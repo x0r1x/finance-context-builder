@@ -1,0 +1,113 @@
+{
+  "blocks": [
+    {
+      "block_id": "CF!r1",
+      "grain": "year",
+      "label_col": 1,
+      "metrics": [
+        {
+          "article_role": "database_like",
+          "concept_id": "bs.cash",
+          "label": "Opening cash",
+          "mapping": {
+            "alternatives": [],
+            "confidence": "high",
+            "method": "rule",
+            "score": 1.0,
+            "source": null
+          },
+          "parent_label": null,
+          "row_key": "CF|2|CF!r1",
+          "source": {
+            "addr": "A2",
+            "col": 1,
+            "row": 2,
+            "sheet": "CF"
+          },
+          "unit": null,
+          "values": [
+            {
+              "cached_value": "100",
+              "formula": null,
+              "formula_template": null,
+              "header_text": "2023",
+              "missing_cached_value": false,
+              "number_format": null,
+              "period_key": "2023",
+              "role": "historical",
+              "source": {
+                "addr": "B2",
+                "col": 2,
+                "row": 2,
+                "sheet": "CF"
+              },
+              "unparsed": false
+            },
+            {
+              "cached_value": "110",
+              "formula": "=B2+10",
+              "formula_template": null,
+              "header_text": "2024E",
+              "missing_cached_value": false,
+              "number_format": null,
+              "period_key": "2024E",
+              "role": "forecast",
+              "source": {
+                "addr": "C2",
+                "col": 3,
+                "row": 2,
+                "sheet": "CF"
+              },
+              "unparsed": false
+            }
+          ]
+        }
+      ],
+      "periods": [
+        {
+          "col": 2,
+          "period_key": "2023",
+          "role": "historical",
+          "text": "2023"
+        },
+        {
+          "col": 3,
+          "period_key": "2024E",
+          "role": "forecast",
+          "text": "2024E"
+        }
+      ],
+      "sheet": "CF"
+    }
+  ],
+  "meta": {
+    "content_sha256": null,
+    "error": null,
+    "job_id": "job1",
+    "questions": [],
+    "schema_version": "1.0.0",
+    "source_filename": "simple.xlsx",
+    "stage": "done",
+    "status": "succeeded",
+    "warnings": []
+  },
+  "schema_version": "1.0.0",
+  "unmapped": [],
+  "warnings": [],
+  "workbook": {
+    "cell_count": 4,
+    "date1904": false,
+    "defined_names": [],
+    "externals": [],
+    "formula_count": 1,
+    "has_vba": false,
+    "has_xlm": false,
+    "locale_hint": null,
+    "missing_cached_values": 0,
+    "sheet_count": 1,
+    "sheets": [
+      "CF"
+    ],
+    "unparsed_formulas": 0
+  }
+}
