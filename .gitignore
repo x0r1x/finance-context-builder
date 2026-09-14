@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Runtime artifacts
+data/
+*.xlsx
+!tests/fixtures/**/*.xlsx
