@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 ColumnRole = Literal["historical", "forecast", "stub", "scenario", "total"]
+RowKind = Literal["fact", "abstract", "index", "helper"]
 
 
 class PeriodHit(BaseModel):
@@ -33,6 +34,8 @@ class LayoutRow(BaseModel):
     indent: int = 0
     check_row: bool = False
     hidden: bool = False
+    kind: RowKind = "fact"
+    section_path: list[str] = Field(default_factory=list)
 
 
 class Block(BaseModel):

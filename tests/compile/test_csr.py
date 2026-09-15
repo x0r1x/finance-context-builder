@@ -21,6 +21,18 @@ def test_range_expansion_caps_at_2000_and_sets_truncated() -> None:
     assert "Sheet1!B2500" not in graph.node_index
 
 
+def test_named_range_edge_is_not_expanded() -> None:
+    edge = Edge(
+        kind="range",
+        source="Cover!C20",
+        target="DS_Drawn_C:DS_Drawn_N",
+        unresolved=True,
+    )
+    graph = build_csr(edges=[edge], extra_nodes=["Cover!C20"])
+    assert "DS_Drawn_C:DS_Drawn_N" in graph.node_index
+    assert "Cover!C20" not in graph.truncated_sources
+
+
 def test_small_range_is_not_truncated() -> None:
     edge = Edge(
         kind="range",

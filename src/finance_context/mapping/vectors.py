@@ -16,7 +16,7 @@ from finance_context.store.fs import atomic_write_bytes
 
 def cache_key(taxonomy: list[Concept], *, model: str, dim: int) -> str:
     payload = json.dumps(
-        [{"id": c.id, "labels": list(c.labels)} for c in taxonomy],
+        [{"id": c.id, "labels": list(c.labels), "definition": c.definition} for c in taxonomy],
         ensure_ascii=False,
         separators=(",", ":"),
     )

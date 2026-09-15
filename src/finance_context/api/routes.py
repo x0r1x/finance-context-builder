@@ -67,16 +67,20 @@ async def post_job(
             owner_path,
             {"content_sha256": digest, "source_filename": filename},
         )
-    meta_path = dest / "meta.json"
-    if meta_path.exists() and (dest / "context.json").exists():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        return JSONResponse(_job_body(job_id, meta), status_code=200)
     live = ctx.bus.get(job_id)
     if live is not None and live.status in {"queued", "running"}:
         return JSONResponse(
             {"job_id": job_id, "status": live.status, "stage": live.stage},
             status_code=202,
         )
+    _clear_mapping_artifacts(dest)
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "job_remap",
+        "mapping artifacts invalidated",
+        job_id=job_id,
+    )
     await ctx.bus.enqueue(job_id)
     rec = ctx.bus.get(job_id)
     return JSONResponse(
@@ -89,6 +93,11 @@ async def post_job(
     )
 
 
+def _clear_mapping_artifacts(dest: Path) -> None:
+    for name in ("mapping.json", "context.json", "context.md", "meta.json"):
+        (dest / name).unlink(missing_ok=True)
+
+
 @router.get("/v1/context-jobs/{job_id}")
 async def get_job(request: Request, job_id: str) -> JSONResponse:
     ctx = _ctx(request)
@@ -99,7 +108,7 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     meta_path = dest / "meta.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        artifacts_ready = (dest / "context.json").exists()
+        artifacts_ready = (dest / "context.json").exists() and (dest / "context.md").exists()
         if live is not None and live.status in {"queued", "running"} and not artifacts_ready:
             meta["status"] = live.status
             meta["stage"] = live.stage

@@ -75,6 +75,23 @@ def test_external_ref_edge() -> None:
     assert any(e.kind == "external" for e in parsed.edges)
 
 
+def test_named_range_is_parsed() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=MAX(DS_Drawn_C:DS_Drawn_N)", sheet="Cover", addr="C20")
+    assert parsed.unparsed is False
+    assert parsed.template == "=MAX(DS_Drawn_C:DS_Drawn_N)"
+    assert any(e.kind == "range" and e.target == "DS_Drawn_C:DS_Drawn_N" for e in parsed.edges)
+
+
+def test_template_keeps_parens_around_lower_precedence() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=(1+Sub_Growth_M)^(H7-1)", sheet="Cover", addr="H11")
+    assert parsed.unparsed is False
+    assert parsed.template is not None
+    assert "(1+Sub_Growth_M)" in parsed.template
+    assert "(R[-4]C[0]-1)" in parsed.template
+
+
 def test_garbage_formula_is_unparsed() -> None:
     engine = FormulaEngine(locale_hint="en")
     parsed = engine.parse("=(((oops", sheet="Sheet1", addr="A1")

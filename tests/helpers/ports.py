@@ -23,7 +23,8 @@ class FakeEmbed:
         if key in self.table:
             return self.table[key]
         for label, vec in self.table.items():
-            if label.casefold() == key:
+            needle = label.casefold()
+            if needle == key or needle in key:
                 return vec
         return [0.0, 0.0, 0.0]
 

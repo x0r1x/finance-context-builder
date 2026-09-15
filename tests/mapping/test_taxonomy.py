@@ -31,6 +31,10 @@ def test_taxonomy_includes_fcf_repayment_drawdown() -> None:
         "fx.equity",
         "bs.re_adj",
         "fx.cash",
+        "cf.receipts",
+        "cf.disbursements",
+        "cf.net",
+        "bs.nwc",
     } <= ids
 
 

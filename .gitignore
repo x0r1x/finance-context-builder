@@ -219,5 +219,6 @@ __marimo__/
 
 # Runtime artifacts
 data/
+out/
 *.xlsx
 !tests/fixtures/**/*.xlsx

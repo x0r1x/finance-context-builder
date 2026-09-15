@@ -344,17 +344,29 @@ def infer_grain(keys: list[str]) -> str | None:
     dates = [_key_as_date(key) for key in calendar]
     if all(item is not None for item in dates):
         ordered = sorted(zip(dates, calendar, strict=True), key=lambda item: item[0] or date.min)
-        steps: list[int] = []
+        day_steps: list[int] = []
+        month_steps: list[int] = []
         for (prev, _), (cur, _) in zip(ordered, ordered[1:], strict=False):
             if prev is None or cur is None:
                 continue
+            days = (cur - prev).days
+            if days > 0:
+                day_steps.append(days)
             delta = (cur.year - prev.year) * 12 + (cur.month - prev.month)
             if delta > 0:
-                steps.append(delta)
-        if steps:
-            unique = set(steps)
-            if len(unique) == 1 or (max(steps) - min(steps) <= 1):
-                med = sorted(steps)[len(steps) // 2]
+                month_steps.append(delta)
+        if day_steps:
+            med_days = sorted(day_steps)[len(day_steps) // 2]
+            if 5 <= med_days <= 9:
+                return "week"
+            if 13 <= med_days <= 17:
+                return "biweek"
+            if 25 <= med_days <= 35:
+                return "month"
+        if month_steps:
+            unique = set(month_steps)
+            if len(unique) == 1 or (max(month_steps) - min(month_steps) <= 1):
+                med = sorted(month_steps)[len(month_steps) // 2]
                 if med <= 1:
                     return "month"
                 if 2 <= med <= 4:
@@ -373,11 +385,11 @@ def infer_grain(keys: list[str]) -> str | None:
 
 def apply_grain(key: str, grain: str | None) -> str:
     if not grain or not is_calendar_key(key):
-        if _DATE_KEY.fullmatch(key):
-            return key[:7]
         return key
     year, quarter, month, _day = parse_period_key(key)
     if year is None:
+        return key
+    if grain in {"week", "biweek"}:
         return key
     if grain == "year":
         return year

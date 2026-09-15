@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 SCHEMA_VERSION = "1.0.0"
 
 Confidence = Literal["high", "medium", "low"]
-MapMethod = Literal["rule", "embed", "llm", "unmapped"]
+MapMethod = Literal["rule", "embed", "llm", "unmapped", "structure"]
 JobStatus = Literal["queued", "running", "succeeded", "degraded", "needs_input", "failed"]
 
 
@@ -28,6 +28,7 @@ class MappingEvidence(BaseModel):
     confidence: Confidence | None = None
     alternatives: list[tuple[str, float]] = Field(default_factory=list)
     source: str | None = None
+    evidence: str | None = None
 
 
 class PeriodValue(BaseModel):
@@ -62,6 +63,7 @@ class FinancialBlock(BaseModel):
     grain: str | None = None
     periods: list[dict[str, Any]] = Field(default_factory=list)
     metrics: list[MetricSeries] = Field(default_factory=list)
+    relations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkbookRaw(BaseModel):

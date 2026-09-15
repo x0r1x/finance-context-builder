@@ -12,6 +12,7 @@
           "mapping": {
             "alternatives": [],
             "confidence": "high",
+            "evidence": null,
             "method": "rule",
             "score": 1.0,
             "source": null
@@ -77,6 +78,7 @@
           "text": "2024E"
         }
       ],
+      "relations": [],
       "sheet": "CF"
     }
   ],
