@@ -7,8 +7,8 @@ from pathlib import Path
 
 from finance_context.layout.models import Layout
 from finance_context.mapping.cascade import map_layout
-from finance_context.mapping.models import Concept, MappingDocument
 from finance_context.mapping.glossary import learn_from_rows, load_glossary, save_glossary
+from finance_context.mapping.models import Concept, MappingDocument
 from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate

@@ -4,7 +4,14 @@ from collections import defaultdict
 
 from finance_context.mapping.facets import prune_candidates
 from finance_context.mapping.knn import COSINE_GAP, COSINE_MIN, TOP_K
-from finance_context.mapping.models import Candidate, Concept, MappedRow, RowContext
+from finance_context.mapping.models import (
+    Candidate,
+    Concept,
+    Disposition,
+    ExclusionReason,
+    MappedRow,
+    RowContext,
+)
 from finance_context.mapping.structure import BookView, Signal
 
 ACCEPT_MIN = 0.82
@@ -56,6 +63,11 @@ class Resolver:
         top = ranked[0]
         if top.score < self.accept_min:
             return None, None
+        if len(ranked) > 1 and ranked[0].score - ranked[1].score < 0.02:
+            preferred = _prefer_specific(ranked, ctx, self.taxonomy)
+            if preferred is None:
+                return None, None
+            top = preferred
         if top.signal == "embed":
             if top.score < COSINE_MIN:
                 return None, None
@@ -82,8 +94,14 @@ def to_mapped(
     picked: Candidate | None,
     ranked: list[Candidate],
     source: str,
+    disposition: Disposition | None = None,
+    exclusion_reason: ExclusionReason | None = None,
 ) -> MappedRow:
     score = picked.score if picked is not None else (ranked[0].score if ranked else None)
+    if disposition is None:
+        disposition = "mapped" if concept_id else "abstained"
+    if exclusion_reason is None and disposition == "abstained":
+        exclusion_reason = _abstain_reason(ranked)
     return MappedRow(
         row_key=ctx.row_key,
         sheet=ctx.sheet,
@@ -98,7 +116,33 @@ def to_mapped(
         confidence=_confidence(source, score),
         alternatives=[(c.concept_id, c.score) for c in ranked[:TOP_K]],
         evidence=picked.evidence if picked is not None else None,
+        disposition=disposition,
+        exclusion_reason=exclusion_reason,
     )
+
+
+def _abstain_reason(ranked: list[Candidate]) -> ExclusionReason:
+    if not ranked:
+        return "no_candidate"
+    if len(ranked) > 1 and ranked[0].score - ranked[1].score < 0.06:
+        return "ambiguous"
+    if ranked[0].score < ACCEPT_MIN:
+        return "low_score"
+    return "facet_mismatch"
+
+
+def _prefer_specific(
+    ranked: list[Candidate],
+    ctx: RowContext,
+    taxonomy: dict[str, Concept],
+) -> Candidate | None:
+    close = [c for c in ranked if ranked[0].score - c.score < 0.02]
+    if len(close) < 2:
+        return ranked[0]
+    leaves = [c for c in close if (taxonomy.get(c.concept_id) and taxonomy[c.concept_id].broader)]
+    if len(leaves) == 1:
+        return leaves[0]
+    return None
 
 
 def _confidence(source: str, score: float | None) -> str | None:

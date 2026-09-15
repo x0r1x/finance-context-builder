@@ -25,6 +25,17 @@ MapSource = Literal[
 ]
 Confidence = Literal["high", "medium", "low"]
 ValueKind = Literal["money", "rate", "ratio", "count"]
+Disposition = Literal["mapped", "excluded", "abstained"]
+ExclusionReason = Literal[
+    "check",
+    "helper",
+    "noise",
+    "technical_bridge",
+    "no_candidate",
+    "facet_mismatch",
+    "ambiguous",
+    "low_score",
+]
 
 
 class Concept(BaseModel):
@@ -35,6 +46,9 @@ class Concept(BaseModel):
     value_kind: ValueKind | None = None
     role: str | None = None
     broader: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    anti_labels: list[str] = Field(default_factory=list)
+    section_hints: list[str] = Field(default_factory=list)
 
 
 class ConceptPick(BaseModel):
@@ -55,6 +69,8 @@ class MappedRow(BaseModel):
     confidence: Confidence | None = None
     alternatives: list[tuple[str, float]] = Field(default_factory=list)
     evidence: str | None = None
+    disposition: Disposition = "mapped"
+    exclusion_reason: ExclusionReason | None = None
 
 
 class MappingQuestion(BaseModel):

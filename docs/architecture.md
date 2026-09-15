@@ -64,7 +64,7 @@ New matching ideas are new `Signal` implementations (`propose(ctx, book) -> list
 | Signal | Role |
 | --- | --- |
 | `glossary` | Learned `(normalized_label, parent) → concept_id` from `data/glossary.json`. |
-| `structure` | Formula graph: passthrough alias across sheets, `SUM` of child rows, inflows minus outflows, roll-forward from the previous period, ratio. |
+| `structure` | Formula graph: passthrough alias across sheets, `SUM` of child rows (including a shared `broader` concept), inflows minus outflows, roll-forward, proration vs true ratio. |
 | `lexical` | Taxonomy labels and stable phrases. |
 | `embed` | Dense retrieve over concept labels/definitions; accept only with cosine gap. |
 | `chat` | Rerank a short pruned list. May return `unknown`. Never invents an id. |
@@ -73,7 +73,9 @@ Structure is the primary signal when formulas are unambiguous. Example: `Dashboa
 
 ### Facets and abstention
 
-Concepts in [`taxonomy.yaml`](../src/finance_context/ontology/taxonomy.yaml) carry `definition`, `statements`, `value_kind` (`money` / `rate` / `ratio` / `count`), optional `role` and `broader`. Missing facets are filled from the id prefix. A money cash-flow line cannot map to `ops.headcount` or `cov.llcr`.
+Concepts in [`taxonomy.yaml`](../src/finance_context/ontology/taxonomy.yaml) carry `definition`, `statements`, `value_kind` (`money` / `rate` / `ratio` / `count`), optional `role`, `broader`, `section_hints`, and `anti_labels`. Missing facets are filled from the id prefix. Division by a named constant or number is proration (still `money`); DSCR-style labels are `ratio`. A money cash-flow line cannot map to `ops.headcount` or `cov.llcr`.
+
+Each mapped fact row stores `disposition`: `mapped`, `excluded` (check/helper/noise), or `abstained` (`unknown` plus a question). Check rows do not create review questions. A wrong tag is still worse than `unknown`; thresholds are not lowered to force a nearest concept.
 
 The resolver fuses scores, prunes incompatible facets, then accepts only above a threshold (stricter for embeddings). Empty or weak lists become `unknown`. Mapped rows store `evidence` (which signal, why).
 

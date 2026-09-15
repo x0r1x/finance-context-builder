@@ -9,9 +9,10 @@ class LexicalSignal:
     name = "lexical"
 
     def __init__(self, taxonomy: list[Concept]) -> None:
+        self.concepts = {c.id: c for c in taxonomy}
         self.phrases: list[tuple[str, str, int]] = []
         for concept in taxonomy:
-            for label in concept.labels:
+            for label in [*concept.labels, *concept.aliases]:
                 n = normalize_label(label)
                 if n:
                     self.phrases.append((n, concept.id, len(n.split())))
@@ -45,6 +46,11 @@ class LexicalSignal:
                     evidence="debt opening/closing balance",
                 )
         for phrase, concept_id, size in self.phrases:
+            concept = self.concepts.get(concept_id)
+            if concept is None or _blocked_by_anti(n, concept):
+                continue
+            if concept.section_hints and not _hint_hit(ctx, extra, concept.section_hints):
+                continue
             score = _phrase_score(n, tokens, phrase, size)
             if score is None:
                 continue
@@ -59,6 +65,24 @@ class LexicalSignal:
                     evidence=f"label matches {phrase!r}",
                 )
         return list(hits.values())
+
+
+def _blocked_by_anti(label: str, concept: Concept) -> bool:
+    return any(
+        normalize_label(anti) and normalize_label(anti) in label for anti in concept.anti_labels
+    )
+
+
+def _hint_hit(ctx: RowContext, extra: set[str], hints: list[str]) -> bool:
+    blob = " ".join([ctx.parent_label or "", *ctx.section_path, ctx.sheet, ctx.label])
+    nblob = normalize_label(blob)
+    for hint in hints:
+        nh = normalize_label(hint)
+        if not nh:
+            continue
+        if nh in nblob or set(nh.split()) <= extra:
+            return True
+    return False
 
 
 def _phrase_score(label: str, tokens: set[str], phrase: str, size: int) -> float | None:
@@ -76,6 +100,9 @@ def _phrase_score(label: str, tokens: set[str], phrase: str, size: int) -> float
             "closing",
             "balance",
             "flow",
+            "debt",
+            "revenue",
+            "headroom",
         }:
             return None
         if phrase in tokens:

@@ -18,6 +18,11 @@ TAXONOMY = [
     Concept(id="bs.ar", labels=["Accounts receivable", "Opening AR"]),
     Concept(id="bs.cash", labels=["Cash", "Opening cash"]),
     Concept(id="cf.receipts", labels=["Receipts", "Collections"]),
+    Concept(
+        id="cf.receipts.subscription",
+        labels=["Subscription collections"],
+        broader="cf.receipts",
+    ),
     Concept(id="cf.disbursements", labels=["Disbursements"]),
     Concept(id="cf.net", labels=["Net cash flow"]),
     Concept(id="cf.drawdown", labels=["Drawdown"]),
@@ -60,6 +65,12 @@ def _layout(*rows: LayoutRow, sheet: str = "P&L") -> Layout:
 def test_normalize_strips_whole_parentheses() -> None:
     assert normalize_label("Revenue (net)") == "revenue"
     assert normalize_label("EBITDA (adj.)") == "ebitda"
+
+
+def test_normalize_keeps_qualifiers_and_unclosed_parens() -> None:
+    assert normalize_label("Payroll (lumpy") == "payroll lumpy"
+    assert normalize_label("Marketing (fixed") == "marketing fixed"
+    assert normalize_label("IT & Telecom") == "it and telecom"
 
 
 def test_glossary_exact_beats_knn() -> None:
@@ -282,7 +293,7 @@ def test_receipts_and_disbursements_not_pnl_or_ap() -> None:
     assert by_label["Receipts"] == "cf.receipts"
     assert by_label["Disbursements"] == "cf.disbursements"
     assert by_label["Cumulative Net Flow"] == "cf.net"
-    assert by_label["Subscription Collections"] == "cf.receipts"
+    assert by_label["Subscription Collections"] == "cf.receipts.subscription"
 
 
 def test_section_header_is_skipped() -> None:

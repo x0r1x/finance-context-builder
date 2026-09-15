@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from finance_context.mapping.models import Candidate, RowContext
-from finance_context.mapping.normalize import normalize_label
+from finance_context.mapping.normalize import normalize_label, section_class
 from finance_context.mapping.structure import BookView
 from finance_context.store.fs import write_json
 
@@ -63,6 +63,9 @@ def learn_from_rows(
             continue
         key = (normalize_label(row.label), normalize_label(row.parent_label))
         learned.setdefault(key, row.concept_id)
+        klass = section_class(row.parent_label)
+        if klass:
+            learned.setdefault((normalize_label(row.label), klass), row.concept_id)
     return learned
 
 
@@ -80,6 +83,9 @@ class GlossarySignal:
         concept_id = self.glossary.get(key)
         if concept_id is None:
             concept_id = self.glossary.get((normalize_label(ctx.label), ""))
+        if concept_id is None:
+            klass = section_class(ctx.parent_label, ctx.section_path, ctx.sheet)
+            concept_id = self.glossary.get((normalize_label(ctx.label), klass))
         if not concept_id or concept_id not in book.taxonomy:
             return []
         return [

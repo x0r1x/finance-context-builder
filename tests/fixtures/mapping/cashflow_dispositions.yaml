@@ -1,0 +1,66 @@
+version: 1
+workbook: cashflow.xlsx
+# Keys use raw labels; tests normalize label/parent/sheet class.
+expectations:
+  - {label: Min Cash Target, concept_id: liq.min_cash_target}
+  - {label: Other Income, parent: REVENUE EARNED, concept_id: pnl.other_income}
+  - {label: Other Income, parent: CASH INFLOWS, concept_id: cf.receipts.other}
+  - {label: Payroll, concept_id: cf.disbursements.payroll}
+  - {label: "Payroll (lumpy", concept_id: cf.disbursements.payroll}
+  - {label: Rent, concept_id: cf.disbursements.rent}
+  - {label: "Rent (lumpy, week-of-mo", concept_id: cf.disbursements.rent}
+  - {label: Utilities, concept_id: cf.disbursements.utilities}
+  - {label: Insurance, concept_id: cf.disbursements.insurance}
+  - {label: Occupancy Subtotal, concept_id: cf.disbursements.occupancy}
+  - {label: Occupancy, concept_id: cf.disbursements.occupancy}
+  - {label: "Supplier Payments (cash", concept_id: cf.disbursements.supplier}
+  - {label: Supplier Payments, concept_id: cf.disbursements.supplier}
+  - {label: Marketing, concept_id: cf.disbursements.marketing}
+  - {label: "Marketing (fixed", concept_id: cf.disbursements.marketing}
+  - {label: "Marketing (variable, % rev", concept_id: cf.disbursements.marketing}
+  - {label: Professional Fees, concept_id: cf.disbursements.professional}
+  - {label: "IT & Telecom", concept_id: cf.disbursements.it}
+  - {label: Travel, concept_id: cf.disbursements.travel}
+  - {label: Other OpEx, concept_id: cf.disbursements.other}
+  - {label: CapEx, concept_id: cf.capex}
+  - {label: "Pre-Tax Income (proxy", concept_id: pnl.pre_tax_income}
+  - {label: Taxable Income After NOL, concept_id: pnl.taxable_income}
+  - {label: Tax Accrued, concept_id: pnl.tax_accrued}
+  - {label: Cash Tax Paid, concept_id: cf.tax_paid}
+  - {label: Tax Paid, concept_id: cf.tax_paid}
+  - {label: Opening Balance, concept_id: bs.debt}
+  - {label: Interest, concept_id: pnl.interest}
+  - {label: Principal, concept_id: cf.repayment}
+  - {label: Closing Balance, concept_id: bs.debt}
+  - {label: "Monthly Payment (PMT, constant", concept_id: debt.scheduled_payment}
+  - {label: "Pre-Revolver Cash (from MF", concept_id: liq.pre_revolver_cash}
+  - {label: Pre-Revolver Closing, concept_id: liq.pre_revolver_cash}
+  - {label: Undrawn (Available, concept_id: debt.available_credit}
+  - {label: Total Principal, concept_id: cf.repayment}
+  - {label: "Commitment Fee (undrawn", concept_id: debt.commitment_fee}
+  - {label: "+ Purchases (drives toward target days", concept_id: bs.inventory_purchases}
+  - {label: "+ Purchases accrued", concept_id: bs.inventory_purchases}
+  - {label: "− Supplier cash paid", concept_id: cf.disbursements.supplier}
+  - {label: Product Collections, concept_id: cf.receipts.product}
+  - {label: Service Collections, concept_id: cf.receipts.service}
+  - {label: Subscription Collections, concept_id: cf.receipts.subscription}
+  - {label: Total Inflows, concept_id: cf.receipts}
+  - {label: Total Outflows, concept_id: cf.disbursements}
+  - {label: "Cash Headroom (vs Min", concept_id: liq.cash_headroom}
+  - {label: Headroom, concept_id: liq.cash_headroom}
+  - {label: Trough Cash $, concept_id: liq.trough_cash}
+  - {label: "Trough Cash Week #", concept_id: liq.trough_period}
+  - {label: Revolver Facility, concept_id: debt.revolver_limit}
+  - {label: Available Credit, concept_id: debt.available_credit}
+  - {label: TOTAL LIQUIDITY, concept_id: liq.total_liquidity}
+  - {label: "Runway (mo", concept_id: liq.runway}
+  - {label: "Runway (mo or Cash positive", concept_id: liq.runway}
+  - {label: Daily Cash Burn, concept_id: liq.daily_burn}
+  - {label: "Cash Conversion (Net CF / Inflows", concept_id: liq.cash_conversion}
+  - {label: "Operating Cash Ratio (In / Out", concept_id: liq.operating_cash_ratio}
+  - {label: "Liquidity Coverage (Tot Liq / Burn", concept_id: liq.liquidity_coverage}
+  - {label: "Covenant Headroom (DSCR − Cov", concept_id: covenant.headroom}
+  - {label: "DSCR (avg over horizon", concept_id: cov.dscr}
+  - {label: "Leverage Covenant (max", concept_id: cov.leverage_limit}
+  - {label: Leverage Headroom, concept_id: cov.leverage_headroom}
+  - {label: "Σ Inflows / Σ Outflows (horizon", concept_id: liq.operating_cash_ratio}

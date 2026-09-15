@@ -11,6 +11,8 @@ _PREFIX_STATEMENT = {
     "fx": "fx",
     "cov": "cov",
     "covenant": "cov",
+    "debt": "bs",
+    "liq": "cf",
 }
 
 _KIND_BY_ID: dict[str, ValueKind] = {
@@ -25,14 +27,32 @@ _KIND_BY_ID: dict[str, ValueKind] = {
     "cov.llcr": "ratio",
     "cov.plcr": "ratio",
     "covenant.headroom": "ratio",
+    "cov.leverage_limit": "ratio",
+    "cov.leverage_headroom": "ratio",
+    "liq.runway": "ratio",
+    "liq.cash_conversion": "ratio",
+    "liq.operating_cash_ratio": "ratio",
+    "liq.liquidity_coverage": "ratio",
+    "liq.trough_period": "count",
 }
 
 _COMPATIBLE: dict[ValueKind, set[str]] = {
     "money": {"money"},
     "rate": {"rate"},
-    "ratio": {"ratio"},
+    "ratio": {"ratio", "rate"},
     "count": {"count"},
 }
+
+_RATIO_LABELS = (
+    "dscr",
+    "llcr",
+    "plcr",
+    "coverage",
+    "conversion",
+    "leverage",
+    "runway",
+    "ratio",
+)
 
 
 def enrich_concept(concept: Concept) -> Concept:
@@ -59,13 +79,24 @@ def prune_candidates(
     taxonomy: dict[str, Concept],
 ) -> list[Candidate]:
     allowed = _COMPATIBLE.get(ctx.value_kind, {"money"})
+    label = (ctx.label or "").casefold()
     kept: list[Candidate] = []
     for item in candidates:
         concept = taxonomy.get(item.concept_id)
         if concept is None:
             continue
         kind = concept.value_kind or "money"
-        if kind not in allowed:
+        if kind not in allowed and not _ratio_label_exception(label, kind, ctx.value_kind):
+            continue
+        if any(anti.casefold() in label for anti in concept.anti_labels if anti):
             continue
         kept.append(item)
     return kept
+
+
+def _ratio_label_exception(label: str, concept_kind: str, row_kind: ValueKind) -> bool:
+    if concept_kind != "ratio":
+        return False
+    if row_kind == "money" and any(token in label for token in _RATIO_LABELS):
+        return True
+    return False

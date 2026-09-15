@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from tests.helpers.ports import GrantSlots
+
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
 from finance_context.mapping.cascade import map_layout
 from finance_context.mapping.models import Concept
-from tests.helpers.ports import GrantSlots
 
 
 def _headers() -> list[AxisHeader]:
@@ -136,6 +137,56 @@ def test_sum_of_receipts_is_receipts_not_net() -> None:
     assert by_label["Collections"] == "cf.receipts"
     assert by_label["Total Inflows"] == "cf.receipts"
     assert by_label["Total Inflows"] != "cf.net"
+
+
+def test_weekly_proration_is_money_not_ratio() -> None:
+    taxonomy = [
+        Concept(id="cf.receipts.product", labels=["Product collections"], broader="cf.receipts"),
+        Concept(id="cf.receipts", labels=["Collections"]),
+    ]
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="Weekly_Forecast",
+                blocks=[
+                    Block(
+                        block_id="Weekly_Forecast!r1",
+                        label_col=1,
+                        axis=Axis(id="Weekly_Forecast!r1", row=1, headers=_headers()),
+                        rows=[LayoutRow(row=8, label="Product Collections", kind="fact")],
+                    )
+                ],
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "Weekly_Forecast",
+            "row": 8,
+            "col": 2,
+            "addr": "B8",
+            "formula_raw": "=Product_Collections/Weeks_Per_Month",
+            "cached_value": "10",
+        },
+        {
+            "sheet": "Weekly_Forecast",
+            "row": 8,
+            "col": 3,
+            "addr": "C8",
+            "formula_raw": "=Product_Collections/Weeks_Per_Month",
+            "cached_value": "10",
+        },
+    ]
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        cells=cells,
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    assert doc.rows[0].concept_id == "cf.receipts.product"
 
 
 def test_percent_row_does_not_map_to_headcount() -> None:
