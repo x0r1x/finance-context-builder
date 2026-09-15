@@ -1,5 +1,7 @@
 # Architecture
 
+Operator guides (RU): [overview](overview.md), [mapping](mapping.md), [taxonomy](taxonomy.md), [review](review.md).
+
 Pipeline: `parse → compile → layout → mapping → build → render`.
 
 ```mermaid
@@ -41,6 +43,8 @@ Weekly dates keep distinct `YYYY-MM-DD` keys. Grain `week` / `biweek` does not c
 
 ## Mapping
 
+Details: [mapping.md](mapping.md). Taxonomy fields and how to extend them: [taxonomy.md](taxonomy.md).
+
 Mapping is retrieve-and-align, not closed-set classification. A wrong tag is worse than `unknown`.
 
 ```mermaid
@@ -72,6 +76,8 @@ New matching ideas are new `Signal` implementations (`propose(ctx, book) -> list
 Structure is the primary signal when formulas are unambiguous. Example: `Dashboard!C17 = Weekly_Forecast!C39` copies the source concept without calling the LLM. `Total Inflows = SUM(collections)` inherits `cf.receipts` as a total, not `cf.net`.
 
 ### Facets and abstention
+
+Concept fields, id families, and the “new meaning vs alias” rule: [taxonomy.md](taxonomy.md).
 
 Concepts in [`taxonomy.yaml`](../src/finance_context/ontology/taxonomy.yaml) carry `definition`, `statements`, `value_kind` (`money` / `rate` / `ratio` / `count`), optional `role`, `broader`, `section_hints`, and `anti_labels`. Missing facets are filled from the id prefix. Division by a named constant or number is proration (still `money`); DSCR-style labels are `ratio`. A money cash-flow line cannot map to `ops.headcount` or `cov.llcr`.
 
