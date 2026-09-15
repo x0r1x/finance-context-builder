@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from finance_context.layout.periods import (
+    apply_grain,
     classify_atom,
     classify_header,
     compose_period,
@@ -148,3 +149,15 @@ def test_time_factor_is_noise() -> None:
 def test_quarter_cadence_from_dates() -> None:
     grain = infer_grain(["2022-07-01", "2022-10-01", "2023-01-01", "2023-04-01"])
     assert grain == "quarter"
+
+
+def test_weekly_cadence_from_dates() -> None:
+    grain = infer_grain(["2026-01-11", "2026-01-18", "2026-01-25", "2026-02-01"])
+    assert grain == "week"
+
+
+def test_apply_grain_week_keeps_day_keys() -> None:
+    assert apply_grain("2026-01-11", "week") == "2026-01-11"
+    assert apply_grain("2026-01-11", None) == "2026-01-11"
+    assert apply_grain("2026-01-11", "month") == "2026-01"
+

@@ -10,8 +10,8 @@
 
 ## CF / `CF!r1`
 
-Periods: grain=year 2. Metrics: 1.
+Periods: grain=year 2. Metrics: 1. Unmapped: 0.
 
 | Label | Concept | Ref | 2023 | 2024E |
 | --- | --- | --- | --- | --- |
-| Opening cash | bs.cash | CF!A2 | 100 `CF!B2` high | 110* `CF!C2` high |
+| Opening cash | bs.cash (high) | CF!A2 | 100 `CF!B2` | 110* `CF!C2` |

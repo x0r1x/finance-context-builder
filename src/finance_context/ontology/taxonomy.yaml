@@ -42,19 +42,24 @@ concepts:
   - id: bs.equity
     labels: [Equity, Капитал]
   - id: bs.cash
-    labels: [Cash, Денежные средства]
+    labels: [Cash, Opening cash, Closing cash, Ending cash, Cash balance, Денежные средства]
   - id: bs.debt
     labels: [Debt, Долг, Borrowings]
   - id: bs.ar
-    labels: [Accounts receivable, Дебиторская задолженность]
+    labels: [Accounts receivable, Opening AR, Closing AR, AR, Receivables, Дебиторская задолженность]
   - id: bs.ap
-    labels: [Accounts payable, Кредиторская задолженность]
+    labels: [Accounts payable, Opening AP, Closing AP, Payables, Кредиторская задолженность]
   - id: bs.inventory
     labels: [Inventory, Запасы]
   - id: bs.retained_earnings
     labels: [Retained earnings, Нераспределённая прибыль]
   - id: bs.re_adj
     labels: [RE adjustment, Prior period adjustment, Корректировка НП]
+  - id: bs.nwc
+    labels: [NWC, Net working capital, Working capital, Изменение NWC]
+    definition: Net working capital balance or change
+    value_kind: money
+    statements: [bs, cf]
   - id: cf.cfo
     labels: [CFO, Cash from operations]
   - id: cf.da
@@ -67,10 +72,16 @@ concepts:
     labels: [Equity issue, Share issue, Эмиссия]
   - id: cf.fcf
     labels: [FCF, Free cash flow, Net CF before financing, CF before financing]
+  - id: cf.net
+    labels: [Net cash flow, Net CF, Cumulative net flow, Cumulative Net Flow]
+  - id: cf.receipts
+    labels: [Receipts, Cash receipts, Collections, Subscription collections]
+  - id: cf.disbursements
+    labels: [Disbursements, Cash disbursements, Cash outflows]
   - id: cf.repayment
     labels: [Repayment, Погашение]
   - id: cf.drawdown
-    labels: [Proceeds, Drawdown, Выборки]
+    labels: [Loan proceeds, Drawdown, Выборки, Facility drawdown]
   - id: covenant.headroom
     labels: [Covenant headroom, Headroom to covenant, Запас по ковенанту]
   - id: val.npv

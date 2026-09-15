@@ -116,6 +116,10 @@ def _tokenize(text: str, decimal: str, sep: str) -> list[Token]:
             tokens.append(Token("OP", ch, i))
             i += 1
             continue
+        if ch == ":":
+            tokens.append(Token("COLON", ch, i))
+            i += 1
+            continue
         if ch == "(":
             tokens.append(Token("LPAREN", ch, i))
             i += 1
@@ -389,6 +393,8 @@ class _Parser:
             self.eat()
             if self.peek() is not None and self.peek().kind == "LPAREN":
                 return self._parse_call(tok.value)
+            if self.peek() is not None and self.peek().kind == "COLON":
+                return self._parse_named_range(tok.value)
             return {"op": "name", "value": tok.value}
         if tok.kind == "LPAREN":
             self.eat()
@@ -407,6 +413,14 @@ class _Parser:
                 args.append(self.parse_expr())
         self.eat("RPAREN")
         return {"op": "func", "name": name, "args": args}
+
+    def _parse_named_range(self, start: str) -> dict[str, Any]:
+        self.eat("COLON")
+        tok = self.peek()
+        if tok is None or tok.kind != "NAME":
+            raise FormulaSyntaxError("expected name after :")
+        end = self.eat("NAME").value
+        return {"op": "range", "named": True, "start_name": start, "end_name": end}
 
     def _op(self, value: str) -> bool:
         tok = self.peek()
@@ -442,6 +456,10 @@ def _collect_edges(
         edges.append(_ref_edge(node, current_sheet, source))
         return
     if op == "range":
+        if node.get("named"):
+            target = f"{node['start_name']}:{node['end_name']}"
+            edges.append(Edge(kind="range", source=source, target=target, unresolved=True))
+            return
         edges.append(_range_edge(node, current_sheet, source))
 
 
@@ -481,6 +499,39 @@ def _r1c1(col: int, row: int, abs_col: bool, abs_row: bool, ocol: int, orow: int
     return r + c
 
 
+def _prec(node: dict[str, Any]) -> int:
+    op = node.get("op")
+    if op == "bin":
+        return {
+            "^": 5,
+            "*": 4,
+            "/": 4,
+            "+": 3,
+            "-": 3,
+            "=": 2,
+            "<>": 2,
+            "<": 2,
+            ">": 2,
+            "<=": 2,
+            ">=": 2,
+            "&": 1,
+        }.get(node.get("kind", ""), 0)
+    if op == "unary":
+        return 6
+    if op == "percent":
+        return 7
+    return 8
+
+
+def _paren(child: dict[str, Any], text: str, parent_prec: int, *, right: bool, op: str) -> str:
+    child_prec = _prec(child)
+    if child_prec < parent_prec:
+        return f"({text})"
+    if right and child_prec == parent_prec and op in {"-", "/", "*"}:
+        return f"({text})"
+    return text
+
+
 def _render(node: dict[str, Any], ocol: int, orow: int, sep: str, decimal: str) -> str:
     op = node["op"]
     if op == "num":
@@ -501,14 +552,22 @@ def _render(node: dict[str, Any], ocol: int, orow: int, sep: str, decimal: str) 
     if op == "ref":
         return _render_ref(node, ocol, orow)
     if op == "range":
+        if node.get("named"):
+            return f"{node['start_name']}:{node['end_name']}"
         return _render_range(node, ocol, orow)
     if op == "unary":
-        return node["kind"] + _render(node["expr"], ocol, orow, sep, decimal)
+        inner = _render(node["expr"], ocol, orow, sep, decimal)
+        if _prec(node["expr"]) < _prec(node):
+            inner = f"({inner})"
+        return node["kind"] + inner
     if op == "percent":
         return _render(node["expr"], ocol, orow, sep, decimal) + "%"
     if op == "bin":
         left = _render(node["left"], ocol, orow, sep, decimal)
         right = _render(node["right"], ocol, orow, sep, decimal)
+        prec = _prec(node)
+        left = _paren(node["left"], left, prec, right=False, op=node["kind"])
+        right = _paren(node["right"], right, prec, right=True, op=node["kind"])
         return left + node["kind"] + right
     if op == "func":
         args = sep.join(_render(a, ocol, orow, sep, decimal) for a in node["args"])

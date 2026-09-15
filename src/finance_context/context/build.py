@@ -3,7 +3,8 @@ from __future__ import annotations
 from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout
 from finance_context.layout.periods import infer_grain
-from finance_context.mapping.models import MappedRow, MappingDocument, MapSource
+from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowRelation
+from finance_context.mapping.rules import is_noise_label
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
@@ -19,6 +20,8 @@ from finance_context.models.context import (
 _METHOD: dict[MapSource, str] = {
     "glossary": "rule",
     "rule": "rule",
+    "lexical": "rule",
+    "structure": "structure",
     "embed": "embed",
     "chat": "llm",
     "question": "unmapped",
@@ -72,6 +75,10 @@ def build_context(
             metrics: list[MetricSeries] = []
             parent_by_row = {r.row: r.label for r in block.rows}
             for layout_row in block.rows:
+                if layout_row.kind != "fact":
+                    continue
+                if is_noise_label(layout_row.label):
+                    continue
                 row_key = f"{sheet.name}|{layout_row.row}|{block.block_id}"
                 mapped = mapped_by_key.get(row_key)
                 parent = None
@@ -100,6 +107,7 @@ def build_context(
                     grain=grain,
                     periods=periods,
                     metrics=metrics,
+                    relations=_relations_for_block(mapping.relations, block.block_id),
                 )
             )
 
@@ -167,6 +175,7 @@ def _series_for_row(
         confidence=mapped.confidence if mapped else "low",
         alternatives=list(mapped.alternatives) if mapped else [],
         source=mapped.source if mapped else None,
+        evidence=mapped.evidence if mapped else None,
     )
     values: list[PeriodValue] = []
     for header in headers:
@@ -199,6 +208,15 @@ def _series_for_row(
         values=values,
         source=source,
     )
+
+
+def _relations_for_block(relations: list[RowRelation], block_id: str) -> list[dict]:
+    out: list[dict] = []
+    for rel in relations:
+        keys = [rel.source_row_key, rel.target_row_key, *rel.member_row_keys]
+        if any(key and key.endswith(f"|{block_id}") for key in keys):
+            out.append(rel.model_dump(mode="json"))
+    return out
 
 
 def _unit_from_values(values: list[PeriodValue]) -> str | None:

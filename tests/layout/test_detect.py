@@ -318,3 +318,50 @@ def test_plain_serial_without_date_format_is_not_a_period() -> None:
     ]
     layout = detect_layout(cells)
     assert layout.sheets[0].blocks == []
+
+
+def test_section_header_is_abstract_and_week_index_is_index() -> None:
+    cells = [
+        _c("Dash", "A1", "Item"),
+        _c("Dash", "B1", "11.01.2026"),
+        _c("Dash", "C1", "18.01.2026"),
+        _c("Dash", "D1", "25.01.2026"),
+        _c("Dash", "A2", "Week #"),
+        _c("Dash", "B2", "1"),
+        _c("Dash", "C2", "2"),
+        _c("Dash", "D2", "3"),
+        _c("Dash", "A3", "CASH INFLOWS"),
+        _c("Dash", "A4", "Receipts"),
+        _c("Dash", "B4", "10"),
+        _c("Dash", "C4", "20"),
+        _c("Dash", "D4", "30"),
+        _c("Dash", "A5", "Проверка баланса"),
+        _c("Dash", "B5", "0"),
+        _c("Dash", "C5", "0"),
+        _c("Dash", "D5", "0"),
+    ]
+    layout = detect_layout(cells)
+    rows = {r.label: r for r in layout.sheets[0].blocks[0].rows}
+    assert rows["Week #"].kind == "index"
+    assert rows["CASH INFLOWS"].kind == "abstract"
+    assert rows["Receipts"].kind == "fact"
+    assert rows["Receipts"].section_path == ["CASH INFLOWS"]
+    assert rows["Receipts"].parent_row == rows["CASH INFLOWS"].row
+    assert rows["Проверка баланса"].kind == "helper"
+
+
+def test_weekly_dates_keep_distinct_period_keys() -> None:
+    cells = [
+        _c("Dash", "A1", "Item"),
+        _c("Dash", "B1", "11.01.2026"),
+        _c("Dash", "C1", "18.01.2026"),
+        _c("Dash", "D1", "25.01.2026"),
+        _c("Dash", "A2", "Receipts"),
+        _c("Dash", "B2", "10"),
+        _c("Dash", "C2", "20"),
+        _c("Dash", "D2", "30"),
+    ]
+    layout = detect_layout(cells)
+    keys = [h.period_key for h in layout.sheets[0].blocks[0].axis.headers]
+    assert keys == ["2026-01-11", "2026-01-18", "2026-01-25"]
+

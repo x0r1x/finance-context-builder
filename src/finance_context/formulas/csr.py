@@ -91,6 +91,9 @@ def build_csr(
     for edge in edges:
         nodes.add(edge.source)
         if edge.kind == "range" and edge.target:
+            if edge.unresolved or "!" not in edge.target:
+                nodes.add(edge.target)
+                continue
             cells, trunc = expand_range(edge.target)
             if trunc:
                 truncated_sources.add(edge.source)

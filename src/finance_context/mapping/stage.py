@@ -8,6 +8,7 @@ from pathlib import Path
 from finance_context.layout.models import Layout
 from finance_context.mapping.cascade import map_layout
 from finance_context.mapping.models import Concept, MappingDocument
+from finance_context.mapping.glossary import learn_from_rows, load_glossary, save_glossary
 from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
@@ -27,6 +28,7 @@ def mapping_workbook(
     cache_path: Path | None = None,
     slot_timeout_sec: float = 120.0,
     embedding_model: str = "",
+    glossary_path: Path | None = None,
 ) -> MappingDocument:
     path = dest_dir / "mapping.json"
     if path.exists():
@@ -40,10 +42,12 @@ def mapping_workbook(
     ir_cells = dest_dir / "ir" / "cells.parquet"
     if ir_cells.exists():
         cells = read_parquet(ir_cells)
+    merged = dict(load_glossary(glossary_path))
+    merged.update(glossary or {})
     doc = map_layout(
         layout,
         taxonomy=taxonomy or load_taxonomy(),
-        glossary=glossary or {},
+        glossary=merged,
         embed=embed,
         chat=chat,
         slots=slots,
@@ -52,6 +56,8 @@ def mapping_workbook(
         cache_path=cache_path,
         embedding_model=embedding_model,
     )
+    if glossary_path is not None:
+        save_glossary(glossary_path, learn_from_rows(merged, doc.rows))
     write_json(path, doc.model_dump(mode="json"))
     log_event(
         _LOGGER,

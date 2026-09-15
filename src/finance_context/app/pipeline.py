@@ -114,6 +114,7 @@ class Pipeline:
                 cache_path=self.settings.data_dir / "taxonomy_embeddings.npz",
                 slot_timeout_sec=self.settings.llm_slot_wait_sec,
                 embedding_model=self.settings.embedding_model or "",
+                glossary_path=self.settings.data_dir / "glossary.json",
             ),
         )
         layout = Layout.model_validate_json((dest_dir / "layout.json").read_text(encoding="utf-8"))

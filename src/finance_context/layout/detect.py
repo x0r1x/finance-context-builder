@@ -76,7 +76,10 @@ def _blocks_for_sheet(sheet: str, cells: list[dict], date1904: bool) -> list[Blo
             continue
         band_cells = [c for r in body_rows for c in by_row[r]]
         label_col = _label_col(band_cells, date1904)
-        data_rows = _data_rows(by_row, body_rows, set(band_rows), label_col, date1904)
+        period_cols = {header.col for header in axis.headers}
+        data_rows = _data_rows(
+            by_row, body_rows, set(band_rows), label_col, date1904, period_cols
+        )
         blocks.append(
             Block(
                 block_id=f"{sheet}!r{header_row}",
@@ -218,10 +221,14 @@ def _axis_from_band(
             AxisHeader(col=col, text=text, role=role, period_key=hit.period_key)
         )
     grain = infer_grain([header.period_key for header in composed])
-    headers = [
-        header.model_copy(update={"period_key": apply_grain(header.period_key, grain)})
-        for header in composed
-    ]
+    grained = [apply_grain(header.period_key, grain) for header in composed]
+    if grain in {"week", "biweek"} or len(set(grained)) < len(grained):
+        headers = composed
+    else:
+        headers = [
+            header.model_copy(update={"period_key": key})
+            for header, key in zip(composed, grained, strict=True)
+        ]
     return Axis(id=f"{sheet}!r{header_row}", row=header_row, headers=headers)
 
 
@@ -475,12 +482,16 @@ def _data_rows(
     header_rows: set[int],
     label_col: int,
     date1904: bool,
+    period_cols: set[int],
 ) -> list[LayoutRow]:
     out: list[LayoutRow] = []
+    section_stack: list[LayoutRow] = []
     for row_n in band_rows:
         if row_n in header_rows:
             continue
-        if _is_counter_row(by_row[row_n], date1904) or _is_empty_row(by_row[row_n], date1904):
+        if _is_empty_row(by_row[row_n], date1904):
+            continue
+        if _is_counter_row(by_row[row_n], date1904):
             continue
         label_cell = _cell_at(by_row[row_n], label_col)
         if label_cell is None:
@@ -489,22 +500,90 @@ def _data_rows(
         if not label:
             continue
         indent = _indent(label)
+        check_row = bool(_CHECK.search(label))
+        kind = _row_kind(by_row[row_n], period_cols, date1904, check_row=check_row)
+        if kind == "abstract":
+            while section_stack and section_stack[-1].indent >= indent:
+                section_stack.pop()
+        else:
+            while section_stack and section_stack[-1].indent > indent:
+                section_stack.pop()
+        section_path = [item.label for item in section_stack]
         parent_row = None
         for prev in reversed(out):
             if prev.indent < indent:
                 parent_row = prev.row
                 break
-        out.append(
-            LayoutRow(
-                row=row_n,
-                label=label.strip(),
-                parent_row=parent_row,
-                indent=indent,
-                check_row=bool(_CHECK.search(label)),
-                hidden=bool(label_cell.get("hidden")),
-            )
+        if parent_row is None and section_stack:
+            parent_row = section_stack[-1].row
+        item = LayoutRow(
+            row=row_n,
+            label=label.strip(),
+            parent_row=parent_row,
+            indent=indent,
+            check_row=check_row,
+            hidden=bool(label_cell.get("hidden")),
+            kind=kind,
+            section_path=section_path,
         )
+        out.append(item)
+        if kind == "abstract":
+            section_stack.append(item)
     return out
+
+
+def _row_kind(
+    row_cells: list[dict],
+    period_cols: set[int],
+    date1904: bool,
+    *,
+    check_row: bool,
+) -> str:
+    if check_row:
+        return "helper"
+    if _is_index_values(row_cells, period_cols, date1904):
+        return "index"
+    has_formula = False
+    has_number = False
+    for cell in row_cells:
+        if int(cell["col"]) not in period_cols:
+            continue
+        if cell.get("formula_raw"):
+            has_formula = True
+        text = _text(cell, date1904)
+        if text and _is_number(text):
+            has_number = True
+    if not has_formula and not has_number:
+        return "abstract"
+    return "fact"
+
+
+def _is_index_values(
+    row_cells: list[dict],
+    period_cols: set[int],
+    date1904: bool,
+) -> bool:
+    nums: list[int] = []
+    for cell in sorted(row_cells, key=lambda c: int(c["col"])):
+        if int(cell["col"]) not in period_cols:
+            continue
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        if not _is_int_text(text):
+            if _is_number(text):
+                return False
+            continue
+        value = int(float(text.replace(",", ".")))
+        if abs(value) > 53:
+            return False
+        nums.append(value)
+    if len(nums) < 2:
+        return False
+    start = nums[0]
+    if start in {0, 1} and nums == list(range(start, start + len(nums))):
+        return True
+    return min(nums) >= 0 and max(nums) <= 12
 
 
 def _cell_at(row_cells: list[dict], col: int) -> dict | None:
