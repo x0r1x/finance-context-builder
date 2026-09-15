@@ -13,16 +13,26 @@ Line items are linked to a small financial taxonomy with the right to abstain: s
 
 Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). See `NOTICE`.
 
-## Local run
+## Environment setup
 
-Needs Python 3.12+ and [uv](https://docs.astral.sh/uv/). LLM and embeddings are optional: without them mapping uses structure + labels, then `unknown`.
+The project needs Python 3.12+ and [uv](https://docs.astral.sh/uv/). On macOS, install
+`uv`, provision Python, and create the project virtual environment with:
 
 ```bash
+brew install uv
+uv python install 3.12
 uv sync
 cp .env.example .env
 ```
 
+`uv sync` creates `.venv` and installs the versions pinned in `uv.lock`. Commands below use
+`uv run`, so activating the virtual environment is not required. To activate it manually, run
+`source .venv/bin/activate`.
+
+LLM and embeddings are optional: without them mapping uses structure + labels, then `unknown`.
 Fill `LLM_API_KEY` / `EMBEDDING_API_KEY` (LM Studio token) and model ids if you use a local OpenAI-compatible server. Default URLs are `http://127.0.0.1:1234/v1`. `.env` is gitignored.
+
+## Local run
 
 ### CLI
 
@@ -31,6 +41,16 @@ uv run finance-context build path/to/model.xlsx -o ./out
 ```
 
 Writes `context.json` and `context.md`.
+
+To extract rows that the mapping stage left without a concept, run:
+
+```bash
+uv run python scripts/extract-unmapped.py data/<job-id>/mapping.json
+```
+
+The script also accepts a generated `context.json`. By default it writes `unmapped.json`
+next to the input file. Use `-o path/to/file.json` to choose another location. The output has the form
+`{"count": <number>, "rows": [<original unmapped rows>]}`.
 
 ### HTTP API
 
@@ -107,7 +127,7 @@ uv run pytest
 uv run ruff check src tests
 ```
 
-With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes HTTP bodies under `out/<timestamp>/` (`healthz.json`, `readyz.json`, `post-job.json`, `job-status.json`, `context.json`, `context.md`). The script exiting with `OK` means the client finished; the server should still be listening on 8080.
+With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes HTTP bodies under `out/<timestamp>/` (`healthz.json`, `readyz.json`, `post-job.json`, `job-status.json`, `context.json`, `context.md`) plus extracted `unmapped.json`. The script exiting with `OK` means the client finished; the server should still be listening on 8080.
 
 ```bash
 bash scripts/run.sh path/to/model.xlsx

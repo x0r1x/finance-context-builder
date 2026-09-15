@@ -17,5 +17,14 @@ workbook="$(resolve_workbook "${1:-}")"
 "$SCRIPTS/check-service.sh"
 "$SCRIPTS/run-context-job.sh" "$workbook"
 
+if [[ ! -f "$RUN_DIR/context.json" ]]; then
+  echo "context.json missing; cannot extract unmapped rows" >&2
+  exit 1
+fi
+python3 "$SCRIPTS/extract-unmapped.py" \
+  "$RUN_DIR/context.json" \
+  --output "$RUN_DIR/unmapped.json"
+log_summary "unmapped=$RUN_DIR/unmapped.json"
+
 log_summary "ok"
 echo "OK  wrote ${RUN_DIR}"
