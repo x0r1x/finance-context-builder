@@ -2,7 +2,9 @@
 
 Read-only service that turns Excel cash-flow workbooks (`.xlsx` / `.xlsm`) into versioned JSON and Markdown context. Formulas are preserved; values come from Excel cached results and are not recalculated.
 
-Line items are linked to a small financial taxonomy with the right to abstain: structure (formula graph) first, then labels, then embeddings, then an optional LLM rerank. Section headers and index rows (`Week #`) are not tagged. See [docs/architecture.md](docs/architecture.md).
+Line items are linked to a small financial taxonomy with the right to abstain: structure (formula graph) first, then labels, then embeddings, then an optional LLM rerank. Section headers and index rows (`Week #`) are not tagged.
+
+Guides: [overview](docs/overview.md), [mapping](docs/mapping.md), [taxonomy](docs/taxonomy.md), [unmapped review](docs/review.md), [architecture](docs/architecture.md).
 
 ## Limits (MVP)
 
@@ -50,7 +52,8 @@ uv run python scripts/extract-unmapped.py data/<job-id>/mapping.json
 
 The script also accepts a generated `context.json`. By default it writes `unmapped.json`
 next to the input file. Use `-o path/to/file.json` to choose another location. The output has the form
-`{"count": <number>, "rows": [<original unmapped rows>]}`.
+`{"count": <number>, "rows": [<unmapped attributes without period values>]}`.
+Excluded rows and time-series `values` are omitted so the extract matches the unmapped rows shown in `context.md`.
 
 ### HTTP API
 
@@ -99,7 +102,7 @@ Endpoints:
 
 Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `DATA_DIR`. See `.env.example`.
 
-Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. Add a new *concept* (with labels, `broader`, `value_kind`, optional `section_hints` / `anti_labels`) when a new financial meaning appears; do not add per-workbook aliases that collide across statements. Check/helper rows are excluded from review; unmapped business rows stay `unknown` instead of taking a nearest guess.
+Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/taxonomy.md](docs/taxonomy.md) and [docs/mapping.md](docs/mapping.md). Check/helper rows are excluded from review; unmapped business rows stay `unknown` instead of taking a nearest guess.
 
 ## Docker
 

@@ -13,27 +13,33 @@ def extract_unmapped(document: Any) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ValueError("input document must be a JSON object")
 
-    if "unmapped" in document:
+    if isinstance(document.get("unmapped"), list):
         rows = document["unmapped"]
-        filter_rows = False
+    elif isinstance(document.get("rows"), list):
+        rows = document["rows"]
     else:
-        rows = document.get("rows")
-        filter_rows = True
-    if not isinstance(rows, list):
         raise ValueError("input document must contain a 'rows' or 'unmapped' array")
     if not all(isinstance(row, dict) for row in rows):
         raise ValueError("every extracted row must be a JSON object")
 
-    if filter_rows:
-        unmapped = [
-            row
-            for row in rows
-            if row.get("concept_id") is None
-            and row.get("disposition", "abstained") != "excluded"
-        ]
-    else:
-        unmapped = rows
+    unmapped = [_compact(row) for row in rows if _is_unmapped(row)]
     return {"count": len(unmapped), "rows": unmapped}
+
+
+def _is_unmapped(row: dict[str, Any]) -> bool:
+    if row.get("concept_id") is not None:
+        return False
+    mapping = row.get("mapping") if isinstance(row.get("mapping"), dict) else {}
+    disposition = row.get("disposition") or mapping.get("disposition") or "abstained"
+    return disposition != "excluded"
+
+
+def _compact(row: dict[str, Any]) -> dict[str, Any]:
+    out = {key: value for key, value in row.items() if key != "values"}
+    source = out.get("source")
+    if isinstance(source, dict) and source.get("sheet") and source.get("addr"):
+        out.setdefault("ref", f"{source['sheet']}!{source['addr']}")
+    return out
 
 
 def _parser() -> argparse.ArgumentParser:
