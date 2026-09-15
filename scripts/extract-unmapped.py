@@ -24,7 +24,15 @@ def extract_unmapped(document: Any) -> dict[str, Any]:
     if not all(isinstance(row, dict) for row in rows):
         raise ValueError("every extracted row must be a JSON object")
 
-    unmapped = [row for row in rows if row.get("concept_id") is None] if filter_rows else rows
+    if filter_rows:
+        unmapped = [
+            row
+            for row in rows
+            if row.get("concept_id") is None
+            and row.get("disposition", "abstained") != "excluded"
+        ]
+    else:
+        unmapped = rows
     return {"count": len(unmapped), "rows": unmapped}
 
 

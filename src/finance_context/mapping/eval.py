@@ -21,5 +21,19 @@ def mapping_metrics(
     }
 
 
+def disposition_metrics(rows: list) -> dict[str, float | int]:
+    n = len(rows)
+    mapped = sum(1 for row in rows if getattr(row, "disposition", None) == "mapped")
+    excluded = sum(1 for row in rows if getattr(row, "disposition", None) == "excluded")
+    abstained = sum(1 for row in rows if getattr(row, "disposition", None) == "abstained")
+    return {
+        "n": n,
+        "mapped": mapped,
+        "excluded": excluded,
+        "abstained": abstained,
+        "processed_rate": (mapped + excluded + abstained) / n if n else 0.0,
+    }
+
+
 def signal_counts(sources: list[str]) -> dict[str, int]:
     return dict(Counter(sources))

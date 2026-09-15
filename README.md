@@ -99,7 +99,7 @@ Endpoints:
 
 Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `DATA_DIR`. See `.env.example`.
 
-Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml` (edit when a new *concept* appears, not for every workbook label).
+Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. Add a new *concept* (with labels, `broader`, `value_kind`, optional `section_hints` / `anti_labels`) when a new financial meaning appears; do not add per-workbook aliases that collide across statements. Check/helper rows are excluded from review; unmapped business rows stay `unknown` instead of taking a nearest guess.
 
 ## Docker
 

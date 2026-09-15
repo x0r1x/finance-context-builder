@@ -105,6 +105,10 @@ def build_row_context(
     pattern = book.patterns.get(key) or RowPattern()
     grain = infer_grain([h.period_key for h in block.axis.headers])
     value_kind = _value_kind(book, sheet, layout_row.row, block, pattern)
+    if _semantic_ratio(layout_row.label):
+        value_kind = "ratio"
+    elif _semantic_count(layout_row.label):
+        value_kind = "count"
     headers = [h.text for h in block.axis.headers[:12]]
     section = " / ".join(layout_row.section_path)
     query = " | ".join(
@@ -144,6 +148,8 @@ def _value_kind(
     block: Block,
     pattern: RowPattern,
 ) -> ValueKind:
+    if pattern.kind == "prorate":
+        return "money"
     if pattern.is_ratio:
         return "ratio"
     percents = 0
@@ -253,6 +259,8 @@ def _shape(ast: dict[str, Any], sheet: str, col: int, row: int) -> dict[str, Any
         if left and right:
             return {"type": "diff", "rows": [left[1], right[1]]}
     if op == "bin" and ast.get("kind") == "/":
+        if _is_proration(ast):
+            return {"type": "prorate"}
         return {"type": "ratio"}
     return None
 
@@ -374,15 +382,17 @@ class StructureSignal:
                 concept_id = book.concepts.get(book.row_key(ctx.sheet, row_n, block_id))
                 if concept_id:
                     child_ids.append(concept_id)
-            if child_ids and len(set(child_ids)) == 1:
-                out.append(
-                    Candidate(
-                        concept_id=child_ids[0],
-                        score=0.93,
-                        signal=self.name,
-                        evidence=f"sum of {len(child_ids)} child rows",
+            if child_ids:
+                shared = _shared_concept(child_ids, book)
+                if shared:
+                    out.append(
+                        Candidate(
+                            concept_id=shared,
+                            score=0.93,
+                            signal=self.name,
+                            evidence=f"sum of {len(child_ids)} child rows",
+                        )
                     )
-                )
         if pattern.kind == "diff" and pattern.diff_rows:
             left_id = _concept_at(book, ctx.sheet, pattern.diff_rows[0])
             right_id = _concept_at(book, ctx.sheet, pattern.diff_rows[1])
@@ -415,6 +425,62 @@ def _concept_at(book: BookView, sheet: str, row: int) -> str | None:
     if block_id is None:
         return None
     return book.concepts.get(book.row_key(sheet, row, block_id))
+
+
+def _shared_concept(child_ids: list[str], book: BookView) -> str | None:
+    unique = list(dict.fromkeys(child_ids))
+    if len(unique) == 1:
+        return unique[0]
+    broaders: list[str] = []
+    prefixes: list[str] = []
+    for cid in unique:
+        concept = book.taxonomy.get(cid)
+        if concept and concept.broader:
+            broaders.append(concept.broader)
+        parts = cid.split(".")
+        if len(parts) >= 2:
+            prefixes.append(".".join(parts[:2]))
+    if broaders and len(set(broaders)) == 1:
+        shared = broaders[0]
+        if shared in book.taxonomy:
+            return shared
+    if prefixes and len(set(prefixes)) == 1:
+        shared = prefixes[0]
+        if shared in book.taxonomy:
+            return shared
+    return None
+
+
+def _is_proration(ast: dict[str, Any]) -> bool:
+    right = ast.get("right") or {}
+    op = right.get("op")
+    if op in {"name", "num"}:
+        return True
+    if op == "bin":
+        return _is_proration({"right": right.get("right") or {}})
+    return False
+
+
+def _semantic_ratio(label: str | None) -> bool:
+    n = normalize_label(label)
+    return any(
+        token in n
+        for token in (
+            "dscr",
+            "llcr",
+            "plcr",
+            "coverage",
+            "conversion",
+            "leverage",
+            "runway",
+            "ratio",
+        )
+    )
+
+
+def _semantic_count(label: str | None) -> bool:
+    n = normalize_label(label)
+    return "week #" in n or n.endswith("week") or "trough cash week" in n
 
 
 def parse_cell_addr(addr: str) -> tuple[int, int]:

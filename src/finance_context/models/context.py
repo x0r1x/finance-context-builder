@@ -29,6 +29,8 @@ class MappingEvidence(BaseModel):
     alternatives: list[tuple[str, float]] = Field(default_factory=list)
     source: str | None = None
     evidence: str | None = None
+    disposition: str = "mapped"
+    exclusion_reason: str | None = None
 
 
 class PeriodValue(BaseModel):
@@ -54,6 +56,8 @@ class MetricSeries(BaseModel):
     mapping: MappingEvidence
     values: list[PeriodValue] = Field(default_factory=list)
     source: SourceRef
+    disposition: str = "mapped"
+    exclusion_reason: str | None = None
 
 
 class FinancialBlock(BaseModel):
@@ -99,4 +103,5 @@ class ContextDocument(BaseModel):
     workbook: WorkbookRaw
     blocks: list[FinancialBlock] = Field(default_factory=list)
     unmapped: list[MetricSeries] = Field(default_factory=list)
+    excluded: list[MetricSeries] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

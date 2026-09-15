@@ -7,6 +7,7 @@ from typing import Any
 from finance_context.errors import PortError
 from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
+from finance_context.mapping.exclusion import exclusion_reason
 from finance_context.mapping.facets import prune_candidates
 from finance_context.mapping.glossary import GlossarySignal
 from finance_context.mapping.knn import TOP_K, rank_concepts
@@ -59,13 +60,21 @@ def map_layout(
     pending = _collect_contexts(book, templates)
     signals = [GlossarySignal(glossary), LexicalSignal(taxonomy), StructureSignal()]
 
-    for ctx in pending:
-        _resolve_row(ctx, book, signals, resolver)
-    for ctx in pending:
-        if ctx.row_key not in book.concepts:
+    for _ in range(4):
+        progressed = False
+        for ctx in pending:
+            if exclusion_reason(ctx):
+                continue
+            before = ctx.row_key in book.concepts
             _resolve_row(ctx, book, signals, resolver)
+            if not before and ctx.row_key in book.concepts:
+                progressed = True
+        if not progressed:
+            break
 
-    need_knn = [ctx for ctx in pending if ctx.row_key not in book.concepts]
+    need_knn = [
+        ctx for ctx in pending if ctx.row_key not in book.concepts and not exclusion_reason(ctx)
+    ]
     index: dict[str, list[float]] = {}
     if need_knn and embed is not None:
         index = _embed_pass(
@@ -81,11 +90,13 @@ def map_layout(
             signals,
         )
 
-    need_chat = [ctx for ctx in pending if ctx.row_key not in book.concepts]
+    need_chat = [
+        ctx for ctx in pending if ctx.row_key not in book.concepts and not exclusion_reason(ctx)
+    ]
     if need_chat and chat is not None:
         _chat_pass(need_chat, book, taxonomy, chat, slots, slot_timeout_sec, resolver, index)
     for ctx in pending:
-        if ctx.row_key not in book.concepts:
+        if ctx.row_key not in book.concepts and not exclusion_reason(ctx):
             _resolve_row(ctx, book, [StructureSignal()], resolver)
 
     questions: list[MappingQuestion] = []
@@ -96,6 +107,20 @@ def map_layout(
         ranked = ctx.extras.get("ranked") or []
         picked = ctx.extras.get("picked")
         source = ctx.extras.get("source") or "question"
+        reason = exclusion_reason(ctx)
+        if reason:
+            mapped.append(
+                to_mapped(
+                    ctx,
+                    concept_id=None,
+                    picked=None,
+                    ranked=[],
+                    source="rule",
+                    disposition="excluded",
+                    exclusion_reason=reason,
+                )
+            )
+            continue
         if concept_id is None:
             source = "question"
             questions.append(_question(ctx, ranked, qn))
@@ -122,7 +147,9 @@ class _Pending:
         return getattr(self.ctx, name)
 
 
-def _collect_contexts(book: BookView, templates: dict[tuple[str, int], list[str | None]]) -> list[_Pending]:
+def _collect_contexts(
+    book: BookView, templates: dict[tuple[str, int], list[str | None]]
+) -> list[_Pending]:
     pending: list[_Pending] = []
     for sheet in book.layout.sheets:
         for block in sheet.blocks:

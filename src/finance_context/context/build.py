@@ -60,6 +60,7 @@ def build_context(
 
     blocks: list[FinancialBlock] = []
     unmapped: list[MetricSeries] = []
+    excluded: list[MetricSeries] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
             grain = infer_grain([h.period_key for h in block.axis.headers])
@@ -95,7 +96,9 @@ def build_context(
                     by_addr=by_addr,
                     row_num=layout_row.row,
                 )
-                if mapped is None or mapped.concept_id is None:
+                if mapped is not None and mapped.disposition == "excluded":
+                    excluded.append(series)
+                elif mapped is None or mapped.concept_id is None:
                     unmapped.append(series)
                 else:
                     metrics.append(series)
@@ -150,6 +153,7 @@ def build_context(
         workbook=workbook,
         blocks=blocks,
         unmapped=unmapped,
+        excluded=excluded,
         warnings=warnings[:50],
     )
 
@@ -176,6 +180,8 @@ def _series_for_row(
         alternatives=list(mapped.alternatives) if mapped else [],
         source=mapped.source if mapped else None,
         evidence=mapped.evidence if mapped else None,
+        disposition=mapped.disposition if mapped else "abstained",
+        exclusion_reason=mapped.exclusion_reason if mapped else None,
     )
     values: list[PeriodValue] = []
     for header in headers:
@@ -207,6 +213,8 @@ def _series_for_row(
         mapping=evidence,
         values=values,
         source=source,
+        disposition=mapped.disposition if mapped else "abstained",
+        exclusion_reason=mapped.exclusion_reason if mapped else None,
     )
 
 
