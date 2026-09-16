@@ -1,63 +1,81 @@
 # Таксономия
 
-Канонические финансовые смыслы живут в [`src/finance_context/ontology/taxonomy.yaml`](../src/finance_context/ontology/taxonomy.yaml). Загрузка: `load_taxonomy` → каждый элемент валидируется как `Concept` и дополняется `enrich_concept`.
+Канонические финансовые смыслы живут в [`src/finance_context/ontology/taxonomy.yaml`](../src/finance_context/ontology/taxonomy.yaml). Загрузка: `load_taxonomy` → `validate_taxonomy` → `enrich_concept` (наследование фасетов).
 
-Таксономия — не словарь синонимов одной Excel-книги. Концепт добавляют, когда появляется **новое значение**. Новый лейбл того же значения — `labels` или `aliases`.
+Таксономия — не словарь синонимов одной Excel-книги. Концепт добавляют, когда появляется **новое значение**. Новый лейбл того же значения — `labels` или `aliases`. Id концепта стабилен (SKOS); версионируется документ (`version`), а не ключ.
 
-Как каскад использует эти поля — в [mapping.md](mapping.md). Как закрывать дыры после прогона — в [review.md](review.md).
+Оси line item взяты из [FAST Standard 3.01](https://www.fast-standard.org/) и оформлены как атрибуты концепта, как `periodType` / `balance` в XBRL, а не как части составного ключа.
+
+Как каскад использует эти поля — в [mapping.md](mapping.md). Как собираются блоки — в [layout.md](layout.md). Как закрывать дыры после прогона — в [review.md](review.md).
 
 ## Модель концепта
 
 ```yaml
-- id: cf.receipts.other
-  labels: [Other income cash, Miscellaneous receipts]
-  aliases: [Other Income]
-  broader: cf.receipts
-  statements: [cf]
-  section_hints: [cash inflow, collection]
-  anti_labels: [accrual, revenue earned]
-  definition: ...          # опционально
-  value_kind: money        # опционально, иначе из id / таблицы
-  role: ...                # опционально
+version: 2
+facet_defaults:
+  cf: {statement: cf, nature: flow, basis: cash}
+concepts:
+  - id: cf.receipts.other
+    labels: [Other income cash, Miscellaneous receipts]
+    aliases: [Other Income]
+    broader: cf.receipts
+    facets: {direction: inflow}   # остальное наследуется
+    definition: ...               # опционально
+    exact_labels: [GMV]           # опционально, форс при точном лейбле
+    deprecated: false
+    replaced_by: null
+    match: {}                     # зарезервировано под IFRS/US-GAAP crosswalk
+calculations:
+  - parent: cf.net
+    terms: [{concept: cf.receipts, weight: 1}, {concept: cf.disbursements, weight: -1}]
 ```
 
 | Поле | Назначение |
 | --- | --- |
-| `id` | Стабильный ключ. Префикс задаёт семью и default `statements` |
+| `id` | Стабильный ключ. Префикс задаёт default-фасеты |
 | `labels` | Канонические фразы для lexical и эмбеддингов |
 | `aliases` | Дополнительные фразы той же сущности (часто «как в книге») |
 | `broader` | Родитель в иерархии; SUM детей может унаследовать этот id |
-| `statements` | Допустимые типы отчёта: `pnl`, `bs`, `cf`, `cov`, `val`, … |
-| `value_kind` | `money` / `rate` / `ratio` / `count` |
+| `facets` | Оси FAST/XBRL: statement, nature, basis, direction, position, series, unit |
+| `value_kind` | Алиас `facets.unit` на время миграции |
+| `statements` | Совместимость; заполняется из `facets.statement`, если пусто |
 | `section_hints` | Lexical срабатывает, только если хинт виден в контексте строки |
 | `anti_labels` | Блок: подстрока в лейбле строки выкидывает этот концепт |
-| `definition` | Текст для людей и для embed-запроса; если пусто — собирается из id и labels |
-| `role` | Зарезервировано, на каскад сейчас почти не влияет |
+| `exact_labels` | Если лейбл строки совпал — концепт форсируется |
+| `definition` | Текст для людей и для embed-запроса |
+| `deprecated` / `replaced_by` | Снятие концепта без переименования id |
+| `role` | Зарезервировано, на каскад не влияет |
 
 Lexical индексирует **и** `labels`, **и** `aliases`. Embed строит векторы по `labels` (без aliases). Поэтому редкую формулировку, которую должен ловить kNN, лучше продублировать в `labels`.
 
+## Фасеты (оси)
+
+Наследуются: prefix `facet_defaults` → предки `broader` → явные поля концепта. Ребёнок не может противоречить родителю.
+
+| Ось | Значения | Откуда |
+| --- | --- | --- |
+| `statement` | pnl, bs, cf, cov, val, ops, fx | XBRL statement / prefix |
+| `nature` | flow, balance | FAST: flow vs stock; XBRL periodType |
+| `basis` | cash, accrual, noncash | FAST: cash or not-cash |
+| `direction` | inflow, outflow | FAST; XBRL balance (для flow) |
+| `position` | opening, closing | FAST BF/CF (для balance) |
+| `series` | constant, series | FAST: constant vs time series |
+| `unit` | money, rate, ratio, count | FAST unit / бывший `value_kind` |
+
+Коллизия `Other Income`: это два концепта с разным `basis` (accrual vs cash), а не один id с `anti_labels`.
+
 ## Что заполняется само
 
-`enrich_concept` (`facets.py`):
+`enrich_concept`:
 
-- пустые `statements` — из префикса id;
-- пустой `value_kind` — из таблицы исключений (`pnl.tax_rate` → `rate`, `cov.dscr` → `ratio`, …) иначе **`money`**;
+- фасеты — наследование, как выше;
+- пустой `unit` → **`money`**;
+- пустые `statements` — из `facets.statement`;
 - пустой `definition` — `"{id}: {labels}"`.
 
-Префикс → default statement:
+Явно указывайте `facets.unit` / `facets.statement`, если дефолт префикса врёт (KPI ликвидности, `debt.scheduled_payment` как cash flow).
 
-| Префикс id | statement |
-| --- | --- |
-| `pnl` | `pnl` |
-| `bs` | `bs` |
-| `cf`, `liq` | `cf` |
-| `debt` | `bs` |
-| `cov`, `covenant` | `cov` |
-| `val` | `val` |
-| `ops` | `ops` |
-| `fx` | `fx` |
-
-Явно указывайте `statements` и `value_kind`, если дефолт врёт (например KPI ликвидности с `value_kind: ratio`).
+При загрузке проверяются уникальность id, существование `broader`, циклы, `deprecated` без `replaced_by`.
 
 ## Семейства id
 
@@ -67,9 +85,9 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 
 **Баланс (`bs.*`)** — итоги активов, PPE, обязательства, капитал, cash, debt, AR/AP, запасы, RE, NWC, purchases к целевым дням запасов.
 
-**Движение денег (`cf.*`)** — CFO, D&A add-back, capex, дивиденды, эмиссия, FCF, net CF; **поступления** `cf.receipts` и дети (product / service / subscription / other); **выплаты** `cf.disbursements` и дети (payroll, rent, utilities, insurance, occupancy, supplier, marketing, professional, IT, travel, other); погашение и выборка (`cf.repayment`, `cf.drawdown`); `cf.tax_paid` (cash tax, broader = disbursements).
+**Движение денег (`cf.*`)** — CFO, D&A add-back, capex, дивиденды, эмиссия, FCF, net CF, CFADS, sources/uses; **поступления** `cf.receipts` и дети; **выплаты** `cf.disbursements` и дети; погашение и выборка; `cf.tax_paid`.
 
-**Долг (`debt.*`)** — scheduled PMT, commitment fee, revolver limit, available credit. Остатки долга — `bs.debt`, не `debt.*`.
+**Долг (`debt.*`)** — scheduled PMT, commitment fee, revolver limit, available credit, sculpting. Остатки долга — `bs.debt`, не `debt.*`. DSRA — `bs.dsra`.
 
 **Ликвидность (`liq.*`)** — min cash, pre-revolver cash, cash headroom, trough cash / week, total liquidity, runway, daily burn, conversion / operating cash ratio / liquidity coverage.
 
@@ -77,14 +95,14 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 
 **Прочее** — `val.npv` / `irr` / `wacc`; `ops.headcount`; `fx.*` (курс и переоценки).
 
-Одинаковый человеческий лейбл может быть **двумя** концептами. Пример: `Other Income` в секции REVENUE EARNED → `pnl.other_income`; в CASH INFLOWS → `cf.receipts.other`. Разведение — `section_hints` + `anti_labels` + `aliases`, не один общий id.
+Одинаковый человеческий лейбл может быть **двумя** концептами. Пример: `Other Income` в секции REVENUE EARNED → `pnl.other_income` (`basis: accrual`); в CASH INFLOWS → `cf.receipts.other` (`basis: cash`). Разведение — фасеты строки, не один общий id.
 
 ## Когда что менять
 
 | Ситуация | Действие |
 | --- | --- |
 | В модели новое *значение* (runway, commitment fee, cash tax) | Новый `id` + labels + facets |
-| Тот же смысл, другая формулировка (`IT & Telecom`) | `labels` или `aliases` существующего id |
+| Тот же смысл, другая формулировка (`IT & Telecom`, `Drawdowns`, `Cashflow …`) | `labels` или `aliases`; нормализатор уже знает plural и `cashflow` |
 | Частный вид уже известного тотала (Product collections) | Дочерний id с `broader` |
 | Лейбл сталкивается с чужим концептом (Headroom) | `anti_labels` / `section_hints` на обоих |
 | Строка — check, circular, «from MF» без бизнеса | Exclusion, не концепт |
@@ -99,9 +117,9 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 - `cf.receipts.product` → `cf.receipts`
 - `cf.disbursements.payroll` → `cf.disbursements`
 
-Structure на `SUM` ищет общий id детей или общий `broader`. Итог поступлений не должен стать `cf.net`. Net — отдельный концепт или diff inflows−outflows.
+Structure на `SUM` ищет общий id детей, общий `broader` или объявленный `calculations` parent — и только когда **все** fact-члены диапазона уже замаплены. Частичный SUM не копирует единственного ребёнка на родителя. Итог поступлений не должен стать `cf.net`. Net объявлен как разность inflows−outflows в yaml; противоречие с наблюдённым SUM даёт `calculation_conflict`.
 
-## `value_kind`
+## `facets.unit` (`value_kind`)
 
 Совместимость при prune: money только к money; count к count; rate к rate; ratio совместим с rate. Строка с денежным рядом не мапится на headcount.
 
@@ -115,12 +133,12 @@ Structure на `SUM` ищет общий id детей или общий `broade
 ## Чеклист PR
 
 1. Нужен ли новый id или хватает alias.
-2. Префикс id согласован с семьёй; при необходимости явные `statements` и `value_kind`.
+2. Префикс id согласован с семьёй; отличия — в `facets`, не в новом префиксе.
 3. `labels` на английском и, если живёт в книгах, русском; узкие формулировки модели — в `aliases`.
-4. Коллизии закрыты `section_hints` / `anti_labels`.
-5. Если есть родитель — `broader` указывает на существующий id.
-6. Gold: строка в `tests/fixtures/mapping/cashflow_dispositions.yaml` (label + parent, если важен контекст).
-7. `uv run pytest` (как минимум mapping/eval + extract). Не понижать `ACCEPT_MIN`, чтобы тест позеленел.
+4. Коллизии закрыты фасетами; `section_hints` / `anti_labels` — только если фасета недостаточно.
+5. Если есть родитель — `broader` указывает на существующий id; фасеты ребёнка не спорят с родителем.
+6. Gold: строка в `tests/fixtures/mapping/cashflow_dispositions.yaml` или в корпусном fixture.
+7. `uv run pytest`. Не понижать `ACCEPT_MIN`, чтобы тест позеленел. Корпус: `uv run python scripts/fetch-corpus.py`.
 
 ## Антипаттерны
 

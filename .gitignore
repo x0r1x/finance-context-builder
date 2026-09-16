@@ -222,3 +222,4 @@ data/
 out/
 *.xlsx
 !tests/fixtures/**/*.xlsx
+resources/corpus/

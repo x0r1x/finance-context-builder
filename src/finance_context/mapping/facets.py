@@ -1,40 +1,12 @@
 from __future__ import annotations
 
-from finance_context.mapping.models import Candidate, Concept, RowContext, ValueKind
-
-_PREFIX_STATEMENT = {
-    "pnl": "pnl",
-    "bs": "bs",
-    "cf": "cf",
-    "val": "val",
-    "ops": "ops",
-    "fx": "fx",
-    "cov": "cov",
-    "covenant": "cov",
-    "debt": "bs",
-    "liq": "cf",
-}
-
-_KIND_BY_ID: dict[str, ValueKind] = {
-    "pnl.interest_rate": "rate",
-    "pnl.tax_rate": "rate",
-    "pnl.volume": "count",
-    "fx.rate": "rate",
-    "val.wacc": "rate",
-    "val.irr": "rate",
-    "ops.headcount": "count",
-    "cov.dscr": "ratio",
-    "cov.llcr": "ratio",
-    "cov.plcr": "ratio",
-    "covenant.headroom": "ratio",
-    "cov.leverage_limit": "ratio",
-    "cov.leverage_headroom": "ratio",
-    "liq.runway": "ratio",
-    "liq.cash_conversion": "ratio",
-    "liq.operating_cash_ratio": "ratio",
-    "liq.liquidity_coverage": "ratio",
-    "liq.trough_period": "count",
-}
+from finance_context.mapping.models import (
+    Candidate,
+    Concept,
+    Facets,
+    RowContext,
+    ValueKind,
+)
 
 _COMPATIBLE: dict[ValueKind, set[str]] = {
     "money": {"money"},
@@ -54,20 +26,64 @@ _RATIO_LABELS = (
     "ratio",
 )
 
+_FACET_FIELDS = (
+    "statement",
+    "nature",
+    "basis",
+    "direction",
+    "position",
+    "series",
+    "unit",
+)
 
-def enrich_concept(concept: Concept) -> Concept:
+
+def merge_facets(base: Facets, overlay: Facets) -> Facets:
+    data = base.model_dump()
+    for key, value in overlay.model_dump().items():
+        if value is not None:
+            data[key] = value
+    return Facets.model_validate(data)
+
+
+def inherit_facets(
+    concept: Concept,
+    by_id: dict[str, Concept],
+    defaults: dict[str, Facets],
+) -> Facets:
+    chain: list[Concept] = []
+    seen: set[str] = set()
+    current: Concept | None = concept
+    while current is not None and current.id not in seen:
+        seen.add(current.id)
+        chain.append(current)
+        current = by_id.get(current.broader) if current.broader else None
+    merged = Facets()
     prefix = concept.id.split(".", 1)[0]
-    statements = list(concept.statements) or (
-        [_PREFIX_STATEMENT[prefix]] if prefix in _PREFIX_STATEMENT else []
-    )
-    value_kind = concept.value_kind or _KIND_BY_ID.get(concept.id, "money")
-    definition = concept.definition or (
-        f"{concept.id}: {', '.join(concept.labels)}"
-    )
+    if prefix in defaults:
+        merged = merge_facets(merged, defaults[prefix])
+    for item in reversed(chain):
+        merged = merge_facets(merged, item.facets)
+    return merged
+
+
+def enrich_concept(
+    concept: Concept,
+    *,
+    by_id: dict[str, Concept] | None = None,
+    defaults: dict[str, Facets] | None = None,
+) -> Concept:
+    facets = inherit_facets(concept, by_id or {}, defaults or {})
+    unit: ValueKind = facets.unit or concept.value_kind or "money"
+    facets = facets.model_copy(update={"unit": unit})
+    statements = list(concept.statements)
+    if not statements and facets.statement:
+        statements = [facets.statement]
+    definition = concept.definition or f"{concept.id}: {', '.join(concept.labels)}"
     return concept.model_copy(
         update={
+            "facets": facets,
+            "value_kind": unit,
             "statements": statements,
-            "value_kind": value_kind,
             "definition": definition,
         }
     )
@@ -85,13 +101,32 @@ def prune_candidates(
         concept = taxonomy.get(item.concept_id)
         if concept is None:
             continue
-        kind = concept.value_kind or "money"
+        kind = concept.value_kind or concept.facets.unit or "money"
         if kind not in allowed and not _ratio_label_exception(label, kind, ctx.value_kind):
             continue
         if any(anti.casefold() in label for anti in concept.anti_labels if anti):
             continue
+        if not _facets_compatible(ctx, concept):
+            continue
         kept.append(item)
     return kept
+
+
+def _facets_compatible(ctx: RowContext, concept: Concept) -> bool:
+    inferred = ctx.inferred_facets
+    concept_values = concept.facets.model_dump()
+    for field in _FACET_FIELDS:
+        if field == "unit":
+            continue
+        guess = getattr(inferred, field)
+        if not guess.confident or not guess.value:
+            continue
+        expected = concept_values.get(field)
+        if expected is None:
+            continue
+        if str(expected) != str(guess.value):
+            return False
+    return True
 
 
 def _ratio_label_exception(label: str, concept_kind: str, row_kind: ValueKind) -> bool:

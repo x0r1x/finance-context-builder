@@ -139,6 +139,67 @@ def test_sum_of_receipts_is_receipts_not_net() -> None:
     assert by_label["Total Inflows"] != "cf.net"
 
 
+def test_partial_sum_does_not_copy_single_child_concept() -> None:
+    taxonomy = [
+        Concept(id="cf.disbursements.insurance", labels=["Insurance"]),
+        Concept(id="pnl.ebitda", labels=["EBITDA"]),
+        Concept(id="pnl.opex", labels=["OPEX"]),
+    ]
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="IS",
+                blocks=[
+                    Block(
+                        block_id="IS!r1",
+                        label_col=1,
+                        axis=Axis(id="IS!r1", row=1, headers=_headers()),
+                        rows=[
+                            LayoutRow(row=10, label="Insurance", kind="fact"),
+                            LayoutRow(row=11, label="Land lease", kind="fact"),
+                            LayoutRow(
+                                row=12,
+                                label="Operating Income or Loss (EBITDA)",
+                                kind="fact",
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "IS",
+            "row": 12,
+            "col": 2,
+            "addr": "B12",
+            "formula_raw": "=SUM(B10:B11)",
+            "cached_value": "30",
+        },
+        {
+            "sheet": "IS",
+            "row": 12,
+            "col": 3,
+            "addr": "C12",
+            "formula_raw": "=SUM(C10:C11)",
+            "cached_value": "40",
+        },
+    ]
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        cells=cells,
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row.concept_id for row in doc.rows}
+    assert by_label["Insurance"] == "cf.disbursements.insurance"
+    assert by_label["Operating Income or Loss (EBITDA)"] == "pnl.ebitda"
+
+
 def test_weekly_proration_is_money_not_ratio() -> None:
     taxonomy = [
         Concept(id="cf.receipts.product", labels=["Product collections"], broader="cf.receipts"),

@@ -1,6 +1,8 @@
 # Разбор несмапленных строк
 
-После прогона смотрят три представления одного и того же отказа:
+Сначала убедиться, что layout вообще отдал fact-строки. `succeeded` + `Unmapped: 0` + пустой `context.md` почти всегда значит: нет блоков или нет лейблов статей, а не «таксономия покрыла всё». Чеклист — [layout.md](layout.md).
+
+После прогона с ненулевым числом fact смотрят три представления одного и того же отказа:
 
 | Где | Что видно |
 | --- | --- |
@@ -22,11 +24,12 @@ Excluded (check / helper / technical) в этот список не входят
 | --- | --- |
 | Новое финансовое значение | Концепт в [taxonomy.yaml](taxonomy.md) + gold |
 | Тот же смысл, другой лейбл / секция | `labels` / `aliases` / `section_hints` / `anti_labels` |
-| Однозначная формула (alias, SUM) | Проверить structure; yaml может не понадобиться |
+| Однозначная формула (alias, SUM) | Проверить structure: SUM копирует концепт, только если замаплены все дети |
+| Пустой прогон, нули в metrics | Layout, не yaml |
 | Технический мост, check, шум | Exclusion; не плодить концепт |
 | Реальная неоднозначность | Оставить `unknown` (`no_candidate` / `ambiguous` / `low_score`) |
 
-4. Обновить `tests/fixtures/mapping/cashflow_dispositions.yaml`, если правите эталонную `cashflow.xlsx`.
+4. Обновить gold: `tests/fixtures/mapping/cashflow_dispositions.yaml` для эталонной `cashflow.xlsx`; для корпуса — `packt_project_finance_dispositions.yaml` / `rvi_project_finance_dispositions.yaml`.
 5. `uv run pytest` и при необходимости повторный прогон — `unmapped.json` должен сжаться только за счёт честных mapped, не за счёт exclude.
 
 ## Как читать `exclusion_reason` у abstained
@@ -36,7 +39,8 @@ Excluded (check / helper / technical) в этот список не входят
 | `no_candidate` | Нет id в yaml или lexical/hints не пускают фразу |
 | `low_score` | Фраза слишком общая; усилить labels или structure, не порог |
 | `ambiguous` | Два концепта рядом — развести hints/anti или уточнить broader |
-| `facet_mismatch` | `value_kind` / anti_labels отрезали единственного кандидата |
+| `facet_mismatch` | `unit` / anti_labels / фасеты отрезали единственного кандидата (в т.ч. ложный `statement=cov` у не-DSCR строки) |
+| `calculation_conflict` | Итог по формуле не совпал с `calculations` в yaml |
 
 ## Пример
 
@@ -54,5 +58,5 @@ Excluded (check / helper / technical) в этот список не входят
 ```bash
 uv run python scripts/extract-unmapped.py out/<run>/context.json -o out/<run>/unmapped.json
 uv run python scripts/extract-unmapped.py data/jobs/<job-id>/mapping.json
-uv run pytest tests/test_extract_unmapped.py tests/eval/test_cashflow_dispositions.py
+uv run pytest tests/test_extract_unmapped.py tests/eval/test_cashflow_dispositions.py tests/eval/test_corpus_dispositions.py
 ```

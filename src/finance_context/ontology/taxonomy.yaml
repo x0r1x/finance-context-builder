@@ -1,13 +1,54 @@
+version: 2
+facet_defaults:
+  pnl: {statement: pnl, nature: flow, basis: accrual}
+  bs: {statement: bs, nature: balance, basis: accrual}
+  cf: {statement: cf, nature: flow, basis: cash}
+  val: {statement: val, nature: flow}
+  ops: {statement: ops}
+  fx: {statement: fx}
+  cov: {statement: cov, nature: flow, unit: ratio}
+  covenant: {statement: cov, nature: flow, unit: ratio}
+  debt: {statement: bs, nature: balance, basis: accrual}
+  liq: {statement: cf, nature: balance, basis: cash}
+calculations:
+  - parent: cf.net
+    terms:
+      - {concept: cf.receipts, weight: 1}
+      - {concept: cf.disbursements, weight: -1}
+patterns:
+  - concept: cf.net
+    score: 0.93
+    evidence: net flow phrasing
+    when:
+      any:
+        - {label_contains: [cumulative net]}
+        - {label_in: [net cf, net cashflow, net cash flow]}
+        - {label_tokens: [net, flow]}
+      unless:
+        label_contains: [present, financing]
+  - concept: bs.debt
+    score: 0.91
+    evidence: debt opening/closing balance
+    when:
+      section_contains: [debt]
+      any:
+        - {label_tokens: [opening, balance]}
+        - {label_tokens: [closing, balance]}
+  - skip_concept: bs.ap
+    when:
+      section_contains: [debt]
 concepts:
   - id: pnl.revenue
-    labels: [Revenue, Выручка, Sales, Sales revenue]
+    labels: [Revenue, Revenues, Gross revenue, Gross revenues, Total revenue, Выручка, Sales, Sales revenue]
     anti_labels: [leverage, ttm, covenant, dscr]
   - id: pnl.volume
     labels: [Volume, Qty, Quantity, Объём]
+    facets: {unit: count}
   - id: pnl.price
     labels: [Price, ASP, Цена]
   - id: pnl.gmv
     labels: [GMV, Gross merchandise value]
+    exact_labels: [GMV]
   - id: pnl.cogs
     labels: [COGS, Cost of sales, Себестоимость]
   - id: pnl.gross_profit
@@ -16,7 +57,7 @@ concepts:
     labels: [OPEX, Operating expenses, Операционные расходы]
     statements: [pnl, cf]
   - id: pnl.ebitda
-    labels: [EBITDA]
+    labels: [EBITDA, Operating income]
   - id: pnl.ebit
     labels: [EBIT, Operating profit]
   - id: pnl.da
@@ -26,12 +67,14 @@ concepts:
     section_hints: [debt, term loan, amortisation, revolver]
   - id: pnl.interest_rate
     labels: [Interest rate, Ставка процента, Coupon rate]
+    facets: {unit: rate}
   - id: pnl.tax
     labels: [Income tax, Налог]
   - id: pnl.deferred_tax
     labels: [Deferred tax, Deferred tax expense, Отложенный налог]
   - id: pnl.tax_rate
     labels: [Tax rate, Ставка налога, Effective tax rate]
+    facets: {unit: rate}
   - id: pnl.net_income
     labels: [Net income, Чистая прибыль]
   - id: bs.assets_total
@@ -48,7 +91,7 @@ concepts:
     labels: [Cash, Opening cash, Closing cash, Ending cash, Cash balance, Денежные средства]
   - id: bs.debt
     labels: [Debt, Долг, Borrowings, Opening Balance, Closing Balance]
-    anti_labels: [dscr, leverage, coverage, headroom, service, repayment]
+    anti_labels: [dscr, leverage, coverage, headroom, service, repayment, drawdown]
     section_hints: [debt, term loan, amortisation, revolver]
   - id: bs.ar
     labels: [Accounts receivable, Opening AR, Closing AR, AR, Receivables, Дебиторская задолженность]
@@ -63,7 +106,6 @@ concepts:
   - id: bs.nwc
     labels: [NWC, Net working capital, Working capital, Изменение NWC]
     definition: Net working capital balance or change
-    value_kind: money
     statements: [bs, cf]
   - id: cf.cfo
     labels: [CFO, Cash from operations]
@@ -71,39 +113,55 @@ concepts:
     labels: [D&A add-back, Depreciation add-back, Амортизация (ОДДС)]
   - id: cf.capex
     labels: [CAPEX, CapEx, Capital expenditure]
+    facets: {direction: outflow}
   - id: cf.dividends
     labels: [Dividends, Дивиденды]
+    facets: {direction: outflow}
   - id: cf.equity_issue
     labels: [Equity issue, Share issue, Эмиссия]
+    facets: {direction: inflow}
   - id: cf.fcf
     labels: [FCF, Free cash flow, Net CF before financing, CF before financing]
   - id: cf.net
     labels: [Net cash flow, Net CF, Cumulative net flow, Cumulative Net Flow]
   - id: cf.receipts
     labels: [Receipts, Cash receipts, Collections, Total Inflows]
-    statements: [cf]
+    facets: {direction: inflow}
   - id: cf.disbursements
     labels: [Disbursements, Cash disbursements, Cash outflows, Total Outflows]
-    statements: [cf]
+    facets: {direction: outflow}
   - id: cf.repayment
     labels: [Repayment, Principal, Principal repayment, Погашение]
     section_hints: [debt, term loan, amortisation, debt service]
+    facets: {direction: outflow}
   - id: cf.drawdown
-    labels: [Loan proceeds, Drawdown, Выборки, Facility drawdown]
+    labels: [Loan proceeds, Drawdown, Drawdowns, Debt drawdown, Выборки, Facility drawdown]
+    facets: {direction: inflow}
+  - id: cf.cfads
+    labels: [CFADS, Cash flow available for debt service, Cashflow available for debt service]
+  - id: cf.sources
+    labels: [Sources, Sources of funds, Sources and uses sources]
+    facets: {direction: inflow}
+  - id: cf.uses
+    labels: [Uses, Uses of funds, Sources and uses uses]
+    facets: {direction: outflow}
   - id: covenant.headroom
     labels: [Covenant headroom, Headroom to covenant, Запас по ковенанту]
-    value_kind: ratio
-    anti_labels: [cash headroom, min cash]
+    facets: {unit: ratio}
   - id: val.npv
     labels: [NPV, Net present value, ЧПС]
   - id: val.irr
     labels: [IRR, Internal rate of return, ВНД]
+    facets: {unit: rate}
   - id: val.wacc
     labels: [WACC, Discount rate, Ставка дисконта]
+    facets: {unit: rate}
   - id: ops.headcount
     labels: [Headcount, FTE, Численность]
+    facets: {unit: count}
   - id: fx.rate
     labels: [FX rate, Exchange rate, Курс валюты]
+    facets: {unit: rate}
   - id: fx.debt
     labels: [Debt FX, FX on debt, Переоценка долга]
   - id: fx.ppe
@@ -114,159 +172,129 @@ concepts:
     labels: [Cash FX, FX on cash, Переоценка кассы]
   - id: cov.dscr
     labels: [DSCR, Debt service coverage, Коэффициент покрытия долга]
-    value_kind: ratio
+    facets: {unit: ratio}
     anti_labels: [llcr, plcr]
   - id: cov.llcr
     labels: [LLCR, Loan life coverage, Коэффициент покрытия за срок кредита]
+    facets: {unit: ratio}
   - id: cov.plcr
     labels: [PLCR, Project life coverage, Коэффициент покрытия за срок проекта]
+    facets: {unit: ratio}
   - id: cov.leverage_limit
     labels: [Leverage, Leverage covenant, Leverage covenant max, Max leverage]
-    value_kind: ratio
-    statements: [cov]
+    facets: {unit: ratio}
   - id: cov.leverage_headroom
     labels: [Leverage headroom, Headroom to leverage covenant]
-    value_kind: ratio
-    statements: [cov]
+    facets: {unit: ratio}
   - id: pnl.other_income
     labels: [Other income, Other revenue]
-    statements: [pnl]
-    section_hints: [revenue, accrual]
-    anti_labels: [cash inflow, collection]
+    facets: {basis: accrual}
   - id: pnl.pre_tax_income
     labels: [Pre-tax income, EBT, Profit before tax]
-    statements: [pnl]
   - id: pnl.taxable_income
     labels: [Taxable income, Taxable income after NOL]
-    statements: [pnl]
   - id: pnl.tax_accrued
     labels: [Tax accrued, Income tax accrual, Accrued tax]
-    statements: [pnl]
   - id: cf.receipts.product
     labels: [Product collections, Product receipts]
     broader: cf.receipts
-    statements: [cf]
   - id: cf.receipts.service
     labels: [Service collections, Service receipts]
     broader: cf.receipts
-    statements: [cf]
   - id: cf.receipts.subscription
     labels: [Subscription collections, Subscription receipts]
     broader: cf.receipts
-    statements: [cf]
   - id: cf.receipts.other
     labels: [Other income cash, Miscellaneous receipts]
     aliases: [Other Income]
     broader: cf.receipts
-    statements: [cf]
-    section_hints: [cash inflow, collection]
-    anti_labels: [accrual, revenue earned]
   - id: cf.disbursements.payroll
     labels: [Payroll, Wages, Зарплата]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.rent
     labels: [Rent, Lease payments]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.utilities
     labels: [Utilities, Коммунальные]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.insurance
     labels: [Insurance, Страхование]
+    anti_labels: [ebitda, operating income]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.marketing
     labels: [Marketing, Ad spend]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.professional
     labels: [Professional fees, Legal and accounting]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.it
     labels: [IT and Telecom, IT, Telecom, IT & Telecom]
     aliases: [IT & Telecom]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.travel
     labels: [Travel, T&E]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.other
     labels: [Other OpEx, Other operating expenses]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.occupancy
     labels: [Occupancy, Occupancy Subtotal, Facility costs]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.disbursements.supplier
     labels: [Supplier payments, Vendor payments, Supplier cash paid]
     broader: cf.disbursements
-    statements: [cf]
   - id: cf.tax_paid
     labels: [Cash tax paid, Tax paid, Tax payment]
-    statements: [cf]
     broader: cf.disbursements
   - id: bs.inventory_purchases
     labels: [Inventory purchases, Purchases accrued, Purchases]
     statements: [bs, cf]
     section_hints: [inventory, working capital]
+  - id: bs.dsra
+    labels: [DSRA, Debt service reserve, Debt service reserve account]
   - id: debt.scheduled_payment
     labels: [Monthly payment, PMT, Scheduled payment]
-    statements: [cf]
+    facets: {statement: cf, nature: flow, direction: outflow}
     section_hints: [term loan, amortisation, debt]
   - id: debt.commitment_fee
     labels: [Commitment fee, Undrawn commitment fee]
-    statements: [cf]
+    facets: {statement: cf, nature: flow, direction: outflow}
     section_hints: [revolver, undrawn]
   - id: debt.revolver_limit
     labels: [Revolver facility, Revolving credit limit, RCF limit]
-    statements: [bs]
   - id: debt.available_credit
     labels: [Available credit, Undrawn, Undrawn available]
-    statements: [bs]
+  - id: debt.sculpting
+    labels: [Debt sculpting, Sculpted repayment, Sculpted principal]
+    facets: {statement: cf, nature: flow, direction: outflow}
   - id: liq.min_cash_target
     labels: [Min cash target, Minimum cash balance, Cash floor]
     statements: [bs, cf]
-    value_kind: money
   - id: liq.pre_revolver_cash
     labels: [Pre-revolver cash, Pre-revolver closing]
-    statements: [cf]
   - id: liq.cash_headroom
     labels: [Cash headroom, Headroom vs min cash, Headroom]
-    statements: [cf]
-    anti_labels: [covenant, dscr, leverage]
     section_hints: [cash, covenant position, liquidity]
   - id: liq.trough_cash
     labels: [Trough cash]
-    statements: [cf]
   - id: liq.trough_period
     labels: [Trough cash week, Trough week]
-    statements: [cf]
-    value_kind: count
+    facets: {unit: count}
   - id: liq.total_liquidity
     labels: [Total liquidity]
-    statements: [cf]
   - id: liq.runway
     labels: [Runway, Cash runway, Runway months]
-    statements: [cf]
-    value_kind: ratio
+    facets: {unit: ratio}
   - id: liq.daily_burn
     labels: [Daily cash burn, Daily burn, Cash burn rate]
-    statements: [cf]
+    facets: {nature: flow}
   - id: liq.cash_conversion
     labels: [Cash conversion, Cash conversion net CF]
-    statements: [cf]
-    value_kind: ratio
+    facets: {unit: ratio}
   - id: liq.operating_cash_ratio
     labels: [Operating cash ratio, Inflows over outflows]
     aliases: [Σ Inflows / Σ Outflows]
-    statements: [cf]
-    value_kind: ratio
+    facets: {unit: ratio}
   - id: liq.liquidity_coverage
     labels: [Liquidity coverage]
-    statements: [cf]
-    value_kind: ratio
+    facets: {unit: ratio}

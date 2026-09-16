@@ -4,7 +4,7 @@ Read-only service that turns Excel cash-flow workbooks (`.xlsx` / `.xlsm`) into 
 
 Line items are linked to a small financial taxonomy with the right to abstain: structure (formula graph) first, then labels, then embeddings, then an optional LLM rerank. Section headers and index rows (`Week #`) are not tagged.
 
-Guides: [overview](docs/overview.md), [mapping](docs/mapping.md), [taxonomy](docs/taxonomy.md), [unmapped review](docs/review.md), [architecture](docs/architecture.md).
+Guides: [overview](docs/overview.md), [layout](docs/layout.md), [mapping](docs/mapping.md), [taxonomy](docs/taxonomy.md), [unmapped review](docs/review.md), [architecture](docs/architecture.md).
 
 ## Limits (MVP)
 

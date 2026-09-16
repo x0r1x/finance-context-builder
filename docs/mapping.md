@@ -4,11 +4,11 @@
 
 Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`).
 
-Связанные документы: [таксономия](taxonomy.md), [разбор unmapped](review.md), [архитектура](architecture.md).
+Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [разбор unmapped](review.md), [архитектура](architecture.md).
 
 ## Что участвует
 
-Layout помечает тело блока видами строк. В маппинг идут **только** `kind=fact` (в периоде есть числа или формулы).
+Layout помечает тело блока видами строк. В маппинг идут **только** `kind=fact` (в периоде есть числа или формулы). Как собираются блоки и лейблы — [layout.md](layout.md). Если fact-строк нет, каскад не виноват: сначала ось и зона лейблов.
 
 | kind | Роль |
 | --- | --- |
@@ -47,7 +47,9 @@ Layout помечает тело блока видами строк. В мапп
 | `embed` | `embed` | Косинус к эмбеддингам лейблов концептов |
 | `chat` | `chat` | Rerank pruned-списка |
 
-Lexical дополнительно знает устойчивые конструкции (net flow → `cf.net`, opening/closing balance в debt-секции → `bs.debt`). Если у концепта заданы `section_hints`, фраза принимается только при попадании хинта в лейбл / родителя / путь секции / лист.
+Lexical индексирует **и** `labels`, **и** `aliases`. Перед сравнением лейбл нормализуется (`normalize_label`): скобки снимаются, но аббревиатуры метрик (`EBITDA`, `CFADS`, `DSCR`) из скобок сохраняются; `cashflow` → `cash flow`; `&` → `and`. Однословные слабые фразы (`revenue`, `debt`, `total`, …) не матчятся, если это **всё** содержимое лейбла; в составном лейбле (`REVENUE - Passenger Car`) — да. Множественное число (`Drawdowns`, `revenues`) сводится к форме из yaml.
+
+Lexical дополнительно знает устойчивые конструкции из блока `patterns:` в yaml (net flow, opening/closing balance в debt-секции). Skip-pattern может запретить концепт в секции (`bs.ap` в debt). Если у концепта заданы `section_hints`, фраза принимается только при попадании хинта в лейбл / родителя / путь секции / лист.
 
 ### Structure
 
@@ -56,8 +58,8 @@ Lexical дополнительно знает устойчивые констр�
 | kind | Когда | Что предлагает |
 | --- | --- | --- |
 | `alias` | Ячейка = одна ячейка другой строки/листа | Тот же `concept_id`, что у источника (score ~0.96). Пример: `Dashboard!C17 = Weekly_Forecast!C39` |
-| `aggregate` | `SUM` соседних fact-строк | Общий концепт детей или их `broader` (не `cf.net` только потому что «Total»). Пример: `Total Inflows = SUM(collections)` → `cf.receipts` |
-| `diff` | Разность inflows и outflows | `cf.net` |
+| `aggregate` | `SUM` соседних fact-строк | Общий концепт детей или их `broader`, **только если замаплены все члены диапазона**. Один смапленный ребёнок (Insurance внутри EBITDA) концепт родителю не копирует. Итог не становится `cf.net` только потому что «Total». Пример: `Total Inflows = SUM(collections)` → `cf.receipts` |
+| `diff` | Разность двух строк | Родитель из `calculations` с противоположными весами |
 | `roll` | Roll-forward остатка | Тот же балансный концепт, что у связанной строки |
 
 Деление на именованную константу или число — **proration**, `value_kind` остаётся `money`. Настоящий ratio — DSCR-подобные лейблы (`dscr`, `coverage`, `leverage`, `runway`, …), см. `_semantic_ratio`.
@@ -71,8 +73,9 @@ Relations (`alias`, `aggregate`, `difference`, `roll_forward`) пишутся в
 Prune отбрасывает:
 
 - id вне таксономии;
-- несовместимый `value_kind` (money-строка не станет `ops.headcount` или `cov.llcr`, кроме исключения: money-лейбл с ratio-токенами может оставить ratio-концепт);
-- попадание `anti_labels` концепта в лейбл строки.
+- несовместимый `unit` / `value_kind`;
+- попадание `anti_labels` концепта в лейбл строки;
+- уверенно выведенный фасет строки, который противоречит фасету концепта (`statement=cov` ставится по **лейблу** строки: `dscr` / `llcr` / `plcr`, не по заголовку секции — иначе CFADS под DSCR отсекается).
 
 `decide`:
 
@@ -114,6 +117,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 | `low_score` | Есть кандидат, но ниже порога |
 | `ambiguous` | Два близких лидера |
 | `facet_mismatch` | Иначе (кандидаты не прошли decide) |
+| `calculation_conflict` | Наблюдённый SUM/diff противоречит объявленному `calculations` |
 
 ## Glossary
 
@@ -137,9 +141,10 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 `finance_context.mapping.eval`:
 
 - **coverage** — доля fact-строк с принятым концептом;
-- **selective risk** — ошибки среди **принятых** маппингов (abstain в риск не входит).
+- **selective risk** — ошибки среди **принятых** маппингов (abstain в риск не входит);
+- **abstain rate** и **risk–coverage** кривая — качество права отказаться.
 
-Золотые ожидания для `resources/cashflow.xlsx`: `tests/fixtures/mapping/cashflow_dispositions.yaml`. Правка таксономии без обновления gold ломает eval.
+Золотые ожидания для `resources/cashflow.xlsx`: `tests/fixtures/mapping/cashflow_dispositions.yaml`. Публичный корпус (MIT / CC-BY-NC-SA, не в git): `uv run python scripts/fetch-corpus.py` → `resources/corpus/` (Packt, RVI; three-statement в lock может 404). Gold: `packt_project_finance_dispositions.yaml`, `rvi_project_finance_dispositions.yaml`. Тесты корпуса скипятся, если книги не скачаны или `expectations` пусты.
 
 ## Как расширять маппинг
 

@@ -19,6 +19,21 @@ def test_coverage_and_selective_risk() -> None:
     assert signal_counts(["rule", "rule", "structure"])["rule"] == 2
 
 
+def test_risk_coverage_curve_orders_by_score() -> None:
+    from finance_context.mapping.eval import risk_coverage_curve
+
+    curve = risk_coverage_curve(
+        [
+            ("bs.cash", "bs.cash", 0.99),
+            ("cf.net", "pnl.revenue", 0.5),
+            ("cf.receipts", None, None),
+        ]
+    )
+    assert curve[0]["k"] == 1
+    assert curve[0]["risk"] == 0.0
+    assert curve[1]["risk"] == 0.5
+
+
 def test_prune_drops_ratio_concepts_on_money_rows() -> None:
     taxonomy = {
         "cov.llcr": Concept(id="cov.llcr", labels=["LLCR"], value_kind="ratio"),

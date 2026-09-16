@@ -38,6 +38,11 @@ def test_taxonomy_includes_fcf_repayment_drawdown() -> None:
         "liq.min_cash_target",
         "cf.disbursements.payroll",
         "cov.leverage_headroom",
+        "cf.cfads",
+        "cf.sources",
+        "cf.uses",
+        "bs.dsra",
+        "debt.sculpting",
     } <= ids
 
 

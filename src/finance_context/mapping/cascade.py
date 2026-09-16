@@ -13,9 +13,11 @@ from finance_context.mapping.glossary import GlossarySignal
 from finance_context.mapping.knn import TOP_K, rank_concepts
 from finance_context.mapping.lexical import LexicalSignal
 from finance_context.mapping.models import (
+    Calculation,
     Candidate,
     Concept,
     ConceptPick,
+    LexicalPattern,
     MappingDocument,
     MappingQuestion,
     RowContext,
@@ -33,6 +35,7 @@ from finance_context.mapping.structure import (
     analyze_structure,
     build_row_context,
 )
+from finance_context.mapping.taxonomy import attached_document, implicit_calculations
 from finance_context.mapping.vectors import load_concept_vectors
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
@@ -52,13 +55,29 @@ def map_layout(
     slot_timeout_sec: float = 0.0,
     cache_path: Path | None = None,
     embedding_model: str = "",
+    patterns: list[LexicalPattern] | None = None,
+    calculations: list[Calculation] | None = None,
 ) -> MappingDocument:
-    book = BookView(layout, cells or [], taxonomy)
+    attached = attached_document(taxonomy)
+    merged_calcs = list(calculations or (attached.calculations if attached else []))
+    merged_calcs.extend(implicit_calculations(taxonomy))
+    merged_patterns = list(patterns or (attached.patterns if attached else []))
+    book = BookView(
+        layout,
+        cells or [],
+        taxonomy,
+        calculations=merged_calcs,
+        patterns=merged_patterns,
+    )
     analyze_structure(book)
     templates = _templates_by_row(cells or [])
     resolver = Resolver(taxonomy)
     pending = _collect_contexts(book, templates)
-    signals = [GlossarySignal(glossary), LexicalSignal(taxonomy), StructureSignal()]
+    signals = [
+        GlossarySignal(glossary),
+        LexicalSignal(taxonomy, merged_patterns),
+        StructureSignal(),
+    ]
 
     for _ in range(4):
         progressed = False
@@ -98,6 +117,7 @@ def map_layout(
     for ctx in pending:
         if ctx.row_key not in book.concepts and not exclusion_reason(ctx):
             _resolve_row(ctx, book, [StructureSignal()], resolver)
+    _apply_calculation_checks(pending, book)
 
     questions: list[MappingQuestion] = []
     mapped = []
@@ -108,6 +128,7 @@ def map_layout(
         picked = ctx.extras.get("picked")
         source = ctx.extras.get("source") or "question"
         reason = exclusion_reason(ctx)
+        conflict = ctx.extras.get("exclusion_reason")
         if reason:
             mapped.append(
                 to_mapped(
@@ -132,6 +153,7 @@ def map_layout(
                 picked=picked,
                 ranked=ranked,
                 source=source,
+                exclusion_reason=conflict if concept_id is None else None,
             )
         )
     return MappingDocument(rows=mapped, questions=questions, relations=book.relations)
@@ -368,6 +390,7 @@ def _ask_chat(
                 f"parent: {ctx.parent_label or ''}\n"
                 f"section: {' / '.join(ctx.section_path)}\n"
                 f"value_kind: {ctx.value_kind}\n"
+                f"facets: {ctx.inferred_facets.model_dump()}\n"
                 f"period_headers: {', '.join(ctx.period_headers)}\n"
                 f"options: {listed}\n"
                 f"definitions: {'; '.join(defs)}"
@@ -381,6 +404,79 @@ def _ask_chat(
     if choices and concept_id not in choices:
         return None
     return str(concept_id)
+
+
+def _apply_calculation_checks(pending: list[_Pending], book: BookView) -> None:
+    for row in pending:
+        concept_id = book.concepts.get(row.row_key)
+        pattern = book.patterns.get(row.row_key)
+        if not concept_id or pattern is None:
+            continue
+        observed: list[str] = []
+        if pattern.kind == "aggregate":
+            for row_n in pattern.aggregate_rows:
+                found = _concept_at_row(book, row.sheet, row_n)
+                if found:
+                    observed.append(found)
+            if len(observed) < 2:
+                continue
+        elif pattern.kind == "diff" and pattern.diff_rows:
+            for row_n in pattern.diff_rows:
+                found = _concept_at_row(book, row.sheet, row_n)
+                if found:
+                    observed.append(found)
+            if len(observed) != 2:
+                continue
+        else:
+            continue
+        if _calculation_compatible(concept_id, pattern.kind, observed, book):
+            picked = row.extras.get("picked")
+            if picked is not None:
+                picked.score = min(1.0, picked.score + 0.02)
+            continue
+        book.concepts.pop(row.row_key, None)
+        row.extras["picked"] = None
+        row.extras["source"] = "question"
+        row.extras["exclusion_reason"] = "calculation_conflict"
+
+
+def _concept_at_row(book: BookView, sheet: str, row: int) -> str | None:
+    found = book.row_index.get((sheet, row))
+    if found is None:
+        return None
+    block, _layout_row = found
+    return book.concepts.get(book.row_key(sheet, row, block.block_id))
+
+
+def _calculation_compatible(
+    concept_id: str,
+    kind: str,
+    observed: list[str],
+    book: BookView,
+) -> bool:
+    relevant = [
+        calc
+        for calc in book.calculations
+        if calc.parent == concept_id and calc.origin == "declared"
+    ]
+    if not relevant:
+        return True
+    observed_set = set(observed)
+    if kind == "aggregate":
+        sums = [calc for calc in relevant if all(term.weight > 0 for term in calc.terms)]
+        diffs = [calc for calc in relevant if any(term.weight < 0 for term in calc.terms)]
+        if sums:
+            return any(observed_set <= {term.concept for term in calc.terms} for calc in sums)
+        if diffs:
+            return False
+        return True
+    if kind == "diff":
+        for calc in relevant:
+            terms = {term.concept for term in calc.terms}
+            if any(term.weight < 0 for term in calc.terms) and observed_set == terms:
+                return True
+        return False
+    return True
 
 
 def _question(ctx: RowContext, ranked: list[Candidate], qn: int) -> MappingQuestion:
