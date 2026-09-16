@@ -177,9 +177,9 @@ def _collect_contexts(
         for block in sheet.blocks:
             by_row = {r.row: r for r in block.rows}
             for layout_row in block.rows:
-                if layout_row.kind != "fact":
+                if layout_row.kind not in {"fact", "flag", "helper"}:
                     continue
-                if is_noise_label(layout_row.label):
+                if layout_row.kind == "fact" and is_noise_label(layout_row.label):
                     continue
                 parent = _parent_label(layout_row, by_row)
                 ctx = build_row_context(

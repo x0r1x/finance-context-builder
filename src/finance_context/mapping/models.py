@@ -35,6 +35,7 @@ Disposition = Literal["mapped", "excluded", "abstained"]
 ExclusionReason = Literal[
     "check",
     "helper",
+    "flag",
     "noise",
     "technical_bridge",
     "no_candidate",

@@ -32,10 +32,11 @@ Each body row gets `kind` and `section_path` from structure, not from label dict
 
 | kind | Meaning |
 | --- | --- |
-| `fact` | Period cells have numbers or formulas. Only these enter mapping and metrics. |
+| `fact` | Period cells have numbers or formulas. These enter mapping as candidates. |
 | `abstract` | Section header: label without period values. Becomes parent of following facts. |
 | `index` | Счётчик `Week #` / `Month #`: подряд `0\|1..n` по оси и лейбл счётчика, либо без формул в периодных ячейках. |
-| `helper` | Check / tie-out rows. |
+| `helper` | Check / tie-out / placeholder (`Spare`, `None`). Excluded; values stay in context. |
+| `flag` | 0/1 timing and scenario rows. Excluded; not financial `unknown`. |
 
 `needs_input` is driven only by questions on `fact` rows.
 
@@ -83,7 +84,7 @@ Concept fields, id families, and the “new meaning vs alias” rule: [taxonomy.
 
 Concepts in [`taxonomy.yaml`](../src/finance_context/ontology/taxonomy.yaml) carry `definition`, `statements`, `value_kind` (`money` / `rate` / `ratio` / `count`), optional `role`, `broader`, `section_hints`, and `anti_labels`. Missing facets are filled from the id prefix. Division by a named constant or number is proration (still `money`). The row’s own label may mark `statement=cov` (`dscr` / `llcr` / `plcr`); a heading like DSCR does not reclassify a child `CFADS` line. A money cash-flow line cannot map to `ops.headcount` or `cov.llcr`.
 
-Each mapped fact row stores `disposition`: `mapped`, `excluded` (check/helper/noise), or `abstained` (`unknown` plus a question). Check rows do not create review questions. A wrong tag is still worse than `unknown`; thresholds are not lowered to force a nearest concept.
+Each mapped fact row stores `disposition`: `mapped`, `excluded` (check/helper/flag/noise), or `abstained` (`unknown` plus a question). Check and flag rows do not create review questions. A wrong tag is still worse than `unknown`; thresholds are not lowered to force a nearest concept.
 
 The resolver fuses scores, prunes incompatible facets, then accepts only above a threshold (stricter for embeddings). Empty or weak lists become `unknown`. Mapped rows store `evidence` (which signal, why).
 

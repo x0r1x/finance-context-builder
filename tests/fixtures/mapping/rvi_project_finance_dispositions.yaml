@@ -17,3 +17,6 @@ expectations:
   - {label: CFADS during debt term, concept_id: cf.cfads}
   - {label: EBITDA, parent: Corporate tax, concept_id: pnl.ebitda}
   - {label: Net Present Value (NPV), concept_id: val.npv}
+  - {label: Cashflow available for equity (FCFE), concept_id: cf.fcf}
+  - {label: Operating cashflow, concept_id: cf.cfo}
+  - {label: Total operating costs, concept_id: pnl.opex}

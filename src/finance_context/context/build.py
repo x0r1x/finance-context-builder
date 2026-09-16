@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout
-from finance_context.layout.periods import infer_grain
+from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowRelation
 from finance_context.mapping.rules import is_noise_label
 from finance_context.models.context import (
@@ -76,9 +76,9 @@ def build_context(
             metrics: list[MetricSeries] = []
             parent_by_row = {r.row: r.label for r in block.rows}
             for layout_row in block.rows:
-                if layout_row.kind != "fact":
+                if layout_row.kind not in {"fact", "flag", "helper"}:
                     continue
-                if is_noise_label(layout_row.label):
+                if layout_row.kind == "fact" and is_noise_label(layout_row.label):
                     continue
                 row_key = f"{sheet.name}|{layout_row.row}|{block.block_id}"
                 mapped = mapped_by_key.get(row_key)
@@ -95,6 +95,7 @@ def build_context(
                     headers=block.axis.headers,
                     by_addr=by_addr,
                     row_num=layout_row.row,
+                    date1904=bool(workbook_meta.get("date1904")),
                 )
                 if mapped is not None and mapped.disposition == "excluded":
                     excluded.append(series)
@@ -169,6 +170,7 @@ def _series_for_row(
     headers: list,
     by_addr: dict[tuple[str, int, int], dict],
     row_num: int,
+    date1904: bool = False,
 ) -> MetricSeries:
     label_addr = format_addr(label_col, row_num)
     source = SourceRef(sheet=sheet_name, addr=label_addr, row=row_num, col=label_col)
@@ -189,6 +191,14 @@ def _series_for_row(
         addr = format_addr(header.col, row_num)
         formula = (cell or {}).get("formula_raw")
         cached = (cell or {}).get("cached_value")
+        fmt = (cell or {}).get("number_format")
+        displayed = display_cell_text(
+            cached if cached is not None else None,
+            fmt,
+            date1904=date1904,
+        )
+        if displayed is not None:
+            cached = displayed
         values.append(
             PeriodValue(
                 period_key=header.period_key,

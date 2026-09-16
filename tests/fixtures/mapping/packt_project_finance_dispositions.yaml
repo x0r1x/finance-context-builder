@@ -17,3 +17,10 @@ expectations:
   - {label: Debt, parent: Balance Sheet, concept_id: bs.debt}
   - {label: Equity, parent: Balance Sheet, concept_id: bs.equity}
   - {label: CAPEX (incl. SPV costs), concept_id: cf.capex}
+  - {label: Construction Cost (k£), concept_id: cf.capex}
+  - {label: Gross revenues, parent: P&L, concept_id: pnl.revenue}
+  - {label: Drawdowns, parent: Debt Repayment Schedule, concept_id: cf.drawdown}
+  - {label: Amortization, parent: P&L, concept_id: pnl.da}
+  - {label: Net Profit, parent: P&L, concept_id: pnl.net_income}
+  - {label: Cash Flow Available for Equity, concept_id: cf.fcf}
+  - {label: Asset, parent: Balance Sheet, concept_id: bs.ppe}

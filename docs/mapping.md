@@ -15,7 +15,8 @@ Layout помечает тело блока видами строк. В мапп
 | `fact` | Кандидат на `concept_id` |
 | `abstract` | Заголовок секции, родитель следующих fact |
 | `index` | Счётчики вроде `Week #` |
-| `helper` | Check / tie-out |
+| `helper` | Check / tie-out / плейсхолдер Spare |
+| `flag` | 0/1 тайминг и сценарии; excluded, не financial unknown |
 
 Лейблы из `is_noise_label` (`Dashboard`, `Assumptions`, `* chart`, `* bridge`, …) **не создают** строк в `mapping.json`.
 
@@ -33,7 +34,7 @@ Layout помечает тело блока видами строк. В мапп
 6. Финальный проход только `structure` (подтянуть то, что открылось после embed/chat).
 7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations`.
 
-Повторная загрузка той же книги на HTTP пересобирает mapping и context; parse/compile/layout переиспользуются, если артефакты уже есть. Сам `mapping.json` при повторном CLI-прогоне в тот же каталог **скипается**, если файл уже лежит на диске.
+Повторная загрузка той же книги на HTTP пересобирает compile, layout, mapping и context; parse (`raw/`) переиспользуется. Сам `mapping.json` при повторном CLI-прогоне в тот же каталог **скипается**, если файл уже лежит на диске.
 
 ## Сигналы
 

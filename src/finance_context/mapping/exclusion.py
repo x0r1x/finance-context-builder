@@ -11,6 +11,8 @@ _TECHNICAL = (
 
 
 def exclusion_reason(ctx: RowContext) -> str | None:
+    if ctx.kind == "flag":
+        return "flag"
     if ctx.article_role == "check" or ctx.kind == "helper":
         return "check" if ctx.article_role == "check" else "helper"
     if is_noise_label(ctx.label):

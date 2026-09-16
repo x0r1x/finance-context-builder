@@ -49,6 +49,16 @@ _FLAG_LABEL = re.compile(
     r"\b(flag|flags|construction|ops|operating|online|toggle|switch|binary)\b",
     re.IGNORECASE,
 )
+_FLAG_BODY = re.compile(
+    r"\b(flag|flags|toggle|switch|binary)\b|start date|end date|"
+    r"beginning of construction|end of construction",
+    re.IGNORECASE,
+)
+_SCENARIO_LABEL = re.compile(
+    r"live case|case number|\bchoice\b",
+    re.IGNORECASE,
+)
+_PLACEHOLDER_LABEL = re.compile(r"^(spare|none)$", re.IGNORECASE)
 _CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_MONTH})
 _RELATIVE_LABEL = re.compile(
     r"^(project\s+)?(year|period|month|quarter|год|период|мес\w*|кв\w*)s?\b",
@@ -750,7 +760,13 @@ def _data_rows(
             continue
         indent = depth + _indent(label)
         check_row = bool(_CHECK.search(label))
-        kind = _row_kind(by_row[row_n], period_cols, date1904, check_row=check_row)
+        kind = _row_kind(
+            by_row[row_n],
+            period_cols,
+            date1904,
+            label=label,
+            check_row=check_row,
+        )
         if kind == "abstract":
             while section_stack and section_stack[-1].indent >= indent:
                 section_stack.pop()
@@ -803,14 +819,18 @@ def _row_kind(
     period_cols: set[int],
     date1904: bool,
     *,
+    label: str,
     check_row: bool,
 ) -> str:
-    if check_row:
+    if check_row or _PLACEHOLDER_LABEL.fullmatch(label.strip()):
         return "helper"
     if _is_index_values(row_cells, period_cols, date1904):
         return "index"
     has_formula = False
     has_number = False
+    binary_vals: set[int] = set()
+    binary_ok = True
+    binary_n = 0
     for cell in row_cells:
         if int(cell["col"]) not in period_cols:
             continue
@@ -819,8 +839,25 @@ def _row_kind(
         text = _text(cell, date1904)
         if text and _is_number(text):
             has_number = True
+            if binary_ok:
+                try:
+                    value = float(text.replace(" ", "").replace(",", "."))
+                except ValueError:
+                    binary_ok = False
+                else:
+                    if value not in {0.0, 1.0}:
+                        binary_ok = False
+                    else:
+                        binary_vals.add(int(value))
+                        binary_n += 1
     if not has_formula and not has_number:
+        if _SCENARIO_LABEL.search(label) or _FLAG_BODY.search(label):
+            return "flag"
         return "abstract"
+    if _SCENARIO_LABEL.search(label) or _FLAG_BODY.search(label):
+        return "flag"
+    if binary_ok and binary_n >= 2 and binary_vals == {0, 1}:
+        return "flag"
     return "fact"
 
 

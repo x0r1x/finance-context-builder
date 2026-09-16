@@ -56,3 +56,78 @@ def test_pf_labels_hit_drawdown_revenue_cfads_ebitda() -> None:
     assert by_label["Debt Drawdown (k£)"] == "cf.drawdown"
     assert by_label["Cashflow available for debt service (CFADS)"] == "cf.cfads"
     assert by_label["Operating Income or Loss (EBITDA)"] == "pnl.ebitda"
+
+
+def test_parent_section_rolls_up_capex_opex_da() -> None:
+    taxonomy = load_taxonomy()
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="Construction",
+                blocks=[
+                    Block(
+                        block_id="Construction!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="Construction!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(col=2, text="1", role="relative", period_key="Y1"),
+                                AxisHeader(col=3, text="2", role="relative", period_key="Y2"),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(row=5, label="CAPEX", kind="abstract"),
+                            LayoutRow(
+                                row=6,
+                                label="Construction Cost (k£)",
+                                kind="fact",
+                                parent_row=5,
+                                section_path=["CAPEX"],
+                            ),
+                            LayoutRow(
+                                row=8,
+                                label="Total Costs (k£)",
+                                kind="fact",
+                                parent_row=5,
+                                section_path=["CAPEX"],
+                            ),
+                            LayoutRow(
+                                row=20,
+                                label="Maintenance & SPV costs",
+                                kind="fact",
+                                section_path=["COSTS"],
+                            ),
+                            LayoutRow(
+                                row=13,
+                                label="Amortization (k£)",
+                                kind="fact",
+                                section_path=["D&A"],
+                            ),
+                            LayoutRow(row=25, label="Net Profit", kind="fact"),
+                            LayoutRow(
+                                row=9,
+                                label="Cashflow available for equity (FCFE)",
+                                kind="fact",
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row.concept_id for row in doc.rows}
+    assert by_label["Construction Cost (k£)"] == "cf.capex"
+    assert by_label["Total Costs (k£)"] == "cf.capex"
+    assert by_label["Maintenance & SPV costs"] == "pnl.opex"
+    assert by_label["Amortization (k£)"] == "pnl.da"
+    assert by_label["Net Profit"] == "pnl.net_income"
+    assert by_label["Cashflow available for equity (FCFE)"] == "cf.fcf"

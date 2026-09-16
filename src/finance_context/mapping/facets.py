@@ -106,17 +106,23 @@ def prune_candidates(
             continue
         if any(anti.casefold() in label for anti in concept.anti_labels if anti):
             continue
-        if not _facets_compatible(ctx, concept):
+        skip_nature = item.signal == "lexical" and item.score >= 0.9
+        if not _facets_compatible(ctx, concept, skip_fields={"nature"} if skip_nature else set()):
             continue
         kept.append(item)
     return kept
 
 
-def _facets_compatible(ctx: RowContext, concept: Concept) -> bool:
+def _facets_compatible(
+    ctx: RowContext,
+    concept: Concept,
+    skip_fields: set[str] | None = None,
+) -> bool:
     inferred = ctx.inferred_facets
     concept_values = concept.facets.model_dump()
+    skip = skip_fields or set()
     for field in _FACET_FIELDS:
-        if field == "unit":
+        if field == "unit" or field in skip:
             continue
         guess = getattr(inferred, field)
         if not guess.confident or not guess.value:

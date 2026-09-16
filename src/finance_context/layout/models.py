@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 ColumnRole = Literal["historical", "forecast", "stub", "scenario", "total", "relative"]
-RowKind = Literal["fact", "abstract", "index", "helper"]
+RowKind = Literal["fact", "abstract", "index", "helper", "flag"]
 
 
 class PeriodHit(BaseModel):

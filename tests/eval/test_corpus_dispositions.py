@@ -7,6 +7,7 @@ import yaml
 
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook
+from finance_context.layout.models import Layout
 from finance_context.layout.stage import layout_workbook
 from finance_context.mapping.cascade import map_layout
 from finance_context.mapping.eval import abstain_rate, disposition_metrics
@@ -47,6 +48,54 @@ def _match_expectation(row, expectations: list[dict]) -> dict | None:
     return labeled[0]
 
 
+def _period_count(block) -> int:
+    return sum(
+        1
+        for header in block.axis.headers
+        if header.role in {"historical", "forecast", "stub", "relative"}
+        and header.period_key not in {"actual", "plan", "total", "stub"}
+    )
+
+
+def _assert_layout_geometry(filename: str, layout: Layout) -> None:
+    blocks = [block for sheet in layout.sheets for block in sheet.blocks]
+    facts = [
+        row
+        for sheet in layout.sheets
+        for block in sheet.blocks
+        for row in block.rows
+        if row.kind == "fact"
+    ]
+    flags = [
+        row
+        for sheet in layout.sheets
+        for block in sheet.blocks
+        for row in block.rows
+        if row.kind == "flag"
+    ]
+    if filename == "packt-project-finance.xlsx":
+        assert any(_period_count(block) >= 3 for block in blocks), (
+            f"{filename}: expected a block with >=3 periods, got "
+            f"{[_period_count(b) for b in blocks]}"
+        )
+        assert facts, f"{filename}: layout produced no fact rows"
+        flag_labels = {normalize_label(row.label) for row in flags}
+        assert any("construction" == label or "construction" in label for label in flag_labels) or any(
+            "beginning of construction" in label for label in flag_labels
+        )
+        return
+    if filename == "rvi-project-finance.xlsx":
+        short = [block.block_id for block in blocks if _period_count(block) == 2]
+        assert len(short) <= 2, (
+            f"{filename}: leftover 2-period start/end blocks: {short[:12]}"
+        )
+        labels = {normalize_label(row.label) for row in facts}
+        for needle in ("cfads", "total revenue"):
+            assert any(needle in label for label in labels), (
+                f"{filename}: no fact label containing {needle!r}"
+            )
+
+
 @pytest.mark.parametrize(("filename", "gold_path"), CASES)
 def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: Path) -> None:
     xlsx = CORPUS / filename
@@ -59,6 +108,7 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
     parse_workbook(xlsx, dest)
     compile_workbook(dest)
     layout = layout_workbook(dest)
+    _assert_layout_geometry(filename, layout)
     cells = read_parquet(dest / "ir" / "cells.parquet")
     doc = map_layout(
         layout,
@@ -75,6 +125,9 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         pytest.skip("gold expectations not filled yet")
     errors = []
     expected_labels = {normalize_label(item["label"]) for item in expectations}
+    mapped_labels = {normalize_label(row.label) for row in doc.rows}
+    missing = sorted(expected_labels - mapped_labels)
+    assert not missing, f"{filename}: gold labels missing from mapped fact rows: {missing}"
     for row in doc.rows:
         if normalize_label(row.label) not in expected_labels:
             continue
@@ -83,4 +136,10 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
             continue
         if row.concept_id != exp["concept_id"]:
             errors.append((row.sheet, row.label, row.concept_id, exp["concept_id"]))
-    assert not errors, errors
+    for row in doc.rows:
+        if row.disposition == "excluded":
+            continue
+        if "available for equity" in normalize_label(row.label) or "fcfe" in normalize_label(
+            row.label
+        ):
+            assert row.concept_id != "bs.equity", row.label

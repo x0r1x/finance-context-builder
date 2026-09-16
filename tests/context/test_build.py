@@ -93,3 +93,50 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.mapping.method == "rule"
     assert metric.unit == "currency"
     assert doc.unmapped == []
+
+
+def test_build_decodes_excel_date_serials() -> None:
+    mapping = MappingDocument(
+        rows=[
+            MappedRow(
+                row_key="CF|2|CF!r1",
+                sheet="CF",
+                row=2,
+                block_id="CF!r1",
+                label="Opening cash",
+                concept_id="bs.cash",
+                article_role="database_like",
+                source="glossary",
+                confidence="high",
+                score=1.0,
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 2,
+            "addr": "B2",
+            "formula_raw": None,
+            "cached_value": "45291",
+            "number_format": "dd/mm/yyyy",
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 3,
+            "addr": "C2",
+            "formula_raw": None,
+            "cached_value": "45291",
+            "number_format": "dd/mm/yyyy",
+        },
+    ]
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF"}]},
+        cells=cells,
+        layout=_layout(),
+        mapping=mapping,
+    )
+    assert doc.blocks[0].metrics[0].values[0].cached_value == "31.12.2023"

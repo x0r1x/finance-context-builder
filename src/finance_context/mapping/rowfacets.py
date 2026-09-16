@@ -42,9 +42,10 @@ def _series(ctx: RowContext) -> FacetGuess:
 
 
 def _nature(label: str, tokens: set[str], pattern_kind: str | None) -> FacetGuess:
-    if pattern_kind == "roll":
+    balance_words = tokens & {"opening", "closing", "balance", "beg", "ending"}
+    if balance_words:
         return FacetGuess(value="balance", confident=True)
-    if tokens & {"opening", "closing", "balance", "beg", "ending"}:
+    if pattern_kind == "roll" and balance_words:
         return FacetGuess(value="balance", confident=True)
     return FacetGuess()
 
