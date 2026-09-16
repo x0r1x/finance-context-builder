@@ -88,7 +88,7 @@ def build_context(
                 series = _series_for_row(
                     sheet_name=sheet.name,
                     block_id=block.block_id,
-                    label_col=block.label_col,
+                    label_col=layout_row.label_col or block.label_col,
                     layout_row_label=layout_row.label,
                     layout_row_parent=parent,
                     mapped=mapped,

@@ -338,6 +338,9 @@ def parse_period_key(key: str) -> tuple[str | None, int | None, int | None, int 
 
 
 def infer_grain(keys: list[str]) -> str | None:
+    relative = _relative_grain(keys)
+    if relative is not None:
+        return relative
     calendar = [key for key in keys if is_calendar_key(key)]
     if len(calendar) < 2:
         return None
@@ -381,6 +384,27 @@ def infer_grain(keys: list[str]) -> str | None:
     if all(_YEAR_KEY.fullmatch(key) for key in calendar):
         return "year"
     return None
+
+
+_RELATIVE_GRAIN = {
+    "Y": "model_year",
+    "Q": "model_quarter",
+    "M": "model_month",
+    "P": "model_period",
+}
+
+
+def _relative_grain(keys: list[str]) -> str | None:
+    if not keys:
+        return None
+    grains: set[str] = set()
+    for key in keys:
+        if not key or key[0] not in _RELATIVE_GRAIN or not key[1:].isdigit():
+            return None
+        grains.add(_RELATIVE_GRAIN[key[0]])
+    if len(grains) == 1:
+        return next(iter(grains))
+    return "model_period"
 
 
 def apply_grain(key: str, grain: str | None) -> str:
