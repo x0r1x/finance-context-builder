@@ -2,7 +2,7 @@
 
 Read-only service that turns Excel cash-flow workbooks (`.xlsx` / `.xlsm`) into versioned JSON and Markdown context. Formulas are preserved; values come from Excel cached results and are not recalculated.
 
-Line items are linked to a small financial taxonomy with the right to abstain: structure (formula graph) first, then labels, then embeddings, then an optional LLM rerank. Section headers and index rows (`Week #`) are not tagged.
+Every layout row is kept in `context.json` (`inventory`, schema `1.1.0`). A small taxonomy may annotate a line with `concept_id`, or abstain: a wrong tag is worse than `unknown`. Structure (formula graph and neighbors) first, then labels, then embeddings, then an optional LLM rerank. Unknown rows still carry hints, neighbors, formula fingerprint, and top-3 candidates.
 
 Guides: [overview](docs/overview.md), [layout](docs/layout.md), [mapping](docs/mapping.md), [taxonomy](docs/taxonomy.md), [unmapped review](docs/review.md), [architecture](docs/architecture.md).
 
@@ -102,7 +102,7 @@ Endpoints:
 
 Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `DATA_DIR`. See `.env.example`.
 
-Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/taxonomy.md](docs/taxonomy.md) and [docs/mapping.md](docs/mapping.md). Check/helper rows are excluded from review; unmapped business rows stay `unknown` instead of taking a nearest guess.
+Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/taxonomy.md](docs/taxonomy.md) and [docs/mapping.md](docs/mapping.md). Check/helper/flag rows are excluded from review questions; they still appear in Markdown (`## Excluded` and row navigator). Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
 
 ## Docker
 
@@ -111,7 +111,7 @@ cp .env.example .env   # optional; LLM/embeddings may stay unset
 docker compose up --build
 ```
 
-Leave Compose running. API: `http://127.0.0.1:8080`. Job artifacts and `glossary.json` go to `./data` on the host.
+Leave Compose running. API: `http://127.0.0.1:8080`. Job artifacts and `glossary.json` go to `./data` on the host. Compose mounts **`./data` only**, not `src/`: taxonomy and mapping code are whatever was baked into the image — rebuild after ontology changes.
 
 Loopback LLM URLs in `.env` (`http://127.0.0.1:1234/v1`) are rewritten to `host.docker.internal` inside the container so LM Studio on the host stays reachable. Keep the model server listening on all interfaces or on the host gateway, not only inside another isolated network.
 

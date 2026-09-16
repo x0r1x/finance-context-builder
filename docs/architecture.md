@@ -22,9 +22,9 @@ flowchart LR
 1. **Raw** (`raw/cells.parquet`, `raw/workbook.json`): cells, formulas, cached values, formats, comments, defined names. OOXML via lxml with zip-slip / bomb / encryption guards.
 2. **Formulas** (`ir/cells.parquet`, `ir/edges.parquet`): templates, AST, dependency edges. Named ranges such as `DS_Drawn_C:DS_Drawn_N` stay unresolved. Unsupported formulas are marked `unparsed`. A range may repeat the sheet qualifier on the right (`SUM(TBA!$D$10:'TBA'!D10)`). Binary templates keep operator parentheses, e.g. `(1+Sub_Growth_M)^(R[-4]C[0]-1)`.
 3. **Layout** (`layout.json`): statement-like blocks, period axes (calendar years/dates **or** model-year indices `Y1..Yn`), grain, label span, row kinds, and section path. Details: [layout.md](layout.md).
-4. **Mapping** (`mapping.json`): entity linking with abstention. Signals propose candidates; a resolver fuses, prunes by taxonomy facets, and maps only above a confidence threshold. Otherwise the row is `unknown` and may become a question. LLM sees labels, section path, and period headers — not numeric values.
-5. **Context** (`context.json`): canonical `ContextDocument` with provenance (`Sheet!A1`), mapping evidence, and structural relations (alias, aggregate, difference, roll-forward).
-6. **Markdown** (`context.md`): deterministic human view. Mapped and unmapped fact rows use the same period tables (unmapped Concept is `unknown`). Default cap is 16 period columns and 80 rows per table; mapping evidence, questions, formula templates, and relations stay in JSON only.
+4. **Mapping** (`mapping.json`): entity linking with abstention. Signals propose candidates from label, section, ±2 neighbors, formula shape, and the IR edge graph; a resolver fuses, prunes by taxonomy facets, and maps only above a confidence threshold. Otherwise the row is `unknown` and may become a question. Top-3 candidates are always stored. LLM sees labels, section path, neighbors, and period headers — not numeric values.
+5. **Context** (`context.json`, schema `1.1.0`): canonical `ContextDocument`. `inventory` lists **every** layout row (kind, `label_path`, neighbors, formula fingerprint, row-level precedents/dependents, hints, candidates). Period series live in `blocks` / `unmapped` / `excluded` without duplicating values onto inventory.
+6. **Markdown** (`context.md`): header reports **content completeness** vs **concept coverage**. Mapped and unmapped fact rows share period tables (unmapped Concept is `unknown`). Then `## Excluded` and per-sheet `## Row navigator` (row, label, path, kind, concept, unit, formula, refs — no period values). Default cap is 16 period columns and 80 rows per table; mapping evidence, questions, formula templates, and relations stay in JSON.
 
 ## Layout row kinds
 
@@ -32,11 +32,11 @@ Each body row gets `kind` and `section_path` from structure, not from label dict
 
 | kind | Meaning |
 | --- | --- |
-| `fact` | Period cells have numbers or formulas. These enter mapping as candidates. |
-| `abstract` | Section header: label without period values. Becomes parent of following facts. |
-| `index` | Счётчик `Week #` / `Month #`: подряд `0\|1..n` по оси и лейбл счётчика, либо без формул в периодных ячейках. |
-| `helper` | Check / tie-out / placeholder (`Spare`, `None`). Excluded; values stay in context. |
-| `flag` | 0/1 timing and scenario rows. Excluded; not financial `unknown`. |
+| `fact` | Period cells have numbers or formulas. Mapping candidates; period series in context. |
+| `abstract` | Section header: label without period values. Parent of following facts; kept in `inventory`. |
+| `index` | Счётчик `Week #` / `Month #`: подряд `0\|1..n` по оси и лейбл счётчика, либо без формул в периодных ячейках. In `inventory` only. |
+| `helper` | Check / tie-out / placeholder (`Spare`, `None`). Excluded from tagging; values stay in `excluded`. |
+| `flag` | 0/1 timing and scenario rows (`Mid case`, `Live Case`, `Covenant breach`, …). Excluded; not financial `unknown`. |
 
 `needs_input` is driven only by questions on `fact` rows.
 
@@ -48,20 +48,22 @@ On a sheet, a short date pair that sits entirely left of the widest timeline is 
 
 Details: [mapping.md](mapping.md). Taxonomy fields and how to extend them: [taxonomy.md](taxonomy.md).
 
-Mapping is retrieve-and-align, not closed-set classification. A wrong tag is worse than `unknown`.
+Mapping is retrieve-and-align, not closed-set classification. Taxonomy is a dictionary; completeness of content does not depend on a hit. A wrong tag is worse than `unknown`.
 
 ```mermaid
 flowchart TD
   ir[IR cells and formula graph] --> struct[Structure patterns]
-  layout[Layout blocks] --> struct
-  struct --> ctx[RowContext]
+  layout[Layout all rows] --> inv[Context inventory]
+  layout --> struct
+  struct --> ctx[RowContext plus neighbors]
   ctx --> signals[Signal providers]
   signals --> resolver[Resolver fuse prune threshold]
-  resolver --> decide{Confident}
-  decide -->|yes| mapped[MappedRow with evidence]
-  decide -->|no| nil[unknown plus question]
-  nil --> gloss[Learned glossary]
-  gloss --> signals
+  resolver --> decide{score >= ACCEPT_MIN}
+  decide -->|yes| mapped[concept_id]
+  decide -->|no| cand[top-3 candidates kept]
+  mapped --> inv
+  cand --> inv
+  inv --> json[context.json and md]
 ```
 
 ### Signals
@@ -71,7 +73,7 @@ New matching ideas are new `Signal` implementations (`propose(ctx, book) -> list
 | Signal | Role |
 | --- | --- |
 | `glossary` | Learned `(normalized_label, parent) → concept_id` from `data/glossary.json`. |
-| `structure` | Formula graph: passthrough alias across sheets, `SUM` of child rows when **every** member is mapped (shared id or `broader`), inflows minus outflows, roll-forward, proration vs true ratio. |
+| `structure` | Formula graph: passthrough alias across sheets, `SUM` of child rows when **every** member is mapped (shared id or `broader`), inflows minus outflows, roll-forward, proration vs true ratio. Also ±2 neighbor labels and row-level dependents from `ir/edges.parquet` (a line that feeds mapped `pnl.opex` / `cf.uses` gets a category prior). |
 | `lexical` | Taxonomy labels and stable phrases. |
 | `embed` | Dense retrieve over concept labels/definitions; accept only with cosine gap. |
 | `chat` | Rerank a short pruned list. May return `unknown`. Never invents an id. |
@@ -84,11 +86,11 @@ Concept fields, id families, and the “new meaning vs alias” rule: [taxonomy.
 
 Concepts in [`taxonomy.yaml`](../src/finance_context/ontology/taxonomy.yaml) carry `definition`, `statements`, `value_kind` (`money` / `rate` / `ratio` / `count`), optional `role`, `broader`, `section_hints`, and `anti_labels`. Missing facets are filled from the id prefix. Division by a named constant or number is proration (still `money`). Lexical `patterns` may copy a section concept onto children (`cf.capex` under Uses); non-money assumptions must be listed in `unless`. `_semantic_ratio` matches **tokens**, not substrings. The row’s own label may mark `statement=cov` (`dscr` / `llcr` / `plcr`); a heading like DSCR does not reclassify a child `CFADS` line. A money cash-flow line cannot map to `ops.headcount` or `cov.llcr`. Covenant **limits** (`cov.dscr_limit`) are not the same id as observed DSCR.
 
-Each mapped fact row stores `disposition`: `mapped`, `excluded` (check/helper/flag/noise), or `abstained` (`unknown` plus a question). Check and flag rows do not create review questions. A wrong tag is still worse than `unknown`; thresholds are not lowered to force a nearest concept.
+Each mapped fact/flag/helper row stores `disposition`: `mapped`, `excluded` (check/helper/flag/noise), or `abstained` (`unknown` plus a question). Always-on **hints** (`nature`, `time_semantics` flow/bop/eop/rate, `statement`, `unit`) are written even when `concept_id` is null. Check and flag rows do not create review questions. A wrong tag is still worse than `unknown`; thresholds are not lowered to force a nearest concept.
 
-The resolver fuses scores, prunes incompatible facets, then accepts only above a threshold (stricter for embeddings). Empty or weak lists become `unknown`. Mapped rows store `evidence` (which signal, why).
+The resolver fuses scores, prunes incompatible facets, then accepts only above a threshold (stricter for embeddings). Empty or weak lists become `unknown` but keep top-3 `candidates`. Mapped rows store `evidence` (which signal, why). Calculation mismatch vs declared `calculations` is a **signed feature** (score down); it still abstains as `calculation_conflict` except a few keep-rules (exact `Cash Flow` under IRR/ratios).
 
-Quality is the pair **coverage** (share of fact rows mapped) and **selective risk** (errors among accepted mappings). Helpers live in `finance_context.mapping.eval`.
+Quality is two numbers, not one: **content completeness** (`inventory` vs layout rows, must be 1.0) and **concept coverage** (share of annotatable rows with an accepted id). **Selective risk** is errors among accepted mappings. Helpers live in `finance_context.mapping.eval`.
 
 ### Learned glossary
 

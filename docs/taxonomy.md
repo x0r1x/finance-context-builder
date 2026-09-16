@@ -40,7 +40,7 @@ calculations:
 | `value_kind` | Алиас `facets.unit` на время миграции |
 | `statements` | Совместимость; заполняется из `facets.statement`, если пусто |
 | `section_hints` | Lexical срабатывает, только если хинт виден в контексте строки |
-| `anti_labels` | Блок: подстрока в лейбле строки выкидывает этот концепт |
+| `anti_labels` | Жёсткий guard: подстрока в лейбле **выкидывает** этот концепт. Не скоринг и не место для широких фраз (`cash in`, `lease`) |
 | `exact_labels` | Если лейбл строки совпал — концепт форсируется |
 | `definition` | Текст для людей и для embed-запроса |
 | `deprecated` / `replaced_by` | Снятие концепта без переименования id |
@@ -106,7 +106,7 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 | В модели новое *значение* (runway, commitment fee, cash tax) | Новый `id` + labels + facets |
 | Тот же смысл, другая формулировка (`IT & Telecom`, `Drawdowns`, `Cashflow …`) | `labels` или `aliases`; нормализатор уже знает plural и `cashflow` |
 | Частный вид уже известного тотала (Product collections) | Дочерний id с `broader` |
-| Лейбл сталкивается с чужим концептом (Headroom) | `anti_labels` / `section_hints` на обоих |
+| Лейбл сталкивается с чужим концептом (Headroom) | Сначала фасеты, секция, `skip_concept` / `unless`. `anti_labels` / `section_hints` — точечный guard, не широкая подстрока |
 | Строка — check, circular, «from MF» без бизнеса | Exclusion, не концепт |
 | Формула копирует уже замапленную строку | Ничего в yaml; это structure |
 
@@ -119,7 +119,7 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 - `cf.receipts.product` → `cf.receipts`
 - `cf.disbursements.payroll` → `cf.disbursements`
 
-Structure на `SUM` ищет общий id детей, общий `broader` или объявленный `calculations` parent — и только когда **все** fact-члены диапазона уже замаплены. Частичный SUM не копирует единственного ребёнка на родителя. Итог поступлений не должен стать `cf.net`. Net объявлен как разность inflows−outflows в yaml; противоречие с наблюдённым SUM даёт `calculation_conflict`.
+Structure на `SUM` ищет общий id детей, общий `broader` или объявленный `calculations` parent — и только когда **все** fact-члены диапазона уже замаплены. Частичный SUM не копирует единственного ребёнка на родителя. Итог поступлений не должен стать `cf.net`. Net объявлен как разность inflows−outflows в yaml. Несовпадение с наблюдённым SUM снижает score и обычно даёт `calculation_conflict`; keep-rule оставляет exact `Cash Flow` под IRR.
 
 ## `facets.unit` (`value_kind`)
 
@@ -139,12 +139,13 @@ Structure на `SUM` ищет общий id детей, общий `broader` и�
 3. `labels` на английском и, если живёт в книгах, русском; узкие формулировки модели — в `aliases`.
 4. Коллизии закрыты фасетами; `section_hints` / `anti_labels` — только если фасета недостаточно.
 5. Если есть родитель — `broader` указывает на существующий id; фасеты ребёнка не спорят с родителем.
-6. Gold: строка в `tests/fixtures/mapping/cashflow_dispositions.yaml` или в корпусном fixture.
+6. Gold: «должно быть» и **негативы** `forbidden_concept_id` в `tests/fixtures/mapping/cashflow_dispositions.yaml` или корпусном fixture.
 7. `uv run pytest`. Не понижать `ACCEPT_MIN`, чтобы тест позеленел. Корпус: `uv run python scripts/fetch-corpus.py`.
 
 ## Антипаттерны
 
 - Один alias на два смысла без секции.
+- Широкий `anti_labels` (`cash in` / `cash out`, голый `lease`) вместо unit + секция + соседи.
 - Ближайший money-концепт для KPI, потому что «хоть что-то» (lifetime под OPEX, Cash Flow → `bs.cash`).
 - Parent-rollup без `unless` на годы / MW / индексы / opening-closing.
 - Подстрока в `_semantic_ratio` (`ratio` внутри `generation`).
