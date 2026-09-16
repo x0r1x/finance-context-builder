@@ -132,6 +132,8 @@ def _phrase_score(label: str, tokens: set[str], phrase: str, size: int) -> float
             if tokens <= {phrase, _singular(phrase), f"{phrase}s"}:
                 return None
             if phrase == "cash" and tokens & _CASH_FLOW_TOKENS:
+                if tokens & {"hand", "hands", "balance"}:
+                    return 0.9
                 return None
             if phrase == "debt" and tokens & _DEBT_FEE_TOKENS:
                 return None

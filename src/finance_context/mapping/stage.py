@@ -42,6 +42,10 @@ def mapping_workbook(
     ir_cells = dest_dir / "ir" / "cells.parquet"
     if ir_cells.exists():
         cells = read_parquet(ir_cells)
+    edges: list[dict] = []
+    ir_edges = dest_dir / "ir" / "edges.parquet"
+    if ir_edges.exists():
+        edges = read_parquet(ir_edges)
     merged = dict(load_glossary(glossary_path))
     merged.update(glossary or {})
     doc = map_layout(
@@ -55,6 +59,7 @@ def mapping_workbook(
         slot_timeout_sec=slot_timeout_sec,
         cache_path=cache_path,
         embedding_model=embedding_model,
+        edges=edges,
     )
     if glossary_path is not None:
         save_glossary(glossary_path, learn_from_rows(merged, doc.rows))

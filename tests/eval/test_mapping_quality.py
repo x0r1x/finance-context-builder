@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from finance_context.mapping.eval import mapping_metrics, signal_counts
+from finance_context.mapping.eval import (
+    concept_coverage,
+    content_completeness,
+    context_report_metrics,
+    mapping_metrics,
+    signal_counts,
+)
 from finance_context.mapping.facets import prune_candidates
 from finance_context.mapping.models import Candidate, Concept, RowContext
 
@@ -15,6 +21,7 @@ def test_coverage_and_selective_risk() -> None:
     assert metrics["n"] == 3
     assert metrics["mapped"] == 2
     assert metrics["coverage"] == 2 / 3
+    assert metrics["concept_coverage"] == 2 / 3
     assert metrics["selective_risk"] == 0.5
     assert signal_counts(["rule", "rule", "structure"])["rule"] == 2
 
@@ -56,3 +63,17 @@ def test_prune_drops_ratio_concepts_on_money_rows() -> None:
         taxonomy,
     )
     assert [c.concept_id for c in kept] == ["pnl.opex"]
+
+
+def test_content_completeness_is_independent_of_concept_coverage() -> None:
+    assert content_completeness(10, 10) == 1.0
+    assert content_completeness(10, 8) == 0.8
+    assert concept_coverage(mapped=6, abstained=4) == 0.6
+    report = context_report_metrics(
+        layout_rows=10,
+        inventory_rows=10,
+        mapped=6,
+        abstained=4,
+    )
+    assert report["content_completeness"] == 1.0
+    assert report["concept_coverage"] == 0.6

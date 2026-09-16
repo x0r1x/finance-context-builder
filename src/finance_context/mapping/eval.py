@@ -3,19 +3,34 @@ from __future__ import annotations
 from collections import Counter
 
 
+def content_completeness(layout_rows: int, inventory_rows: int) -> float:
+    if layout_rows <= 0:
+        return 1.0
+    return inventory_rows / layout_rows
+
+
+def concept_coverage(mapped: int, abstained: int) -> float:
+    annotatable = mapped + abstained
+    if annotatable <= 0:
+        return 0.0
+    return mapped / annotatable
+
+
 def mapping_metrics(
     predicted: list[tuple[str, str | None, str | None]],
 ) -> dict[str, float | int]:
     """predicted items are (row_id, gold_concept, pred_concept)."""
     fact_n = len(predicted)
     mapped = [(gold, pred) for _, gold, pred in predicted if pred]
-    coverage = len(mapped) / fact_n if fact_n else 0.0
+    abstained = fact_n - len(mapped)
+    coverage = concept_coverage(len(mapped), abstained)
     errors = sum(1 for gold, pred in mapped if gold and pred != gold)
     selective_risk = errors / len(mapped) if mapped else 0.0
     return {
         "n": fact_n,
         "mapped": len(mapped),
         "coverage": coverage,
+        "concept_coverage": coverage,
         "selective_risk": selective_risk,
         "errors": errors,
     }
@@ -32,6 +47,24 @@ def disposition_metrics(rows: list) -> dict[str, float | int]:
         "excluded": excluded,
         "abstained": abstained,
         "processed_rate": (mapped + excluded + abstained) / n if n else 0.0,
+        "concept_coverage": concept_coverage(mapped, abstained),
+    }
+
+
+def context_report_metrics(
+    *,
+    layout_rows: int,
+    inventory_rows: int,
+    mapped: int,
+    abstained: int,
+) -> dict[str, float | int]:
+    return {
+        "layout_rows": layout_rows,
+        "inventory_rows": inventory_rows,
+        "content_completeness": content_completeness(layout_rows, inventory_rows),
+        "mapped": mapped,
+        "abstained": abstained,
+        "concept_coverage": concept_coverage(mapped, abstained),
     }
 
 

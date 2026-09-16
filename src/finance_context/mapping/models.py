@@ -71,6 +71,7 @@ class InferredFacets(BaseModel):
     position: FacetGuess = Field(default_factory=FacetGuess)
     series: FacetGuess = Field(default_factory=FacetGuess)
     unit: FacetGuess = Field(default_factory=FacetGuess)
+    time_semantics: FacetGuess = Field(default_factory=FacetGuess)
 
 
 class CalcTerm(BaseModel):
@@ -214,3 +215,5 @@ class RowContext(BaseModel):
     query_text: str = ""
     label_col: int = 1
     inferred_facets: InferredFacets = Field(default_factory=InferredFacets)
+    prev_labels: list[str] = Field(default_factory=list)
+    next_labels: list[str] = Field(default_factory=list)

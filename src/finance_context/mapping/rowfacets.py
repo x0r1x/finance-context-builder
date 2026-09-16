@@ -25,6 +25,7 @@ def infer_row_facets(ctx: RowContext, *, pattern_kind: str | None = None) -> Inf
         direction=_direction(klass, blob),
         basis=_basis(blob, klass),
         statement=_statement(n),
+        time_semantics=_time_semantics(n, tokens, pattern_kind, unit),
     )
 
 
@@ -80,3 +81,21 @@ def _statement(label: str) -> FacetGuess:
     if any(token in label.split() for token in ("dscr", "llcr", "plcr")):
         return FacetGuess(value="cov", confident=True)
     return FacetGuess()
+
+
+def _time_semantics(
+    label: str, tokens: set[str], pattern_kind: str | None, unit: str | None
+) -> FacetGuess:
+    if unit in {"rate", "ratio"}:
+        return FacetGuess(value="rate", confident=True)
+    opening = bool(tokens & set(_OPENING)) or "brought forward" in label or "b/f" in label
+    closing = bool(tokens & set(_CLOSING)) or "carried forward" in label or "c/f" in label
+    if opening and not closing:
+        return FacetGuess(value="bop", confident=True)
+    if closing and not opening:
+        return FacetGuess(value="eop", confident=True)
+    if pattern_kind == "roll":
+        return FacetGuess(value="eop", confident=False)
+    if pattern_kind in {"aggregate", "diff"}:
+        return FacetGuess(value="flow", confident=False)
+    return FacetGuess(value="flow", confident=False)

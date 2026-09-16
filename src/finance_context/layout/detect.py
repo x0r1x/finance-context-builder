@@ -55,7 +55,8 @@ _FLAG_BODY = re.compile(
     re.IGNORECASE,
 )
 _SCENARIO_LABEL = re.compile(
-    r"live case|case number|\bchoice\b",
+    r"live case|case number|\bchoice\b|\bmid case\b|\blow case\b|"
+    r"applied \(real terms\)|\breal terms\b|covenant breach",
     re.IGNORECASE,
 )
 _PLACEHOLDER_LABEL = re.compile(r"^(spare|none)$", re.IGNORECASE)

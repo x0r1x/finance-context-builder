@@ -34,12 +34,51 @@ patterns:
       any:
         - {label_tokens: [opening, balance]}
         - {label_tokens: [closing, balance]}
+  - concept: bs.goodwill
+    score: 0.94
+    evidence: goodwill opening/closing
+    when:
+      section_contains: [goodwill]
+      label_contains: [b/f, c/f, brought forward, carried forward, balance b, balance c]
+  - concept: bs.equity
+    score: 0.91
+    evidence: equity funding opening/closing
+    when:
+      section_contains: [equity]
+      label_contains: [b/f, c/f, brought forward, carried forward, balance b, balance c]
+      unless:
+        label_contains: [available]
+  - concept: bs.ppe
+    score: 0.91
+    evidence: depreciation book opening/closing
+    when:
+      section_contains: [depreciation]
+      label_contains: [b/f, c/f, brought forward, carried forward, balance b, balance c]
+      unless:
+        section_contains: [goodwill]
+  - concept: bs.debt
+    score: 0.91
+    evidence: funding or repayment opening/closing
+    when:
+      any:
+        - {section_contains: [debt]}
+        - {section_contains: [repayment]}
+        - {section_contains: [funding]}
+      label_contains: [b/f, c/f, brought forward, carried forward, balance b, balance c]
+      unless:
+        section_contains: [equity]
+  - skip_concept: bs.ppe
+    when:
+      section_contains: [goodwill]
   - skip_concept: bs.ap
     when:
       section_contains: [debt]
+  - skip_concept: cf.disbursements
+    when:
+      label_contains: [cfads, available for debt, available for equity, cash flow available]
   - skip_concept: pnl.tax
     when:
-      section_contains: [cfs, cash flow]
+      section_contains: [cfs, cash flow, cashflow]
       label_contains: [tax]
       unless:
         label_contains: [rate, deferred, accrued, taxable, pre-tax, before tax]
@@ -53,7 +92,7 @@ patterns:
           - {label_contains: [sources, drawdown, equity, interest, total uses, total sources,
               lifetime, turbine, capacity, inflation, cpi, escalation, mw, share premium,
               share capital, goodwill, balance b, balance c, brought forward, carried forward,
-              b/f, c/f, loan amount]}
+              b/f, c/f, loan amount, full-wrap, due diligence]}
           - {label_in: [debt]}
   - concept: pnl.opex
     score: 0.9
@@ -67,7 +106,8 @@ patterns:
         any:
           - {section_contains: [capex, uses, source]}
           - {label_contains: [cashflow, cash flow, ebitda, ebit, revenue, cfads, tax, traffic,
-              lifetime, turbine, capacity, inflation, cpi, escalation, mw]}
+              lifetime, turbine, capacity, inflation, cpi, escalation, mw, uncertainty,
+              hedge, payout]}
   - concept: pnl.revenue
     score: 0.9
     evidence: parent revenue section
@@ -75,16 +115,17 @@ patterns:
       section_contains: [revenue]
       unless:
         label_contains: [traffic, volume, cost, tax, opex, price, other income, lifetime,
-          turbine, capacity, inflation, cpi, escalation, mw]
+          turbine, capacity, inflation, cpi, escalation, mw, uncertainty, hedge, duration]
   - concept: pnl.da
     score: 0.9
     evidence: parent d and a section
     when:
       section_contains: [da, amortisation, amortization, depreciation]
       unless:
-        label_contains: [asset, opening, closing, value, lifetime, straight line, years]
+        label_contains: [asset, opening, closing, value, lifetime, straight line, years,
+          b/f, c/f, brought forward, carried forward, balance b, balance c]
   - concept: cf.net
-    score: 0.9
+    score: 0.96
     evidence: cash flow line
     when:
       label_in: [cash flow]
@@ -94,14 +135,38 @@ patterns:
     score: 0.92
     evidence: cash tax on cashflow statement
     when:
-      section_contains: [cfs, cash flow]
+      section_contains: [cfs, cash flow, cashflow]
       label_contains: [income tax, tax]
       unless:
         label_contains: [rate, deferred, accrued, taxable, pre-tax, before tax]
+  - concept: cf.equity_issue
+    score: 0.94
+    evidence: construction or sources equity injection
+    when:
+      any:
+        - {label_contains: [equity injected, injected]}
+        - {label_in: [equity], section_contains: [sources, construction, irr, ratios]}
+      unless:
+        any:
+          - {section_contains: [balance]}
+          - {label_contains: [available, fcfe, returns, ratio]}
+  - skip_concept: bs.equity
+    when:
+      any:
+        - {label_contains: [equity injected, injected]}
+        - {label_in: [equity], section_contains: [sources, construction, irr, ratios]}
+      unless:
+        section_contains: [balance]
+  - skip_concept: bs.equity
+    when:
+      section_contains: [funding]
+      label_contains: [b/f, c/f, brought forward, carried forward, balance b, balance c]
+      unless:
+        section_contains: [equity]
 concepts:
   - id: pnl.revenue
     labels: [Revenue, Revenues, Gross revenue, Gross revenues, Total revenue, Выручка, Sales, Sales revenue]
-    anti_labels: [leverage, ttm, covenant, dscr]
+    anti_labels: [leverage, ttm, covenant, dscr, duration]
   - id: pnl.volume
     labels: [Volume, Qty, Quantity, Объём, Traffic, TRAFFIC]
     facets: {unit: count}
@@ -125,7 +190,8 @@ concepts:
     labels: [EBIT, Operating profit]
   - id: pnl.da
     labels: [D&A, Depreciation, Amortization, Amortisation, Амортизация]
-    anti_labels: [straight line, lifetime, years]
+    aliases: [Straight line depreciation base]
+    anti_labels: [lifetime, years]
   - id: pnl.interest
     labels: [Interest expense, Interest, Loan interest, Capitalized interest, Capitalized interests, Проценты]
     section_hints: [debt, term loan, amortisation, revolver, construction, ratios, irr, project irr]
@@ -155,11 +221,13 @@ concepts:
   - id: bs.equity
     labels: [Equity, Капитал]
     aliases: [Net Assets]
-    anti_labels: [available for equity, fcfe, returns, cashflow available, ratio, fcfe to]
+    anti_labels: [available for equity, fcfe, returns, cashflow available, ratio, fcfe to,
+      injected]
   - id: bs.cash
     labels: [Cash, Opening cash, Closing cash, Ending cash, Cash balance, Денежные средства]
+    aliases: [Cash in hand, Cash in hands]
     anti_labels: [operating cashflow, cash flow available, cashflow available, cash flow,
-      cash in, cash out, total cash]
+      total cash]
   - id: bs.debt
     labels: [Debt, Долг, Borrowings, Opening Balance, Closing Balance]
     anti_labels: [dscr, leverage, coverage, headroom, service, repayment, drawdown, fee,
@@ -187,13 +255,15 @@ concepts:
     labels: [CAPEX, CapEx, Capital expenditure, Construction cost]
     facets: {direction: outflow}
   - id: cf.dividends
-    labels: [Dividends, Dividends earned, Дивиденды]
+    labels: [Dividends, Dividends earned, Dividend paid, Дивиденды]
+    aliases: [Total equity returns, Total equity returns (dividends)]
     facets: {direction: outflow}
   - id: cf.equity_issue
     labels: [Equity issue, Share issue, Equity drawdowns, Эмиссия]
+    aliases: [Equity Injected]
     facets: {direction: inflow}
   - id: cf.fcf
-    labels: [FCF, FCFE, Free cash flow, Net CF before financing, CF before financing, Cash flow available for equity, Cashflow available for equity]
+    labels: [FCF, FCFE, Free cash flow, Net CF before financing, CF before financing, Cash flow available for equity, Cashflow available for equity, Cashflow available for dividend]
     anti_labels: [ratio, fcfe to, fcfe /]
   - id: cf.net
     labels: [Net cash flow, Net CF, Cumulative net flow, Cumulative Net Flow]
@@ -203,7 +273,7 @@ concepts:
     facets: {direction: inflow}
   - id: cf.disbursements
     labels: [Disbursements, Cash disbursements, Cash outflows, Total Outflows]
-    aliases: [Total Cash out]
+    aliases: [Total Cash out, Cash out End of Concession]
     facets: {direction: outflow}
   - id: cf.repayment
     labels: [Repayment, Principal, Principal repayment, Погашение]
@@ -215,6 +285,7 @@ concepts:
     facets: {direction: inflow}
   - id: cf.cfads
     labels: [CFADS, Cash flow available for debt service, Cashflow available for debt service]
+    exact_labels: [CFADS, Cash Flow Available for Debt Service (CFADS)]
   - id: cf.sources
     labels: [Sources, Sources of funds, Sources and uses sources]
     facets: {direction: inflow}
@@ -396,6 +467,7 @@ concepts:
     facets: {unit: count}
   - id: ops.availability
     labels: [Availability, Availability factor]
+    exact_labels: [Availability, Availability factor]
     facets: {unit: ratio}
   - id: ops.cpi
     labels: [CPI, Consumer price index]
@@ -427,3 +499,27 @@ concepts:
     labels: [Share capital]
   - id: bs.share_premium
     labels: [Share premium]
+  - id: val.payout_ratio
+    labels: [Dividend payout ratio, Payout ratio]
+    aliases: [Dividend payout ratio period 1, Dividend payout ratio period 2]
+    facets: {unit: rate}
+  - id: ops.uncertainty
+    labels: [Uncertainty]
+    facets: {unit: rate}
+  - id: ops.hedge_ratio
+    labels: [PPA hedged volume, Hedged volume]
+    facets: {unit: rate}
+  - id: ops.lease_rate
+    labels: [Variable land lease]
+    facets: {unit: rate}
+  - id: ops.depreciation_life
+    labels: [Straight line depreciation]
+    exact_labels: [Straight line depreciation]
+    facets: {unit: count}
+  - id: ops.construction_period
+    labels: [Development & Construction, Construction period]
+    exact_labels: [Development & Construction]
+    facets: {unit: count}
+  - id: ops.model_start
+    labels: [Model start, Construction start, Model start / Construction start]
+    exact_labels: [Model start / Construction start]

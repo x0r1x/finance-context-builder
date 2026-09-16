@@ -577,3 +577,39 @@ def test_placeholder_and_binary_timing_are_not_facts() -> None:
     assert rows["Merchant price choice"].kind == "flag"
     assert rows["Revenue"].kind == "fact"
 
+
+def test_scenario_and_covenant_breach_are_flags() -> None:
+    cells = [
+        _c("PF", "A1", "Item"),
+        _c("PF", "B1", "2024"),
+        _c("PF", "C1", "2025"),
+        _c("PF", "D1", "2026"),
+        _c("PF", "A2", "Mid case"),
+        _c("PF", "B2", "1"),
+        _c("PF", "C2", "0"),
+        _c("PF", "D2", "0"),
+        _c("PF", "A3", "Low case"),
+        _c("PF", "B3", "0"),
+        _c("PF", "C3", "1"),
+        _c("PF", "D3", "0"),
+        _c("PF", "A4", "Applied (real terms)"),
+        _c("PF", "B4", "1"),
+        _c("PF", "C4", "1"),
+        _c("PF", "D4", "1"),
+        _c("PF", "A5", "Covenant breach"),
+        _c("PF", "B5", "0"),
+        _c("PF", "C5", "0"),
+        _c("PF", "D5", "1"),
+        _c("PF", "A6", "Revenue"),
+        _c("PF", "B6", "10"),
+        _c("PF", "C6", "20"),
+        _c("PF", "D6", "30"),
+    ]
+    layout = detect_layout(cells)
+    rows = {r.label: r for r in layout.sheets[0].blocks[0].rows}
+    assert rows["Mid case"].kind == "flag"
+    assert rows["Low case"].kind == "flag"
+    assert rows["Applied (real terms)"].kind == "flag"
+    assert rows["Covenant breach"].kind == "flag"
+    assert rows["Revenue"].kind == "fact"
+

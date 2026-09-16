@@ -7,10 +7,25 @@
       "metrics": [
         {
           "article_role": "database_like",
+          "candidates": [],
+          "check_row": false,
           "concept_id": "bs.cash",
+          "dependents_rows": [],
           "disposition": "mapped",
           "exclusion_reason": null,
+          "formula_exceptions": [],
+          "formula_fingerprint": null,
+          "hidden": false,
+          "hints": {
+            "nature": null,
+            "statement": null,
+            "time_semantics": null,
+            "unit": null
+          },
+          "indent": 0,
+          "kind": null,
           "label": "Opening cash",
+          "label_path": [],
           "mapping": {
             "alternatives": [],
             "confidence": "high",
@@ -21,7 +36,10 @@
             "score": 1.0,
             "source": null
           },
+          "neighbors": [],
+          "numeric_summary": null,
           "parent_label": null,
+          "precedents_rows": [],
           "row_key": "CF|2|CF!r1",
           "source": {
             "addr": "A2",
@@ -87,18 +105,19 @@
     }
   ],
   "excluded": [],
+  "inventory": [],
   "meta": {
     "content_sha256": null,
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.0.0",
+    "schema_version": "1.1.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "unmapped": [],
   "warnings": [],
   "workbook": {

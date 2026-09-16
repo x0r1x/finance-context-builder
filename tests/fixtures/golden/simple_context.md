@@ -1,12 +1,14 @@
 # Financial context
 
-- Schema: `1.0.0`
+- Schema: `1.1.0`
 - Job: `job1`
 - Status: `succeeded`
 - Source: `simple.xlsx`
 - Sheets: 1
 - Cells: 4
 - Formulas: 1
+- Content completeness: 1.00 (1/1 layout rows)
+- Concept coverage: 1.00 (1/1 annotatable)
 
 ## CF / `CF!r1`
 

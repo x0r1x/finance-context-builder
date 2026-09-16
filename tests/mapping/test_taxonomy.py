@@ -60,6 +60,13 @@ def test_taxonomy_includes_fcf_repayment_drawdown() -> None:
         "bs.goodwill",
         "bs.share_capital",
         "bs.share_premium",
+        "val.payout_ratio",
+        "ops.uncertainty",
+        "ops.hedge_ratio",
+        "ops.lease_rate",
+        "ops.depreciation_life",
+        "ops.construction_period",
+        "ops.model_start",
     } <= ids
 
 

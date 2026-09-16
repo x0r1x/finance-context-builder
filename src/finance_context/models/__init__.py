@@ -1,11 +1,15 @@
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
+    CandidateHit,
     ContextDocument,
     FinancialBlock,
+    InventoryRow,
     MappingEvidence,
     MetricSeries,
+    NumericSummary,
     PeriodValue,
+    RowHints,
     SourceRef,
     WorkbookRaw,
 )
@@ -13,11 +17,15 @@ from finance_context.models.context import (
 __all__ = [
     "SCHEMA_VERSION",
     "ArtifactMeta",
+    "CandidateHit",
     "ContextDocument",
     "FinancialBlock",
+    "InventoryRow",
     "MappingEvidence",
     "MetricSeries",
+    "NumericSummary",
     "PeriodValue",
+    "RowHints",
     "SourceRef",
     "WorkbookRaw",
 ]
