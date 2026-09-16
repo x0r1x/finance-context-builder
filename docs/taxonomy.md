@@ -81,21 +81,23 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 
 Полный список — yaml. Ниже карта смыслов, не дамп.
 
-**PnL (`pnl.*`)** — выручка, объём, цена, GMV, COGS, маржа, OPEX, EBITDA/EBIT, D&A, процент и ставка, налог / deferred / tax rate / accrued, net income, other income, pre-tax / taxable.
+**PnL (`pnl.*`)** — выручка, объём (в т.ч. Traffic), цена, GMV, COGS, маржа, OPEX, EBITDA/EBIT, D&A, процент и ставка, налог / deferred / tax rate / accrued, net income, other income, pre-tax / taxable. `Income Tax` на CFS/ОДДС — `cf.tax_paid`, не `pnl.tax`.
 
-**Баланс (`bs.*`)** — итоги активов, PPE, обязательства, капитал, cash, debt, AR/AP, запасы, RE, NWC, purchases к целевым дням запасов.
+**Баланс (`bs.*`)** — итоги активов, PPE (в т.ч. Long term assets), обязательства, капитал (Net Assets как NAV), share capital / share premium, goodwill, cash, debt, AR/AP, запасы, RE, NWC, purchases к целевым дням запасов.
 
-**Движение денег (`cf.*`)** — CFO, D&A add-back, capex, дивиденды, эмиссия, FCF, net CF, CFADS, sources/uses; **поступления** `cf.receipts` и дети; **выплаты** `cf.disbursements` и дети; погашение и выборка; `cf.tax_paid`.
+**Движение денег (`cf.*`)** — CFO, D&A add-back, capex, дивиденды, эмиссия, FCF, net CF (в т.ч. голый `Cash Flow`), CFADS, sources/uses, `cf.debt_service` (итог principal+interest; голое `Debt service` по-прежнему exact на `debt.scheduled_payment`); **поступления** `cf.receipts` и дети; **выплаты** `cf.disbursements` и дети; погашение и выборка; `cf.tax_paid`.
 
-**Долг (`debt.*`)** — scheduled PMT, commitment fee, revolver limit, available credit, sculpting. Остатки долга — `bs.debt`, не `debt.*`. DSRA — `bs.dsra`.
+**Долг (`debt.*`)** — scheduled PMT, commitment / up-front fee (деньги) и `debt.upfront_fee_rate` (ставка), `debt.facility_amount` (размер линии, не остаток), revolver limit, available credit, sculpting. Остатки долга — `bs.debt`, не `debt.*`. DSRA — `bs.dsra`.
 
 **Ликвидность (`liq.*`)** — min cash, pre-revolver cash, cash headroom, trough cash / week, total liquidity, runway, daily burn, conversion / operating cash ratio / liquidity coverage.
 
-**Ковенанты (`cov.*`, `covenant.headroom`)** — DSCR, LLCR, PLCR, leverage limit / headroom, запас до ковенанта. Не путать с `liq.cash_headroom`.
+**Ковенанты (`cov.*`, `covenant.headroom`)** — факт DSCR / Average / Minimum DSCR по ряду (`cov.dscr`); порог `DSCR minimum` (`cov.dscr_limit`); LLCR, PLCR, leverage limit / headroom. Не путать с `liq.cash_headroom`.
 
-**Прочее** — `val.npv` / `irr` / `wacc`; `ops.headcount`; `fx.*` (курс и переоценки).
+**Операции (`ops.*`)** — lifetime, capacity / MW, число турбин (`ops.asset_count`, не headcount), generation / MWh, availability, CPI, inflation / PPA escalation. Не мапить phasing 0.2/0.8 на финансовый id.
 
-Одинаковый человеческий лейбл может быть **двумя** концептами. Пример: `Other Income` в секции REVENUE EARNED → `pnl.other_income` (`basis: accrual`); в CASH INFLOWS → `cf.receipts.other` (`basis: cash`). Разведение — фасеты строки, не один общий id.
+**Прочее** — `val.npv` / `irr` / `wacc` / `val.coc` (Cost of capital, если это не тот же WACC) / `val.fcfe_equity` / `val.total_investment`; `ops.headcount`; `fx.*` (курс и переоценки).
+
+Одинаковый человеческий лейбл может быть **двумя** концептами. Пример: `Other Income` в секции REVENUE EARNED → `pnl.other_income` (`basis: accrual`); в CASH INFLOWS → `cf.receipts.other` (`basis: cash`). `Income Tax` на P&L → `pnl.tax`; на CFS → `cf.tax_paid` (skip + pattern по секции, не `statement=cf` на весь лист). `DSCR minimum` (константа ковенанта) → `cov.dscr_limit`; `Minimum Debt Service Coverage Ratio` (статистика ряда) → `cov.dscr`. Разведение — фасеты и паттерны, не один общий id.
 
 ## Когда что менять
 
@@ -123,12 +125,12 @@ Structure на `SUM` ищет общий id детей, общий `broader` и�
 
 Совместимость при prune: money только к money; count к count; rate к rate; ratio совместим с rate. Строка с денежным рядом не мапится на headcount.
 
-- Процент / ставка налога / FX rate / WACC / IRR → `rate`
-- DSCR, leverage, conversion, runway, coverage → `ratio`
-- Headcount, trough week → `count`
+- Процент / ставка налога / FX rate / WACC / CoC / IRR / эскалация → `rate` (ratio-строка совместима с rate-концептом)
+- DSCR, leverage, conversion, runway, coverage, CPI, availability, FCFE/Equity → `ratio`
+- Headcount, trough week, lifetime, turbines, traffic, generation, MW → `count`
 - Остальное, включая proration (`сумма / дни в месяце`) → `money`
 
-Если формула — деление, но лейбл про coverage — побеждает семантика лейбла (`_semantic_ratio`).
+Если формула — деление, но лейбл про coverage — побеждает семантика лейбла (`_semantic_ratio`, **токены**, не подстрока: `ratio` ⊂ `generation` не считается).
 
 ## Чеклист PR
 
@@ -143,7 +145,10 @@ Structure на `SUM` ищет общий id детей, общий `broader` и�
 ## Антипаттерны
 
 - Один alias на два смысла без секции.
-- Ближайший money-концепт для KPI, потому что «хоть что-то».
+- Ближайший money-концепт для KPI, потому что «хоть что-то» (lifetime под OPEX, Cash Flow → `bs.cash`).
+- Parent-rollup без `unless` на годы / MW / индексы / opening-closing.
+- Подстрока в `_semantic_ratio` (`ratio` внутри `generation`).
+- `statement=cf` на весь лист Cashflow, из-за которого выручка ОДДС уезжает с `pnl.revenue`.
 - Ручная запись в `glossary.json` вместо yaml: glossary перезапишется со следующих high-confidence джобов и не попадёт в git.
 - Exclude для «непонятной» бизнес-строки.
 - Дублирование id с разным регистром или синонимы `cf.receipts` / `cf.inflows` без `broader`.

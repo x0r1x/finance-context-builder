@@ -48,9 +48,19 @@ Layout помечает тело блока видами строк. В мапп
 | `embed` | `embed` | Косинус к эмбеддингам лейблов концептов |
 | `chat` | `chat` | Rerank pruned-списка |
 
-Lexical индексирует **и** `labels`, **и** `aliases`. Перед сравнением лейбл нормализуется (`normalize_label`): скобки снимаются, но аббревиатуры метрик (`EBITDA`, `CFADS`, `DSCR`) из скобок сохраняются; `cashflow` → `cash flow`; `&` → `and`. Однословные слабые фразы (`revenue`, `debt`, `total`, …) не матчятся, если это **всё** содержимое лейбла; в составном лейбле (`REVENUE - Passenger Car`) — да. Множественное число (`Drawdowns`, `revenues`) сводится к форме из yaml.
+Lexical индексирует **и** `labels`, **и** `aliases`. Перед сравнением лейбл нормализуется (`normalize_label`): скобки снимаются, но аббревиатуры метрик (`EBITDA`, `CFADS`, `DSCR`) из скобок сохраняются; `cashflow` → `cash flow`; `&` → `and`. Однословные слабые фразы (`revenue`, `debt`, `total`, `cash`, …) не матчятся, если это **всё** содержимое лейбла; в составном лейбле (`REVENUE - Passenger Car`) — да. Для `cash` слабый матч ещё отключается, если рядом `flow` / `in` / `out` / `total` (`Cash Flow` не становится `bs.cash`); для `debt` — если рядом `fee` / `up-front`. Множественное число (`Drawdowns`, `revenues`) сводится к форме из yaml.
 
-Lexical дополнительно знает устойчивые конструкции из блока `patterns:` в yaml (net flow, opening/closing balance в debt-секции). Skip-pattern может запретить концепт в секции (`bs.ap` в debt). Если у концепта заданы `section_hints`, фраза принимается только при попадании хинта в лейбл / родителя / путь секции / лист.
+Lexical дополнительно знает устойчивые конструкции из блока `patterns:` в yaml. Это **не** то же самое, что structure-агрегат:
+
+- **Parent rollup** (дети наследуют секцию): `section_contains` `capex`/`uses` → `cf.capex`; `opex`/`operating`/`costs` → `pnl.opex`; `revenue` → `pnl.revenue`; D&A-секция → `pnl.da`. Кандидат с score 0.9. Не-денежные дети (срок жизни, MW, CPI, share premium, balance b/f) отсекаются `unless.label_contains` в тех же паттернах — иначе assumptions становятся opex/revenue. Pattern-хит **не** фильтруется `anti_labels` концепта до prune; стоп для rollup — `unless`.
+- **Skip-pattern** запрещает концепт в секции: `bs.ap` в debt; `pnl.tax` на листе/пути `cfs` или `cash flow`, чтобы `Income Tax` в ОДДС не оставался P&L-налогом. Глобально ставить `statement=cf` по имени листа нельзя: выручка на Cashflow Statement в PF-моделях остаётся `pnl.revenue`.
+- `section_contains` с пробелом (`cash flow`) требует **все** токены фразы в `section_tokens` (лейбл ∪ родитель ∪ путь ∪ лист). Одно слово `cashflow` после нормализации не существует — это два токена.
+- Точная строка `cash flow` (без available/operating/net) → `cf.net`.
+- Если у концепта заданы `section_hints`, фраза принимается только при попадании хинта в лейбл / родителя / путь секции / лист (например `Arrangement fee` на Ratios: в hints есть `ratios` / `irr`).
+
+`_semantic_ratio` / `_semantic_count` смотрят **токены** нормализованного лейбла, не подстроку: `ratio` внутри `generation` не делает MWh коэффициентом. Ratio-токены: `dscr`, `coverage`, `cpi`, `inflation`, `availability`, `wacc`, `coc`, … Count: `lifetime`, `turbine`, `traffic`, `generation`, `capacity`, `mw`. Prune тогда отбрасывает money-концепты.
+
+Фасет `basis=accrual` ставится по `accrual` / `accrued` / `revenue earned`, не по голому `earned` — иначе `Dividends earned` прунится с `cf.dividends`.
 
 ### Structure
 
@@ -63,7 +73,7 @@ Lexical дополнительно знает устойчивые констр�
 | `diff` | Разность двух строк | Родитель из `calculations` с противоположными весами |
 | `roll` | Roll-forward остатка | Тот же балансный концепт, что у связанной строки |
 
-Деление на именованную константу или число — **proration**, `value_kind` остаётся `money`. Настоящий ratio — DSCR-подобные лейблы (`dscr`, `coverage`, `leverage`, `runway`, …), см. `_semantic_ratio`.
+Деление на именованную константу или число — **proration**, `value_kind` остаётся `money`. Настоящий ratio — токены вроде `dscr` / `coverage` / `leverage` / `runway` / `cpi` (не подстрока: `generation` ≠ ratio), см. `_semantic_ratio`.
 
 Relations (`alias`, `aggregate`, `difference`, `roll_forward`) пишутся в `mapping.json` и в блоки `context.json`. В Markdown их нет.
 
@@ -150,7 +160,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 ## Как расширять маппинг
 
 1. Сначала [таксономия](taxonomy.md): есть ли смысл, или это тот же id с другим лейблом.
-2. Если смысл есть, а каскад молчит — уточнить `labels` / `aliases` / `section_hints` / `anti_labels`, не общий alias на два значения.
+2. Если смысл есть, а каскад молчит — уточнить `labels` / `aliases` / `section_hints` / `anti_labels`, не общий alias на два значения. Если ложный тег от секции — `unless` на parent-rollup, не понижать порог.
 3. Если формула однозначна (копия с другого листа, SUM детей) — это задача structure, не chat.
 4. Новый *тип* совпадения — новый `Signal` + тесты в `tests/mapping/`.
 5. Не включать строку в exclude, если это бизнес-атрибут.
