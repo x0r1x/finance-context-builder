@@ -11,6 +11,7 @@ def _c(
     *,
     hidden: bool = False,
     formula: str | None = None,
+    formula_template: str | None = None,
     number_format: str | None = None,
 ) -> dict:
     col, row = parse_addr(addr)
@@ -22,7 +23,7 @@ def _c(
         "cached_value": value,
         "hidden": hidden,
         "formula_raw": formula,
-        "formula_template": None,
+        "formula_template": formula_template,
         "unparsed": False,
         "number_format": number_format,
         "comment": None,
@@ -364,4 +365,184 @@ def test_weekly_dates_keep_distinct_period_keys() -> None:
     layout = detect_layout(cells)
     keys = [h.period_key for h in layout.sheets[0].blocks[0].axis.headers]
     assert keys == ["2026-01-11", "2026-01-18", "2026-01-25"]
+
+
+def test_model_year_row_forms_relative_axis() -> None:
+    cells = [
+        _c("CFS", "B2", "Year"),
+        _c("CFS", "E2", "1"),
+        _c("CFS", "F2", "2"),
+        _c("CFS", "G2", "3"),
+        _c("CFS", "B6", "P&L"),
+        _c("CFS", "B9", "Gross revenues"),
+        _c("CFS", "E9", "10"),
+        _c("CFS", "F9", "20"),
+        _c("CFS", "G9", "30"),
+        _c("CFS", "B13", "EBITDA"),
+        _c("CFS", "E13", "400"),
+        _c("CFS", "F13", "500"),
+        _c("CFS", "G13", "600"),
+    ]
+    layout = detect_layout(cells)
+    blocks = layout.sheets[0].blocks
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert [h.period_key for h in block.axis.headers] == ["Y1", "Y2", "Y3"]
+    assert all(h.role == "relative" for h in block.axis.headers)
+    assert block.label_col == 2
+    rows = {r.label: r for r in block.rows}
+    assert rows["Gross revenues"].kind == "fact"
+    assert rows["EBITDA"].kind == "fact"
+    assert rows["P&L"].kind == "abstract"
+    assert rows["Gross revenues"].section_path == ["P&L"]
+
+
+def test_start_end_dates_left_of_timeline_are_not_a_block() -> None:
+    cells = [
+        _c("PF", "D1", "Item"),
+        _c("PF", "L1", "2024"),
+        _c("PF", "M1", "2025"),
+        _c("PF", "N1", "2026"),
+        _c("PF", "D2", "Revenue"),
+        _c("PF", "L2", "100"),
+        _c("PF", "M2", "110"),
+        _c("PF", "N2", "120"),
+        _c("PF", "D3", "Lease"),
+        _c("PF", "G3", "01.01.2026"),
+        _c("PF", "H3", "31.12.2035"),
+        _c("PF", "D4", "EPC"),
+        _c("PF", "L4", "10"),
+        _c("PF", "M4", "20"),
+        _c("PF", "N4", "30"),
+        _c("PF", "D5", "O&M"),
+        _c("PF", "L5", "11"),
+        _c("PF", "M5", "22"),
+        _c("PF", "N5", "33"),
+    ]
+    layout = detect_layout(cells)
+    blocks = layout.sheets[0].blocks
+    assert len(blocks) == 1
+    assert [h.period_key for h in blocks[0].axis.headers] == ["2024", "2025", "2026"]
+    labels = [r.label for r in blocks[0].rows if r.kind == "fact"]
+    assert labels == ["Revenue", "EPC", "O&M"]
+
+
+def test_nested_label_columns_use_span_indent() -> None:
+    cells = [
+        _c("PF", "L1", "2024"),
+        _c("PF", "M1", "2025"),
+        _c("PF", "N1", "2026"),
+        _c("PF", "B2", "Cashflow Statement"),
+        _c("PF", "C3", "Uses of funds"),
+        _c("PF", "D4", "EPC"),
+        _c("PF", "L4", "10"),
+        _c("PF", "M4", "20"),
+        _c("PF", "N4", "30"),
+        _c("PF", "D5", "Development"),
+        _c("PF", "L5", "4"),
+        _c("PF", "M5", "5"),
+        _c("PF", "N5", "6"),
+        _c("PF", "D6", "Share premium"),
+        _c("PF", "L6", "1"),
+        _c("PF", "M6", "1"),
+        _c("PF", "N6", "1"),
+    ]
+    layout = detect_layout(cells)
+    block = layout.sheets[0].blocks[0]
+    assert block.label_col == 4
+    rows = {r.label: r for r in block.rows}
+    assert rows["Cashflow Statement"].kind == "abstract"
+    assert rows["Uses of funds"].kind == "abstract"
+    assert rows["EPC"].kind == "fact"
+    assert rows["EPC"].section_path == ["Cashflow Statement", "Uses of funds"]
+    assert rows["EPC"].label_col == 4
+    assert rows["Cashflow Statement"].label_col == 2
+
+
+def test_unlabeled_model_years_align_with_formula_run() -> None:
+    cells = [_c("CFS", "A1", "Item")]
+    for index, col in enumerate("CDEFGHIJ", start=1):
+        cells.append(_c("CFS", f"{col}1", str(index)))
+    cells.append(_c("CFS", "A2", "Revenue"))
+    for index, col in enumerate("CDEFGHIJ", start=1):
+        cells.append(
+            _c(
+                "CFS",
+                f"{col}2",
+                str(index * 10),
+                formula=f"={col}1*10",
+                formula_template="=R[-1]C[0]*10",
+            )
+        )
+    layout = detect_layout(cells)
+    blocks = layout.sheets[0].blocks
+    assert len(blocks) == 1
+    assert [h.period_key for h in blocks[0].axis.headers] == [f"P{i}" for i in range(1, 9)]
+    assert all(h.role == "relative" for h in blocks[0].axis.headers)
+    assert blocks[0].rows[0].kind == "fact"
+
+
+def test_short_calendar_right_of_timeline_is_dropped() -> None:
+    cells = [
+        _c("PF", "A1", "Item"),
+        _c("PF", "B1", "2024"),
+        _c("PF", "C1", "2025"),
+        _c("PF", "D1", "2026"),
+        _c("PF", "E1", "2027"),
+        _c("PF", "A2", "Revenue"),
+        _c("PF", "B2", "10"),
+        _c("PF", "C2", "20"),
+        _c("PF", "D2", "30"),
+        _c("PF", "E2", "40"),
+        _c("PF", "A10", "COD"),
+        _c("PF", "G10", "01.01.2030"),
+        _c("PF", "H10", "31.12.2030"),
+        _c("PF", "A11", "O&M"),
+        _c("PF", "B11", "11"),
+        _c("PF", "C11", "22"),
+        _c("PF", "D11", "33"),
+        _c("PF", "E11", "44"),
+    ]
+    layout = detect_layout(cells)
+    blocks = layout.sheets[0].blocks
+    assert len(blocks) == 1
+    assert [h.period_key for h in blocks[0].axis.headers] == ["2024", "2025", "2026", "2027"]
+    assert [r.label for r in blocks[0].rows if r.kind == "fact"] == ["Revenue", "O&M"]
+
+
+def test_small_integers_with_formulas_are_fact() -> None:
+    cells = [
+        _c("P&L", "A1", "Item"),
+        _c("P&L", "B1", "2023"),
+        _c("P&L", "C1", "2024E"),
+        _c("P&L", "D1", "2025E"),
+        _c("P&L", "A2", "Units"),
+        _c("P&L", "B2", "1", formula="=Assumptions!B2", formula_template="=Assumptions!R[0]C[0]"),
+        _c("P&L", "C2", "2", formula="=Assumptions!C2", formula_template="=Assumptions!R[0]C[0]"),
+        _c("P&L", "D2", "3", formula="=Assumptions!D2", formula_template="=Assumptions!R[0]C[0]"),
+    ]
+    layout = detect_layout(cells)
+    rows = {r.label: r for r in layout.sheets[0].blocks[0].rows}
+    assert rows["Units"].kind == "fact"
+
+
+def test_flag_values_are_not_index() -> None:
+    cells = [
+        _c("PF", "A1", "Item"),
+        _c("PF", "B1", "2024"),
+        _c("PF", "C1", "2025"),
+        _c("PF", "D1", "2026"),
+        _c("PF", "A2", "Construction flag"),
+        _c("PF", "B2", "1"),
+        _c("PF", "C2", "1"),
+        _c("PF", "D2", "0"),
+        _c("PF", "A3", "Revenue"),
+        _c("PF", "B3", "10"),
+        _c("PF", "C3", "20"),
+        _c("PF", "D3", "30"),
+    ]
+    layout = detect_layout(cells)
+    rows = {r.label: r for r in layout.sheets[0].blocks[0].rows}
+    assert rows["Construction flag"].kind == "fact"
+    assert rows["Revenue"].kind == "fact"
 

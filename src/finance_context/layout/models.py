@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ColumnRole = Literal["historical", "forecast", "stub", "scenario", "total"]
+ColumnRole = Literal["historical", "forecast", "stub", "scenario", "total", "relative"]
 RowKind = Literal["fact", "abstract", "index", "helper"]
 
 
@@ -36,6 +36,7 @@ class LayoutRow(BaseModel):
     hidden: bool = False
     kind: RowKind = "fact"
     section_path: list[str] = Field(default_factory=list)
+    label_col: int | None = None
 
 
 class Block(BaseModel):

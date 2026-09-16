@@ -161,3 +161,11 @@ def test_apply_grain_week_keeps_day_keys() -> None:
     assert apply_grain("2026-01-11", None) == "2026-01-11"
     assert apply_grain("2026-01-11", "month") == "2026-01"
 
+
+def test_model_year_keys_infer_relative_grain() -> None:
+    assert infer_grain(["Y1", "Y2", "Y3"]) == "model_year"
+    assert infer_grain(["Q1", "Q2", "Q3"]) == "model_quarter"
+    assert infer_grain(["M1", "M2", "M3"]) == "model_month"
+    assert infer_grain(["P0", "P1", "P2"]) == "model_period"
+    assert apply_grain("Y1", "model_year") == "Y1"
+

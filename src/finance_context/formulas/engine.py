@@ -270,7 +270,8 @@ def _scan_range_body(text: str, i: int) -> tuple[dict[str, Any], int] | None:
         start = _cell_node(cell)
         j = cell.end()
         if j < len(text) and text[j] == ":":
-            cell2 = _CELL_BODY.match(text, j + 1)
+            k = _skip_sheet_qualifier(text, j + 1)
+            cell2 = _CELL_BODY.match(text, k)
             if cell2:
                 return (
                     {"op": "range", "start": start, "end": _cell_node(cell2)},
@@ -300,6 +301,28 @@ def _scan_range_body(text: str, i: int) -> tuple[dict[str, Any], int] | None:
             rows.end(),
         )
     return None
+
+
+def _skip_sheet_qualifier(text: str, i: int) -> int:
+    if i < len(text) and text[i] == "'":
+        j = i + 1
+        while j < len(text):
+            if text[j] == "'" and j + 1 < len(text) and text[j + 1] == "'":
+                j += 2
+                continue
+            if text[j] == "'":
+                j += 1
+                break
+            j += 1
+        else:
+            return i
+        if j < len(text) and text[j] == "!":
+            return j + 1
+        return i
+    match = _UNQUOTED_SHEET.match(text, i)
+    if match:
+        return match.end()
+    return i
 
 
 class _Parser:

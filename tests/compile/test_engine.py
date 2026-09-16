@@ -41,6 +41,15 @@ def test_range_edge() -> None:
     assert any(e.kind == "range" and e.target == "Sheet1!A1:B2" for e in parsed.edges)
 
 
+def test_range_with_sheet_qualifier_on_right_end() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=SUM(TBA!$D$10:'TBA'!D10)", sheet="Operation", addr="E7")
+    assert parsed.unparsed is False
+    assert any(
+        e.kind == "range" and e.target == "TBA!D10:D10" for e in parsed.edges
+    )
+
+
 def test_cross_sheet_ref_becomes_r1c1_relative_to_origin() -> None:
     engine = FormulaEngine(locale_hint="en")
     parsed = engine.parse("=Inputs!D5", sheet="P&L", addr="D24")

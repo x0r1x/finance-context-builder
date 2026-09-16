@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
+from finance_context.excel.a1 import format_addr
+from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.models import (
     Axis,
     AxisHeader,
@@ -31,6 +33,7 @@ from finance_context.layout.periods import (
     is_quarter_label,
     is_role_marker_text,
     is_start_period_label,
+    normalize_header,
 )
 
 _CHECK = re.compile(
@@ -38,7 +41,24 @@ _CHECK = re.compile(
     re.IGNORECASE,
 )
 _INDEX_LABEL = re.compile(r"^(№|n|no|#)$", re.IGNORECASE)
+_COUNTER_LABEL = re.compile(
+    r"week\b|#|№|period\s*index|\bindex\b|счётчик|счетчик|номер",
+    re.IGNORECASE,
+)
+_FLAG_LABEL = re.compile(
+    r"\b(flag|flags|construction|ops|operating|online|toggle|switch|binary)\b",
+    re.IGNORECASE,
+)
 _CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_MONTH})
+_RELATIVE_LABEL = re.compile(
+    r"^(project\s+)?(year|period|month|quarter|год|период|мес\w*|кв\w*)s?\b",
+    re.IGNORECASE,
+)
+_PERIOD_ROLES = frozenset({"historical", "forecast", "stub", "relative"})
+_STRUCTURAL_KEYS = frozenset({"actual", "plan", "total", "stub"})
+_UNLABELED_RELATIVE_MIN = 8
+_FORMULA_RUN_MIN = 3
+_FP_ENGINE = FormulaEngine(locale_hint="en")
 
 
 
@@ -57,28 +77,20 @@ def _blocks_for_sheet(sheet: str, cells: list[dict], date1904: bool) -> list[Blo
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
         by_row[int(cell["row"])].append(cell)
-    bands = _header_bands(by_row, date1904)
-    blocks: list[Block] = []
     row_ids = sorted(by_row)
-    for i, band_rows in enumerate(bands):
+    candidates = _axis_candidates(sheet, by_row, date1904)
+    blocks: list[Block] = []
+    for i, (band_rows, axis) in enumerate(candidates):
         header_row = max(band_rows)
-        end = min(bands[i + 1]) if i + 1 < len(bands) else max(row_ids) + 1
+        end = min(candidates[i + 1][0]) if i + 1 < len(candidates) else max(row_ids) + 1
         start = min(band_rows)
         body_rows = [r for r in row_ids if start <= r < end]
-        axis = _axis_from_band(sheet, band_rows, by_row, date1904)
-        calendar_n = sum(
-            1
-            for header in axis.headers
-            if header.role in {"historical", "forecast", "stub"} and header.period_key
-            not in {"actual", "plan", "total", "stub"}
-        )
-        if calendar_n < 2:
-            continue
-        band_cells = [c for r in body_rows for c in by_row[r]]
-        label_col = _label_col(band_cells, date1904)
         period_cols = {header.col for header in axis.headers}
+        label_col, span = _label_span(
+            by_row, body_rows, set(band_rows), period_cols, date1904
+        )
         data_rows = _data_rows(
-            by_row, body_rows, set(band_rows), label_col, date1904, period_cols
+            by_row, body_rows, set(band_rows), span, date1904, period_cols
         )
         blocks.append(
             Block(
@@ -89,6 +101,223 @@ def _blocks_for_sheet(sheet: str, cells: list[dict], date1904: bool) -> list[Blo
             )
         )
     return blocks
+
+
+def _axis_candidates(
+    sheet: str,
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> list[tuple[list[int], Axis]]:
+    formula_cols = _formula_timeline_cols(by_row)
+    candidates: list[tuple[list[int], Axis]] = []
+    for band_rows in _header_bands(by_row, date1904):
+        axis = _axis_from_band(sheet, band_rows, by_row, date1904)
+        if _period_count(axis) >= 2:
+            candidates.append((band_rows, axis))
+    taken = {row_n for band_rows, _ in candidates for row_n in band_rows}
+    for row_n in sorted(by_row):
+        if row_n in taken:
+            continue
+        labeled = _relative_run(by_row[row_n], date1904, require_label=True, min_len=3)
+        if labeled:
+            axis = _axis_from_relative(sheet, row_n, labeled, by_row[row_n], date1904)
+            candidates.append(([row_n], axis))
+            taken.add(row_n)
+            continue
+        unlabeled = _relative_run(
+            by_row[row_n],
+            date1904,
+            require_label=False,
+            min_len=_UNLABELED_RELATIVE_MIN,
+        )
+        if not unlabeled or not formula_cols:
+            continue
+        run_cols = {col for col, _ in unlabeled}
+        if not _same_timeline(run_cols, formula_cols):
+            continue
+        if any(_same_timeline(run_cols, _axis_cols(axis)) for _, axis in candidates):
+            continue
+        axis = _axis_from_relative(sheet, row_n, unlabeled, by_row[row_n], date1904)
+        candidates.append(([row_n], axis))
+        taken.add(row_n)
+    return _keep_dominant(candidates)
+
+
+def _period_count(axis: Axis) -> int:
+    return sum(
+        1
+        for header in axis.headers
+        if header.role in _PERIOD_ROLES and header.period_key not in _STRUCTURAL_KEYS
+    )
+
+
+def _axis_cols(axis: Axis) -> set[int]:
+    return {header.col for header in axis.headers}
+
+
+def _same_timeline(left: set[int], right: set[int]) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    lmin, lmax = min(left), max(left)
+    rmin, rmax = min(right), max(right)
+    if abs(lmin - rmin) <= 1 and abs(lmax - rmax) <= 1:
+        return True
+    union = len(left | right)
+    return union > 0 and len(left & right) / union >= 0.8
+
+
+def _comparable_width(left: int, right: int) -> bool:
+    if left <= 0 or right <= 0:
+        return False
+    return min(left, right) / max(left, right) >= 0.75
+
+
+def _keep_dominant(
+    candidates: list[tuple[list[int], Axis]],
+) -> list[tuple[list[int], Axis]]:
+    if not candidates:
+        return []
+    primary = max(candidates, key=lambda item: _period_count(item[1]))
+    pcols = _axis_cols(primary[1])
+    pmin = min(pcols) if pcols else 0
+    pwidth = _period_count(primary[1])
+    kept: list[tuple[list[int], Axis]] = []
+    for item in candidates:
+        if item is primary:
+            kept.append(item)
+            continue
+        cols = _axis_cols(item[1])
+        if not cols:
+            continue
+        if max(cols) < pmin:
+            continue
+        if _same_timeline(cols, pcols):
+            kept.append(item)
+            continue
+        if cols.isdisjoint(pcols) and _comparable_width(_period_count(item[1]), pwidth):
+            kept.append(item)
+    kept.sort(key=lambda item: min(item[0]))
+    return kept
+
+
+def _cell_fingerprint(cell: dict) -> str | None:
+    template = cell.get("formula_template")
+    if template:
+        return str(template)
+    raw = cell.get("formula_raw")
+    if not raw:
+        return None
+    addr = cell.get("addr") or format_addr(int(cell["col"]), int(cell["row"]))
+    parsed = _FP_ENGINE.parse(str(raw), sheet=str(cell.get("sheet") or ""), addr=str(addr))
+    if parsed.unparsed or not parsed.template:
+        return None
+    return parsed.template
+
+
+def _row_formula_run(row_cells: list[dict]) -> list[int]:
+    items: list[tuple[int, str]] = []
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        fingerprint = _cell_fingerprint(cell)
+        if fingerprint:
+            items.append((int(cell["col"]), fingerprint))
+    best: list[tuple[int, str]] = []
+    run: list[tuple[int, str]] = []
+    for col, fingerprint in items:
+        if run and col == run[-1][0] + 1 and fingerprint == run[-1][1]:
+            run.append((col, fingerprint))
+        else:
+            run = [(col, fingerprint)]
+        if len(run) > len(best):
+            best = list(run)
+    if len(best) < _FORMULA_RUN_MIN:
+        return []
+    return [col for col, _ in best]
+
+
+def _formula_timeline_cols(by_row: dict[int, list[dict]]) -> set[int] | None:
+    best: tuple[int, int, int, int] | None = None
+    for cells in by_row.values():
+        cols = _row_formula_run(cells)
+        if len(cols) < _FORMULA_RUN_MIN:
+            continue
+        width = cols[-1] - cols[0]
+        candidate = (width, len(cols), cols[0], cols[-1])
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    if best is None:
+        return None
+    _, _, start, end = best
+    return set(range(start, end + 1))
+
+
+def _relative_run(
+    row_cells: list[dict],
+    date1904: bool,
+    *,
+    require_label: bool,
+    min_len: int,
+) -> list[tuple[int, int]]:
+    label = _row_label(row_cells, date1904)
+    raw = normalize_header(label)
+    if require_label and (not raw or not _RELATIVE_LABEL.match(raw)):
+        return []
+    if label and _FLAG_LABEL.search(label):
+        return []
+    seq: list[tuple[int, int]] = []
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        text = _text(cell, date1904)
+        if not text or classify_header(text) is not None:
+            continue
+        if not _is_int_text(text):
+            if _is_number(text):
+                seq = []
+            continue
+        seq.append((int(cell["col"]), int(float(text.replace(",", ".")))))
+    best: list[tuple[int, int]] = []
+    run: list[tuple[int, int]] = []
+    for col, value in seq:
+        if run and value == run[-1][1] + 1 and col == run[-1][0] + 1:
+            run.append((col, value))
+        else:
+            run = [(col, value)]
+        if len(run) > len(best):
+            best = list(run)
+    if len(best) >= min_len and best[0][1] in {0, 1}:
+        return best
+    return []
+
+
+def _relative_prefix(label: str | None) -> str:
+    raw = normalize_header(label) or ""
+    if re.search(r"quarter|кв", raw, re.IGNORECASE):
+        return "Q"
+    if re.search(r"month|мес", raw, re.IGNORECASE):
+        return "M"
+    if re.search(r"year|год", raw, re.IGNORECASE):
+        return "Y"
+    return "P"
+
+
+def _axis_from_relative(
+    sheet: str,
+    row_n: int,
+    run: list[tuple[int, int]],
+    row_cells: list[dict],
+    date1904: bool,
+) -> Axis:
+    prefix = _relative_prefix(_row_label(row_cells, date1904))
+    headers = [
+        AxisHeader(
+            col=col,
+            text=str(value),
+            role="relative",
+            period_key=f"{prefix}{value}",
+        )
+        for col, value in run
+    ]
+    return Axis(id=f"{sheet}!r{row_n}", row=row_n, headers=headers)
 
 
 def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[int]]:
@@ -461,26 +690,49 @@ def _row_label(row_cells: list[dict], date1904: bool) -> str | None:
     return None
 
 
-def _label_col(band_cells: list[dict], date1904: bool) -> int:
-    candidates: list[int] = []
-    for cell in band_cells:
-        if cell.get("hidden"):
+def _label_span(
+    by_row: dict[int, list[dict]],
+    body_rows: list[int],
+    header_rows: set[int],
+    period_cols: set[int],
+    date1904: bool,
+) -> tuple[int, list[int]]:
+    left_edge = min(period_cols) if period_cols else 10**6
+    leftmost: dict[int, int] = defaultdict(int)
+    for row_n in body_rows:
+        if row_n in header_rows:
             continue
-        text = _text(cell, date1904)
-        if not text or classify_header(text) is not None or _is_number(text):
-            continue
-        candidates.append(int(cell["col"]))
-    if candidates:
-        return min(candidates)
-    visible = [int(c["col"]) for c in band_cells if not c.get("hidden")]
-    return min(visible) if visible else 1
+        for cell in sorted(by_row[row_n], key=lambda item: int(item["col"])):
+            if cell.get("hidden"):
+                continue
+            col = int(cell["col"])
+            if col >= left_edge or col in period_cols:
+                continue
+            text = _text(cell, date1904)
+            if not text or _is_number(text) or classify_header(text) is not None:
+                continue
+            leftmost[col] += 1
+            break
+    if not leftmost:
+        visible = [
+            int(cell["col"])
+            for row_n in body_rows
+            for cell in by_row[row_n]
+            if not cell.get("hidden")
+        ]
+        fallback = min(visible) if visible else 1
+        return fallback, [fallback]
+    primary = max(leftmost.items(), key=lambda item: (item[1], -item[0]))[0]
+    span = sorted(col for col in leftmost if col < primary)
+    span.append(primary)
+    return primary, span
 
 
 def _data_rows(
     by_row: dict[int, list[dict]],
     band_rows: list[int],
     header_rows: set[int],
-    label_col: int,
+    label_span: list[int],
     date1904: bool,
     period_cols: set[int],
 ) -> list[LayoutRow]:
@@ -493,13 +745,10 @@ def _data_rows(
             continue
         if _is_counter_row(by_row[row_n], date1904):
             continue
-        label_cell = _cell_at(by_row[row_n], label_col)
-        if label_cell is None:
+        label, depth, label_cell = _row_span_label(by_row[row_n], label_span, date1904)
+        if label is None or label_cell is None:
             continue
-        label = _text(label_cell, date1904)
-        if not label:
-            continue
-        indent = _indent(label)
+        indent = depth + _indent(label)
         check_row = bool(_CHECK.search(label))
         kind = _row_kind(by_row[row_n], period_cols, date1904, check_row=check_row)
         if kind == "abstract":
@@ -525,11 +774,28 @@ def _data_rows(
             hidden=bool(label_cell.get("hidden")),
             kind=kind,
             section_path=section_path,
+            label_col=int(label_cell["col"]),
         )
         out.append(item)
         if kind == "abstract":
             section_stack.append(item)
     return out
+
+
+def _row_span_label(
+    row_cells: list[dict],
+    label_span: list[int],
+    date1904: bool,
+) -> tuple[str | None, int, dict | None]:
+    for depth, col in enumerate(label_span):
+        cell = _cell_at(row_cells, col)
+        if cell is None or cell.get("hidden"):
+            continue
+        text = _text(cell, date1904)
+        if not text or _is_number(text) or classify_header(text) is not None:
+            continue
+        return text, depth, cell
+    return None, 0, None
 
 
 def _row_kind(
@@ -564,9 +830,12 @@ def _is_index_values(
     date1904: bool,
 ) -> bool:
     nums: list[int] = []
+    has_formula = False
     for cell in sorted(row_cells, key=lambda c: int(c["col"])):
         if int(cell["col"]) not in period_cols:
             continue
+        if cell.get("formula_raw") or cell.get("formula_template"):
+            has_formula = True
         text = _text(cell, date1904)
         if not text:
             continue
@@ -581,9 +850,13 @@ def _is_index_values(
     if len(nums) < 2:
         return False
     start = nums[0]
-    if start in {0, 1} and nums == list(range(start, start + len(nums))):
+    sequential = start in {0, 1} and nums == list(range(start, start + len(nums)))
+    if not sequential:
+        return False
+    label = _row_label(row_cells, date1904) or ""
+    if _COUNTER_LABEL.search(label) or _INDEX_LABEL.fullmatch(label.strip()):
         return True
-    return min(nums) >= 0 and max(nums) <= 12
+    return not has_formula
 
 
 def _cell_at(row_cells: list[dict], col: int) -> dict | None:

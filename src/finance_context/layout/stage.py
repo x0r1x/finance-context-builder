@@ -61,7 +61,9 @@ def _row_rows(layout: Layout) -> list[dict]:
                         "label": row.label,
                         "parent_row": row.parent_row,
                         "check_row": row.check_row,
-                        "label_col": block.label_col,
+                        "label_col": (
+                            row.label_col if row.label_col is not None else block.label_col
+                        ),
                         "indent": row.indent,
                     }
                 )
