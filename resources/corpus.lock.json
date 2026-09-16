@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "books": [
+    {
+      "slug": "packt-project-finance",
+      "license": "MIT",
+      "urls": [
+        "https://raw.githubusercontent.com/PacktPublishing/Project-Finance-and-Excel---Build-Financial-Models-from-Scratch/main/Financial%2BModel.xlsx"
+      ],
+      "sha256": "d8de77e6af2da56983101b74d3099ca77a9641dd7bd89f3cb76f03425c4a5acc",
+      "filename": "packt-project-finance.xlsx"
+    },
+    {
+      "slug": "three-statement",
+      "license": "MIT",
+      "urls": [
+        "https://raw.githubusercontent.com/Nachidoestech/three-statement-model/main/model/three_statement_model.xlsx",
+        "https://github.com/Nachidoestech/three-statement-model/raw/main/model/three_statement_model.xlsx"
+      ],
+      "sha256": null,
+      "filename": "three-statement.xlsx"
+    },
+    {
+      "slug": "rvi-project-finance",
+      "license": "CC-BY-NC-SA-4.0",
+      "redistribute": false,
+      "urls": [
+        "https://raw.githubusercontent.com/RenewablesPro/rvi-sample-models/main/Simplified-Project-Finance-Model.xlsx"
+      ],
+      "sha256": "3b9a8b47f3cf9ad506698c6cf89082472401b9c8b851ed78ba944101c35b43f2",
+      "filename": "rvi-project-finance.xlsx"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+version: 1
+workbook: rvi-project-finance.xlsx
+# Keys use raw labels; tests normalize label/parent/sheet class.
+expectations:
+  - {label: Internal Rate of Return (IRR), concept_id: val.irr}
+  - {label: Average Debt Service Coverage Ratio (DSCR), concept_id: cov.dscr}
+  - {label: Minimum Debt Service Coverage Ratio (DSCR), concept_id: cov.dscr}
+  - {label: Total uses of funds, concept_id: cf.uses}
+  - {label: Total sources of funds, concept_id: cf.sources}
+  - {label: Total revenue, parent: Cashflow Statement, concept_id: pnl.revenue}
+  - {label: Cashflow available for debt service (CFADS), concept_id: cf.cfads}
+  - {label: Debt principal, parent: Cashflow Statement, concept_id: cf.repayment}
+  - {label: Operating Income or Loss (EBITDA), concept_id: pnl.ebitda}
+  - {label: Debt drawdowns, concept_id: cf.drawdown}
+  - {label: Principal repayment, parent: Linear repayment, concept_id: cf.repayment}
+  - {label: CFADS, parent: Debt Service Coverage Ratio, concept_id: cf.cfads}
+  - {label: CFADS during debt term, concept_id: cf.cfads}
+  - {label: EBITDA, parent: Corporate tax, concept_id: pnl.ebitda}
+  - {label: Net Present Value (NPV), concept_id: val.npv}

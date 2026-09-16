@@ -1,0 +1,19 @@
+version: 1
+workbook: packt-project-finance.xlsx
+# Keys use raw labels; tests normalize label/parent/sheet class.
+expectations:
+  - {label: Total Uses (k£), parent: Uses, concept_id: cf.uses}
+  - {label: Total Sources (k£), parent: Sources, concept_id: cf.sources}
+  - {label: Debt Drawdown (k£), concept_id: cf.drawdown}
+  - {label: Principal Repayment, parent: Debt Repayment Schedule, concept_id: cf.repayment}
+  - {label: Interests, parent: Debt Repayment Schedule, concept_id: pnl.interest}
+  - {label: OPEX, parent: P&L, concept_id: pnl.opex}
+  - {label: EBITDA, parent: P&L, concept_id: pnl.ebitda}
+  - {label: Total Revenue (real), concept_id: pnl.revenue}
+  - {label: Total Revenue (nominal), concept_id: pnl.revenue}
+  - {label: REVENUE - Passenger Car (PC), concept_id: pnl.revenue}
+  - {label: Cash Flow Available for Debt Service (CFADS), concept_id: cf.cfads}
+  - {label: Principal repayment, parent: Cashflow Statement, concept_id: cf.repayment}
+  - {label: Debt, parent: Balance Sheet, concept_id: bs.debt}
+  - {label: Equity, parent: Balance Sheet, concept_id: bs.equity}
+  - {label: CAPEX (incl. SPV costs), concept_id: cf.capex}

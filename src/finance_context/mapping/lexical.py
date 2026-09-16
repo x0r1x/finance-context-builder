@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from finance_context.mapping.models import Candidate, Concept, RowContext
+from finance_context.mapping.models import Candidate, Concept, LexicalPattern, RowContext
 from finance_context.mapping.normalize import normalize_label
+from finance_context.mapping.patterns import pattern_matches
 from finance_context.mapping.structure import BookView, section_tokens
 
 
 class LexicalSignal:
     name = "lexical"
 
-    def __init__(self, taxonomy: list[Concept]) -> None:
+    def __init__(
+        self,
+        taxonomy: list[Concept],
+        patterns: list[LexicalPattern] | None = None,
+    ) -> None:
         self.concepts = {c.id: c for c in taxonomy}
+        self.patterns = list(patterns or [])
         self.phrases: list[tuple[str, str, int]] = []
         for concept in taxonomy:
             for label in [*concept.labels, *concept.aliases]:
@@ -22,39 +28,35 @@ class LexicalSignal:
         if not n:
             return []
         hits: dict[str, Candidate] = {}
-        tokens = set(n.split())
+        tokens = _expand_tokens(n.split())
         extra = section_tokens(ctx)
-        if "cf.net" in book.taxonomy and (
-            "cumulative net" in n
-            or n in {"net cf", "net cashflow", "net cash flow"}
-            or ({"net", "flow"} <= tokens and "present" not in n and "financing" not in n)
-        ):
-            hits["cf.net"] = Candidate(
-                concept_id="cf.net",
-                score=0.93,
+        skipped = {
+            pattern.skip_concept
+            for pattern in self.patterns
+            if pattern.skip_concept
+            and pattern_matches(pattern.when, label=n, tokens=tokens, section=extra)
+        }
+        for pattern in self.patterns:
+            if not pattern.concept or pattern.concept not in book.taxonomy:
+                continue
+            if pattern.concept in skipped:
+                continue
+            if not pattern_matches(pattern.when, label=n, tokens=tokens, section=extra):
+                continue
+            hits[pattern.concept] = Candidate(
+                concept_id=pattern.concept,
+                score=pattern.score,
                 signal=self.name,
-                evidence="net flow phrasing",
+                evidence=pattern.evidence,
             )
-        if "debt" in extra and (
-            {"opening", "balance"} <= tokens or {"closing", "balance"} <= tokens
-        ):
-            if "bs.debt" in book.taxonomy:
-                hits["bs.debt"] = Candidate(
-                    concept_id="bs.debt",
-                    score=0.91,
-                    signal=self.name,
-                    evidence="debt opening/closing balance",
-                )
         for phrase, concept_id, size in self.phrases:
             concept = self.concepts.get(concept_id)
-            if concept is None or _blocked_by_anti(n, concept):
+            if concept is None or concept_id in skipped or _blocked_by_anti(n, concept):
                 continue
             if concept.section_hints and not _hint_hit(ctx, extra, concept.section_hints):
                 continue
             score = _phrase_score(n, tokens, phrase, size)
             if score is None:
-                continue
-            if concept_id == "bs.ap" and "debt" in extra:
                 continue
             prev = hits.get(concept_id)
             if prev is None or score > prev.score:
@@ -85,6 +87,38 @@ def _hint_hit(ctx: RowContext, extra: set[str], hints: list[str]) -> bool:
     return False
 
 
+def _expand_tokens(parts: list[str]) -> set[str]:
+    tokens = set(parts)
+    extra: set[str] = set()
+    for token in tokens:
+        stem = _singular(token)
+        if stem != token:
+            extra.add(stem)
+    return tokens | extra
+
+
+def _singular(token: str) -> str:
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+_WEAK_SINGLETONS = {
+    "net",
+    "cash",
+    "total",
+    "opening",
+    "closing",
+    "balance",
+    "flow",
+    "debt",
+    "revenue",
+    "headroom",
+}
+
+
 def _phrase_score(label: str, tokens: set[str], phrase: str, size: int) -> float | None:
     if label == phrase:
         return 1.0
@@ -92,18 +126,11 @@ def _phrase_score(label: str, tokens: set[str], phrase: str, size: int) -> float
     if size >= 2 and phrase in label:
         return 0.94
     if size == 1:
-        if phrase in {
-            "net",
-            "cash",
-            "total",
-            "opening",
-            "closing",
-            "balance",
-            "flow",
-            "debt",
-            "revenue",
-            "headroom",
-        }:
+        if phrase in _WEAK_SINGLETONS:
+            if tokens <= {phrase, _singular(phrase), f"{phrase}s"}:
+                return None
+            if phrase in tokens:
+                return 0.88
             return None
         if phrase in tokens:
             return 0.9

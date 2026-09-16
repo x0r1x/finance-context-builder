@@ -57,7 +57,7 @@ class Resolver:
     def decide(
         self, ctx: RowContext, ranked: list[Candidate]
     ) -> tuple[str | None, Candidate | None]:
-        ranked = _apply_guards(ctx, ranked, set(self.taxonomy))
+        ranked = _apply_guards(ctx, ranked, self.taxonomy)
         if not ranked:
             return None, None
         top = ranked[0]
@@ -156,19 +156,32 @@ def _confidence(source: str, score: float | None) -> str | None:
 
 
 def _apply_guards(
-    ctx: RowContext, ranked: list[Candidate], concept_ids: set[str]
+    ctx: RowContext, ranked: list[Candidate], taxonomy: dict[str, Concept]
 ) -> list[Candidate]:
-    label = ctx.label.casefold().strip()
-    if label == "gmv":
-        forced = [c for c in ranked if c.concept_id == "pnl.gmv"]
-        if not forced and "pnl.gmv" in concept_ids:
-            return [
-                Candidate(
-                    concept_id="pnl.gmv",
-                    score=1.0,
-                    signal="lexical",
-                    evidence="gmv is not revenue",
-                )
-            ]
+    from finance_context.mapping.normalize import normalize_label
+
+    n = normalize_label(ctx.label)
+    if not n:
+        return ranked
+    forced_id: str | None = None
+    for concept in taxonomy.values():
+        exact = {normalize_label(label) for label in concept.exact_labels if label}
+        if n in exact:
+            if forced_id and forced_id != concept.id:
+                return ranked
+            forced_id = concept.id
+    if not forced_id:
+        return ranked
+    forced = [c for c in ranked if c.concept_id == forced_id]
+    if forced:
         return forced
+    if forced_id in taxonomy:
+        return [
+            Candidate(
+                concept_id=forced_id,
+                score=1.0,
+                signal="lexical",
+                evidence="exact_labels",
+            )
+        ]
     return ranked

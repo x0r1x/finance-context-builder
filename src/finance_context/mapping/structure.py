@@ -8,9 +8,18 @@ from finance_context.excel.a1 import parse_addr
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.models import Block, Layout, LayoutRow
 from finance_context.layout.periods import infer_grain
-from finance_context.mapping.models import Candidate, Concept, RowContext, RowRelation, ValueKind
+from finance_context.mapping.models import (
+    Calculation,
+    Candidate,
+    Concept,
+    LexicalPattern,
+    RowContext,
+    RowRelation,
+    ValueKind,
+)
 from finance_context.mapping.normalize import normalize_label
 from finance_context.mapping.roles import article_role
+from finance_context.mapping.rowfacets import infer_row_facets
 
 _ENGINE = FormulaEngine(locale_hint="en")
 
@@ -46,9 +55,14 @@ class BookView:
         layout: Layout,
         cells: list[dict],
         taxonomy: list[Concept],
+        *,
+        calculations: list[Calculation] | None = None,
+        patterns: list[LexicalPattern] | None = None,
     ) -> None:
         self.layout = layout
         self.taxonomy = {c.id: c for c in taxonomy}
+        self.calculations = list(calculations or [])
+        self.lexical_patterns = list(patterns or [])
         self.cells: dict[tuple[str, int, int], dict] = {
             (str(c["sheet"]), int(c["row"]), int(c["col"])): c for c in cells
         }
@@ -122,7 +136,7 @@ def build_row_context(
         )
         if part
     )
-    return RowContext(
+    ctx = RowContext(
         row_key=key,
         sheet=sheet,
         row=layout_row.row,
@@ -137,8 +151,10 @@ def build_row_context(
         period_headers=headers,
         article_role=article_role(layout_row, templates),
         query_text=query,
-        label_col=block.label_col,
+        label_col=layout_row.label_col or block.label_col,
     )
+    ctx.inferred_facets = infer_row_facets(ctx, pattern_kind=pattern.kind)
+    return ctx
 
 
 def _value_kind(
@@ -374,16 +390,24 @@ class StructureSignal:
                         )
                     )
         if pattern.kind == "aggregate" and pattern.aggregate_rows:
+            members: list[str] = []
             child_ids: list[str] = []
             for row_n in pattern.aggregate_rows:
                 block_id = _block_id(book, ctx.sheet, row_n)
                 if not block_id:
                     continue
-                concept_id = book.concepts.get(book.row_key(ctx.sheet, row_n, block_id))
+                key = book.row_key(ctx.sheet, row_n, block_id)
+                members.append(key)
+                concept_id = book.concepts.get(key)
                 if concept_id:
                     child_ids.append(concept_id)
             if child_ids:
-                shared = _shared_concept(child_ids, book)
+                shared = _shared_concept(
+                    child_ids,
+                    book,
+                    mapped=len(child_ids),
+                    members=len(members),
+                )
                 if shared:
                     out.append(
                         Candidate(
@@ -396,16 +420,16 @@ class StructureSignal:
         if pattern.kind == "diff" and pattern.diff_rows:
             left_id = _concept_at(book, ctx.sheet, pattern.diff_rows[0])
             right_id = _concept_at(book, ctx.sheet, pattern.diff_rows[1])
-            if {left_id, right_id} <= {"cf.receipts", "cf.disbursements"} and left_id != right_id:
-                if "cf.net" in book.taxonomy:
-                    out.append(
-                        Candidate(
-                            concept_id="cf.net",
-                            score=0.94,
-                            signal=self.name,
-                            evidence="inflows minus outflows",
-                        )
+            parent = _diff_parent(left_id, right_id, book)
+            if parent:
+                out.append(
+                    Candidate(
+                        concept_id=parent,
+                        score=0.94,
+                        signal=self.name,
+                        evidence="declared difference of mapped operands",
                     )
+                )
         if pattern.kind == "roll":
             source_id = _concept_at(book, ctx.sheet, pattern.roll_from_row or -1)
             if source_id:
@@ -427,10 +451,21 @@ def _concept_at(book: BookView, sheet: str, row: int) -> str | None:
     return book.concepts.get(book.row_key(sheet, row, block_id))
 
 
-def _shared_concept(child_ids: list[str], book: BookView) -> str | None:
+def _shared_concept(
+    child_ids: list[str],
+    book: BookView,
+    *,
+    mapped: int,
+    members: int,
+) -> str | None:
+    if members <= 0 or mapped < members:
+        return None
     unique = list(dict.fromkeys(child_ids))
     if len(unique) == 1:
         return unique[0]
+    calc_parent = _aggregate_parent(unique, book)
+    if calc_parent:
+        return calc_parent
     broaders: list[str] = []
     prefixes: list[str] = []
     for cid in unique:
@@ -451,6 +486,34 @@ def _shared_concept(child_ids: list[str], book: BookView) -> str | None:
     return None
 
 
+def _diff_parent(left_id: str | None, right_id: str | None, book: BookView) -> str | None:
+    if not left_id or not right_id or left_id == right_id:
+        return None
+    observed = {left_id, right_id}
+    for calc in book.calculations:
+        if len(calc.terms) != 2:
+            continue
+        weights = {term.concept: term.weight for term in calc.terms}
+        if set(weights) != observed:
+            continue
+        if weights[left_id] * weights[right_id] < 0 and calc.parent in book.taxonomy:
+            return calc.parent
+    return None
+
+
+def _aggregate_parent(child_ids: list[str], book: BookView) -> str | None:
+    observed = set(child_ids)
+    for calc in book.calculations:
+        if any(term.weight < 0 for term in calc.terms):
+            continue
+        terms = {term.concept for term in calc.terms}
+        if not terms:
+            continue
+        if observed == terms and calc.parent in book.taxonomy:
+            return calc.parent
+    return None
+
+
 def _is_proration(ast: dict[str, Any]) -> bool:
     right = ast.get("right") or {}
     op = right.get("op")
@@ -463,8 +526,9 @@ def _is_proration(ast: dict[str, Any]) -> bool:
 
 def _semantic_ratio(label: str | None) -> bool:
     n = normalize_label(label)
+    raw = (label or "").casefold()
     return any(
-        token in n
+        token in n or token in raw
         for token in (
             "dscr",
             "llcr",

@@ -7,12 +7,18 @@ from tests.helpers.ports import CapBudget, DenySlots, FakeChat, FakeEmbed, Grant
 from finance_context.errors import PortError
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
 from finance_context.mapping.cascade import map_layout
-from finance_context.mapping.models import Concept
+from finance_context.mapping.models import (
+    Concept,
+    LexicalPattern,
+    PatternWhen,
+    TaxonomyDocument,
+)
 from finance_context.mapping.normalize import normalize_label
+from finance_context.mapping.taxonomy import register_document
 
 TAXONOMY = [
     Concept(id="pnl.revenue", labels=["Revenue", "Выручка", "Sales"]),
-    Concept(id="pnl.gmv", labels=["GMV"]),
+    Concept(id="pnl.gmv", labels=["GMV"], exact_labels=["GMV"]),
     Concept(id="bs.assets_total", labels=["Total Assets", "Итого активы"]),
     Concept(id="bs.equity", labels=["Equity"]),
     Concept(id="bs.ar", labels=["Accounts receivable", "Opening AR"]),
@@ -28,6 +34,27 @@ TAXONOMY = [
     Concept(id="cf.drawdown", labels=["Drawdown"]),
     Concept(id="val.npv", labels=["NPV"]),
 ]
+
+register_document(
+    TaxonomyDocument(
+        concepts=TAXONOMY,
+        patterns=[
+            LexicalPattern(
+                concept="cf.net",
+                score=0.93,
+                evidence="net flow phrasing",
+                when=PatternWhen(
+                    any=[
+                        PatternWhen(label_contains=["cumulative net"]),
+                        PatternWhen(label_in=["net cf", "net cashflow", "net cash flow"]),
+                        PatternWhen(label_tokens=["net", "flow"]),
+                    ],
+                    unless=PatternWhen(label_contains=["present", "financing"]),
+                ),
+            )
+        ],
+    )
+)
 
 VECS = {
     "revenue": [1.0, 0.0, 0.0],
@@ -65,6 +92,15 @@ def _layout(*rows: LayoutRow, sheet: str = "P&L") -> Layout:
 def test_normalize_strips_whole_parentheses() -> None:
     assert normalize_label("Revenue (net)") == "revenue"
     assert normalize_label("EBITDA (adj.)") == "ebitda"
+
+
+def test_normalize_keeps_metric_acronyms_and_splits_cashflow() -> None:
+    assert normalize_label("Operating Income or Loss (EBITDA)") == (
+        "operating income or loss ebitda"
+    )
+    assert normalize_label("Cashflow available for debt service (CFADS)") == (
+        "cash flow available for debt service cfads"
+    )
 
 
 def test_normalize_keeps_qualifiers_and_unclosed_parens() -> None:
@@ -288,6 +324,20 @@ def test_receipts_and_disbursements_not_pnl_or_ap() -> None:
         embed=None,
         chat=FakeChat("pnl.revenue"),
         slots=GrantSlots(),
+        patterns=[
+            LexicalPattern(
+                concept="cf.net",
+                score=0.93,
+                evidence="net flow phrasing",
+                when=PatternWhen(
+                    any=[
+                        PatternWhen(label_contains=["cumulative net"]),
+                        PatternWhen(label_tokens=["net", "flow"]),
+                    ],
+                    unless=PatternWhen(label_contains=["present", "financing"]),
+                ),
+            )
+        ],
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Receipts"] == "cf.receipts"
