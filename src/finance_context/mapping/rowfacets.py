@@ -5,7 +5,7 @@ from finance_context.mapping.normalize import normalize_label, section_class
 
 _OPENING = ("opening", "beg", "bf", "brought")
 _CLOSING = ("closing", "ending", "carried", "cf")
-_ACCRUAL = ("accrual", "accrued", "earned", "revenue earned")
+_ACCRUAL = ("accrual", "accrued", "revenue earned")
 _CASH = ("cash inflow", "cash outflow", "collection", "collections", "receipt", "receipts", "paid")
 
 

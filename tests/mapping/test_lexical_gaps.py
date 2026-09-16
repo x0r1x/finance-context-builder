@@ -131,3 +131,222 @@ def test_parent_section_rolls_up_capex_opex_da() -> None:
     assert by_label["Amortization (k£)"] == "pnl.da"
     assert by_label["Net Profit"] == "pnl.net_income"
     assert by_label["Cashflow available for equity (FCFE)"] == "cf.fcf"
+
+
+def test_parent_rollup_skips_lifetime_capacity_inflation_balance() -> None:
+    taxonomy = load_taxonomy()
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="Assumptions",
+                blocks=[
+                    Block(
+                        block_id="Assumptions!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="Assumptions!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(col=2, text="1", role="relative", period_key="Y1"),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(
+                                row=2,
+                                label="Operating lifetime",
+                                kind="fact",
+                                section_path=["Operating costs"],
+                            ),
+                            LayoutRow(
+                                row=3,
+                                label="Number of wind turbines",
+                                kind="fact",
+                                section_path=["Revenue"],
+                            ),
+                            LayoutRow(
+                                row=4,
+                                label="Installed capacity MW",
+                                kind="fact",
+                                section_path=["Revenue"],
+                            ),
+                            LayoutRow(
+                                row=5,
+                                label="PPA escalation",
+                                kind="fact",
+                                section_path=["Revenue"],
+                            ),
+                            LayoutRow(
+                                row=6,
+                                label="Share premium",
+                                kind="fact",
+                                section_path=["Uses"],
+                            ),
+                            LayoutRow(
+                                row=7,
+                                label="Balance b/f",
+                                kind="fact",
+                                section_path=["CAPEX"],
+                            ),
+                            LayoutRow(
+                                row=8,
+                                label="Straight line depreciation",
+                                kind="fact",
+                                section_path=["D&A"],
+                            ),
+                            LayoutRow(
+                                row=9,
+                                label="CPI",
+                                kind="fact",
+                                section_path=["Revenue"],
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row.concept_id for row in doc.rows}
+    assert by_label["Operating lifetime"] == "ops.lifetime"
+    assert by_label["Number of wind turbines"] == "ops.asset_count"
+    assert by_label["Installed capacity MW"] == "ops.capacity"
+    assert by_label["PPA escalation"] == "ops.inflation"
+    assert by_label["Share premium"] == "bs.share_premium"
+    assert by_label["Balance b/f"] not in {"cf.capex", "pnl.opex", "pnl.revenue"}
+    assert by_label["Straight line depreciation"] != "pnl.da"
+    assert by_label["CPI"] == "ops.cpi"
+
+
+def test_packt_leftovers_and_cash_not_balance() -> None:
+    taxonomy = load_taxonomy()
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="Ratios",
+                blocks=[
+                    Block(
+                        block_id="Ratios!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="Ratios!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(col=2, text="1", role="relative", period_key="Y1"),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(row=2, label="Cash Flow", kind="fact"),
+                            LayoutRow(row=3, label="Total Cash in", kind="fact"),
+                            LayoutRow(row=4, label="Total Cash out", kind="fact"),
+                            LayoutRow(row=5, label="Arrangement fee", kind="fact"),
+                            LayoutRow(row=6, label="Capitalized interests", kind="fact"),
+                            LayoutRow(row=7, label="TRAFFIC - Passenger Car (PC)", kind="fact"),
+                            LayoutRow(row=8, label="Dividends earned", kind="fact"),
+                            LayoutRow(row=9, label="Total Investment", kind="fact"),
+                            LayoutRow(row=10, label="Debt up-front fee", kind="fact"),
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row.concept_id for row in doc.rows}
+    assert by_label["Cash Flow"] == "cf.net"
+    assert by_label["Cash Flow"] != "bs.cash"
+    assert by_label["Total Cash in"] == "cf.receipts"
+    assert by_label["Total Cash out"] == "cf.disbursements"
+    assert by_label["Arrangement fee"] == "debt.commitment_fee"
+    assert by_label["Capitalized interests"] == "pnl.interest"
+    assert by_label["TRAFFIC - Passenger Car (PC)"] == "pnl.volume"
+    assert by_label["Dividends earned"] == "cf.dividends"
+    assert by_label["Total Investment"] == "val.total_investment"
+    assert by_label["Debt up-front fee"] != "bs.debt"
+
+
+def test_income_tax_on_cfs_is_cash_tax_not_pnl() -> None:
+    taxonomy = load_taxonomy()
+    cfs = _layout(LayoutRow(row=2, label="Income Tax"), sheet="CFS")
+    pnl = _layout(LayoutRow(row=2, label="Income Tax"), sheet="P&L")
+    cfs_doc = map_layout(
+        cfs, taxonomy=taxonomy, glossary={}, embed=None, chat=None, slots=GrantSlots()
+    )
+    pnl_doc = map_layout(
+        pnl, taxonomy=taxonomy, glossary={}, embed=None, chat=None, slots=GrantSlots()
+    )
+    assert cfs_doc.rows[0].concept_id == "cf.tax_paid"
+    assert pnl_doc.rows[0].concept_id == "pnl.tax"
+
+
+def test_dscr_minimum_is_limit_not_observed_dscr() -> None:
+    taxonomy = load_taxonomy()
+    layout = _layout(
+        LayoutRow(row=2, label="DSCR minimum"),
+        LayoutRow(row=3, label="Average Debt Service Coverage Ratio (DSCR)"),
+        LayoutRow(row=4, label="Minimum Debt Service Coverage Ratio (DSCR)"),
+        sheet="Funding assumptions",
+    )
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row.concept_id for row in doc.rows}
+    assert by_label["DSCR minimum"] == "cov.dscr_limit"
+    assert by_label["Average Debt Service Coverage Ratio (DSCR)"] == "cov.dscr"
+    assert by_label["Minimum Debt Service Coverage Ratio (DSCR)"] == "cov.dscr"
+
+
+def test_new_pf_concepts_map() -> None:
+    taxonomy = load_taxonomy()
+    layout = _layout(
+        LayoutRow(row=2, label="Cost of capital"),
+        LayoutRow(row=3, label="CoC"),
+        LayoutRow(row=4, label="Electricity generation"),
+        LayoutRow(row=5, label="Loan amount"),
+        LayoutRow(row=6, label="Goodwill"),
+        LayoutRow(row=7, label="Share capital"),
+        LayoutRow(row=8, label="Total debt service"),
+        LayoutRow(row=9, label="FCFE / Equity"),
+        LayoutRow(row=10, label="Long term assets"),
+        LayoutRow(row=11, label="Net Assets"),
+        LayoutRow(row=12, label="Availability"),
+        sheet="PF Model",
+    )
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row.concept_id for row in doc.rows}
+    assert by_label["Cost of capital"] == "val.coc"
+    assert by_label["CoC"] == "val.coc"
+    assert by_label["Electricity generation"] == "ops.generation"
+    assert by_label["Loan amount"] == "debt.facility_amount"
+    assert by_label["Goodwill"] == "bs.goodwill"
+    assert by_label["Share capital"] == "bs.share_capital"
+    assert by_label["Total debt service"] == "cf.debt_service"
+    assert by_label["FCFE / Equity"] == "val.fcfe_equity"
+    assert by_label["Long term assets"] == "bs.ppe"
+    assert by_label["Net Assets"] == "bs.equity"
+    assert by_label["Availability"] == "ops.availability"

@@ -24,3 +24,11 @@ expectations:
   - {label: Net Profit, parent: P&L, concept_id: pnl.net_income}
   - {label: Cash Flow Available for Equity, concept_id: cf.fcf}
   - {label: Asset, parent: Balance Sheet, concept_id: bs.ppe}
+  - {label: Dividends earned, concept_id: cf.dividends}
+  - {label: TRAFFIC - Passenger Car (PC), concept_id: pnl.volume}
+  - {label: TRAFFIC - Heavy Vehicle (HV), concept_id: pnl.volume}
+  - {label: Arrangement fee, parent: Project IRR, concept_id: debt.commitment_fee}
+  - {label: Capitalized Interests, parent: Project IRR, concept_id: pnl.interest}
+  - {label: Cash Flow, parent: Project IRR, concept_id: cf.net}
+  - {label: Total Investment, concept_id: val.total_investment}
+  - {label: Income Tax, parent: Cashflow Statement, concept_id: cf.tax_paid}

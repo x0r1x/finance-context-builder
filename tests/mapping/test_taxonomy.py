@@ -43,6 +43,23 @@ def test_taxonomy_includes_fcf_repayment_drawdown() -> None:
         "cf.uses",
         "bs.dsra",
         "debt.sculpting",
+        "cov.dscr_limit",
+        "ops.lifetime",
+        "ops.capacity",
+        "ops.asset_count",
+        "ops.generation",
+        "ops.availability",
+        "ops.cpi",
+        "ops.inflation",
+        "val.coc",
+        "val.fcfe_equity",
+        "val.total_investment",
+        "debt.facility_amount",
+        "debt.upfront_fee_rate",
+        "cf.debt_service",
+        "bs.goodwill",
+        "bs.share_capital",
+        "bs.share_premium",
     } <= ids
 
 

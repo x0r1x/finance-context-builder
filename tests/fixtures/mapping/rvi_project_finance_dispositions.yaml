@@ -20,3 +20,10 @@ expectations:
   - {label: Cashflow available for equity (FCFE), concept_id: cf.fcf}
   - {label: Operating cashflow, concept_id: cf.cfo}
   - {label: Total operating costs, concept_id: pnl.opex}
+  - {label: DSCR minimum, concept_id: cov.dscr_limit}
+  - {label: Operating lifetime, concept_id: ops.lifetime}
+  - {label: Share premium, concept_id: bs.share_premium}
+  - {label: Share capital, concept_id: bs.share_capital}
+  - {label: Goodwill, concept_id: bs.goodwill}
+  - {label: Loan amount, concept_id: debt.facility_amount}
+  - {label: Total debt service, concept_id: cf.debt_service}

@@ -527,9 +527,16 @@ def _is_proration(ast: dict[str, Any]) -> bool:
 def _semantic_ratio(label: str | None) -> bool:
     n = normalize_label(label)
     raw = (label or "").casefold()
-    return any(
-        token in n or token in raw
-        for token in (
+    tokens = set(n.split())
+    if "fcfe" in tokens and "equity" in tokens and ("/" in raw or "ratio" in tokens):
+        return True
+    if "cost of capital" in n:
+        return True
+    return bool(
+        tokens
+        & {
+            "wacc",
+            "coc",
             "dscr",
             "llcr",
             "plcr",
@@ -538,13 +545,25 @@ def _semantic_ratio(label: str | None) -> bool:
             "leverage",
             "runway",
             "ratio",
-        )
+            "cpi",
+            "inflation",
+            "escalation",
+            "availability",
+        }
     )
 
 
 def _semantic_count(label: str | None) -> bool:
     n = normalize_label(label)
-    return "week #" in n or n.endswith("week") or "trough cash week" in n
+    tokens = set(n.split())
+    if "week #" in n or n.endswith("week") or "trough cash week" in n:
+        return True
+    if any(
+        part in n
+        for part in ("lifetime", "turbine", "traffic", "vehicles", "generation", "mwh")
+    ):
+        return True
+    return "capacity" in n or "mw" in tokens
 
 
 def parse_cell_addr(addr: str) -> tuple[int, int]:

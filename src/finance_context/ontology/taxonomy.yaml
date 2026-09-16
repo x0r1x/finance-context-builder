@@ -37,6 +37,12 @@ patterns:
   - skip_concept: bs.ap
     when:
       section_contains: [debt]
+  - skip_concept: pnl.tax
+    when:
+      section_contains: [cfs, cash flow]
+      label_contains: [tax]
+      unless:
+        label_contains: [rate, deferred, accrued, taxable, pre-tax, before tax]
   - concept: cf.capex
     score: 0.9
     evidence: parent capex or uses section
@@ -44,7 +50,10 @@ patterns:
       section_contains: [capex, uses]
       unless:
         any:
-          - {label_contains: [sources, drawdown, equity, interest, total uses, total sources]}
+          - {label_contains: [sources, drawdown, equity, interest, total uses, total sources,
+              lifetime, turbine, capacity, inflation, cpi, escalation, mw, share premium,
+              share capital, goodwill, balance b, balance c, brought forward, carried forward,
+              b/f, c/f, loan amount]}
           - {label_in: [debt]}
   - concept: pnl.opex
     score: 0.9
@@ -57,21 +66,23 @@ patterns:
       unless:
         any:
           - {section_contains: [capex, uses, source]}
-          - {label_contains: [cashflow, cash flow, ebitda, ebit, revenue, cfads, tax, traffic]}
+          - {label_contains: [cashflow, cash flow, ebitda, ebit, revenue, cfads, tax, traffic,
+              lifetime, turbine, capacity, inflation, cpi, escalation, mw]}
   - concept: pnl.revenue
     score: 0.9
     evidence: parent revenue section
     when:
       section_contains: [revenue]
       unless:
-        label_contains: [traffic, volume, cost, tax, opex, price, other income]
+        label_contains: [traffic, volume, cost, tax, opex, price, other income, lifetime,
+          turbine, capacity, inflation, cpi, escalation, mw]
   - concept: pnl.da
     score: 0.9
     evidence: parent d and a section
     when:
       section_contains: [da, amortisation, amortization, depreciation]
       unless:
-        label_contains: [asset, opening, closing, value]
+        label_contains: [asset, opening, closing, value, lifetime, straight line, years]
   - concept: cf.net
     score: 0.9
     evidence: cash flow line
@@ -79,12 +90,20 @@ patterns:
       label_in: [cash flow]
       unless:
         label_contains: [available, operating, net]
+  - concept: cf.tax_paid
+    score: 0.92
+    evidence: cash tax on cashflow statement
+    when:
+      section_contains: [cfs, cash flow]
+      label_contains: [income tax, tax]
+      unless:
+        label_contains: [rate, deferred, accrued, taxable, pre-tax, before tax]
 concepts:
   - id: pnl.revenue
     labels: [Revenue, Revenues, Gross revenue, Gross revenues, Total revenue, Выручка, Sales, Sales revenue]
     anti_labels: [leverage, ttm, covenant, dscr]
   - id: pnl.volume
-    labels: [Volume, Qty, Quantity, Объём]
+    labels: [Volume, Qty, Quantity, Объём, Traffic, TRAFFIC]
     facets: {unit: count}
   - id: pnl.price
     labels: [Price, ASP, Цена]
@@ -106,14 +125,16 @@ concepts:
     labels: [EBIT, Operating profit]
   - id: pnl.da
     labels: [D&A, Depreciation, Amortization, Amortisation, Амортизация]
+    anti_labels: [straight line, lifetime, years]
   - id: pnl.interest
     labels: [Interest expense, Interest, Loan interest, Capitalized interest, Capitalized interests, Проценты]
-    section_hints: [debt, term loan, amortisation, revolver, construction]
+    section_hints: [debt, term loan, amortisation, revolver, construction, ratios, irr, project irr]
   - id: pnl.interest_rate
     labels: [Interest rate, Ставка процента, Coupon rate]
     facets: {unit: rate}
   - id: pnl.tax
     labels: [Income tax, Taxes, Налог]
+    anti_labels: [tax paid, cash tax]
   - id: pnl.deferred_tax
     labels: [Deferred tax, Deferred tax expense, Отложенный налог]
   - id: pnl.tax_rate
@@ -123,22 +144,26 @@ concepts:
     labels: [Net income, Net profit, Чистая прибыль]
   - id: bs.assets_total
     labels: [Total assets, Assets, Итого активы, Активы]
+    anti_labels: [long term, net assets]
   - id: bs.assets_current
     labels: [Current assets, Оборотные активы]
   - id: bs.ppe
     labels: [PPE, PP&E, Fixed assets, Asset, Основные средства]
-    aliases: [Asset value opening, Asset value closing]
+    aliases: [Asset value opening, Asset value closing, Long term assets]
   - id: bs.liabilities
     labels: [Liabilities, Обязательства]
   - id: bs.equity
     labels: [Equity, Капитал]
-    anti_labels: [available for equity, fcfe, returns, cashflow available]
+    aliases: [Net Assets]
+    anti_labels: [available for equity, fcfe, returns, cashflow available, ratio, fcfe to]
   - id: bs.cash
     labels: [Cash, Opening cash, Closing cash, Ending cash, Cash balance, Денежные средства]
-    anti_labels: [operating cashflow, cash flow available, cashflow available]
+    anti_labels: [operating cashflow, cash flow available, cashflow available, cash flow,
+      cash in, cash out, total cash]
   - id: bs.debt
     labels: [Debt, Долг, Borrowings, Opening Balance, Closing Balance]
-    anti_labels: [dscr, leverage, coverage, headroom, service, repayment, drawdown]
+    anti_labels: [dscr, leverage, coverage, headroom, service, repayment, drawdown, fee,
+      up-front, upfront, arrangement, commitment, loan amount]
     section_hints: [debt, term loan, amortisation, revolver]
   - id: bs.ar
     labels: [Accounts receivable, Opening AR, Closing AR, AR, Receivables, Дебиторская задолженность]
@@ -169,13 +194,16 @@ concepts:
     facets: {direction: inflow}
   - id: cf.fcf
     labels: [FCF, FCFE, Free cash flow, Net CF before financing, CF before financing, Cash flow available for equity, Cashflow available for equity]
+    anti_labels: [ratio, fcfe to, fcfe /]
   - id: cf.net
     labels: [Net cash flow, Net CF, Cumulative net flow, Cumulative Net Flow]
   - id: cf.receipts
     labels: [Receipts, Cash receipts, Collections, Total Inflows]
+    aliases: [Total Cash in]
     facets: {direction: inflow}
   - id: cf.disbursements
     labels: [Disbursements, Cash disbursements, Cash outflows, Total Outflows]
+    aliases: [Total Cash out]
     facets: {direction: outflow}
   - id: cf.repayment
     labels: [Repayment, Principal, Principal repayment, Погашение]
@@ -221,7 +249,12 @@ concepts:
   - id: cov.dscr
     labels: [DSCR, Debt service coverage, Коэффициент покрытия долга]
     facets: {unit: ratio}
-    anti_labels: [llcr, plcr]
+    anti_labels: [llcr, plcr, dscr minimum]
+  - id: cov.dscr_limit
+    labels: [DSCR minimum, Lockup DSCR, Minimum DSCR covenant]
+    exact_labels: [DSCR minimum]
+    facets: {unit: ratio, statement: cov}
+    anti_labels: [headroom, coverage ratio, average]
   - id: cov.llcr
     labels: [LLCR, Loan life coverage, Коэффициент покрытия за срок кредита]
     facets: {unit: ratio}
@@ -307,8 +340,9 @@ concepts:
     section_hints: [term loan, amortisation, debt]
   - id: debt.commitment_fee
     labels: [Commitment fee, Undrawn commitment fee, Arrangement fee, Engagement fee]
+    aliases: [Up-front fee, Debt up-front fee]
     facets: {statement: cf, nature: flow, direction: outflow}
-    section_hints: [revolver, undrawn, construction, uses, debt]
+    section_hints: [revolver, undrawn, construction, uses, debt, ratios, irr, project irr, funding]
   - id: debt.revolver_limit
     labels: [Revolver facility, Revolving credit limit, RCF limit]
   - id: debt.available_credit
@@ -347,3 +381,49 @@ concepts:
   - id: liq.liquidity_coverage
     labels: [Liquidity coverage]
     facets: {unit: ratio}
+  - id: ops.lifetime
+    labels: [Operating lifetime, Lifetime, Project life]
+    facets: {unit: count}
+  - id: ops.capacity
+    labels: [Installed capacity, Capacity]
+    aliases: [MW]
+    facets: {unit: count}
+  - id: ops.asset_count
+    labels: [Number of wind turbines, Turbines, Wind turbines]
+    facets: {unit: count}
+  - id: ops.generation
+    labels: [Generation, Electricity generation, Net generation, MWh]
+    facets: {unit: count}
+  - id: ops.availability
+    labels: [Availability, Availability factor]
+    facets: {unit: ratio}
+  - id: ops.cpi
+    labels: [CPI, Consumer price index]
+    facets: {unit: ratio}
+  - id: ops.inflation
+    labels: [Inflation, Inflation index, PPA escalation]
+    facets: {unit: rate}
+  - id: val.coc
+    labels: [Cost of capital, CoC]
+    facets: {unit: rate}
+  - id: val.fcfe_equity
+    labels: [FCFE / Equity, FCFE to equity, FCFE/Equity]
+    facets: {unit: ratio}
+  - id: val.total_investment
+    labels: [Total Investment, Total investment]
+  - id: debt.facility_amount
+    labels: [Loan amount, Facility size, Facility amount]
+    facets: {nature: balance}
+  - id: debt.upfront_fee_rate
+    labels: [Up-front fee rate, Upfront fee rate]
+    aliases: [Up-front fee, Debt up-front fee]
+    facets: {unit: rate}
+  - id: cf.debt_service
+    labels: [Total debt service, Debt service total]
+    facets: {statement: cf, nature: flow, direction: outflow}
+  - id: bs.goodwill
+    labels: [Goodwill]
+  - id: bs.share_capital
+    labels: [Share capital]
+  - id: bs.share_premium
+    labels: [Share premium]
