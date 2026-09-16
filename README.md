@@ -70,7 +70,7 @@ curl -s http://127.0.0.1:8080/healthz
 curl -s http://127.0.0.1:8080/readyz
 ```
 
-Submit a workbook. `POST` returns **202** and starts mapping. Repeated submission of the same workbook automatically rebuilds mapping and context, calling embeddings/LLM for rows unresolved by structure and labels. Parsed, compiled, and layout artifacts are reused. Poll until `status` is terminal:
+Submit a workbook. `POST` returns **202** and starts mapping. Repeated submission of the same workbook rebuilds compile, layout, mapping, and context (parse artifacts are reused), calling embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
 
 | status | Meaning |
 | --- | --- |

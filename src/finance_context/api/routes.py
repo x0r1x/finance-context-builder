@@ -73,12 +73,12 @@ async def post_job(
             {"job_id": job_id, "status": live.status, "stage": live.stage},
             status_code=202,
         )
-    _clear_mapping_artifacts(dest)
+    _clear_downstream_artifacts(dest)
     log_event(
         _LOGGER,
         logging.INFO,
         "job_remap",
-        "mapping artifacts invalidated",
+        "compile, layout, and mapping artifacts invalidated",
         job_id=job_id,
     )
     await ctx.bus.enqueue(job_id)
@@ -93,9 +93,18 @@ async def post_job(
     )
 
 
-def _clear_mapping_artifacts(dest: Path) -> None:
-    for name in ("mapping.json", "context.json", "context.md", "meta.json"):
+def _clear_downstream_artifacts(dest: Path) -> None:
+    for name in (
+        "layout.json",
+        "mapping.json",
+        "context.json",
+        "context.md",
+        "meta.json",
+    ):
         (dest / name).unlink(missing_ok=True)
+    ir = dest / "ir"
+    for name in ("cells.parquet", "edges.parquet"):
+        (ir / name).unlink(missing_ok=True)
 
 
 @router.get("/v1/context-jobs/{job_id}")
