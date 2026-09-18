@@ -169,7 +169,11 @@ def build_row_context(
         is_total=pattern.is_total or bool(pattern.aggregate_rows),
         period_grain=grain,
         period_headers=headers,
-        article_role=article_role(layout_row, templates),
+        article_role=article_role(
+            layout_row,
+            templates,
+            block_kind=getattr(block, "kind", "timeline"),
+        ),
         query_text=query,
         label_col=layout_row.label_col or block.label_col,
         prev_labels=prev_labels,
@@ -681,7 +685,7 @@ _GRAPH_SKIP_LABELS = ("cfads", "fcfe", "fcf", "ebitda", "dscr", "irr")
 
 def _graph_priors(ctx: RowContext, book: BookView) -> list[Candidate]:
     label = normalize_label(ctx.label)
-    if any(token in label for token in _GRAPH_SKIP_LABELS):
+    if any(token in label for token in (*_GRAPH_SKIP_LABELS, "duration", "toll")):
         return []
     out: list[Candidate] = []
     for dep in book.dependents.get((ctx.sheet, ctx.row), []):

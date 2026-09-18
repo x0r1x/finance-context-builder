@@ -66,6 +66,8 @@ class RowHints(BaseModel):
     time_semantics: str | None = None
     statement: str | None = None
     unit: str | None = None
+    segment: str | None = None
+    escalation: str | None = None
 
 
 class RoleCell(BaseModel):

@@ -28,6 +28,7 @@ expectations:
   - {label: TRAFFIC - Passenger Car (PC), concept_id: pnl.volume}
   - {label: TRAFFIC - Heavy Vehicle (HV), concept_id: pnl.volume}
   - {label: Arrangement fee, parent: Project IRR, concept_id: debt.commitment_fee}
+  - {label: Toll Rate - Heavy Vehicule (HV), concept_id: pnl.price}
   - {label: Capitalized Interests, parent: Project IRR, concept_id: pnl.interest}
   - {label: Cash Flow, parent: Project IRR, concept_id: cf.net}
   - {label: Total Investment, concept_id: val.total_investment}
@@ -41,3 +42,12 @@ expectations:
   - {label: Equity Injected, forbidden_concept_id: bs.equity}
   - {label: Total Cash in/Cash out, concept_id: cf.equity_cashflow}
   - {label: Cash out End of Concession, forbidden_concept_id: bs.cash}
+  - {label: Concession Duration, concept_id: ops.lifetime}
+  - {label: Construction Duration, concept_id: ops.construction_period}
+  - {label: Operations Duration, concept_id: ops.lifetime}
+  - {label: Traffic Evolution per year (PC & HV), concept_id: ops.volume_growth}
+  - {label: Maintenance (including heavy maintenance & SPV costs), concept_id: pnl.opex}
+  - {label: Fixed Rate Margin, concept_id: debt.margin_rate}
+  - {label: Gearing, concept_id: debt.gearing}
+  - {label: Dividend distribution policy, concept_id: val.payout_ratio}
+  - {label: Toll Rate - Passenger Car (PC), concept_id: pnl.price}

@@ -641,6 +641,13 @@ def test_params_block_from_scenario_matrix() -> None:
         _c("Input Assumptions", "D11", "0.65"),
         _c("Input Assumptions", "F11", "0.65"),
         _c("Input Assumptions", "G11", "0.8"),
+        _c("Input Assumptions", "B12", "TRAFFIC & REVENUE ASSUMPTIONS"),
+        _c("Input Assumptions", "F12", "TRAFFIC & REVENUE ASSUMPTIONS"),
+        _c("Input Assumptions", "B13", "Maintenance (including heavy maintenance & SPV costs)"),
+        _c("Input Assumptions", "C13", "£/year"),
+        _c("Input Assumptions", "D13", "8900000"),
+        _c("Input Assumptions", "F13", "8900000"),
+        _c("Input Assumptions", "G13", "8900000"),
     ]
     layout = detect_layout(cells)
     sheet = layout.sheets[0]
@@ -649,10 +656,16 @@ def test_params_block_from_scenario_matrix() -> None:
     assert block.kind == "params"
     labels = {row.label: row for row in block.rows}
     assert labels["TIME ASSUMPTIONS"].kind == "abstract"
+    assert labels["TRAFFIC & REVENUE ASSUMPTIONS"].kind == "abstract"
     assert labels["Concession Duration"].kind == "fact"
     unit_cols = {cell.role for cell in labels["Tax Rate"].cells}
     assert "unit" in unit_cols
     assert "value" in unit_cols
+    from finance_context.layout.params import unit_kind_from_text
+
+    assert unit_kind_from_text("£/year") == "money"
+    assert unit_kind_from_text("years") == "count"
+    assert unit_kind_from_text("veh/year") == "count"
 
 
 def test_prose_and_shortcut_sheets_are_rejected() -> None:
@@ -826,4 +839,58 @@ def test_graph_selects_active_value_column() -> None:
     block = layout.sheets[0].blocks[0]
     value_cols = {header.col for header in block.axis.headers if header.role == "value"}
     assert value_cols == {4}
+
+
+def test_side_by_side_year_and_month_tables() -> None:
+    years = list(zip("CDEFGHIJKL", range(2020, 2030), strict=True))
+    months = [("N", "янв.20"), ("O", "фев.20"), ("P", "мар.20"), ("Q", "апр.20")]
+    cells = [_c("Output", "B6", "Item")]
+    for col, year in years:
+        cells.append(_c("Output", f"{col}6", str(year)))
+    for col, text in months:
+        cells.append(_c("Output", f"{col}6", text))
+    cells.append(_c("Output", "B7", "DC Capacity"))
+    for col, _year in years:
+        cells.append(_c("Output", f"{col}7", "100"))
+    for col, _text in months:
+        cells.append(_c("Output", f"{col}7", "10"))
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    assert len(sheet.blocks) == 2
+    year_block = next(
+        block
+        for block in sheet.blocks
+        if all(h.period_key.isdigit() for h in block.axis.headers)
+    )
+    month_block = next(block for block in sheet.blocks if block is not year_block)
+    assert [h.period_key for h in year_block.axis.headers] == [str(y) for _, y in years]
+    assert max(h.col for h in year_block.axis.headers) < min(
+        h.col for h in month_block.axis.headers
+    )
+    assert year_block.rows[0].label == "DC Capacity"
+    assert month_block.rows[0].label == "DC Capacity"
+
+
+def test_short_start_end_left_of_timeline_is_dropped() -> None:
+    cells = [
+        _c("PF", "A1", "Start"),
+        _c("PF", "B1", "01.01.2020"),
+        _c("PF", "C1", "31.12.2024"),
+        _c("PF", "E1", "2020"),
+        _c("PF", "F1", "2021"),
+        _c("PF", "G1", "2022"),
+        _c("PF", "H1", "2023"),
+        _c("PF", "A2", "Revenue"),
+        _c("PF", "B2", "1"),
+        _c("PF", "C2", "2"),
+        _c("PF", "E2", "10"),
+        _c("PF", "F2", "11"),
+        _c("PF", "G2", "12"),
+        _c("PF", "H2", "13"),
+    ]
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    assert len(sheet.blocks) == 1
+    keys = [h.period_key for h in sheet.blocks[0].axis.headers]
+    assert keys == ["2020", "2021", "2022", "2023"]
 

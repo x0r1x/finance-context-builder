@@ -101,21 +101,36 @@ def _blocks_for_sheet(
     row_ids = sorted(by_row)
     candidates = _axis_candidates(sheet, by_row, date1904)
     blocks: list[Block] = []
-    for i, (band_rows, axis) in enumerate(candidates):
-        header_row = max(band_rows)
-        end = min(candidates[i + 1][0]) if i + 1 < len(candidates) else max(row_ids) + 1
+    for band_rows, axis in candidates:
         start = min(band_rows)
+        later = [min(other[0]) for other in candidates if min(other[0]) > start]
+        end = min(later) if later else max(row_ids) + 1
         body_rows = [r for r in row_ids if start <= r < end]
         period_cols = {header.col for header in axis.headers}
+        col_floor = 0
+        pmin = min(period_cols) if period_cols else 0
+        for other_band, other_axis in candidates:
+            if other_axis is axis:
+                continue
+            if min(other_band) != start:
+                continue
+            other_cols = _axis_cols(other_axis)
+            if other_cols and max(other_cols) < pmin:
+                col_floor = max(col_floor, max(other_cols))
         label_col, span = _label_span(
-            by_row, body_rows, set(band_rows), period_cols, date1904
+            by_row,
+            body_rows,
+            set(band_rows),
+            period_cols,
+            date1904,
+            col_floor=col_floor,
         )
         data_rows = _data_rows(
             by_row, body_rows, set(band_rows), span, date1904, period_cols
         )
         blocks.append(
             Block(
-                block_id=f"{sheet}!r{header_row}",
+                block_id=axis.id,
                 label_col=label_col,
                 axis=axis,
                 rows=data_rows,
@@ -137,9 +152,9 @@ def _axis_candidates(
     formula_cols = _formula_timeline_cols(by_row)
     candidates: list[tuple[list[int], Axis]] = []
     for band_rows in _header_bands(by_row, date1904):
-        axis = _axis_from_band(sheet, band_rows, by_row, date1904)
-        if _period_count(axis) >= 2:
-            candidates.append((band_rows, axis))
+        for axis in _axes_from_band(sheet, band_rows, by_row, date1904):
+            if _period_count(axis) >= 2:
+                candidates.append((band_rows, axis))
     taken = {row_n for band_rows, _ in candidates for row_n in band_rows}
     for row_n in sorted(by_row):
         if row_n in taken:
@@ -217,14 +232,19 @@ def _keep_dominant(
         cols = _axis_cols(item[1])
         if not cols:
             continue
+        width = _period_count(item[1])
         if max(cols) < pmin:
+            if width >= 3:
+                kept.append(item)
             continue
         if _same_timeline(cols, pcols):
             kept.append(item)
             continue
-        if cols.isdisjoint(pcols) and _comparable_width(_period_count(item[1]), pwidth):
+        if cols.isdisjoint(pcols) and (
+            width >= 3 or _comparable_width(width, pwidth)
+        ):
             kept.append(item)
-    kept.sort(key=lambda item: min(item[0]))
+    kept.sort(key=lambda item: (min(item[0]), min(_axis_cols(item[1]) or {0})))
     return kept
 
 
@@ -430,12 +450,12 @@ def _band_calendar_cols(
     return cols
 
 
-def _axis_from_band(
+def _axes_from_band(
     sheet: str,
     band_rows: list[int],
     by_row: dict[int, list[dict]],
     date1904: bool,
-) -> Axis:
+) -> list[Axis]:
     header_row = max(band_rows)
     cols = sorted(
         {
@@ -475,16 +495,55 @@ def _axis_from_band(
         composed.append(
             AxisHeader(col=col, text=text, role=role, period_key=hit.period_key)
         )
-    grain = infer_grain([header.period_key for header in composed])
-    grained = [apply_grain(header.period_key, grain) for header in composed]
-    if grain in {"week", "biweek"} or len(set(grained)) < len(grained):
-        headers = composed
-    else:
-        headers = [
-            header.model_copy(update={"period_key": key})
-            for header, key in zip(composed, grained, strict=True)
-        ]
-    return Axis(id=f"{sheet}!r{header_row}", row=header_row, headers=headers)
+    runs = _split_header_runs(composed)
+    axes: list[Axis] = []
+    multi = len(runs) > 1
+    for run in runs:
+        grain = infer_grain([header.period_key for header in run])
+        grained = [apply_grain(header.period_key, grain) for header in run]
+        if grain in {"week", "biweek"} or len(set(grained)) < len(grained):
+            headers = run
+        else:
+            headers = [
+                header.model_copy(update={"period_key": key})
+                for header, key in zip(run, grained, strict=True)
+            ]
+        axis_id = f"{sheet}!r{header_row}"
+        if multi:
+            axis_id = f"{axis_id}c{headers[0].col}"
+        axes.append(Axis(id=axis_id, row=header_row, headers=headers))
+    return axes
+
+
+def _header_key_class(key: str) -> str:
+    if len(key) == 4 and key.isdigit():
+        return "year"
+    if len(key) >= 7 and key[4] == "-":
+        return "date"
+    if key[:1] in {"Y", "Q", "M", "P"} and key[1:].isdigit():
+        return "relative"
+    return "other"
+
+
+def _split_header_runs(headers: list[AxisHeader]) -> list[list[AxisHeader]]:
+    if not headers:
+        return []
+    ordered = sorted(headers, key=lambda item: item.col)
+    runs: list[list[AxisHeader]] = [[ordered[0]]]
+    for prev, item in zip(ordered, ordered[1:], strict=False):
+        gap = item.col - prev.col > 1
+        left_cls = _header_key_class(prev.period_key)
+        right_cls = _header_key_class(item.period_key)
+        grain_break = (
+            not gap
+            and left_cls != right_cls
+            and "other" not in {left_cls, right_cls}
+        )
+        if gap or grain_break:
+            runs.append([item])
+        else:
+            runs[-1].append(item)
+    return [run for run in runs if len(run) >= 2]
 
 
 def _column_atoms(
@@ -722,6 +781,8 @@ def _label_span(
     header_rows: set[int],
     period_cols: set[int],
     date1904: bool,
+    *,
+    col_floor: int = 0,
 ) -> tuple[int, list[int]]:
     left_edge = min(period_cols) if period_cols else 10**6
     leftmost: dict[int, int] = defaultdict(int)
@@ -732,7 +793,7 @@ def _label_span(
             if cell.get("hidden"):
                 continue
             col = int(cell["col"])
-            if col >= left_edge or col in period_cols:
+            if col <= col_floor or col >= left_edge or col in period_cols:
                 continue
             text = _text(cell, date1904)
             if not text or _is_number(text) or classify_header(text) is not None:

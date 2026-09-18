@@ -446,8 +446,29 @@ def _hints_for(
     elif statement in {"pnl", "cf"}:
         nature = nature or "flow"
     return RowHints(
-        nature=nature, time_semantics=time_semantics, statement=statement, unit=unit
+        nature=nature,
+        time_semantics=time_semantics,
+        statement=statement,
+        unit=unit,
+        segment=_segment_hint(label, tokens),
+        escalation=_escalation_hint(label, tokens),
     )
+
+
+def _segment_hint(label: str, tokens: set[str]) -> str | None:
+    if "pc" in tokens or "passenger" in tokens:
+        return "pc"
+    if "hv" in tokens or "heavy" in tokens:
+        return "hv"
+    return None
+
+
+def _escalation_hint(label: str, tokens: set[str]) -> str | None:
+    if "inflation" not in tokens and "escalation" not in tokens:
+        return None
+    if "cost" in tokens or "costs" in tokens:
+        return "cost"
+    return "revenue"
 
 
 def _row_formula_and_numbers(

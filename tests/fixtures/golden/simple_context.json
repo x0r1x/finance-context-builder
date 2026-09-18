@@ -19,7 +19,9 @@
           "formula_fingerprint": null,
           "hidden": false,
           "hints": {
+            "escalation": null,
             "nature": null,
+            "segment": null,
             "statement": null,
             "time_semantics": null,
             "unit": null

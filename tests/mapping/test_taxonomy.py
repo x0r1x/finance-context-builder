@@ -67,6 +67,9 @@ def test_taxonomy_includes_fcf_repayment_drawdown() -> None:
         "ops.depreciation_life",
         "ops.construction_period",
         "ops.model_start",
+        "ops.volume_growth",
+        "debt.margin_rate",
+        "debt.gearing",
     } <= ids
 
 

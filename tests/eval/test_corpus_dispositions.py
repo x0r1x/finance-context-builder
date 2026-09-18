@@ -169,6 +169,13 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert ia, "Input Assumptions must appear in inventory"
         labels = {normalize_label(row.label): row for row in ia}
         assert "concession duration" in labels
+        assert labels["concession duration"].kind == "fact"
+        header = labels.get("traffic and revenue assumptions")
+        if header is not None:
+            assert header.kind == "abstract"
+        costs = labels.get("costs during construction")
+        if costs is not None:
+            assert costs.kind == "abstract"
         assert "tax rate" in labels
         assert labels["tax rate"].unit == "rate"
         assert labels["concession duration"].unit == "count"

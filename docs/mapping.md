@@ -58,7 +58,7 @@ Lexical дополнительно знает устойчивые констр�
 - Точная строка `cash flow` (без available/operating/net) → `cf.net`.
 - Если у концепта заданы `section_hints`, фраза принимается только при попадании хинта в лейбл / родителя / путь секции / лист (например `Arrangement fee` на Ratios: в hints есть `ratios` / `irr`).
 
-`_semantic_ratio` / `_semantic_count` смотрят **токены** нормализованного лейбла, не подстроку: `ratio` внутри `generation` не делает MWh коэффициентом. Ratio-токены: `dscr`, `coverage`, `cpi`, `inflation`, `availability` (не если рядом `generation`), `wacc`, `coc`, … Count: `lifetime`, `turbine`, `traffic`, `generation`, `capacity`, `mw`. Голый токен `lease` **не** ratio: денежный `Variable land lease` в CFS — opex/cash, ставка — только когда ряд % или нули как input. Явная колонка единиц (`%` / `years` / `£`) задаёт `value_kind` и **не** перебивается семантикой лейбла. Prune тогда отбрасывает несовместимые концепты.
+`_semantic_ratio` / `_semantic_count` смотрят **токены** нормализованного лейбла, не подстроку: `ratio` внутри `generation` не делает MWh коэффициентом. Ratio-токены: `dscr`, `coverage`, `cpi`, `inflation`, `availability` (не если рядом `generation`), `wacc`, `coc`, … Count: `lifetime`, `turbine`, `traffic`, `generation`, `capacity`, `mw`. Голый токен `lease` **не** ratio: денежный `Variable land lease` в CFS — opex/cash, ставка — только когда ряд % или нули как input. Явная колонка единиц (`%` / `years` / `£` / `£/year`) задаёт `value_kind` и **не** перебивается семантикой лейбла. `£/year` — money, не count. Prune тогда отбрасывает несовместимые концепты.
 
 Фасет `basis=accrual` ставится по `accrual` / `accrued` / `revenue earned`, не по голому `earned` — иначе `Dividends earned` прунится с `cf.dividends`.
 
@@ -136,7 +136,9 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 
 ## Hints и inventory
 
-Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate), `statement`, `unit`. Unknown сразу полезен даунстриму.
+Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate), `statement`, `unit`, плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`) когда это видно из лейбла. Unknown сразу полезен даунстриму.
+
+Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, не concept.
 
 `inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `precedents_rows` / `dependents_rows`, `cells` (роли `value` / `unit` / `scenario` / `total` / `note`), `precedent_cells` (до 8 ссылок с графа, которых нет среди уже экспортированных ячеек строки). Period values не дублируются на inventory. Инвариант: `len(inventory) ==` сумма layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
 
