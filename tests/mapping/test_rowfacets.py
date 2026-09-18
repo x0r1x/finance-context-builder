@@ -64,3 +64,30 @@ def test_dscr_label_is_covenant() -> None:
     )
     facets = infer_row_facets(ctx)
     assert facets.statement.value == "cov"
+
+
+def test_opening_balance_is_bop() -> None:
+    ctx = RowContext(
+        row_key="x",
+        sheet="BS",
+        row=2,
+        block_id="b",
+        label="Opening cash",
+        period_headers=["2024"],
+    )
+    facets = infer_row_facets(ctx)
+    assert facets.time_semantics.value == "bop"
+    assert facets.nature.value == "balance"
+
+
+def test_dividends_earned_is_not_accrual_basis() -> None:
+    ctx = RowContext(
+        row_key="x",
+        sheet="Ratios",
+        row=2,
+        block_id="b",
+        label="Dividends earned",
+        period_headers=["2024"],
+    )
+    facets = infer_row_facets(ctx)
+    assert facets.basis.value != "accrual"

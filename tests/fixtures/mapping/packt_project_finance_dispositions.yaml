@@ -17,3 +17,25 @@ expectations:
   - {label: Debt, parent: Balance Sheet, concept_id: bs.debt}
   - {label: Equity, parent: Balance Sheet, concept_id: bs.equity}
   - {label: CAPEX (incl. SPV costs), concept_id: cf.capex}
+  - {label: Construction Cost (k£), concept_id: cf.capex}
+  - {label: Gross revenues, parent: P&L, concept_id: pnl.revenue}
+  - {label: Drawdowns, parent: Debt Repayment Schedule, concept_id: cf.drawdown}
+  - {label: Amortization, parent: P&L, concept_id: pnl.da}
+  - {label: Net Profit, parent: P&L, concept_id: pnl.net_income}
+  - {label: Cash Flow Available for Equity, concept_id: cf.fcf}
+  - {label: Asset, parent: Balance Sheet, concept_id: bs.ppe}
+  - {label: Dividends earned, concept_id: cf.dividends}
+  - {label: TRAFFIC - Passenger Car (PC), concept_id: pnl.volume}
+  - {label: TRAFFIC - Heavy Vehicle (HV), concept_id: pnl.volume}
+  - {label: Arrangement fee, parent: Project IRR, concept_id: debt.commitment_fee}
+  - {label: Capitalized Interests, parent: Project IRR, concept_id: pnl.interest}
+  - {label: Cash Flow, parent: Project IRR, concept_id: cf.net}
+  - {label: Total Investment, concept_id: val.total_investment}
+  - {label: Income Tax, parent: Cashflow Statement, concept_id: cf.tax_paid}
+  - {label: Income Tax, parent: P&L, concept_id: pnl.tax}
+  - {label: Cash in hand, concept_id: bs.cash}
+  - {label: Cash in hands, concept_id: bs.cash}
+  - {label: Cash out End of Concession, concept_id: cf.disbursements}
+  - {label: Equity Injected, concept_id: cf.equity_issue}
+  - {label: Equity (k£), parent: Sources, concept_id: cf.equity_issue}
+  - {label: Equity Injected, forbidden_concept_id: bs.equity}

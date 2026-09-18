@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 Confidence = Literal["high", "medium", "low"]
 MapMethod = Literal["rule", "embed", "llm", "unmapped", "structure"]
@@ -46,6 +46,28 @@ class PeriodValue(BaseModel):
     missing_cached_value: bool = False
 
 
+class CandidateHit(BaseModel):
+    concept_id: str
+    score: float
+    evidence: str | None = None
+
+
+class NumericSummary(BaseModel):
+    first: str | None = None
+    last: str | None = None
+    minimum: str | None = None
+    maximum: str | None = None
+    constant: bool = False
+    n: int = 0
+
+
+class RowHints(BaseModel):
+    nature: str | None = None
+    time_semantics: str | None = None
+    statement: str | None = None
+    unit: str | None = None
+
+
 class MetricSeries(BaseModel):
     row_key: str
     label: str
@@ -58,6 +80,44 @@ class MetricSeries(BaseModel):
     source: SourceRef
     disposition: str = "mapped"
     exclusion_reason: str | None = None
+    kind: str | None = None
+    indent: int = 0
+    hidden: bool = False
+    check_row: bool = False
+    label_path: list[str] = Field(default_factory=list)
+    neighbors: list[str] = Field(default_factory=list)
+    formula_fingerprint: str | None = None
+    formula_exceptions: list[str] = Field(default_factory=list)
+    numeric_summary: NumericSummary | None = None
+    precedents_rows: list[str] = Field(default_factory=list)
+    dependents_rows: list[str] = Field(default_factory=list)
+    candidates: list[CandidateHit] = Field(default_factory=list)
+    hints: RowHints = Field(default_factory=RowHints)
+
+
+class InventoryRow(BaseModel):
+    row_key: str
+    sheet: str
+    row: int
+    kind: str
+    label: str
+    parent_label: str | None = None
+    label_path: list[str] = Field(default_factory=list)
+    indent: int = 0
+    hidden: bool = False
+    check_row: bool = False
+    neighbors: list[str] = Field(default_factory=list)
+    concept_id: str | None = None
+    disposition: str | None = None
+    exclusion_reason: str | None = None
+    unit: str | None = None
+    formula_fingerprint: str | None = None
+    formula_exceptions: list[str] = Field(default_factory=list)
+    numeric_summary: NumericSummary | None = None
+    precedents_rows: list[str] = Field(default_factory=list)
+    dependents_rows: list[str] = Field(default_factory=list)
+    candidates: list[CandidateHit] = Field(default_factory=list)
+    hints: RowHints = Field(default_factory=RowHints)
 
 
 class FinancialBlock(BaseModel):
@@ -104,4 +164,5 @@ class ContextDocument(BaseModel):
     blocks: list[FinancialBlock] = Field(default_factory=list)
     unmapped: list[MetricSeries] = Field(default_factory=list)
     excluded: list[MetricSeries] = Field(default_factory=list)
+    inventory: list[InventoryRow] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

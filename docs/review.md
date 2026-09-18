@@ -2,35 +2,41 @@
 
 Сначала убедиться, что layout вообще отдал fact-строки. `succeeded` + `Unmapped: 0` + пустой `context.md` почти всегда значит: нет блоков или нет лейблов статей, а не «таксономия покрыла всё». Чеклист — [layout.md](layout.md).
 
-После прогона с ненулевым числом fact смотрят три представления одного и того же отказа:
+После прогона с ненулевым числом fact смотрят отказ **и** полный контент:
 
 | Где | Что видно |
 | --- | --- |
-| `context.md` | В блоке строка с Concept `unknown` (плюс счётчик `Unmapped: N`) |
-| `context.json` → `unmapped` | Полные серии с `values` по периодам |
+| `context.md` шапка | `Content completeness` (должно быть 1.00) и `Concept coverage` (может быть < 1) |
+| `context.md` блок | Строка с Concept `unknown` (плюс счётчик `Unmapped: N`) |
+| `context.md` `## Excluded` | Helper / flag / check |
+| `context.md` `## Row navigator / {sheet}` | Все layout-строки: kind, path, concept, formula, refs; без периодных значений |
+| `context.json` → `unmapped` | Полные серии с `values` по периодам, `candidates`, `hints`, `neighbors` |
+| `context.json` → `inventory` | Все kind, включая abstract; инвариант полноты |
 | `unmapped.json` | Та же выжимка атрибутов **без** `values`, плюс `ref` как в колонке Ref |
 
-`scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `unmapped` из context или `rows` из mapping, оставляет `concept_id is null` и `disposition != excluded`, выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в Markdown.
+`scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `unmapped` из context или `rows` из mapping, оставляет `concept_id is null` и `disposition != excluded`, выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown, не с длиной navigator.
 
-Excluded (check / helper / technical) в этот список не входят — они в `context.excluded`.
+Excluded (check / helper / flag / technical) в `unmapped.json` не входят — они в `context.excluded` и в навигаторе.
 
 ## Цикл правки
 
 1. Прогнать книгу (`uv run finance-context build …` или `bash scripts/run.sh path/to/model.xlsx` при живом `serve`).
-2. Открыть `unmapped.json`: `label`, `parent_label`, `sheet`, `ref`, `disposition`, `exclusion_reason`, `article_role`.
+2. Открыть `unmapped.json` и ту же строку в `inventory` / navigator: `label`, `parent_label`, `label_path`, `neighbors`, `candidates`, `hints`, `sheet`, `ref`, `disposition`, `exclusion_reason`, `article_role`.
 3. Для каждой строки решить класс:
 
 | Класс | Действие |
 | --- | --- |
 | Новое финансовое значение | Концепт в [taxonomy.yaml](taxonomy.md) + gold |
-| Тот же смысл, другой лейбл / секция | `labels` / `aliases` / `section_hints` / `anti_labels` |
+| Тот же смысл, другой лейбл / секция | `labels` / `aliases` / `section_hints` / `skip_concept` / `unless`; не широкий `anti_labels` |
+| Ребёнок под CAPEX/OPEX/Revenue, но это годы / MW / индекс | `unless` на parent-rollup + `facets.unit`, не money-id родителя |
+| Соседи и граф уже намекают (lease рядом с opex) | Это structure-признак; не клеить alias ставки |
 | Однозначная формула (alias, SUM) | Проверить structure: SUM копирует концепт, только если замаплены все дети |
-| Пустой прогон, нули в metrics | Layout, не yaml |
+| Пустой прогон, нули в metrics, completeness < 1 | Layout / build, не yaml |
 | Технический мост, check, шум | Exclusion; не плодить концепт |
-| Реальная неоднозначность | Оставить `unknown` (`no_candidate` / `ambiguous` / `low_score`) |
+| Реальная неоднозначность | Оставить `unknown` (`no_candidate` / `ambiguous` / `low_score`); кандидаты уже в JSON |
 
-4. Обновить gold: `tests/fixtures/mapping/cashflow_dispositions.yaml` для эталонной `cashflow.xlsx`; для корпуса — `packt_project_finance_dispositions.yaml` / `rvi_project_finance_dispositions.yaml`.
-5. `uv run pytest` и при необходимости повторный прогон — `unmapped.json` должен сжаться только за счёт честных mapped, не за счёт exclude.
+4. Обновить gold: `tests/fixtures/mapping/cashflow_dispositions.yaml` для эталонной `cashflow.xlsx`; для корпуса — `packt_project_finance_dispositions.yaml` / `rvi_project_finance_dispositions.yaml` (в т.ч. `forbidden_concept_id`).
+5. `uv run pytest` и при необходимости повторный прогон — `unmapped.json` должен сжаться только за счёт честных mapped, не за счёт exclude. Completeness при этом остаётся 1.0.
 
 ## Как читать `exclusion_reason` у abstained
 
@@ -44,14 +50,14 @@ Excluded (check / helper / technical) в этот список не входят
 
 ## Пример
 
-На прогоне вроде `out/<timestamp>/` четыре unknown при живой таксономии cash-flow — нормальный остаток, а не «скрипт насчитал лишнего»:
+На прогоне вроде `out/<timestamp>/` остаток unknown при живой таксономии — нормален, если это не ложный high-тег:
 
-- `Other Income` в одном из контекстов, который hints ещё не отличают;
-- варианты `Total Debt Service` / lumpy / TOTAL, для которых нет отдельного канонического id (итог сервиса долга ≠ `cf.repayment` и ≠ `bs.debt` без новой семантики).
+- доли строительства 0.2/0.8 (phasing) — не flag (только 0/1) и не финансовый факт;
+- строки, для которых нет стабильного id (не клеить к ближайшему money).
 
-Их либо заводят как новый концепт (если смысл стабилен), либо оставляют `unknown`.
+Их либо заводят как новый концепт (если смысл повторяется между книгами), либо оставляют `unknown`. Ложный `pnl.opex` на Operating lifetime хуже, чем unknown.
 
-В Markdown таблицы режутся (по умолчанию 16 колонок и 80 строк). Если видите `_Truncated in Markdown; full series remain in JSON._`, полнота — в JSON, не в MD. На число **строк**-атрибутов в `unmapped.json` это не влияет, пока N ≤ 80 на блок.
+В Markdown таблицы режутся (по умолчанию 16 колонок и 80 строк). Navigator тоже режется по `max_rows` на лист. Если видите `_Truncated in Markdown; full series remain in JSON._`, полнота — в JSON, не в MD. На число **строк**-атрибутов в `unmapped.json` это не влияет, пока N ≤ 80 на блок.
 
 ## Команды
 

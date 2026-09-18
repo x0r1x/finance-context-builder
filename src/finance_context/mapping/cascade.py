@@ -24,6 +24,7 @@ from finance_context.mapping.models import (
 )
 from finance_context.mapping.resolver import (
     SOURCE_BY_SIGNAL,
+    ACCEPT_MIN,
     Resolver,
     collect_proposals,
     to_mapped,
@@ -57,6 +58,7 @@ def map_layout(
     embedding_model: str = "",
     patterns: list[LexicalPattern] | None = None,
     calculations: list[Calculation] | None = None,
+    edges: list[dict] | None = None,
 ) -> MappingDocument:
     attached = attached_document(taxonomy)
     merged_calcs = list(calculations or (attached.calculations if attached else []))
@@ -68,6 +70,7 @@ def map_layout(
         taxonomy,
         calculations=merged_calcs,
         patterns=merged_patterns,
+        edges=edges or [],
     )
     analyze_structure(book)
     templates = _templates_by_row(cells or [])
@@ -177,9 +180,9 @@ def _collect_contexts(
         for block in sheet.blocks:
             by_row = {r.row: r for r in block.rows}
             for layout_row in block.rows:
-                if layout_row.kind != "fact":
+                if layout_row.kind not in {"fact", "flag", "helper"}:
                     continue
-                if is_noise_label(layout_row.label):
+                if layout_row.kind == "fact" and is_noise_label(layout_row.label):
                     continue
                 parent = _parent_label(layout_row, by_row)
                 ctx = build_row_context(
@@ -434,10 +437,28 @@ def _apply_calculation_checks(pending: list[_Pending], book: BookView) -> None:
             if picked is not None:
                 picked.score = min(1.0, picked.score + 0.02)
             continue
+        if _keep_despite_conflict(row, concept_id, pattern.kind):
+            picked = row.extras.get("picked")
+            if picked is not None:
+                picked.score = max(0.0, picked.score - 0.08)
+                if picked.score >= ACCEPT_MIN:
+                    continue
         book.concepts.pop(row.row_key, None)
         row.extras["picked"] = None
         row.extras["source"] = "question"
         row.extras["exclusion_reason"] = "calculation_conflict"
+
+
+def _keep_despite_conflict(row: _Pending, concept_id: str, kind: str) -> bool:
+    from finance_context.mapping.normalize import normalize_label
+
+    label = normalize_label(row.label)
+    blob = normalize_label(
+        " ".join([row.parent_label or "", *row.section_path, row.sheet, row.label])
+    )
+    if concept_id == "cf.net" and label == "cash flow":
+        return any(token in blob for token in ("irr", "ratio", "ratios", "project"))
+    return False
 
 
 def _concept_at_row(book: BookView, sheet: str, row: int) -> str | None:

@@ -161,3 +161,98 @@ def test_sum_mapped_to_difference_concept_is_abstained() -> None:
     by_label = {row.label: row for row in doc.rows}
     assert by_label["Total Inflows"].concept_id is None
     assert by_label["Total Inflows"].exclusion_reason == "calculation_conflict"
+
+
+def test_irr_cash_flow_keeps_net_despite_aggregate() -> None:
+    from finance_context.mapping.taxonomy import load_taxonomy
+
+    taxonomy = load_taxonomy()
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="Ratios",
+                blocks=[
+                    Block(
+                        block_id="Ratios!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="Ratios!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(
+                                    col=2, text="Y1", role="forecast", period_key="Y1"
+                                ),
+                                AxisHeader(
+                                    col=3, text="Y2", role="forecast", period_key="Y2"
+                                ),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(
+                                row=11,
+                                label="Collections",
+                                kind="fact",
+                                section_path=["Project IRR"],
+                            ),
+                            LayoutRow(
+                                row=12,
+                                label="Other collections",
+                                kind="fact",
+                                section_path=["Project IRR"],
+                            ),
+                            LayoutRow(
+                                row=13,
+                                label="Cash Flow",
+                                kind="fact",
+                                section_path=["Project IRR"],
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "Ratios",
+            "row": 13,
+            "col": 2,
+            "addr": "B13",
+            "formula_raw": "=SUM(B11:B12)",
+            "cached_value": "30",
+        },
+        {
+            "sheet": "Ratios",
+            "row": 13,
+            "col": 3,
+            "addr": "C13",
+            "formula_raw": "=SUM(C11:C12)",
+            "cached_value": "40",
+        },
+        {
+            "sheet": "Ratios",
+            "row": 11,
+            "col": 2,
+            "addr": "B11",
+            "cached_value": "10",
+        },
+        {
+            "sheet": "Ratios",
+            "row": 12,
+            "col": 2,
+            "addr": "B12",
+            "cached_value": "20",
+        },
+    ]
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        cells=cells,
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row for row in doc.rows}
+    assert by_label["Cash Flow"].concept_id == "cf.net"
+    assert by_label["Cash Flow"].alternatives

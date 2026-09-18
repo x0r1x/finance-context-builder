@@ -79,6 +79,50 @@ def test_markdown_matches_golden() -> None:
     assert "Opening cash" in rendered
 
 
+def test_markdown_includes_navigator_and_excluded() -> None:
+    from finance_context.models.context import InventoryRow, RowHints
+
+    doc = ContextDocument(
+        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
+        workbook=WorkbookRaw(sheets=["CF"], sheet_count=1, cell_count=1),
+        blocks=[],
+        excluded=[
+            MetricSeries(
+                row_key="CF|3|CF!r1",
+                label="Spare",
+                concept_id=None,
+                article_role="check",
+                kind="helper",
+                mapping=MappingEvidence(method="unmapped", confidence="low"),
+                source=SourceRef(sheet="CF", addr="A3", row=3, col=1),
+                disposition="excluded",
+                exclusion_reason="helper",
+            )
+        ],
+        inventory=[
+            InventoryRow(
+                row_key="CF|2|CF!r1",
+                sheet="CF",
+                row=2,
+                kind="fact",
+                label="Opening cash",
+                label_path=["Cashflow"],
+                concept_id="bs.cash",
+                unit="currency",
+                formula_fingerprint="=RC[1]",
+                hints=RowHints(time_semantics="bop"),
+            )
+        ],
+    )
+    rendered = render_markdown(doc)
+    assert "## Excluded" in rendered
+    assert "Spare" in rendered
+    assert "## Row navigator / CF" in rendered
+    assert "Opening cash" in rendered
+    assert "- Content completeness: 1.00 (1/1 layout rows)" in rendered
+    assert "- Concept coverage: 1.00 (1/1 annotatable)" in rendered
+
+
 def test_markdown_uses_column_not_period_key() -> None:
     doc = ContextDocument(
         meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),

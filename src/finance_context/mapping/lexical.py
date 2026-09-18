@@ -117,6 +117,8 @@ _WEAK_SINGLETONS = {
     "revenue",
     "headroom",
 }
+_CASH_FLOW_TOKENS = {"flow", "in", "out", "inflow", "outflow", "total"}
+_DEBT_FEE_TOKENS = {"fee", "upfront", "up-front"}
 
 
 def _phrase_score(label: str, tokens: set[str], phrase: str, size: int) -> float | None:
@@ -128,6 +130,12 @@ def _phrase_score(label: str, tokens: set[str], phrase: str, size: int) -> float
     if size == 1:
         if phrase in _WEAK_SINGLETONS:
             if tokens <= {phrase, _singular(phrase), f"{phrase}s"}:
+                return None
+            if phrase == "cash" and tokens & _CASH_FLOW_TOKENS:
+                if tokens & {"hand", "hands", "balance"}:
+                    return 0.9
+                return None
+            if phrase == "debt" and tokens & _DEBT_FEE_TOKENS:
                 return None
             if phrase in tokens:
                 return 0.88

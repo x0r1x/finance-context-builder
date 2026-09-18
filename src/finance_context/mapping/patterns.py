@@ -24,7 +24,12 @@ def pattern_matches(
     if when.label_excludes:
         checks.append(not any(part in label for part in when.label_excludes))
     if when.section_contains:
-        checks.append(any(token in section for token in when.section_contains))
+        checks.append(
+            any(
+                set(token.split()) <= section if " " in token else token in section
+                for token in when.section_contains
+            )
+        )
     if when.any:
         checks.append(
             any(

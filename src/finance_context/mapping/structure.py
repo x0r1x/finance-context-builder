@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from typing import Any, Protocol
 
@@ -8,6 +9,7 @@ from finance_context.excel.a1 import parse_addr
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.models import Block, Layout, LayoutRow
 from finance_context.layout.periods import infer_grain
+from finance_context.mapping.graph import row_adjacency
 from finance_context.mapping.models import (
     Calculation,
     Candidate,
@@ -18,6 +20,7 @@ from finance_context.mapping.models import (
     ValueKind,
 )
 from finance_context.mapping.normalize import normalize_label
+from finance_context.mapping.patterns import pattern_matches
 from finance_context.mapping.roles import article_role
 from finance_context.mapping.rowfacets import infer_row_facets
 
@@ -58,6 +61,7 @@ class BookView:
         *,
         calculations: list[Calculation] | None = None,
         patterns: list[LexicalPattern] | None = None,
+        edges: list[dict] | None = None,
     ) -> None:
         self.layout = layout
         self.taxonomy = {c.id: c for c in taxonomy}
@@ -78,6 +82,7 @@ class BookView:
         self.patterns: dict[str, RowPattern] = {}
         self.concepts: dict[str, str] = {}
         self.relations: list[RowRelation] = []
+        self.precedents, self.dependents = row_adjacency(edges or [])
 
     def row_key(self, sheet: str, row: int, block_id: str) -> str:
         return f"{sheet}|{row}|{block_id}"
@@ -119,10 +124,12 @@ def build_row_context(
     pattern = book.patterns.get(key) or RowPattern()
     grain = infer_grain([h.period_key for h in block.axis.headers])
     value_kind = _value_kind(book, sheet, layout_row.row, block, pattern)
-    if _semantic_ratio(layout_row.label):
+    if _semantic_ratio(layout_row.label, value_kind):
         value_kind = "ratio"
     elif _semantic_count(layout_row.label):
         value_kind = "count"
+    if _lease_rate_input(layout_row.label, book, sheet, layout_row.row, block, value_kind):
+        value_kind = "rate"
     headers = [h.text for h in block.axis.headers[:12]]
     section = " / ".join(layout_row.section_path)
     query = " | ".join(
@@ -136,6 +143,7 @@ def build_row_context(
         )
         if part
     )
+    prev_labels, next_labels = _neighbor_labels(block, layout_row.row)
     ctx = RowContext(
         row_key=key,
         sheet=sheet,
@@ -152,6 +160,8 @@ def build_row_context(
         article_role=article_role(layout_row, templates),
         query_text=query,
         label_col=layout_row.label_col or block.label_col,
+        prev_labels=prev_labels,
+        next_labels=next_labels,
     )
     ctx.inferred_facets = infer_row_facets(ctx, pattern_kind=pattern.kind)
     return ctx
@@ -441,7 +451,21 @@ class StructureSignal:
                         evidence="roll-forward from prior period",
                     )
                 )
-        return out
+        out.extend(_graph_priors(ctx, book))
+        out.extend(_neighbor_priors(ctx, book))
+        return [item for item in out if not _skipped_concept(ctx, book, item.concept_id)]
+
+
+def _skipped_concept(ctx: RowContext, book: BookView, concept_id: str) -> bool:
+    n = normalize_label(ctx.label)
+    tokens = set(n.split())
+    extra = section_tokens(ctx)
+    for pattern in book.lexical_patterns:
+        if pattern.skip_concept != concept_id:
+            continue
+        if pattern_matches(pattern.when, label=n, tokens=tokens, section=extra):
+            return True
+    return False
 
 
 def _concept_at(book: BookView, sheet: str, row: int) -> str | None:
@@ -524,12 +548,23 @@ def _is_proration(ast: dict[str, Any]) -> bool:
     return False
 
 
-def _semantic_ratio(label: str | None) -> bool:
+def _semantic_ratio(label: str | None, value_kind: ValueKind | None = None) -> bool:
     n = normalize_label(label)
     raw = (label or "").casefold()
-    return any(
-        token in n or token in raw
-        for token in (
+    tokens = set(n.split())
+    if "fcfe" in tokens and "equity" in tokens and ("/" in raw or "ratio" in tokens):
+        return True
+    if "cost of capital" in n:
+        return True
+    if "availability" in tokens and "generation" not in tokens:
+        return True
+    if "lease" in tokens:
+        return value_kind in {"rate", "ratio"}
+    return bool(
+        tokens
+        & {
+            "wacc",
+            "coc",
             "dscr",
             "llcr",
             "plcr",
@@ -538,13 +573,127 @@ def _semantic_ratio(label: str | None) -> bool:
             "leverage",
             "runway",
             "ratio",
-        )
+            "cpi",
+            "inflation",
+            "escalation",
+            "payout",
+            "hedge",
+            "hedged",
+            "uncertainty",
+        }
     )
+
+
+def _lease_rate_input(
+    label: str | None,
+    book: BookView,
+    sheet: str,
+    row: int,
+    block: Block,
+    value_kind: ValueKind,
+) -> bool:
+    if normalize_label(label) != "variable land lease":
+        return False
+    if value_kind in {"rate", "ratio"}:
+        return True
+    numbers = 0
+    percents = 0
+    for header in block.axis.headers:
+        cell = book.cells.get((sheet, row, header.col))
+        if cell is None:
+            continue
+        if "%" in str(cell.get("number_format") or ""):
+            percents += 1
+        if cell.get("cached_value") not in (None, ""):
+            numbers += 1
+    return percents > 0 or numbers == 0
+
+
+def _neighbor_labels(block: Block, row: int, span: int = 2) -> tuple[list[str], list[str]]:
+    ordered = [item for item in block.rows if item.label]
+    index = next((i for i, item in enumerate(ordered) if item.row == row), None)
+    if index is None:
+        return [], []
+    prev_labels = [item.label for item in ordered[max(0, index - span) : index]]
+    next_labels = [item.label for item in ordered[index + 1 : index + 1 + span]]
+    return prev_labels, next_labels
+
+
+_GRAPH_SINKS = {
+    "cf.uses",
+    "cf.sources",
+    "cf.capex",
+    "pnl.opex",
+    "pnl.revenue",
+}
+_GRAPH_SKIP_LABELS = ("cfads", "fcfe", "fcf", "ebitda", "dscr", "irr")
+
+
+def _graph_priors(ctx: RowContext, book: BookView) -> list[Candidate]:
+    label = normalize_label(ctx.label)
+    if any(token in label for token in _GRAPH_SKIP_LABELS):
+        return []
+    out: list[Candidate] = []
+    for dep in book.dependents.get((ctx.sheet, ctx.row), []):
+        sheet, _, row_text = dep.partition("!")
+        try:
+            row_n = int(row_text)
+        except ValueError:
+            continue
+        concept_id = _concept_at(book, sheet, row_n)
+        if concept_id in _GRAPH_SINKS:
+            out.append(
+                Candidate(
+                    concept_id=concept_id,
+                    score=0.86,
+                    signal="structure",
+                    evidence=f"feeds mapped {concept_id} at {dep}",
+                )
+            )
+    return out
+
+
+def _neighbor_priors(ctx: RowContext, book: BookView) -> list[Candidate]:
+    blob = normalize_label(" ".join([*ctx.prev_labels, *ctx.next_labels, *ctx.section_path]))
+    label = normalize_label(ctx.label)
+    out: list[Candidate] = []
+    if "lease" in label and ctx.value_kind == "money" and "pnl.opex" in book.taxonomy:
+        if any(token in blob for token in ("opex", "operating", "cost", "cashflow", "lease")):
+            out.append(
+                Candidate(
+                    concept_id="pnl.opex",
+                    score=0.9,
+                    signal="structure",
+                    evidence="lease cash line next to opex neighbors",
+                )
+            )
+    if label in {"equity", "equity k"} or label.startswith("equity "):
+        if any(token in blob for token in ("source", "construction", "irr", "injected")):
+            if "cf.equity_issue" in book.taxonomy and "balance" not in blob:
+                out.append(
+                    Candidate(
+                        concept_id="cf.equity_issue",
+                        score=0.93,
+                        signal="structure",
+                        evidence="equity funding line in sources/construction",
+                    )
+                )
+    return out
 
 
 def _semantic_count(label: str | None) -> bool:
     n = normalize_label(label)
-    return "week #" in n or n.endswith("week") or "trough cash week" in n
+    tokens = set(n.split())
+    if "week #" in n or n.endswith("week") or "trough cash week" in n:
+        return True
+    if any(
+        part in n
+        for part in ("lifetime", "turbine", "traffic", "vehicles", "generation", "mwh")
+    ):
+        return True
+    if n in {"development and construction", "straight line depreciation"}:
+        return True
+    return "capacity" in n or "mw" in tokens
 
 
 def parse_cell_addr(addr: str) -> tuple[int, int]:
@@ -553,4 +702,8 @@ def parse_cell_addr(addr: str) -> tuple[int, int]:
 
 def section_tokens(ctx: RowContext) -> set[str]:
     blob = " ".join([ctx.label, ctx.parent_label or "", *ctx.section_path, ctx.sheet])
-    return set(normalize_label(blob).split())
+    tokens = set(normalize_label(blob).split())
+    for part in (ctx.label, ctx.parent_label, *ctx.section_path, ctx.sheet):
+        if part:
+            tokens |= set(re.findall(r"[a-z0-9]+", str(part).casefold()))
+    return tokens

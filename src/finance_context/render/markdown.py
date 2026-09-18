@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from finance_context.models.context import ContextDocument, FinancialBlock, MetricSeries
+from finance_context.mapping.eval import concept_coverage, content_completeness
+from finance_context.models.context import ContextDocument, FinancialBlock, InventoryRow, MetricSeries
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
 
@@ -21,6 +22,7 @@ def render_markdown(
         f"- Sheets: {doc.workbook.sheet_count}",
         f"- Cells: {doc.workbook.cell_count}",
         f"- Formulas: {doc.workbook.formula_count}",
+        *_coverage_lines(doc),
         "",
     ]
     if doc.warnings:
@@ -40,7 +42,56 @@ def render_markdown(
                 block_id, leftover, max_columns=max_columns, max_rows=max_rows
             )
         )
+    if doc.excluded:
+        lines.extend(_excluded_section(doc.excluded, max_rows=max_rows))
+    if doc.inventory:
+        lines.extend(_navigator_sections(doc.inventory, max_rows=max_rows))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _annotatable_counts(rows: list) -> tuple[int, int]:
+    mapped = 0
+    abstained = 0
+    for row in rows:
+        disposition = getattr(row, "disposition", None)
+        if disposition == "excluded":
+            continue
+        if getattr(row, "concept_id", None):
+            mapped += 1
+        elif disposition == "abstained" or getattr(row, "kind", None) in {None, "fact", "flag"}:
+            abstained += 1
+    return mapped, abstained
+
+
+def _coverage_lines(doc: ContextDocument) -> list[str]:
+    if doc.inventory:
+        layout_n = len(doc.inventory)
+        mapped, abstained = _annotatable_counts(doc.inventory)
+        completeness = content_completeness(layout_n, layout_n)
+        coverage = concept_coverage(mapped, abstained)
+        annotatable = mapped + abstained
+        return [
+            (
+                f"- Content completeness: {completeness:.2f} "
+                f"({layout_n}/{layout_n} layout rows)"
+            ),
+            (
+                f"- Concept coverage: {coverage:.2f} "
+                f"({mapped}/{annotatable} annotatable)"
+            ),
+        ]
+    series = [
+        *[metric for block in doc.blocks for metric in block.metrics],
+        *doc.unmapped,
+    ]
+    mapped, abstained = _annotatable_counts(series)
+    n = mapped + abstained
+    completeness = content_completeness(n, n)
+    coverage = concept_coverage(mapped, abstained)
+    return [
+        f"- Content completeness: {completeness:.2f} ({n}/{n} layout rows)",
+        f"- Concept coverage: {coverage:.2f} ({mapped}/{n} annotatable)",
+    ]
 
 
 def _unmapped_by_block(rows: list[MetricSeries]) -> dict[str, list[MetricSeries]]:
@@ -198,3 +249,72 @@ def _format_value(raw: str | None) -> str:
 
 def _cell(value: object) -> str:
     return str(value).translate(_MD_ESCAPE).strip()
+
+
+def _excluded_section(rows: list[MetricSeries], *, max_rows: int) -> list[str]:
+    lines = [
+        "## Excluded",
+        "",
+        f"Excluded: {len(rows)}.",
+        "",
+        "| Row | Label | Kind | Reason | Ref |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for series in rows[:max_rows]:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _cell(series.source.row),
+                    _cell(series.label),
+                    _cell(series.kind or ""),
+                    _cell(series.exclusion_reason or series.disposition),
+                    _cell(series.source.cell_ref),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    if len(rows) > max_rows:
+        lines.extend(["_Truncated in Markdown; full series remain in JSON._", ""])
+    return lines
+
+
+def _navigator_sections(rows: list[InventoryRow], *, max_rows: int) -> list[str]:
+    by_sheet: dict[str, list[InventoryRow]] = {}
+    for row in rows:
+        by_sheet.setdefault(row.sheet, []).append(row)
+    lines: list[str] = []
+    for sheet, items in by_sheet.items():
+        lines.extend(
+            [
+                f"## Row navigator / {sheet}",
+                "",
+                f"Rows: {len(items)}.",
+                "",
+                "| Row | Label | Path | Kind | Concept | Unit | Formula | Refs |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for item in items[:max_rows]:
+            refs = " ".join([*item.precedents_rows[:3], *item.dependents_rows[:3]])
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _cell(item.row),
+                        _cell(item.label),
+                        _cell(" / ".join(item.label_path)),
+                        _cell(item.kind),
+                        _cell(item.concept_id or "unknown"),
+                        _cell(item.unit or item.hints.unit or ""),
+                        _cell(item.formula_fingerprint or ""),
+                        _cell(refs),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+        if len(items) > max_rows:
+            lines.extend(["_Truncated in Markdown; full series remain in JSON._", ""])
+    return lines

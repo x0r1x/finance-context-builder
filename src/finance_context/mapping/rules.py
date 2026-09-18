@@ -14,6 +14,8 @@ _NOISE_EXACT = {
     "chart",
     "charts",
     "bridge",
+    "spare",
+    "none",
 }
 _NOISE_TAILS = (" charts", " chart", " bridge")
 

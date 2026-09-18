@@ -17,3 +17,33 @@ expectations:
   - {label: CFADS during debt term, concept_id: cf.cfads}
   - {label: EBITDA, parent: Corporate tax, concept_id: pnl.ebitda}
   - {label: Net Present Value (NPV), concept_id: val.npv}
+  - {label: Cashflow available for equity (FCFE), concept_id: cf.fcf}
+  - {label: Operating cashflow, concept_id: cf.cfo}
+  - {label: Total operating costs, concept_id: pnl.opex}
+  - {label: DSCR minimum, concept_id: cov.dscr_limit}
+  - {label: Operating lifetime, concept_id: ops.lifetime}
+  - {label: Share premium, parent: Cashflow Statement, concept_id: bs.share_premium}
+  - {label: Share premium, parent: Uses of funds, concept_id: bs.share_premium}
+  - {label: Variable land lease, parent: Cashflow Statement, concept_id: pnl.opex}
+  - {label: Variable land lease, parent: Cashflow Statement, forbidden_concept_id: ops.lease_rate}
+  - {label: PPA duration, forbidden_concept_id: pnl.revenue}
+  - {label: Net generation before availability, forbidden_concept_id: ops.availability}
+  - {label: Share capital, concept_id: bs.share_capital}
+  - {label: Goodwill, concept_id: bs.goodwill}
+  - {label: Loan amount, concept_id: debt.facility_amount}
+  - {label: Total debt service, concept_id: cf.debt_service}
+  - {label: Dividend paid, concept_id: cf.dividends}
+  - {label: Cashflow available for dividend, concept_id: cf.fcf}
+  - {label: Total equity returns (dividends), concept_id: cf.dividends}
+  - {label: Straight line depreciation base, concept_id: pnl.da}
+  - {label: Straight line depreciation, concept_id: ops.depreciation_life}
+  - {label: Dividend payout ratio period 1, concept_id: val.payout_ratio}
+  - {label: PPA hedged volume, concept_id: ops.hedge_ratio}
+  - {label: Development & Construction, concept_id: ops.construction_period}
+  - {label: Model start / Construction start, concept_id: ops.model_start}
+  - {label: Balance b/f, parent: Linear repayment, concept_id: bs.debt}
+  - {label: Balance c/f, parent: Linear repayment, concept_id: bs.debt}
+  - {label: Balance b/f, parent: Equity funding, concept_id: bs.equity}
+  - {label: Balance c/f, parent: Equity funding, concept_id: bs.equity}
+  - {label: Balance b/f, parent: No depreciation, concept_id: bs.goodwill}
+  - {label: Balance b/f, parent: Straight line depreciation, concept_id: bs.ppe}

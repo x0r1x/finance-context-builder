@@ -41,7 +41,7 @@ Formula-copy (одинаковый `formula_template` в соседних кол
 
 Лейбл строки — первая непустая ячейка span; `indent` — позиция в span плюс ведущие пробелы. У `LayoutRow` свой `label_col` (адрес в context), если статья не в `block.label_col`.
 
-Виды строк (`fact` / `abstract` / `index` / `helper`) — как в [architecture.md](architecture.md). `index` только если по оси идёт `0|1, 2, 3, …` и лейбл счётчика (`week`, `#`, …) **или** в периодных ячейках нет формул. Ветка «все числа ≤ 12» снята: денежные 1..12 с формулами и 0/1-флаги — `fact`.
+Виды строк (`fact` / `abstract` / `index` / `helper` / `flag`) — как в [architecture.md](architecture.md). `index` только если по оси идёт `0|1, 2, 3, …` и лейбл счётчика (`week`, `#`, …) **или** в периодных ячейках нет формул. Ветка «все числа ≤ 12» снята: денежные 1..12 с формулами остаются `fact`. Плейсхолдеры `Spare` / `None` — `helper`. Сценарии (`Live Case`, `Mid case`, `Low case`, `* choice`, `Applied (real terms)`, `Covenant breach`) и ряды, где по оси есть и 0, и 1, — `flag`; каскад их excluded, значения остаются в `context.excluded`, сами строки — в inventory.
 
 ## Формулы и ось
 
