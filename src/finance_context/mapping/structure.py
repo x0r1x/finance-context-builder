@@ -100,6 +100,10 @@ def analyze_structure(book: BookView) -> dict[str, RowPattern]:
     for sheet in book.layout.sheets:
         for block in sheet.blocks:
             period_cols = [h.col for h in block.axis.headers]
+            if getattr(block, "kind", "timeline") == "params":
+                period_cols = [
+                    h.col for h in block.axis.headers if h.role in {"value", "scenario"}
+                ]
             for layout_row in block.rows:
                 key = book.row_key(sheet.name, layout_row.row, block.block_id)
                 pattern = _pattern_for_row(book, sheet.name, layout_row.row, period_cols)
@@ -123,14 +127,22 @@ def build_row_context(
     key = book.row_key(sheet, layout_row.row, block.block_id)
     pattern = book.patterns.get(key) or RowPattern()
     grain = infer_grain([h.period_key for h in block.axis.headers])
+    if getattr(block, "kind", "timeline") == "params":
+        grain = None
+        headers: list[str] = []
+    else:
+        headers = [h.text for h in block.axis.headers[:12]]
     value_kind = _value_kind(book, sheet, layout_row.row, block, pattern)
-    if _semantic_ratio(layout_row.label, value_kind):
-        value_kind = "ratio"
-    elif _semantic_count(layout_row.label):
-        value_kind = "count"
-    if _lease_rate_input(layout_row.label, book, sheet, layout_row.row, block, value_kind):
-        value_kind = "rate"
-    headers = [h.text for h in block.axis.headers[:12]]
+    unit_kind = _unit_from_row_cells(book, sheet, layout_row)
+    if unit_kind:
+        value_kind = unit_kind
+    else:
+        if _semantic_ratio(layout_row.label, value_kind):
+            value_kind = "ratio"
+        elif _semantic_count(layout_row.label):
+            value_kind = "count"
+        if _lease_rate_input(layout_row.label, book, sheet, layout_row.row, block, value_kind):
+            value_kind = "rate"
     section = " / ".join(layout_row.section_path)
     query = " | ".join(
         part
@@ -193,6 +205,20 @@ def _value_kind(
     if percents and percents >= max(1, numbers // 2):
         return "rate"
     return "money"
+
+
+def _unit_from_row_cells(book: BookView, sheet: str, layout_row: LayoutRow) -> ValueKind | None:
+    from finance_context.layout.params import unit_kind_from_text
+
+    for item in layout_row.cells:
+        if item.role != "unit":
+            continue
+        cell = book.cells.get((sheet, layout_row.row, item.col))
+        text = None if cell is None else str(cell.get("cached_value") or "")
+        kind = unit_kind_from_text(text)
+        if kind in {"money", "rate", "ratio", "count"}:
+            return kind  # type: ignore[return-value]
+    return None
 
 
 def _pattern_for_row(
@@ -427,6 +453,16 @@ class StructureSignal:
                             evidence=f"sum of {len(child_ids)} child rows",
                         )
                     )
+                equity_net = _equity_cashflow_sum(ctx, child_ids, book)
+                if equity_net:
+                    out.append(
+                        Candidate(
+                            concept_id=equity_net,
+                            score=0.95,
+                            signal=self.name,
+                            evidence="sum of equity irr cash lines",
+                        )
+                    )
         if pattern.kind == "diff" and pattern.diff_rows:
             left_id = _concept_at(book, ctx.sheet, pattern.diff_rows[0])
             right_id = _concept_at(book, ctx.sheet, pattern.diff_rows[1])
@@ -507,6 +543,20 @@ def _shared_concept(
         shared = prefixes[0]
         if shared in book.taxonomy:
             return shared
+    return None
+
+
+def _equity_cashflow_sum(ctx: RowContext, child_ids: list[str], book: BookView) -> str | None:
+    if "cf.equity_cashflow" not in book.taxonomy:
+        return None
+    blob = normalize_label(
+        " ".join([ctx.label, ctx.parent_label or "", *ctx.section_path, ctx.sheet])
+    )
+    if "irr" not in blob and "equity" not in blob:
+        return None
+    kinds = set(child_ids)
+    if "cf.equity_issue" in kinds and kinds & {"cf.dividends", "cf.disbursements", "bs.cash"}:
+        return "cf.equity_cashflow"
     return None
 
 

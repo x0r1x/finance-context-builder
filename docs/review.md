@@ -7,11 +7,11 @@
 | Где | Что видно |
 | --- | --- |
 | `context.md` шапка | `Content completeness` (должно быть 1.00) и `Concept coverage` (может быть < 1) |
-| `context.md` блок | Строка с Concept `unknown` (плюс счётчик `Unmapped: N`) |
+| `context.md` блок | Timeline: строка с Concept `unknown` (плюс счётчик `Unmapped: N`). Params: `## Parameters / {sheet}` |
 | `context.md` `## Excluded` | Helper / flag / check |
 | `context.md` `## Row navigator / {sheet}` | Все layout-строки: kind, path, concept, formula, refs; без периодных значений |
-| `context.json` → `unmapped` | Полные серии с `values` по периодам, `candidates`, `hints`, `neighbors` |
-| `context.json` → `inventory` | Все kind, включая abstract; инвариант полноты |
+| `context.json` → `unmapped` | Полные серии с `values` по периодам (timeline) или `cells` (params), `candidates`, `hints`, `neighbors` |
+| `context.json` → `inventory` | Все kind, включая abstract; `cells` / `precedent_cells`; инвариант полноты |
 | `unmapped.json` | Та же выжимка атрибутов **без** `values`, плюс `ref` как в колонке Ref |
 
 `scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `unmapped` из context или `rows` из mapping, оставляет `concept_id is null` и `disposition != excluded`, выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown, не с длиной navigator.
@@ -21,7 +21,7 @@ Excluded (check / helper / flag / technical) в `unmapped.json` не входя�
 ## Цикл правки
 
 1. Прогнать книгу (`uv run finance-context build …` или `bash scripts/run.sh path/to/model.xlsx` при живом `serve`).
-2. Открыть `unmapped.json` и ту же строку в `inventory` / navigator: `label`, `parent_label`, `label_path`, `neighbors`, `candidates`, `hints`, `sheet`, `ref`, `disposition`, `exclusion_reason`, `article_role`.
+2. Открыть `unmapped.json` и ту же строку в `inventory` / navigator: `label`, `parent_label`, `label_path`, `neighbors`, `candidates`, `hints`, `sheet`, `ref`, `disposition`, `exclusion_reason`, `article_role`, `cells`, `unit`.
 3. Для каждой строки решить класс:
 
 | Класс | Действие |
@@ -31,7 +31,7 @@ Excluded (check / helper / flag / technical) в `unmapped.json` не входя�
 | Ребёнок под CAPEX/OPEX/Revenue, но это годы / MW / индекс | `unless` на parent-rollup + `facets.unit`, не money-id родителя |
 | Соседи и граф уже намекают (lease рядом с opex) | Это structure-признак; не клеить alias ставки |
 | Однозначная формула (alias, SUM) | Проверить structure: SUM копирует концепт, только если замаплены все дети |
-| Пустой прогон, нули в metrics, completeness < 1 | Layout / build, не yaml |
+| Пустой прогон, нули в metrics, completeness < 1 | Layout / build, не yaml. Cover и Shortcuts в знаменатель не входят; Input Assumptions должен быть params |
 | Технический мост, check, шум | Exclusion; не плодить концепт |
 | Реальная неоднозначность | Оставить `unknown` (`no_candidate` / `ambiguous` / `low_score`); кандидаты уже в JSON |
 

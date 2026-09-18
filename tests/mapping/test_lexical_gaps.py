@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from tests.helpers.ports import GrantSlots
 
-from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
+from finance_context.layout.models import (
+    Axis,
+    AxisHeader,
+    Block,
+    Layout,
+    LayoutRow,
+    RowCell,
+    SheetLayout,
+)
 from finance_context.mapping.cascade import map_layout
+from finance_context.mapping.structure import BookView, analyze_structure, build_row_context
 from finance_context.mapping.taxonomy import load_taxonomy
 
 
@@ -358,6 +367,131 @@ def test_cash_in_hand_and_injected_equity() -> None:
     assert by_label["Variable land lease"].concept_id != "ops.lease_rate"
     assert by_label["Cash in hand"].alternatives
 
+
+def test_total_cash_in_cash_out_is_equity_cashflow() -> None:
+    taxonomy = load_taxonomy()
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="Ratios",
+                blocks=[
+                    Block(
+                        block_id="Ratios!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="Ratios!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(col=2, text="1", role="relative", period_key="Y1"),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(
+                                row=27,
+                                label="Total Cash in/Cash out",
+                                kind="fact",
+                                section_path=["Equity IRR"],
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    row = doc.rows[0]
+    assert row.concept_id == "cf.equity_cashflow"
+    assert row.alternatives, "top candidates must remain even when mapping is close"
+
+
+def test_unit_column_sets_value_kind() -> None:
+    taxonomy = load_taxonomy()
+    rows = [
+        LayoutRow(
+            row=8,
+            label="Concession Duration",
+            kind="fact",
+            cells=[RowCell(col=3, role="unit"), RowCell(col=4, role="value")],
+        ),
+        LayoutRow(
+            row=9,
+            label="Tax Rate",
+            kind="fact",
+            cells=[RowCell(col=3, role="unit"), RowCell(col=4, role="value")],
+        ),
+        LayoutRow(
+            row=10,
+            label="Toll Rate",
+            kind="fact",
+            cells=[RowCell(col=3, role="unit"), RowCell(col=4, role="value")],
+        ),
+    ]
+    block = Block(
+        block_id="Input Assumptions!r5",
+        label_col=2,
+        kind="params",
+        axis=Axis(
+            id="Input Assumptions!r5",
+            row=5,
+            headers=[
+                AxisHeader(col=4, text="Values", role="value", period_key="value"),
+            ],
+        ),
+        rows=rows,
+    )
+    layout = Layout(
+        sheets=[SheetLayout(name="Input Assumptions", blocks=[block])]
+    )
+    cells = [
+        {
+            "sheet": "Input Assumptions",
+            "row": 8,
+            "col": 3,
+            "addr": "C8",
+            "cached_value": "years",
+        },
+        {
+            "sheet": "Input Assumptions",
+            "row": 9,
+            "col": 3,
+            "addr": "C9",
+            "cached_value": "%",
+        },
+        {
+            "sheet": "Input Assumptions",
+            "row": 10,
+            "col": 3,
+            "addr": "C10",
+            "cached_value": "£",
+        },
+    ]
+    book = BookView(layout, cells, taxonomy)
+    analyze_structure(book)
+    kinds = {
+        row.label: build_row_context(book, "Input Assumptions", block, row, None, []).value_kind
+        for row in rows
+    }
+    assert kinds["Concession Duration"] == "count"
+    assert kinds["Tax Rate"] == "rate"
+    assert kinds["Toll Rate"] == "money"
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        cells=cells,
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row for row in doc.rows}
+    assert by_label["Tax Rate"].concept_id == "pnl.tax_rate"
 
 def test_income_tax_on_cfs_is_cash_tax_not_pnl() -> None:
     taxonomy = load_taxonomy()

@@ -98,6 +98,9 @@ def _assert_layout_geometry(filename: str, layout: Layout) -> None:
             f"{[_period_count(b) for b in blocks]}"
         )
         assert facts, f"{filename}: layout produced no fact rows"
+        ia = next((sheet for sheet in layout.sheets if sheet.name == "Input Assumptions"), None)
+        assert ia is not None and ia.blocks
+        assert all(block.kind == "params" for block in ia.blocks)
         flag_labels = {normalize_label(row.label) for row in flags}
         assert any("construction" == label or "construction" in label for label in flag_labels) or any(
             "beginning of construction" in label for label in flag_labels
@@ -109,6 +112,9 @@ def _assert_layout_geometry(filename: str, layout: Layout) -> None:
             f"{filename}: leftover 2-period start/end blocks: {short[:12]}"
         )
         labels = {normalize_label(row.label) for row in facts}
+        assert not any(
+            sheet.name == "Top Shortcuts" and sheet.blocks for sheet in layout.sheets
+        )
         for needle in ("cfads", "total revenue"):
             assert any(needle in label for label in labels), (
                 f"{filename}: no fact label containing {needle!r}"
@@ -158,6 +164,39 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         ctx_doc.excluded
     )
     assert series_n <= layout_n
+    if filename == "packt-project-finance.xlsx":
+        ia = [row for row in ctx_doc.inventory if row.sheet == "Input Assumptions"]
+        assert ia, "Input Assumptions must appear in inventory"
+        labels = {normalize_label(row.label): row for row in ia}
+        assert "concession duration" in labels
+        assert "tax rate" in labels
+        assert labels["tax rate"].unit == "rate"
+        assert labels["concession duration"].unit == "count"
+        toll = labels.get("toll rate")
+        if toll is not None:
+            assert toll.unit == "money"
+        stub = next(
+            (
+                cell
+                for row in ctx_doc.inventory
+                if row.sheet == "Construction" and row.row == 22
+                for cell in row.cells
+                if cell.role == "value"
+            ),
+            None,
+        )
+        assert stub is not None
+        total = next(
+            (
+                cell
+                for row in ctx_doc.inventory
+                if row.sheet == "Construction" and row.row == 16
+                for cell in row.cells
+                if cell.role == "total"
+            ),
+            None,
+        )
+        assert total is not None
     if not expectations:
         pytest.skip("gold expectations not filled yet")
     errors = []

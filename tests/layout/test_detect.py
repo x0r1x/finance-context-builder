@@ -613,3 +613,217 @@ def test_scenario_and_covenant_breach_are_flags() -> None:
     assert rows["Covenant breach"].kind == "flag"
     assert rows["Revenue"].kind == "fact"
 
+
+def test_params_block_from_scenario_matrix() -> None:
+    cells = [
+        _c("Input Assumptions", "C5", "Units"),
+        _c("Input Assumptions", "D5", "Values"),
+        _c("Input Assumptions", "F2", "Base Case"),
+        _c("Input Assumptions", "G2", "Scenario 2"),
+        _c("Input Assumptions", "B7", "TIME ASSUMPTIONS"),
+        _c("Input Assumptions", "B8", "Concession Duration"),
+        _c("Input Assumptions", "C8", "years"),
+        _c("Input Assumptions", "D8", "40", formula="=INDEX(F8:G8,$D$3)"),
+        _c("Input Assumptions", "F8", "40"),
+        _c("Input Assumptions", "G8", "36.5"),
+        _c("Input Assumptions", "B9", "Tax Rate"),
+        _c("Input Assumptions", "C9", "%"),
+        _c("Input Assumptions", "D9", "0.3"),
+        _c("Input Assumptions", "F9", "0.3"),
+        _c("Input Assumptions", "G9", "0.3"),
+        _c("Input Assumptions", "B10", "Toll Rate"),
+        _c("Input Assumptions", "C10", "£"),
+        _c("Input Assumptions", "D10", "3.56"),
+        _c("Input Assumptions", "F10", "3.56"),
+        _c("Input Assumptions", "G10", "3.56"),
+        _c("Input Assumptions", "B11", "Gearing"),
+        _c("Input Assumptions", "C11", "%"),
+        _c("Input Assumptions", "D11", "0.65"),
+        _c("Input Assumptions", "F11", "0.65"),
+        _c("Input Assumptions", "G11", "0.8"),
+    ]
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    assert sheet.blocks
+    block = sheet.blocks[0]
+    assert block.kind == "params"
+    labels = {row.label: row for row in block.rows}
+    assert labels["TIME ASSUMPTIONS"].kind == "abstract"
+    assert labels["Concession Duration"].kind == "fact"
+    unit_cols = {cell.role for cell in labels["Tax Rate"].cells}
+    assert "unit" in unit_cols
+    assert "value" in unit_cols
+
+
+def test_prose_and_shortcut_sheets_are_rejected() -> None:
+    cells = [
+        _c("Cover", "A1", "Strictly confidential educational material for modelling."),
+        _c("Cover", "A2", "No representation or warranty of any kind is made in relation to accuracy."),
+        _c("Cover", "A3", "This spreadsheet is for educational purposes only and must not be relied on."),
+        _c("Shortcuts", "A1", "CTRL"),
+        _c("Shortcuts", "B1", "+"),
+        _c("Shortcuts", "C1", "Arrow Keys"),
+        _c("Shortcuts", "D1", "Move to the edge of the current data region in a worksheet."),
+        _c("Shortcuts", "A2", "CTRL"),
+        _c("Shortcuts", "B2", "+"),
+        _c("Shortcuts", "C2", "Home"),
+        _c("Shortcuts", "D2", "Move to the beginning of the worksheet."),
+        _c("Shortcuts", "A3", "TAB"),
+        _c("Shortcuts", "D3", "Move to the next cell within a menu window."),
+    ]
+    layout = detect_layout(cells)
+    assert all(not sheet.blocks for sheet in layout.sheets)
+
+
+def test_sensitivity_grid_keeps_title_only() -> None:
+    cells = [
+        _c("Sensitivity", "A1", "GRID 1: MO-12 CLOSING CASH"),
+        _c("Sensitivity", "B2", "0.75"),
+        _c("Sensitivity", "C2", "1.00"),
+        _c("Sensitivity", "D2", "1.25"),
+        _c("Sensitivity", "A3", "-0.2"),
+        _c("Sensitivity", "B3", "100"),
+        _c("Sensitivity", "C3", "200"),
+        _c("Sensitivity", "D3", "300"),
+        _c("Sensitivity", "A4", "0"),
+        _c("Sensitivity", "B4", "110"),
+        _c("Sensitivity", "C4", "210"),
+        _c("Sensitivity", "D4", "310"),
+        _c("Sensitivity", "A5", "0.2"),
+        _c("Sensitivity", "B5", "120"),
+        _c("Sensitivity", "C5", "220"),
+        _c("Sensitivity", "D5", "320"),
+    ]
+    layout = detect_layout(cells)
+    block = layout.sheets[0].blocks[0]
+    assert len(block.rows) == 1
+    assert block.rows[0].kind == "abstract"
+    assert "GRID" in block.rows[0].label
+
+
+def test_timeline_stub_cells_get_roles() -> None:
+    cells = [
+        _c("Construction", "A1", "Item"),
+        _c("Construction", "E1", "2023"),
+        _c("Construction", "F1", "2024"),
+        _c("Construction", "G1", "2025"),
+        _c("Construction", "A2", "CAPEX"),
+        _c("Construction", "C2", "300", formula="=SUM(E2:G2)"),
+        _c("Construction", "E2", "100", formula_template="=RC[1]"),
+        _c("Construction", "F2", "100"),
+        _c("Construction", "G2", "100"),
+        _c("Construction", "A3", "Equity target"),
+        _c("Construction", "C3", "115", formula="=$C$2*0.35"),
+        _c("Construction", "E3", "50"),
+        _c("Construction", "F3", "65"),
+        _c("Construction", "G3", "0"),
+        _c("Construction", "A4", "Debt"),
+        _c("Construction", "C4", "k£"),
+        _c("Construction", "E4", "10"),
+        _c("Construction", "F4", "20"),
+        _c("Construction", "G4", "30"),
+    ]
+    layout = detect_layout(cells)
+    rows = {row.label: row for row in layout.sheets[0].blocks[0].rows}
+    capex_roles = {cell.role for cell in rows["CAPEX"].cells}
+    assert "total" in capex_roles
+    equity_roles = {cell.role for cell in rows["Equity target"].cells}
+    assert "value" in equity_roles
+    debt_roles = {cell.role for cell in rows["Debt"].cells}
+    assert "unit" in debt_roles
+
+
+def test_params_block_from_parameter_table() -> None:
+    cells = [
+        _c("Assumptions", "B6", "Parameter"),
+        _c("Assumptions", "C6", "Base"),
+        _c("Assumptions", "D6", "Bull"),
+        _c("Assumptions", "E6", "Bear"),
+        _c("Assumptions", "F6", "Active"),
+        _c("Assumptions", "G6", "Unit"),
+        _c("Assumptions", "H6", "Notes"),
+        _c("Assumptions", "B8", "Company"),
+        _c("Assumptions", "C8", "Acme Corp"),
+        _c("Assumptions", "F8", "Acme Corp"),
+        _c("Assumptions", "G8", "text"),
+        _c("Assumptions", "H8", "Legal name of the SPV"),
+        _c("Assumptions", "B9", "Model version"),
+        _c("Assumptions", "C9", "v3"),
+        _c("Assumptions", "F9", "v3"),
+        _c("Assumptions", "G9", "text"),
+        _c("Assumptions", "B10", "Tax Rate"),
+        _c("Assumptions", "C10", "0.25"),
+        _c("Assumptions", "D10", "0.2"),
+        _c("Assumptions", "E10", "0.3"),
+        _c("Assumptions", "F10", "0.25"),
+        _c("Assumptions", "G10", "%"),
+        _c("Assumptions", "B11", "Start date"),
+        _c("Assumptions", "C11", "44927"),
+        _c("Assumptions", "F11", "44927"),
+        _c("Assumptions", "G11", "date"),
+        _c("Assumptions", "B12", "Gearing"),
+        _c("Assumptions", "C12", "0.65"),
+        _c("Assumptions", "D12", "0.7"),
+        _c("Assumptions", "E12", "0.5"),
+        _c("Assumptions", "F12", "0.65"),
+        _c("Assumptions", "G12", "%"),
+    ]
+    layout = detect_layout(cells)
+    block = layout.sheets[0].blocks[0]
+    assert block.kind == "params"
+    tax = next(row for row in block.rows if row.label == "Tax Rate")
+    roles = {cell.role for cell in tax.cells}
+    assert "unit" in roles
+    assert "value" in roles
+    assert "scenario" in roles
+
+
+def test_check_result_table_is_helper_not_junk() -> None:
+    cells = [
+        _c("Checks", "A1", "Check"),
+        _c("Checks", "B1", "Result"),
+        _c("Checks", "C1", "Note"),
+        _c("Checks", "A2", "Balance sheet ties"),
+        _c("Checks", "B2", "1"),
+        _c("Checks", "C2", "assets vs equity plus debt"),
+        _c("Checks", "A3", "Cashflow ties"),
+        _c("Checks", "B3", "0"),
+        _c("Checks", "A4", "Sources equal uses"),
+        _c("Checks", "B4", "1"),
+        _c("Checks", "A5", "Debt schedule ties"),
+        _c("Checks", "B5", "1"),
+    ]
+    layout = detect_layout(cells)
+    rows = layout.sheets[0].blocks[0].rows
+    assert len(rows) >= 3
+    assert all(row.check_row or row.kind == "helper" for row in rows)
+
+
+def test_graph_selects_active_value_column() -> None:
+    cells = [
+        _c("Input Assumptions", "B5", "Parameter"),
+        _c("Input Assumptions", "C5", "Base"),
+        _c("Input Assumptions", "D5", "Values"),
+        _c("Input Assumptions", "B8", "Gearing"),
+        _c("Input Assumptions", "C8", "0.7"),
+        _c("Input Assumptions", "D8", "0.65"),
+        _c("Input Assumptions", "B9", "Tax Rate"),
+        _c("Input Assumptions", "C9", "0.3"),
+        _c("Input Assumptions", "D9", "0.3"),
+        _c("Input Assumptions", "B10", "Duration"),
+        _c("Input Assumptions", "C10", "30"),
+        _c("Input Assumptions", "D10", "40"),
+        _c("Input Assumptions", "B11", "Toll"),
+        _c("Input Assumptions", "C11", "3"),
+        _c("Input Assumptions", "D11", "3.56"),
+    ]
+    edges = [
+        {"source": "Construction!E21", "target": "Input Assumptions!D8"},
+        {"source": "P&L!C9", "target": "Input Assumptions!D9"},
+        {"source": "CFS!C10", "target": "Input Assumptions!D10"},
+    ]
+    layout = detect_layout(cells, edges=edges)
+    block = layout.sheets[0].blocks[0]
+    value_cols = {header.col for header in block.axis.headers if header.role == "value"}
+    assert value_cols == {4}
+

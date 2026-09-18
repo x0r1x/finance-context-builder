@@ -127,7 +127,7 @@ def map_layout(
     qn = 1
     for ctx in pending:
         concept_id = book.concepts.get(ctx.row_key)
-        ranked = ctx.extras.get("ranked") or []
+        ranked = ctx.extras.get("ranked") or ctx.extras.get("proposals") or []
         picked = ctx.extras.get("picked")
         source = ctx.extras.get("source") or "question"
         reason = exclusion_reason(ctx)
@@ -213,8 +213,9 @@ def _resolve_row(
 ) -> None:
     proposals = collect_proposals(pending.ctx, book, signals)
     ranked = resolver.fuse(pending.ctx, proposals)
+    pending.extras["proposals"] = sorted(proposals, key=lambda item: item.score, reverse=True)[:5]
+    pending.extras["ranked"] = ranked or list(pending.extras["proposals"])
     concept_id, picked = resolver.decide(pending.ctx, ranked)
-    pending.extras["ranked"] = ranked
     if concept_id and picked:
         book.concepts[pending.row_key] = concept_id
         pending.extras["picked"] = picked
@@ -267,7 +268,8 @@ def _embed_pass(
             ]
             proposals = collect_proposals(row.ctx, book, signals) + embed_cands
             ranked = resolver.fuse(row.ctx, proposals)
-            row.extras["ranked"] = ranked
+            row.extras["proposals"] = sorted(proposals, key=lambda item: item.score, reverse=True)[:5]
+            row.extras["ranked"] = ranked or list(row.extras["proposals"])
             concept_id, picked = resolver.decide(row.ctx, ranked)
             if concept_id and picked:
                 book.concepts[row.row_key] = concept_id

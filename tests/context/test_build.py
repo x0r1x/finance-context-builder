@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from finance_context.context.build import build_context
-from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
+from finance_context.layout.models import (
+    Axis,
+    AxisHeader,
+    Block,
+    Layout,
+    LayoutRow,
+    RowCell,
+    SheetLayout,
+)
 from finance_context.mapping.models import MappedRow, MappingDocument
 
 
@@ -282,3 +290,96 @@ def test_zero_cached_formula_is_not_missing() -> None:
     assert len(summary) == 1
     assert summary[0].startswith("2 formula cell(s) missing cached values")
     assert "CF!C2" in summary[0]
+
+
+def test_build_exports_role_and_precedent_cells() -> None:
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="Construction",
+                blocks=[
+                    Block(
+                        block_id="Construction!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="Construction!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(
+                                    col=5, text="2023", role="historical", period_key="2023"
+                                )
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(
+                                row=26,
+                                label="Equity (k£)",
+                                kind="fact",
+                                cells=[RowCell(col=3, role="value")],
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    mapping = MappingDocument(
+        rows=[
+            MappedRow(
+                row_key="Construction|26|Construction!r1",
+                sheet="Construction",
+                row=26,
+                block_id="Construction!r1",
+                label="Equity (k£)",
+                concept_id="cf.equity_issue",
+                article_role="assumption",
+                source="rule",
+                confidence="high",
+                score=0.94,
+                alternatives=[("cf.equity_issue", 0.94), ("bs.equity", 0.5), ("cf.fcf", 0.4)],
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "Construction",
+            "row": 26,
+            "col": 3,
+            "addr": "C26",
+            "cached_value": "115",
+            "formula_raw": "=$C$20*0.35",
+        },
+        {
+            "sheet": "Construction",
+            "row": 26,
+            "col": 5,
+            "addr": "E26",
+            "cached_value": "50",
+            "formula_raw": "=C26",
+        },
+        {
+            "sheet": "Debt",
+            "row": 3,
+            "col": 6,
+            "addr": "F3",
+            "cached_value": "0.065",
+        },
+    ]
+    edges = [
+        {"source": "Construction!E26", "target": "Construction!C26"},
+        {"source": "Construction!E26", "target": "Debt!F3"},
+    ]
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "Construction"}, {"name": "Debt"}]},
+        cells=cells,
+        layout=layout,
+        mapping=mapping,
+        edges=edges,
+    )
+    series = doc.blocks[0].metrics[0]
+    assert any(cell.role == "value" and cell.addr == "C26" for cell in series.cells)
+    assert any(cell.addr.endswith("F3") for cell in series.precedent_cells)
+    assert len(series.candidates) == 3
+    inv = doc.inventory[0]
+    assert inv.cells and inv.precedent_cells

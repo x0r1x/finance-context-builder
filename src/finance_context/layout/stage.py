@@ -16,11 +16,18 @@ def layout_workbook(dest_dir: Path, catalog: IrCatalog | None = None) -> Layout:
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         date1904 = bool(meta.get("date1904"))
-    layout = detect_layout(cells, date1904=date1904)
+    layout = detect_layout(cells, date1904=date1904, edges=_read_edges(dest_dir))
     write_json(dest_dir / "layout.json", layout.model_dump(mode="json"))
     if catalog is not None:
         register_layout(layout, catalog)
     return layout
+
+
+def _read_edges(dest_dir: Path) -> list[dict]:
+    path = dest_dir / "ir" / "edges.parquet"
+    if not path.is_file():
+        return []
+    return read_parquet(path)
 
 
 def register_layout(layout: Layout, catalog: IrCatalog) -> None:

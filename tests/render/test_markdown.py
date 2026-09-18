@@ -10,6 +10,7 @@ from finance_context.models.context import (
     MappingEvidence,
     MetricSeries,
     PeriodValue,
+    RoleCell,
     SourceRef,
     WorkbookRaw,
 )
@@ -316,4 +317,42 @@ def test_markdown_unmapped_period_table() -> None:
     assert "55* `Dash!C3`" in rendered
     assert "Unmapped rows" not in rendered
     assert rendered.count("## Dash") == 1
+
+
+def test_markdown_renders_parameters_table() -> None:
+    doc = ContextDocument(
+        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
+        workbook=WorkbookRaw(sheets=["Input Assumptions"], sheet_count=1, cell_count=4),
+        blocks=[
+            FinancialBlock(
+                block_id="Input Assumptions!r5",
+                sheet="Input Assumptions",
+                label_col=2,
+                kind="params",
+                periods=[
+                    {"col": 4, "text": "Values", "role": "value", "period_key": "value"},
+                ],
+                metrics=[
+                    MetricSeries(
+                        row_key="Input Assumptions|8|Input Assumptions!r5",
+                        label="Tax Rate",
+                        concept_id="pnl.tax_rate",
+                        article_role="assumption",
+                        unit="rate",
+                        mapping=MappingEvidence(method="rule", confidence="high", score=0.9),
+                        source=SourceRef(sheet="Input Assumptions", addr="B8", row=8, col=2),
+                        cells=[
+                            RoleCell(addr="C8", col=3, role="unit", cached_value="%"),
+                            RoleCell(addr="D8", col=4, role="value", cached_value="0.3"),
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+    rendered = render_markdown(doc)
+    assert "## Parameters / Input Assumptions" in rendered
+    assert "Tax Rate" in rendered
+    assert "%" in rendered
+    assert "pnl.tax_rate" in rendered
 
