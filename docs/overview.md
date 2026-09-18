@@ -26,7 +26,7 @@
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
 | `context.json` | Схема `1.2.0`: блоки с периодами или параметрами, `unmapped`, `excluded`, полный `inventory` |
-| `context.md` | Две метрики в шапке; таблицы периодов; `## Excluded`; row navigator без значений |
+| `context.md` | Две метрики в шапке; таблицы периодов; `## Parameters / {sheet}`; `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 
 Между джобами: `$DATA_DIR/glossary.json` (выученные high-confidence пары) и `taxonomy_embeddings.npz` (кэш эмбеддингов концептов).
@@ -35,9 +35,9 @@
 
 `parse → compile → layout → mapping → build → render`.
 
-Каскад маппинга резолвит `fact` / `flag` / `helper`. Если детектор не собрал блоков (нет календарной оси и нет индекса `Year 1..n`) или не нашёл лейблы статей, fact-строк нет: статус может быть `succeeded` при пустом контексте — это layout, не таксономия. Подробности: [layout.md](layout.md).
+Каскад маппинга резолвит `fact` / `flag` / `helper`. Если детектор не собрал ни timeline, ни params (проза / навигация) или не нашёл лейблы статей, fact-строк нет: статус может быть `succeeded` при пустом контексте — это layout, не таксономия. Подробности: [layout.md](layout.md).
 
-Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они в `inventory` без периодных рядов. Period values есть только у `fact` / `flag` / `helper` (в `blocks` / `unmapped` / `excluded`). Даунстрим видит лейбл, `label_path`, соседей ±2, отпечаток формулы, hints и кандидатов — не сырой дамп всех чисел.
+Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они в `inventory` без периодных рядов. Значения периодной оси — у `fact` / `flag` / `helper` timeline-блоков; у params — role-tagged ячейки (`value` / `unit` / `scenario` / `total` / `note`) и при необходимости `precedent_cells` с графа. Даунстрим видит лейбл, `label_path`, соседей ±2, отпечаток формулы, hints, кандидатов и эти ячейки — не сырой дамп всех чисел листа.
 
 Опциональны embeddings и chat (OpenAI-совместимый endpoint, по умолчанию LM Studio). Без них остаются structure + lexical + glossary, затем `unknown` с кандидатами.
 

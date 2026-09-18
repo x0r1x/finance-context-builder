@@ -8,11 +8,11 @@
 
 ## Что участвует
 
-Layout помечает тело блока видами строк. Каскад резолвит **`fact` / `flag` / `helper`**. `abstract` и `index` в `mapping.json` не попадают, но **все** layout-строки пишутся в `context.inventory`. Как собираются блоки и лейблы — [layout.md](layout.md). Если fact-строк нет, каскад не виноват: сначала ось и зона лейблов.
+Layout помечает тело блока видами строк. Каскад резолвит **`fact` / `flag` / `helper`**. `abstract` и `index` в `mapping.json` не попадают, но **все** layout-строки пишутся в `context.inventory`. Как собираются блоки и лейблы — [layout.md](layout.md). Если fact-строк нет, каскад не виноват: сначала ось **или** params-шейп и зона лейблов.
 
 | kind | Роль |
 | --- | --- |
-| `fact` | Кандидат на `concept_id`; периодные значения в блоках / unmapped |
+| `fact` | Кандидат на `concept_id`; периодные значения в timeline-блоках / unmapped, либо role-tagged ячейки в params |
 | `abstract` | Заголовок секции, родитель следующих fact; только inventory |
 | `index` | Счётчики вроде `Week #`; только inventory |
 | `helper` | Check / tie-out / плейсхолдер Spare; excluded |
@@ -48,7 +48,7 @@ Layout помечает тело блока видами строк. Каска�
 | `embed` | `embed` | Косинус к эмбеддингам лейблов концептов |
 | `chat` | `chat` | Rerank pruned-списка |
 
-Lexical индексирует **и** `labels`, **и** `aliases`. Перед сравнением лейбл нормализуется (`normalize_label`): скобки снимаются, но аббревиатуры метрик (`EBITDA`, `CFADS`, `DSCR`) из скобок сохраняются; `cashflow` → `cash flow`; `&` → `and`. Однословные слабые фразы (`revenue`, `debt`, `total`, `cash`, …) не матчятся, если это **всё** содержимое лейбла; в составном лейбле (`REVENUE - Passenger Car`) — да. Для `cash` слабый матч ещё отключается, если рядом `flow` / `in` / `out` / `total` (`Cash Flow` не становится `bs.cash`), **кроме** `hand` / `hands` / `balance` (`Cash in hand` → `bs.cash`); для `debt` — если рядом `fee` / `up-front`. Множественное число (`Drawdowns`, `revenues`) сводится к форме из yaml.
+Lexical индексирует **и** `labels`, **и** `aliases`. Перед сравнением лейбл нормализуется (`normalize_label`): скобки снимаются, но аббревиатуры метрик (`EBITDA`, `CFADS`, `DSCR`) из скобок сохраняются; `cashflow` → `cash flow`; `&` → `and`; `/` → пробел (`Total Cash in/Cash out` сравнивается с `Total Cash in Cash out`). Однословные слабые фразы (`revenue`, `debt`, `total`, `cash`, …) не матчятся, если это **всё** содержимое лейбла; в составном лейбле (`REVENUE - Passenger Car`) — да. Для `cash` слабый матч ещё отключается, если рядом `flow` / `in` / `out` / `total` (`Cash Flow` не становится `bs.cash`), **кроме** `hand` / `hands` / `balance` (`Cash in hand` → `bs.cash`); для `debt` — если рядом `fee` / `up-front`. Множественное число (`Drawdowns`, `revenues`) сводится к форме из yaml. Anti-лейбл со слэшем (`fcfe /`) матчится по сырой строке, чтобы после замены `/` на пробел не блокировать голый `FCFE`.
 
 Lexical дополнительно знает устойчивые конструкции из блока `patterns:` в yaml. Это **не** то же самое, что structure-агрегат:
 
@@ -58,7 +58,7 @@ Lexical дополнительно знает устойчивые констр�
 - Точная строка `cash flow` (без available/operating/net) → `cf.net`.
 - Если у концепта заданы `section_hints`, фраза принимается только при попадании хинта в лейбл / родителя / путь секции / лист (например `Arrangement fee` на Ratios: в hints есть `ratios` / `irr`).
 
-`_semantic_ratio` / `_semantic_count` смотрят **токены** нормализованного лейбла, не подстроку: `ratio` внутри `generation` не делает MWh коэффициентом. Ratio-токены: `dscr`, `coverage`, `cpi`, `inflation`, `availability` (не если рядом `generation`), `wacc`, `coc`, … Count: `lifetime`, `turbine`, `traffic`, `generation`, `capacity`, `mw`. Голый токен `lease` **не** ratio: денежный `Variable land lease` в CFS — opex/cash, ставка — только когда ряд % или нули как input. Prune тогда отбрасывает money-концепты.
+`_semantic_ratio` / `_semantic_count` смотрят **токены** нормализованного лейбла, не подстроку: `ratio` внутри `generation` не делает MWh коэффициентом. Ratio-токены: `dscr`, `coverage`, `cpi`, `inflation`, `availability` (не если рядом `generation`), `wacc`, `coc`, … Count: `lifetime`, `turbine`, `traffic`, `generation`, `capacity`, `mw`. Голый токен `lease` **не** ratio: денежный `Variable land lease` в CFS — opex/cash, ставка — только когда ряд % или нули как input. Явная колонка единиц (`%` / `years` / `£`) задаёт `value_kind` и **не** перебивается семантикой лейбла. Prune тогда отбрасывает несовместимые концепты.
 
 Фасет `basis=accrual` ставится по `accrual` / `accrued` / `revenue earned`, не по голому `earned` — иначе `Dividends earned` прунится с `cf.dividends`.
 
@@ -69,7 +69,7 @@ Lexical дополнительно знает устойчивые констр�
 | kind | Когда | Что предлагает |
 | --- | --- | --- |
 | `alias` | Ячейка = одна ячейка другой строки/листа | Тот же `concept_id`, что у источника (score ~0.96). Пример: `Dashboard!C17 = Weekly_Forecast!C39` |
-| `aggregate` | `SUM` соседних fact-строк | Общий концепт детей или их `broader`, **только если замаплены все члены диапазона**. Один смапленный ребёнок (Insurance внутри EBITDA) концепт родителю не копирует. Итог не становится `cf.net` только потому что «Total». Пример: `Total Inflows = SUM(collections)` → `cf.receipts` |
+| `aggregate` | `SUM` соседних fact-строк | Общий концепт детей или их `broader`, **только если замаплены все члены диапазона**. Один смапленный ребёнок (Insurance внутри EBITDA) концепт родителю не копирует. Итог не становится `cf.net` только потому что «Total». SUM разнонаправленных equity-линий под IRR → `cf.equity_cashflow`, не `cf.receipts`. Пример: `Total Inflows = SUM(collections)` → `cf.receipts` |
 | `diff` | Разность двух строк | Родитель из `calculations` с противоположными весами |
 | `roll` | Roll-forward остатка | Тот же балансный концепт, что у связанной строки |
 | neighbor prior | Соседи ±2 | Денежный lease рядом с opex / Variable land lease → `pnl.opex`, не `ops.lease_rate` |
@@ -99,7 +99,7 @@ Prune отбрасывает:
 - два лидера ближе чем **0.02** → берётся более специфичный id (`broader` задан), иначе отказ (ambiguous);
 - для сигнала `embed` дополнительно: score ≥ **0.85** (`COSINE_MIN`) и отрыв от второго ≥ **0.08** (`COSINE_GAP`); top-k эмбеддингов = 5.
 
-Пороги не снижают, чтобы «закрыть покрытие». Близкий неверный тег хуже `unknown`. Top-3 кандидата после fuse **всегда** кладутся в `alternatives` / `candidates`, в том числе при abstain (`Cash Flow` с `cf.net` 0.9 не выглядит как «ничего не нашли»).
+Пороги не снижают, чтобы «закрыть покрытие». Близкий неверный тег хуже `unknown`. Top-3 кандидата кладутся в `alternatives` / `candidates` и при abstain: если prune опустошил fused-список, остаются сырые proposals (`no_candidate` больше не значит `candidates: []`).
 
 ## Exclusion
 
@@ -138,7 +138,9 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 
 Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate), `statement`, `unit`. Unknown сразу полезен даунстриму.
 
-`inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `precedents_rows` / `dependents_rows`. Period values не дублируются: у inventory только `row_key`. Инвариант: `len(inventory) ==` сумма layout-строк. Нарушение — warning `Content completeness N/M`.
+`inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `precedents_rows` / `dependents_rows`, `cells` (роли `value` / `unit` / `scenario` / `total` / `note`), `precedent_cells` (до 8 ссылок с графа, которых нет среди уже экспортированных ячеек строки). Period values не дублируются на inventory. Инвариант: `len(inventory) ==` сумма layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
+
+Top-3 `candidates` пишутся и при abstain: если prune опустошил fused-список, в context остаются сырые proposals.
 
 ## Glossary
 

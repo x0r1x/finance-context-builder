@@ -21,10 +21,10 @@ flowchart LR
 
 1. **Raw** (`raw/cells.parquet`, `raw/workbook.json`): cells, formulas, cached values, formats, comments, defined names. OOXML via lxml with zip-slip / bomb / encryption guards.
 2. **Formulas** (`ir/cells.parquet`, `ir/edges.parquet`): templates, AST, dependency edges. Named ranges such as `DS_Drawn_C:DS_Drawn_N` stay unresolved. Unsupported formulas are marked `unparsed`. A range may repeat the sheet qualifier on the right (`SUM(TBA!$D$10:'TBA'!D10)`). Binary templates keep operator parentheses, e.g. `(1+Sub_Growth_M)^(R[-4]C[0]-1)`.
-3. **Layout** (`layout.json`): statement-like blocks, period axes (calendar years/dates **or** model-year indices `Y1..Yn`), grain, label span, row kinds, and section path. Details: [layout.md](layout.md).
+3. **Layout** (`layout.json`): statement-like blocks, period axes (calendar years/dates **or** model-year indices `Y1..Yn`), or `params` blocks when there is no axis; grain, label span, row kinds, section path, and role-tagged non-period cells. Details: [layout.md](layout.md).
 4. **Mapping** (`mapping.json`): entity linking with abstention. Signals propose candidates from label, section, ±2 neighbors, formula shape, and the IR edge graph; a resolver fuses, prunes by taxonomy facets, and maps only above a confidence threshold. Otherwise the row is `unknown` and may become a question. Top-3 candidates are always stored. LLM sees labels, section path, neighbors, and period headers — not numeric values.
 5. **Context** (`context.json`, schema `1.2.0`): canonical `ContextDocument`. `inventory` lists **every** layout row (kind, `label_path`, neighbors, formula fingerprint, row-level precedents/dependents, hints, candidates, role-tagged cells). Period series live in `blocks` / `unmapped` / `excluded` without duplicating values onto inventory. `block.kind` is `timeline` or `params`.
-6. **Markdown** (`context.md`): header reports **content completeness** vs **concept coverage**. Mapped and unmapped fact rows share period tables (unmapped Concept is `unknown`). Then `## Excluded` and per-sheet `## Row navigator` (row, label, path, kind, concept, unit, formula, refs — no period values). Default cap is 16 period columns and 80 rows per table; mapping evidence, questions, formula templates, and relations stay in JSON.
+6. **Markdown** (`context.md`): header reports **content completeness** vs **concept coverage**. Timeline facts share period tables (unmapped Concept is `unknown`). Params blocks render as `## Parameters / {sheet}` (label, unit, value, scenarios, concept, ref). Then `## Excluded` and per-sheet `## Row navigator` (row, label, path, kind, concept, unit, formula, refs — no period values). Default cap is 16 period columns and 80 rows per table; mapping evidence, questions, formula templates, and relations stay in JSON.
 
 ## Layout row kinds
 
@@ -42,7 +42,7 @@ Each body row gets `kind` and `section_path` from structure, not from label dict
 
 Weekly dates keep distinct `YYYY-MM-DD` keys. Grain `week` / `biweek` does not collapse them to months. Relative project-finance axes use keys `Y1` / `Q1` / `M1` / `P1` and grain `model_*`; they are not calendar keys.
 
-On a sheet, a short date pair that sits entirely left of the widest timeline is not a second block. Row labels are taken from a **span** of text columns left of the axis (not `min(col)`), so section headers in col 2 and articles in col 4 still become `abstract` + `fact`. Each `LayoutRow` may store its own `label_col` for provenance.
+On a sheet, a short date pair that sits entirely left of the widest timeline is not a second block. Row labels are taken from a **span** of text columns left of the axis (not `min(col)`), so section headers in col 2 and articles in col 4 still become `abstract` + `fact`. Each `LayoutRow` may store its own `label_col` for provenance. Columns between the label span and the period axis are role-tagged (`total` / `unit` / `value`). Sheets without an axis become `params` or are rejected as prose/nav — they do not inflate completeness.
 
 ## Mapping
 
