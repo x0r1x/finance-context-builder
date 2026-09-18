@@ -9,6 +9,7 @@ from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.graph import row_adjacency
 from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowRelation
 from finance_context.mapping.rules import is_noise_label
+from finance_context.context.timeline import annotate_block_periods, build_timeline
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
@@ -227,6 +228,13 @@ def build_context(
         warnings.append(
             f"Content completeness {len(inventory)}/{expected_rows} layout rows"
         )
+    timeline, timeline_warnings = build_timeline(
+        layout, cells, date1904=bool(workbook_meta.get("date1904"))
+    )
+    warnings.extend(timeline_warnings)
+    if timeline is not None:
+        for block in blocks:
+            block.periods = annotate_block_periods(block.periods, timeline)
     if mapping.questions:
         warnings.append(f"{len(mapping.questions)} row(s) need mapping review")
     if missing_cached:
@@ -266,6 +274,7 @@ def build_context(
         schema_version=SCHEMA_VERSION,
         meta=meta,
         workbook=workbook,
+        timeline=timeline,
         blocks=blocks,
         unmapped=unmapped,
         excluded=excluded,

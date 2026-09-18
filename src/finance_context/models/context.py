@@ -4,7 +4,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.2.0"
+SCHEMA_VERSION = "1.3.0"
+
+TimelinePhase = Literal["construction", "operation"]
 
 Confidence = Literal["high", "medium", "low"]
 MapMethod = Literal["rule", "embed", "llm", "unmapped", "structure"]
@@ -135,6 +137,21 @@ class InventoryRow(BaseModel):
     precedent_cells: list[RoleCell] = Field(default_factory=list)
 
 
+class ModelPeriod(BaseModel):
+    period_id: str
+    index: int
+    phase: TimelinePhase | None = None
+    phase_year: int | None = None
+    calendar_year: str | None = None
+    flags: dict[str, bool] = Field(default_factory=dict)
+
+
+class WorkbookTimeline(BaseModel):
+    grain: str | None = None
+    source_block_id: str | None = None
+    periods: list[ModelPeriod] = Field(default_factory=list)
+
+
 class FinancialBlock(BaseModel):
     block_id: str
     sheet: str
@@ -177,6 +194,7 @@ class ContextDocument(BaseModel):
     schema_version: str = SCHEMA_VERSION
     meta: ArtifactMeta
     workbook: WorkbookRaw
+    timeline: WorkbookTimeline | None = None
     blocks: list[FinancialBlock] = Field(default_factory=list)
     unmapped: list[MetricSeries] = Field(default_factory=list)
     excluded: list[MetricSeries] = Field(default_factory=list)

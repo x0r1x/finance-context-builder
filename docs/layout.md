@@ -14,6 +14,8 @@
 
 Относительная шапка (project finance) — лейбл `Year` / `Period` / `Month` / `Quarter` (и русские год/период/мес/кв) и справа непрерывный ряд целых `0|1, 2, 3, …` длиной ≥ 3. Ключи периодов: `Y1` / `Q1` / `M1` / `P1`. Роль колонки — `relative`. Grain: `model_year` / `model_quarter` / `model_month` / `model_period`. `apply_grain` календарные ключи не трогает.
 
+После `build_context` 0/1-флаги на master-оси (`model_*` блок с наибольшим числом flag-строк) собираются в `context.timeline`: `phase` construction/operation, `phase_year` внутри run, overlays (repayment, availability) только в `flags`. Календарная книга без таких флагов получает `calendar_year` и `phase=null`. Флаги по-прежнему excluded из маппинга.
+
 Если слова Year в строке нет, но справа ≥ 8 целых `0|1..n` **и** те же колонки совпадают с самым широким formula-copy run на листе (`formula_template` / R1C1), ось всё равно строится. Счётчик `Week #` под календарём на тех же колонках второй осью не становится.
 
 Кандидат отбрасывается, если у него меньше двух периодов (календарь) или меньше трёх (подписанная относительная ось).
