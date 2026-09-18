@@ -25,8 +25,8 @@
 | `ir/` | Шаблоны формул, AST, рёбра зависимостей |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `context.json` | Схема `1.2.0`: блоки с периодами или параметрами, `unmapped`, `excluded`, полный `inventory` |
-| `context.md` | Две метрики в шапке; таблицы периодов; `## Parameters / {sheet}`; `## Excluded`; row navigator без значений |
+| `context.json` | Схема `1.3.0`: `timeline` (фазы model year), блоки с периодами или параметрами, `unmapped`, `excluded`, полный `inventory` |
+| `context.md` | Две метрики в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}`; `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 
 Между джобами: `$DATA_DIR/glossary.json` (выученные high-confidence пары) и `taxonomy_embeddings.npz` (кэш эмбеддингов концептов).

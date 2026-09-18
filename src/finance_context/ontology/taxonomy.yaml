@@ -92,7 +92,7 @@ patterns:
           - {label_contains: [sources, drawdown, equity, interest, total uses, total sources,
               lifetime, turbine, capacity, inflation, cpi, escalation, mw, share premium,
               share capital, goodwill, balance b, balance c, brought forward, carried forward,
-              b/f, c/f, loan amount, full-wrap, due diligence]}
+              b/f, c/f, loan amount, full-wrap, due diligence, duration]}
           - {label_in: [debt]}
   - concept: pnl.opex
     score: 0.9
@@ -115,7 +115,8 @@ patterns:
       section_contains: [revenue]
       unless:
         label_contains: [traffic, volume, cost, tax, opex, price, other income, lifetime,
-          turbine, capacity, inflation, cpi, escalation, mw, uncertainty, hedge, duration]
+          turbine, capacity, inflation, cpi, escalation, mw, uncertainty, hedge, duration,
+          toll]
   - concept: pnl.da
     score: 0.9
     evidence: parent d and a section
@@ -186,12 +187,12 @@ patterns:
 concepts:
   - id: pnl.revenue
     labels: [Revenue, Revenues, Gross revenue, Gross revenues, Total revenue, Выручка, Sales, Sales revenue]
-    anti_labels: [leverage, ttm, covenant, dscr, duration]
+    anti_labels: [leverage, ttm, covenant, dscr, duration, toll]
   - id: pnl.volume
     labels: [Volume, Qty, Quantity, Объём, Traffic, TRAFFIC]
     facets: {unit: count}
   - id: pnl.price
-    labels: [Price, ASP, Цена]
+    labels: [Price, ASP, Цена, Toll Rate]
     anti_labels: [choice]
   - id: pnl.gmv
     labels: [GMV, Gross merchandise value]
@@ -478,7 +479,7 @@ concepts:
     labels: [Liquidity coverage]
     facets: {unit: ratio}
   - id: ops.lifetime
-    labels: [Operating lifetime, Lifetime, Project life]
+    labels: [Operating lifetime, Lifetime, Project life, Concession Duration, Operations Duration]
     facets: {unit: count}
   - id: ops.capacity
     labels: [Installed capacity, Capacity]
@@ -500,6 +501,10 @@ concepts:
   - id: ops.inflation
     labels: [Inflation, Inflation index, PPA escalation]
     facets: {unit: rate}
+  - id: ops.volume_growth
+    labels: [Traffic Evolution, Volume growth, Traffic growth]
+    aliases: [Traffic Evolution per year]
+    facets: {unit: rate}
   - id: val.coc
     labels: [Cost of capital, CoC]
     facets: {unit: rate}
@@ -512,7 +517,7 @@ concepts:
     labels: [Loan amount, Facility size, Facility amount]
     facets: {nature: balance}
   - id: debt.upfront_fee_rate
-    labels: [Up-front fee rate, Upfront fee rate]
+    labels: [Up-front fee rate, Upfront fee rate, Arrangement fee, Engagement fee]
     aliases: [Up-front fee, Debt up-front fee]
     facets: {unit: rate}
   - id: cf.debt_service
@@ -526,7 +531,7 @@ concepts:
     labels: [Share premium]
   - id: val.payout_ratio
     labels: [Dividend payout ratio, Payout ratio]
-    aliases: [Dividend payout ratio period 1, Dividend payout ratio period 2]
+    aliases: [Dividend payout ratio period 1, Dividend payout ratio period 2, Dividend distribution policy]
     facets: {unit: rate}
   - id: ops.uncertainty
     labels: [Uncertainty]
@@ -542,9 +547,16 @@ concepts:
     exact_labels: [Straight line depreciation]
     facets: {unit: count}
   - id: ops.construction_period
-    labels: [Development & Construction, Construction period]
+    labels: [Development & Construction, Construction period, Construction Duration]
+    aliases: [Construction Duration]
     exact_labels: [Development & Construction]
     facets: {unit: count}
   - id: ops.model_start
     labels: [Model start, Construction start, Model start / Construction start]
     exact_labels: [Model start / Construction start]
+  - id: debt.margin_rate
+    labels: [Fixed Rate Margin, Debt margin, Margin over]
+    facets: {unit: rate}
+  - id: debt.gearing
+    labels: [Gearing, Debt gearing]
+    facets: {unit: rate}

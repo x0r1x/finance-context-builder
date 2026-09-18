@@ -492,6 +492,9 @@ def test_unit_column_sets_value_kind() -> None:
     )
     by_label = {row.label: row for row in doc.rows}
     assert by_label["Tax Rate"].concept_id == "pnl.tax_rate"
+    assert by_label["Toll Rate"].concept_id == "pnl.price"
+    assert by_label["Concession Duration"].concept_id == "ops.lifetime"
+    assert by_label["Concession Duration"].article_role == "assumption"
 
 def test_income_tax_on_cfs_is_cash_tax_not_pnl() -> None:
     taxonomy = load_taxonomy()

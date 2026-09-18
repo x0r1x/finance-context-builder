@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from finance_context.mapping.eval import concept_coverage, content_completeness
-from finance_context.models.context import ContextDocument, FinancialBlock, InventoryRow, MetricSeries
+from finance_context.models.context import (
+    ContextDocument,
+    FinancialBlock,
+    InventoryRow,
+    MetricSeries,
+    WorkbookTimeline,
+)
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
 
@@ -25,6 +31,8 @@ def render_markdown(
         *_coverage_lines(doc),
         "",
     ]
+    if doc.timeline and doc.timeline.periods:
+        lines.extend(_timeline_section(doc.timeline))
     if doc.warnings:
         lines.extend(["## Warnings", ""])
         for warning in doc.warnings[:20]:
@@ -92,6 +100,37 @@ def _coverage_lines(doc: ContextDocument) -> list[str]:
         f"- Content completeness: {completeness:.2f} ({n}/{n} layout rows)",
         f"- Concept coverage: {coverage:.2f} ({mapped}/{n} annotatable)",
     ]
+
+
+def _timeline_section(timeline: WorkbookTimeline) -> list[str]:
+    rows = list(timeline.periods)
+    truncated = len(rows) > 16
+    if truncated:
+        rows = rows[:16]
+    lines = [
+        "## Timeline",
+        "",
+        (
+            f"Grain: `{timeline.grain or 'n/a'}`. "
+            f"Source: `{timeline.source_block_id or 'n/a'}`. "
+            f"Periods: {len(timeline.periods)}."
+        ),
+        "",
+        "| Period | Phase | Phase year | Calendar |",
+        "| --- | --- | --- | --- |",
+    ]
+    for item in rows:
+        lines.append(
+            "| "
+            f"{_cell(item.period_id)} | "
+            f"{_cell(item.phase or '')} | "
+            f"{item.phase_year if item.phase_year is not None else ''} | "
+            f"{_cell(item.calendar_year or '')} |"
+        )
+    if truncated:
+        lines.extend(["", "_Truncated in Markdown; full timeline remains in JSON._"])
+    lines.append("")
+    return lines
 
 
 def _unmapped_by_block(rows: list[MetricSeries]) -> dict[str, list[MetricSeries]]:

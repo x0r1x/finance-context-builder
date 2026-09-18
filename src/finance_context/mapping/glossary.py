@@ -57,7 +57,16 @@ def learn_from_rows(
     for row in rows:
         if not getattr(row, "concept_id", None):
             continue
+        if getattr(row, "kind", None) == "abstract":
+            continue
         if getattr(row, "source", None) not in {"glossary", "rule", "structure", "lexical"}:
+            continue
+        raw_label = str(getattr(row, "label", "") or "").strip()
+        if raw_label.isupper() and (
+            "ASSUMPTION" in raw_label
+            or raw_label.startswith("COSTS DURING")
+            or raw_label.startswith("PROJECT FINANCING")
+        ):
             continue
         if getattr(row, "confidence", None) != "high":
             continue

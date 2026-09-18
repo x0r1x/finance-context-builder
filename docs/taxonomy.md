@@ -87,13 +87,13 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 
 **Движение денег (`cf.*`)** — CFO, D&A add-back, capex, дивиденды, эмиссия, FCF, net CF (в т.ч. голый `Cash Flow`), CFADS, sources/uses, `cf.debt_service` (итог principal+interest; голое `Debt service` по-прежнему exact на `debt.scheduled_payment`); **поступления** `cf.receipts` и дети; **выплаты** `cf.disbursements` и дети; погашение и выборка; `cf.tax_paid`.
 
-**Долг (`debt.*`)** — scheduled PMT, commitment / up-front fee (деньги) и `debt.upfront_fee_rate` (ставка), `debt.facility_amount` (размер линии, не остаток), revolver limit, available credit, sculpting. Остатки долга — `bs.debt`, не `debt.*`. DSRA — `bs.dsra`.
+**Долг (`debt.*`)** — scheduled PMT, commitment / up-front fee (деньги) и `debt.upfront_fee_rate` (ставка, в т.ч. Arrangement/Engagement fee в % ), `debt.margin_rate`, `debt.gearing`, `debt.facility_amount` (размер линии, не остаток), revolver limit, available credit, sculpting. Остатки долга — `bs.debt`, не `debt.*`. DSRA — `bs.dsra`.
 
 **Ликвидность (`liq.*`)** — min cash, pre-revolver cash, cash headroom, trough cash / week, total liquidity, runway, daily burn, conversion / operating cash ratio / liquidity coverage.
 
 **Ковенанты (`cov.*`, `covenant.headroom`)** — факт DSCR / Average / Minimum DSCR по ряду (`cov.dscr`); порог `DSCR minimum` (`cov.dscr_limit`); LLCR, PLCR, leverage limit / headroom. Не путать с `liq.cash_headroom`.
 
-**Операции (`ops.*`)** — lifetime, capacity / MW, число турбин (`ops.asset_count`, не headcount), generation / MWh, availability, CPI, inflation / PPA escalation. Не мапить phasing 0.2/0.8 на финансовый id.
+**Операции (`ops.*`)** — lifetime (Concession / Operations Duration), construction period, capacity / MW, число турбин (`ops.asset_count`, не headcount), generation / MWh, availability, CPI, inflation / PPA escalation, `ops.volume_growth` (Traffic Evolution). Не мапить phasing 0.2/0.8 на финансовый id. PC/HV и revenue vs cost inflation — `hints.segment` / `hints.escalation`, не отдельные id.
 
 **Прочее** — `val.npv` / `irr` / `wacc` / `val.coc` (Cost of capital, если это не тот же WACC) / `val.fcfe_equity` / `val.total_investment`; `ops.headcount`; `fx.*` (курс и переоценки).
 

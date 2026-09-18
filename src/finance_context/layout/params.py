@@ -101,10 +101,10 @@ def unit_kind_from_text(text: str | None) -> str | None:
         return None
     if "%" in blob or blob in {"per year", "of margin"}:
         return "rate"
+    if any(token in blob for token in ("£", "$", "€", "₽")):
+        return "money"
     if any(token in blob for token in ("year", "month", "day", "veh", "mw", "count")):
         return "count"
-    if any(token in blob for token in ("£", "$", "€", "₽", "k£")):
-        return "money"
     if blob in {"text", "date"}:
         return None
     if _UNIT_TEXT.fullmatch(blob):
@@ -283,11 +283,22 @@ def _params_data_rows(
         if _is_number(label):
             continue
         tagged = _row_cells(cells, roles, label_col, date1904)
-        has_value = any(item.role in {"value", "scenario"} for item in tagged)
+        numeric_value = False
+        for item in tagged:
+            if item.role not in {"value", "scenario"}:
+                continue
+            cell = _cell_at(cells, item.col)
+            text = _text(cell, date1904) if cell else None
+            if cell and cell.get("formula_raw"):
+                numeric_value = True
+                break
+            if text and _is_number(text):
+                numeric_value = True
+                break
         check_row = bool(_CHECK.search(label)) or check_table
-        if _is_section_label(label, has_value):
+        if _is_section_label(label, numeric_value):
             kind = "abstract"
-        elif not has_value:
+        elif not numeric_value:
             if len(label) >= _PROSE_MIN:
                 continue
             kind = "abstract"

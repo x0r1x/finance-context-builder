@@ -7,12 +7,14 @@ from finance_context.models.context import (
     InventoryRow,
     MappingEvidence,
     MetricSeries,
+    ModelPeriod,
     NumericSummary,
     PeriodValue,
     RoleCell,
     RowHints,
     SourceRef,
     WorkbookRaw,
+    WorkbookTimeline,
 )
 
 __all__ = [
@@ -24,10 +26,12 @@ __all__ = [
     "InventoryRow",
     "MappingEvidence",
     "MetricSeries",
+    "ModelPeriod",
     "NumericSummary",
     "PeriodValue",
     "RoleCell",
     "RowHints",
     "SourceRef",
     "WorkbookRaw",
+    "WorkbookTimeline",
 ]

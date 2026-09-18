@@ -169,6 +169,13 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert ia, "Input Assumptions must appear in inventory"
         labels = {normalize_label(row.label): row for row in ia}
         assert "concession duration" in labels
+        assert labels["concession duration"].kind == "fact"
+        header = labels.get("traffic and revenue assumptions")
+        if header is not None:
+            assert header.kind == "abstract"
+        costs = labels.get("costs during construction")
+        if costs is not None:
+            assert costs.kind == "abstract"
         assert "tax rate" in labels
         assert labels["tax rate"].unit == "rate"
         assert labels["concession duration"].unit == "count"
@@ -197,6 +204,17 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
             None,
         )
         assert total is not None
+        assert ctx_doc.timeline is not None
+        by_id = {item.period_id: item for item in ctx_doc.timeline.periods}
+        assert by_id["Y1"].phase == "construction" and by_id["Y1"].phase_year == 1
+        assert by_id["Y4"].phase == "construction" and by_id["Y4"].phase_year == 4
+        assert by_id["Y5"].phase == "operation" and by_id["Y5"].phase_year == 1
+        construction = next(block for block in ctx_doc.blocks if block.sheet == "Construction")
+        y5 = next(item for item in construction.periods if item["period_key"] == "Y5")
+        assert y5["phase"] == "operation" and y5["phase_year"] == 1
+        flag_mapped = [row for row in doc.rows if row.exclusion_reason == "flag"]
+        assert flag_mapped
+        assert all(row.concept_id is None for row in flag_mapped)
     if not expectations:
         pytest.skip("gold expectations not filled yet")
     errors = []

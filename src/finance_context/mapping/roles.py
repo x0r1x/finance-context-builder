@@ -11,9 +11,16 @@ _ADJUST = re.compile(r"корректир|adjustment|plug")
 _ASSUME = re.compile(r"ставк|assumption|допущен|\brate\b")
 
 
-def article_role(row: LayoutRow, cell_templates: list[str | None]) -> ArticleRole:
+def article_role(
+    row: LayoutRow,
+    cell_templates: list[str | None],
+    *,
+    block_kind: str = "timeline",
+) -> ArticleRole:
     if row.check_row:
         return "check"
+    if block_kind == "params" and row.kind == "fact":
+        return "assumption"
     label = normalize_label(row.label)
     if _OUTPUT.search(label):
         return "output"

@@ -19,7 +19,9 @@
           "formula_fingerprint": null,
           "hidden": false,
           "hints": {
+            "escalation": null,
             "nature": null,
+            "segment": null,
             "statement": null,
             "time_semantics": null,
             "unit": null
@@ -114,13 +116,14 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.2.0",
+    "schema_version": "1.3.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.2.0",
+  "schema_version": "1.3.0",
+  "timeline": null,
   "unmapped": [],
   "warnings": [],
   "workbook": {
