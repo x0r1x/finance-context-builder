@@ -13,6 +13,7 @@ from finance_context.layout.models import (
     LayoutRow,
     SheetLayout,
 )
+from finance_context.layout.params import attach_stub_cells, detect_params_block
 from finance_context.layout.periods import (
     LAYER_BOUNDS,
     LAYER_DATE,
@@ -73,18 +74,27 @@ _FP_ENGINE = FormulaEngine(locale_hint="en")
 
 
 
-def detect_layout(cells: list[dict], *, date1904: bool = False) -> Layout:
+def detect_layout(
+    cells: list[dict], *, date1904: bool = False, edges: list[dict] | None = None
+) -> Layout:
     by_sheet: dict[str, list[dict]] = {}
     for cell in cells:
         by_sheet.setdefault(cell["sheet"], []).append(cell)
     sheets = [
-        SheetLayout(name=name, blocks=_blocks_for_sheet(name, sheet_cells, date1904))
+        SheetLayout(
+            name=name, blocks=_blocks_for_sheet(name, sheet_cells, date1904, edges)
+        )
         for name, sheet_cells in by_sheet.items()
     ]
     return Layout(sheets=sheets)
 
 
-def _blocks_for_sheet(sheet: str, cells: list[dict], date1904: bool) -> list[Block]:
+def _blocks_for_sheet(
+    sheet: str,
+    cells: list[dict],
+    date1904: bool,
+    edges: list[dict] | None = None,
+) -> list[Block]:
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
         by_row[int(cell["row"])].append(cell)
@@ -109,8 +119,13 @@ def _blocks_for_sheet(sheet: str, cells: list[dict], date1904: bool) -> list[Blo
                 label_col=label_col,
                 axis=axis,
                 rows=data_rows,
+                kind="timeline",
             )
         )
+    if not blocks:
+        extra = detect_params_block(sheet, by_row, date1904, edges)
+        if extra is not None:
+            blocks.append(extra)
     return blocks
 
 
@@ -792,6 +807,13 @@ def _data_rows(
             kind=kind,
             section_path=section_path,
             label_col=int(label_cell["col"]),
+        )
+        attach_stub_cells(
+            item,
+            by_row[row_n],
+            label_span=label_span,
+            period_cols=period_cols,
+            date1904=date1904,
         )
         out.append(item)
         if kind == "abstract":

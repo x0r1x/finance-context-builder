@@ -122,6 +122,10 @@ def _block_section(
         ),
         "",
     ]
+    if getattr(block, "kind", "timeline") == "params":
+        lines[0] = f"## Parameters / {block.sheet}"
+        lines.extend(_params_table(block, unmapped=unmapped, max_rows=max_rows))
+        return lines
     if not headers:
         return lines
     truncated = (max_columns > 0 and len(block.periods) > max_columns) or (
@@ -136,6 +140,58 @@ def _block_section(
     if truncated:
         lines.append("_Truncated in Markdown; full series remain in JSON._")
         lines.append("")
+    return lines
+
+
+def _params_table(
+    block: FinancialBlock,
+    *,
+    unmapped: list[MetricSeries],
+    max_rows: int,
+) -> list[str]:
+    rows = [*block.metrics, *unmapped]
+    if not rows:
+        return []
+    lines = [
+        "| Label | Unit | Value | Scenarios | Concept | Ref |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for series in rows[:max_rows]:
+        unit = next((c.cached_value for c in series.cells if c.role == "unit"), "") or (
+            series.unit or series.hints.unit or ""
+        )
+        value = next(
+            (c.cached_value for c in series.cells if c.role == "value"),
+            None,
+        )
+        if value is None:
+            value_period = next((v for v in series.values if v.role == "value"), None)
+            if value_period is None and series.values:
+                value_period = series.values[0]
+            value = None if value_period is None else value_period.cached_value
+        scenarios = [
+            f"{c.role}:{_format_value(c.cached_value)}"
+            for c in series.cells
+            if c.role == "scenario" and c.cached_value not in (None, "")
+        ][:4]
+        concept = series.concept_id or "unknown"
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _cell(series.label),
+                    _cell(unit),
+                    _cell(_format_value(value)),
+                    _cell(" ".join(scenarios)),
+                    _cell(concept),
+                    _cell(series.source.cell_ref),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    if len(rows) > max_rows:
+        lines.extend(["_Truncated in Markdown; full series remain in JSON._", ""])
     return lines
 
 

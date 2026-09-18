@@ -107,6 +107,7 @@ def test_normalize_keeps_qualifiers_and_unclosed_parens() -> None:
     assert normalize_label("Payroll (lumpy") == "payroll lumpy"
     assert normalize_label("Marketing (fixed") == "marketing fixed"
     assert normalize_label("IT & Telecom") == "it and telecom"
+    assert normalize_label("Total Cash in/Cash out") == "total cash in cash out"
 
 
 def test_glossary_exact_beats_knn() -> None:

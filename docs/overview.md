@@ -25,7 +25,7 @@
 | `ir/` | Шаблоны формул, AST, рёбра зависимостей |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `context.json` | Схема `1.1.0`: блоки с периодами, `unmapped`, `excluded`, полный `inventory` |
+| `context.json` | Схема `1.2.0`: блоки с периодами или параметрами, `unmapped`, `excluded`, полный `inventory` |
 | `context.md` | Две метрики в шапке; таблицы периодов; `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 

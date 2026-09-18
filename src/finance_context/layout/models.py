@@ -4,8 +4,20 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ColumnRole = Literal["historical", "forecast", "stub", "scenario", "total", "relative"]
+ColumnRole = Literal[
+    "historical",
+    "forecast",
+    "stub",
+    "scenario",
+    "total",
+    "relative",
+    "label",
+    "value",
+    "unit",
+    "note",
+]
 RowKind = Literal["fact", "abstract", "index", "helper", "flag"]
+BlockKind = Literal["timeline", "params"]
 
 
 class PeriodHit(BaseModel):
@@ -27,6 +39,11 @@ class Axis(BaseModel):
     headers: list[AxisHeader]
 
 
+class RowCell(BaseModel):
+    col: int
+    role: ColumnRole
+
+
 class LayoutRow(BaseModel):
     row: int
     label: str
@@ -37,6 +54,7 @@ class LayoutRow(BaseModel):
     kind: RowKind = "fact"
     section_path: list[str] = Field(default_factory=list)
     label_col: int | None = None
+    cells: list[RowCell] = Field(default_factory=list)
 
 
 class Block(BaseModel):
@@ -44,6 +62,7 @@ class Block(BaseModel):
     label_col: int
     axis: Axis
     rows: list[LayoutRow]
+    kind: BlockKind = "timeline"
 
 
 class SheetLayout(BaseModel):

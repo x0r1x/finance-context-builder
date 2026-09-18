@@ -145,7 +145,7 @@ patterns:
     when:
       any:
         - {label_contains: [equity injected, injected]}
-        - {label_in: [equity], section_contains: [sources, construction, irr, ratios]}
+        - {label_tokens: [equity], section_contains: [sources, construction, irr, ratios]}
       unless:
         any:
           - {section_contains: [balance]}
@@ -154,9 +154,29 @@ patterns:
     when:
       any:
         - {label_contains: [equity injected, injected]}
-        - {label_in: [equity], section_contains: [sources, construction, irr, ratios]}
+        - {label_tokens: [equity], section_contains: [sources, construction, irr, ratios]}
       unless:
         section_contains: [balance]
+  - skip_concept: cf.receipts
+    when:
+      label_contains: [cash in]
+      any:
+        - {label_contains: [cash out]}
+        - {label_contains: [in cash out]}
+  - skip_concept: cf.disbursements
+    when:
+      label_contains: [cash in]
+      any:
+        - {label_contains: [cash out]}
+  - concept: cf.equity_cashflow
+    score: 0.94
+    evidence: signed equity irr cash line
+    when:
+      any:
+        - {label_contains: [total cash in cash out, cash in cash out, cash flow to equity, equity cash flow]}
+        - {label_contains: [total cash], section_contains: [equity irr, irr]}
+      unless:
+        label_contains: [available, fcfe, ratio]
   - skip_concept: bs.equity
     when:
       section_contains: [funding]
@@ -265,6 +285,11 @@ concepts:
   - id: cf.fcf
     labels: [FCF, FCFE, Free cash flow, Net CF before financing, CF before financing, Cash flow available for equity, Cashflow available for equity, Cashflow available for dividend]
     anti_labels: [ratio, fcfe to, fcfe /]
+  - id: cf.equity_cashflow
+    labels: [Cash flow to equity, Equity cash flow, Total Cash in/Cash out]
+    aliases: [Total Cash in Cash out]
+    facets: {statement: cf, nature: flow, unit: money}
+    anti_labels: [available, fcfe, ratio]
   - id: cf.net
     labels: [Net cash flow, Net CF, Cumulative net flow, Cumulative Net Flow]
   - id: cf.receipts

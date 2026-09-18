@@ -41,6 +41,7 @@ def normalize_label(label: str | None) -> str:
         return ""
     text = str(label)
     text = text.replace("&", " and ").replace("−", " ").replace("–", " ").replace("+", " ")
+    text = text.replace("/", " ")
     extras: list[str] = []
     for match in _PARENS.finditer(text):
         extras.extend(_paren_tokens(match.group(0)))

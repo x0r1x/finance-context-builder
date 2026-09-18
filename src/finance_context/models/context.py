@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.2.0"
 
 Confidence = Literal["high", "medium", "low"]
 MapMethod = Literal["rule", "embed", "llm", "unmapped", "structure"]
@@ -68,6 +68,15 @@ class RowHints(BaseModel):
     unit: str | None = None
 
 
+class RoleCell(BaseModel):
+    addr: str
+    col: int
+    role: str
+    cached_value: str | None = None
+    formula: str | None = None
+    formula_template: str | None = None
+
+
 class MetricSeries(BaseModel):
     row_key: str
     label: str
@@ -93,6 +102,8 @@ class MetricSeries(BaseModel):
     dependents_rows: list[str] = Field(default_factory=list)
     candidates: list[CandidateHit] = Field(default_factory=list)
     hints: RowHints = Field(default_factory=RowHints)
+    cells: list[RoleCell] = Field(default_factory=list)
+    precedent_cells: list[RoleCell] = Field(default_factory=list)
 
 
 class InventoryRow(BaseModel):
@@ -118,6 +129,8 @@ class InventoryRow(BaseModel):
     dependents_rows: list[str] = Field(default_factory=list)
     candidates: list[CandidateHit] = Field(default_factory=list)
     hints: RowHints = Field(default_factory=RowHints)
+    cells: list[RoleCell] = Field(default_factory=list)
+    precedent_cells: list[RoleCell] = Field(default_factory=list)
 
 
 class FinancialBlock(BaseModel):
@@ -125,6 +138,7 @@ class FinancialBlock(BaseModel):
     sheet: str
     label_col: int
     grain: str | None = None
+    kind: str = "timeline"
     periods: list[dict[str, Any]] = Field(default_factory=list)
     metrics: list[MetricSeries] = Field(default_factory=list)
     relations: list[dict[str, Any]] = Field(default_factory=list)

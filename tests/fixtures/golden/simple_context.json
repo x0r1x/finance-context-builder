@@ -3,11 +3,13 @@
     {
       "block_id": "CF!r1",
       "grain": "year",
+      "kind": "timeline",
       "label_col": 1,
       "metrics": [
         {
           "article_role": "database_like",
           "candidates": [],
+          "cells": [],
           "check_row": false,
           "concept_id": "bs.cash",
           "dependents_rows": [],
@@ -39,6 +41,7 @@
           "neighbors": [],
           "numeric_summary": null,
           "parent_label": null,
+          "precedent_cells": [],
           "precedents_rows": [],
           "row_key": "CF|2|CF!r1",
           "source": {
@@ -111,13 +114,13 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.1.0",
+    "schema_version": "1.2.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.1.0",
+  "schema_version": "1.2.0",
   "unmapped": [],
   "warnings": [],
   "workbook": {

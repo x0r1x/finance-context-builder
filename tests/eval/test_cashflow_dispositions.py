@@ -62,6 +62,14 @@ def test_cashflow_unmapped_rows_follow_gold_dispositions(tmp_path: Path) -> None
     relevant = [row for row in doc.rows if normalize_label(row.label) in expected_labels]
     errors = []
     for row in relevant:
+        if row.sheet.casefold() in {
+            "assumptions",
+            "cover",
+            "disclaimer",
+            "checks",
+            "sensitivity",
+        }:
+            continue
         exp = _match_expectation(row, gold)
         if exp is None:
             continue

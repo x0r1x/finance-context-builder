@@ -119,7 +119,7 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 - `cf.receipts.product` → `cf.receipts`
 - `cf.disbursements.payroll` → `cf.disbursements`
 
-Structure на `SUM` ищет общий id детей, общий `broader` или объявленный `calculations` parent — и только когда **все** fact-члены диапазона уже замаплены. Частичный SUM не копирует единственного ребёнка на родителя. Итог поступлений не должен стать `cf.net`. Net объявлен как разность inflows−outflows в yaml. Несовпадение с наблюдённым SUM снижает score и обычно даёт `calculation_conflict`; keep-rule оставляет exact `Cash Flow` под IRR.
+Structure на `SUM` ищет общий id детей, общий `broader` или объявленный `calculations` parent — и только когда **все** fact-члены диапазона уже замаплены. Частичный SUM не копирует единственного ребёнка на родителя. Итог поступлений не должен стать `cf.net`. Знакопеременный equity IRR (`Total Cash in/Cash out`) — отдельный `cf.equity_cashflow`, не alias к `cf.receipts` / `cf.fcf`. Net объявлен как разность inflows−outflows в yaml. Несовпадение с наблюдённым SUM снижает score и обычно даёт `calculation_conflict`; keep-rule оставляет exact `Cash Flow` под IRR.
 
 ## `facets.unit` (`value_kind`)
 

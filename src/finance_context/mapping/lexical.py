@@ -51,7 +51,7 @@ class LexicalSignal:
             )
         for phrase, concept_id, size in self.phrases:
             concept = self.concepts.get(concept_id)
-            if concept is None or concept_id in skipped or _blocked_by_anti(n, concept):
+            if concept is None or concept_id in skipped or _blocked_by_anti(n, concept, ctx.label):
                 continue
             if concept.section_hints and not _hint_hit(ctx, extra, concept.section_hints):
                 continue
@@ -69,10 +69,18 @@ class LexicalSignal:
         return list(hits.values())
 
 
-def _blocked_by_anti(label: str, concept: Concept) -> bool:
-    return any(
-        normalize_label(anti) and normalize_label(anti) in label for anti in concept.anti_labels
-    )
+def _blocked_by_anti(label: str, concept: Concept, raw: str | None = None) -> bool:
+    raw_fold = (raw or "").casefold()
+    for anti in concept.anti_labels:
+        if "/" in str(anti):
+            compact = str(anti).replace(" ", "").casefold()
+            if compact and compact in raw_fold.replace(" ", ""):
+                return True
+            continue
+        n_anti = normalize_label(anti)
+        if n_anti and n_anti in label:
+            return True
+    return False
 
 
 def _hint_hit(ctx: RowContext, extra: set[str], hints: list[str]) -> bool:

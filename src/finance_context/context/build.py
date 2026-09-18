@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections import Counter
 
-from finance_context.excel.a1 import format_addr
+from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.layout.models import Layout, LayoutRow
+from finance_context.layout.params import unit_kind_from_text
 from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.graph import row_adjacency
 from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowRelation
@@ -19,6 +20,7 @@ from finance_context.models.context import (
     MetricSeries,
     NumericSummary,
     PeriodValue,
+    RoleCell,
     RowHints,
     SourceRef,
     WorkbookRaw,
@@ -35,6 +37,14 @@ _METHOD: dict[MapSource, str] = {
 }
 
 _SERIES_KINDS = {"fact", "flag", "helper"}
+_SERIES_ROLES = {
+    "historical",
+    "forecast",
+    "stub",
+    "relative",
+    "value",
+    "scenario",
+}
 
 
 def build_context(
@@ -75,6 +85,10 @@ def build_context(
     for sheet in layout.sheets:
         for block in sheet.blocks:
             grain = infer_grain([h.period_key for h in block.axis.headers])
+            value_headers = [h for h in block.axis.headers if h.role in _SERIES_ROLES]
+            if getattr(block, "kind", "timeline") == "params":
+                grain = None
+                value_headers = [h for h in block.axis.headers if h.role in {"value", "scenario"}]
             periods = [
                 {
                     "col": header.col,
@@ -82,7 +96,7 @@ def build_context(
                     "role": header.role,
                     "period_key": header.period_key,
                 }
-                for header in block.axis.headers
+                for header in value_headers
             ]
             metrics: list[MetricSeries] = []
             parent_by_row = {r.row: r.label for r in block.rows}
@@ -100,13 +114,33 @@ def build_context(
                 fingerprint, exceptions, summary = _row_formula_and_numbers(
                     sheet_name=sheet.name,
                     row_num=layout_row.row,
-                    headers=block.axis.headers,
+                    headers=value_headers,
                     by_addr=by_addr,
                 )
                 loc = (sheet.name, layout_row.row)
-                hints = _hints_for(mapped, layout_row)
-                series_unit = None
+                role_cells = _role_cells(
+                    sheet.name, layout_row, by_addr, bool(workbook_meta.get("date1904"))
+                )
+                unit_text = next(
+                    (
+                        item.cached_value
+                        for item in role_cells
+                        if item.role == "unit" and item.cached_value
+                    ),
+                    None,
+                )
+                hints = _hints_for(mapped, layout_row, unit_text)
+                series_unit = unit_kind_from_text(unit_text)
                 candidates = _candidates_for(mapped)
+                known_cols = {item.col for item in role_cells} | {h.col for h in value_headers}
+                extra_precs = _precedent_cells(
+                    sheet.name,
+                    layout_row.row,
+                    edges or [],
+                    by_addr,
+                    known_cols,
+                    bool(workbook_meta.get("date1904")),
+                )
                 if layout_row.kind in _SERIES_KINDS and not (
                     layout_row.kind == "fact" and is_noise_label(layout_row.label)
                 ):
@@ -117,7 +151,7 @@ def build_context(
                         layout_row=layout_row,
                         layout_row_parent=parent,
                         mapped=mapped,
-                        headers=block.axis.headers,
+                        headers=value_headers,
                         by_addr=by_addr,
                         date1904=bool(workbook_meta.get("date1904")),
                         label_path=label_path,
@@ -129,8 +163,10 @@ def build_context(
                         dependents_rows=list(dependents.get(loc, [])),
                         candidates=candidates,
                         hints=hints,
+                        role_cells=role_cells,
+                        precedent_cells=extra_precs,
                     )
-                    series_unit = series.unit
+                    series_unit = series_unit or series.unit
                     if mapped is not None and mapped.disposition == "excluded":
                         excluded.append(series)
                     elif mapped is None or mapped.concept_id is None:
@@ -169,6 +205,8 @@ def build_context(
                         dependents_rows=list(dependents.get(loc, [])),
                         candidates=candidates,
                         hints=hints,
+                        cells=role_cells,
+                        precedent_cells=extra_precs,
                     )
                 )
             blocks.append(
@@ -177,6 +215,7 @@ def build_context(
                     sheet=sheet.name,
                     label_col=block.label_col,
                     grain=grain,
+                    kind=getattr(block, "kind", "timeline"),
                     periods=periods,
                     metrics=metrics,
                     relations=_relations_for_block(mapping.relations, block.block_id),
@@ -255,6 +294,8 @@ def _series_for_row(
     dependents_rows: list[str],
     candidates: list[CandidateHit],
     hints: RowHints,
+    role_cells: list[RoleCell],
+    precedent_cells: list[RoleCell],
 ) -> MetricSeries:
     row_num = layout_row.row
     label_addr = format_addr(label_col, row_num)
@@ -298,7 +339,10 @@ def _series_for_row(
                 missing_cached_value=bool(formula) and cached in (None, ""),
             )
         )
-    unit = _unit_from_values(values)
+    unit_from_cell = unit_kind_from_text(
+        next((item.cached_value for item in role_cells if item.role == "unit"), None)
+    )
+    unit = unit_from_cell or _unit_from_values(values)
     if hints.unit is None:
         hints = hints.model_copy(update={"unit": unit})
     return MetricSeries(
@@ -326,6 +370,8 @@ def _series_for_row(
         dependents_rows=dependents_rows,
         candidates=candidates,
         hints=hints,
+        cells=role_cells,
+        precedent_cells=precedent_cells,
     )
 
 
@@ -373,13 +419,16 @@ def _candidates_for(mapped: MappedRow | None) -> list[CandidateHit]:
     return hits
 
 
-def _hints_for(mapped: MappedRow | None, layout_row: LayoutRow) -> RowHints:
+def _hints_for(
+    mapped: MappedRow | None, layout_row: LayoutRow, unit_text: str | None = None
+) -> RowHints:
     concept_id = mapped.concept_id if mapped else None
     statement = concept_id.split(".", 1)[0] if concept_id else None
     label = (layout_row.label or "").casefold()
     tokens = set(label.replace("/", " ").replace("-", " ").split())
     nature = None
     time_semantics = None
+    unit = unit_kind_from_text(unit_text)
     if tokens & {"opening", "closing", "balance", "beg", "ending"}:
         nature = "balance"
     if "opening" in tokens or "b/f" in label or "brought forward" in label:
@@ -388,7 +437,7 @@ def _hints_for(mapped: MappedRow | None, layout_row: LayoutRow) -> RowHints:
     elif "closing" in tokens or "c/f" in label or "carried forward" in label:
         time_semantics = "eop"
         nature = "balance"
-    elif any(token in tokens for token in ("rate", "ratio", "%")):
+    elif unit == "rate" or any(token in tokens for token in ("rate", "ratio", "%")):
         time_semantics = "rate"
     elif layout_row.kind == "fact":
         time_semantics = "flow"
@@ -396,7 +445,9 @@ def _hints_for(mapped: MappedRow | None, layout_row: LayoutRow) -> RowHints:
         nature = nature or "balance"
     elif statement in {"pnl", "cf"}:
         nature = nature or "flow"
-    return RowHints(nature=nature, time_semantics=time_semantics, statement=statement)
+    return RowHints(
+        nature=nature, time_semantics=time_semantics, statement=statement, unit=unit
+    )
 
 
 def _row_formula_and_numbers(
@@ -454,3 +505,99 @@ def _row_formula_and_numbers(
 def inventory_completeness(layout: Layout, inventory: list[InventoryRow]) -> bool:
     expected = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
     return len(inventory) == expected
+
+
+def _role_cells(
+    sheet: str,
+    layout_row: LayoutRow,
+    by_addr: dict[tuple[str, int, int], dict],
+    date1904: bool,
+) -> list[RoleCell]:
+    out: list[RoleCell] = []
+    for item in layout_row.cells:
+        cell = by_addr.get((sheet, layout_row.row, item.col))
+        cached = None if cell is None else cell.get("cached_value")
+        fmt = None if cell is None else cell.get("number_format")
+        displayed = display_cell_text(
+            cached if cached is not None else None, fmt, date1904=date1904
+        )
+        out.append(
+            RoleCell(
+                addr=format_addr(item.col, layout_row.row),
+                col=item.col,
+                role=item.role,
+                cached_value=displayed if displayed is not None else cached,
+                formula=None if cell is None else cell.get("formula_raw"),
+                formula_template=None if cell is None else cell.get("formula_template"),
+            )
+        )
+    return out
+
+
+def _precedent_cells(
+    sheet: str,
+    row: int,
+    edges: list[dict],
+    by_addr: dict[tuple[str, int, int], dict],
+    known_cols: set[int],
+    date1904: bool,
+    *,
+    limit: int = 8,
+) -> list[RoleCell]:
+    out: list[RoleCell] = []
+    seen: set[tuple[str, int, int]] = set()
+    needle = f"{sheet}!{row}"
+    for edge in edges:
+        source = str(edge.get("source") or "")
+        target = str(edge.get("target") or "")
+        if not _ref_on_row(source, sheet, row) and needle not in source.replace("$", ""):
+            continue
+        parsed = _parse_sheet_addr(target)
+        if parsed is None:
+            continue
+        tgt_sheet, col, tgt_row = parsed
+        if (tgt_sheet, tgt_row, col) in seen:
+            continue
+        if tgt_sheet == sheet and tgt_row == row and col in known_cols:
+            continue
+        cell = by_addr.get((tgt_sheet, tgt_row, col))
+        cached = None if cell is None else cell.get("cached_value")
+        fmt = None if cell is None else cell.get("number_format")
+        displayed = display_cell_text(
+            cached if cached is not None else None, fmt, date1904=date1904
+        )
+        seen.add((tgt_sheet, tgt_row, col))
+        out.append(
+            RoleCell(
+                addr=f"{tgt_sheet}!{format_addr(col, tgt_row)}",
+                col=col,
+                role="value",
+                cached_value=displayed if displayed is not None else cached,
+                formula=None if cell is None else cell.get("formula_raw"),
+                formula_template=None if cell is None else cell.get("formula_template"),
+            )
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _ref_on_row(ref: str, sheet: str, row: int) -> bool:
+    parsed = _parse_sheet_addr(ref)
+    if parsed is None:
+        return False
+    ref_sheet, _col, ref_row = parsed
+    return ref_sheet == sheet and ref_row == row
+
+
+def _parse_sheet_addr(ref: str) -> tuple[str, int, int] | None:
+    if "!" not in ref:
+        return None
+    sheet, addr = ref.rsplit("!", 1)
+    sheet = sheet.strip().strip("'").replace("''", "'")
+    addr = addr.split(":")[0].replace("$", "")
+    try:
+        col, row = parse_addr(addr)
+    except ValueError:
+        return None
+    return sheet, col, row

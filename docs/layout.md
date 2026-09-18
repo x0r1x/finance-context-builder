@@ -1,8 +1,8 @@
 # Layout
 
-Стадия `layout` режет книгу на блоки с осью периодов и строками тела. Без fact-строк маппинг не вызывается: джоб может закончиться `succeeded` с пустым контекстом.
+Стадия `layout` режет книгу на блоки с осью периодов и строками тела. Без fact-строк маппинг не вызывается: джоб может закончиться `succeeded` с пустым контекстом. Если оси нет, классификатор шейпа собирает `params`-блок (подпись + колонка значений) или отбрасывает прозу и навигацию — они не входят в знаменатель completeness.
 
-Код: `src/finance_context/layout/` (`detect.py`, `periods.py`) и разбор ссылок в `src/finance_context/formulas/engine.py`.
+Код: `src/finance_context/layout/` (`detect.py`, `periods.py`, `params.py`) и разбор ссылок в `src/finance_context/formulas/engine.py`.
 
 Связанные документы: [обзор](overview.md), [маппинг](mapping.md), [архитектура](architecture.md).
 
