@@ -23,7 +23,7 @@ Excluded (check / helper / flag / technical) в `unmapped.json` не входя�
 
 ## Цикл правки
 
-1. Прогнать книгу (`uv run finance-context build …` или `bash scripts/run.sh path/to/model.xlsx` при живом `serve`).
+1. Прогнать книгу (`uv run finance-context build …` или `bash scripts/run.sh path/to/model.xlsx` при живом `serve`). `run.sh` кладёт в `out/<run>/` ещё `graph.json` и `graph-trace.json`.
 2. Открыть `unmapped.json` и ту же строку в `inventory` / navigator: `label`, `parent_label`, `label_path`, `neighbors`, `candidates`, `hints`, `sheet`, `ref`, `disposition`, `exclusion_reason`, `article_role`, `cells`, `unit`. Формулы и влияние на CFS — `GET .../graph/trace` ([graph.md](graph.md)).
 3. Для каждой строки решить класс:
 

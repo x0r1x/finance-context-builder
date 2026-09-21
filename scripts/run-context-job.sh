@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Upload a workbook, poll the job, download context.json and context.md into OUT_DIR.
+# Upload a workbook, poll the job, download context.json, graph.json, context.md,
+# and a smoke graph/trace into OUT_DIR.
 # Usage: run-context-job.sh [path/to/model.xlsx]
 # Env: BASE_URL, OUT_DIR, RUN_DIR, JOB_TIMEOUT_SEC
 
@@ -33,16 +34,33 @@ if [[ "$job_status" == "failed" ]]; then
   exit 1
 fi
 
-code="$(http_get "/v1/context-jobs/${job_id}/context.json" "$RUN_DIR/context.json")"
-if [[ "$code" != "200" ]]; then
-  echo "context.json expected HTTP 200, got ${code}" >&2
+graph_url="$(json_field "$RUN_DIR/job-status.json" graph_json_url)"
+if [[ "$graph_url" != "/v1/context-jobs/${job_id}/graph.json" ]]; then
+  echo "job status missing graph_json_url for ${job_id}" >&2
   exit 1
 fi
 
-code="$(http_get "/v1/context-jobs/${job_id}/context.md" "$RUN_DIR/context.md")"
-if [[ "$code" != "200" ]]; then
-  echo "context.md expected HTTP 200, got ${code}" >&2
-  exit 1
+require_get "/v1/context-jobs/${job_id}/context.json" "$RUN_DIR/context.json"
+require_get "/v1/context-jobs/${job_id}/graph.json" "$RUN_DIR/graph.json"
+require_get "/v1/context-jobs/${job_id}/context.md" "$RUN_DIR/context.md"
+
+origin="$(
+  python3 "$_COMMON_DIR/check-graph.py" \
+    "$RUN_DIR/context.json" \
+    "$RUN_DIR/graph.json" \
+    --print-origin
+)"
+if [[ -n "$origin" ]]; then
+  encoded="$(urlencode "$origin")"
+  require_get \
+    "/v1/context-jobs/${job_id}/graph/trace?from=${encoded}&direction=precedents&depth=6" \
+    "$RUN_DIR/graph-trace.json"
+  python3 "$_COMMON_DIR/check-graph.py" \
+    --trace "$RUN_DIR/graph-trace.json" \
+    --origin "$origin"
+  log_summary "graph_trace_from=${origin}"
+else
+  log_summary "graph_trace skipped (no formula cell, concept_id, or row_key)"
 fi
 
 echo "OK  job ${job_id} (${job_status})  wrote ${RUN_DIR}"

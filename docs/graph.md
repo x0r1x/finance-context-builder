@@ -36,9 +36,11 @@ SCC на cell-edges (без unresolved/dangling):
 
 ## Трассировка
 
-CLI пишет `graph.json` рядом с `context.json`. HTTP:
+CLI пишет `graph.json` рядом с `context.json`. HTTP и `scripts/run.sh` (при живом `serve`) тоже: `run-context-job.sh` качает sidecar, `scripts/check-graph.py` проверяет, что отчёт не дублирует граф.
 
 ```bash
+bash scripts/run.sh path/to/model.xlsx
+# out/<timestamp>/graph.json and graph-trace.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.json"
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph/trace?from=P%26L!C13&direction=precedents&depth=8"
 ```

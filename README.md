@@ -133,7 +133,7 @@ uv run pytest
 uv run ruff check src tests
 ```
 
-With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes HTTP bodies under `out/<timestamp>/` (`healthz.json`, `readyz.json`, `post-job.json`, `job-status.json`, `context.json`, `context.md`) plus extracted `unmapped.json`. Graph artifacts stay on the job in `$DATA_DIR/jobs/{id}/` (`graph.json`, `ir/cell_edges.parquet`). The script exiting with `OK` means the client finished; the server should still be listening on 8080.
+With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes HTTP bodies under `out/<timestamp>/` (`healthz.json`, `readyz.json`, `post-job.json`, `job-status.json`, `context.json`, `graph.json`, `graph-trace.json`, `context.md`) plus extracted `unmapped.json`. The client checks that `context.json` does not embed row-graph fields and that `graph.json` is stats-only, then smokes `GET .../graph/trace`. The script exiting with `OK` means the client finished; the server should still be listening on 8080.
 
 ```bash
 bash scripts/run.sh path/to/model.xlsx

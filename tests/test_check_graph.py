@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check-graph.py"
+
+
+def _run(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _write(path: Path, payload: dict) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _ok_graph(**overrides: object) -> dict:
+    body: dict = {
+        "schema_version": "1.0.0",
+        "job_id": "job-1",
+        "nodes": 3,
+        "edges": 2,
+        "artifacts": {
+            "cells": "ir/cells.parquet",
+            "edges": "ir/edges.parquet",
+            "cell_edges": "ir/cell_edges.parquet",
+            "index": "ir/graph_index.parquet",
+        },
+    }
+    body.update(overrides)
+    return body
+
+
+def _ok_context(**overrides: object) -> dict:
+    body: dict = {
+        "schema_version": "1.4.0",
+        "graph": {
+            "artifact": "graph.json",
+            "nodes": 3,
+            "edges": 2,
+        },
+        "blocks": [
+            {
+                "metrics": [
+                    {
+                        "concept_id": "pnl.ebitda",
+                        "row_key": "P&L|13",
+                        "values": [
+                            {
+                                "has_formula": True,
+                                "source": {"sheet": "P&L", "addr": "C13"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ],
+        "inventory": [{"row_key": "P&L|13", "concept_id": "pnl.ebitda"}],
+    }
+    body.update(overrides)
+    return body
+
+
+def test_accepts_sidecar_and_prints_formula_cell_origin(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+
+    result = _run(str(context), str(graph), "--print-origin")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "P&L!C13"
+
+
+def test_rejects_row_graph_fields_in_context(tmp_path: Path) -> None:
+    context = _write(
+        tmp_path / "context.json",
+        _ok_context(
+            inventory=[
+                {
+                    "row_key": "P&L|13",
+                    "precedents_rows": ["P&L|9"],
+                }
+            ]
+        ),
+    )
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "precedents_rows" in result.stderr
+
+
+def test_rejects_count_mismatch_and_formula_in_graph(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(
+        tmp_path / "graph.json",
+        _ok_graph(nodes=99, formula_ast={"op": "+"}),
+    )
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "nodes=" in result.stderr
+    assert "formula_ast" in result.stderr
+
+
+def test_validates_trace_origin(tmp_path: Path) -> None:
+    trace = _write(
+        tmp_path / "graph-trace.json",
+        {"origin": "P&L!C13", "nodes": [], "edges": []},
+    )
+
+    ok = _run("--trace", str(trace), "--origin", "P&L!C13")
+    bad = _run("--trace", str(trace), "--origin", "other")
+
+    assert ok.returncode == 0, ok.stderr
+    assert bad.returncode == 1
+    assert "trace origin" in bad.stderr
