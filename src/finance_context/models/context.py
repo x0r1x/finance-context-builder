@@ -171,6 +171,7 @@ class WorkbookRaw(BaseModel):
     locale_hint: str | None = None
     date1904: bool = False
     defined_names: list[dict[str, Any]] = Field(default_factory=list)
+    iterate: bool = False
     formula_count: int = 0
     missing_cached_values: int = 0
     unparsed_formulas: int = 0
@@ -196,6 +197,7 @@ class GraphPointer(BaseModel):
     edges: int = 0
     cycles_unexpected: int = 0
     cycles_iterative: int = 0
+    iterate: bool = False
     unresolved: int = 0
     dangling: int = 0
     empty_range_members: int = 0

@@ -101,6 +101,45 @@ def test_template_keeps_parens_around_lower_precedence() -> None:
     assert "(R[-4]C[0]-1)" in parsed.template
 
 
+def test_ppmt_walks_all_cell_args() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=PPMT(B1,B2,B3,B4)", sheet="Debt", addr="C10")
+    assert parsed.unparsed is False
+    targets = {e.target for e in parsed.edges if e.kind == "ref"}
+    assert targets == {"Debt!B1", "Debt!B2", "Debt!B3", "Debt!B4"}
+
+
+def test_xlfn_ppmt_is_canonical_and_collects_refs() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=_xlfn.PPMT(B1,C1,D1,E1)", sheet="Debt", addr="F1")
+    assert parsed.unparsed is False
+    assert parsed.ast is not None
+    assert parsed.ast["name"] == "PPMT"
+    targets = {e.target for e in parsed.edges if e.kind == "ref"}
+    assert targets == {"Debt!B1", "Debt!C1", "Debt!D1", "Debt!E1"}
+    assert not any(e.kind == "dynamic" for e in parsed.edges)
+
+
+def test_xlfn_indirect_stays_dynamic() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse('=_xlfn.INDIRECT("A1")', sheet="Sheet1", addr="B1")
+    assert parsed.unparsed is False
+    assert any(e.kind == "dynamic" and e.unresolved for e in parsed.edges)
+    assert not any(e.kind == "ref" for e in parsed.edges)
+
+
+def test_if_and_index_walk_nested_refs() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=IF(A1>0,INDEX(B1:D1,C2),SUM(E1,F1))", sheet="P&L", addr="G1")
+    assert parsed.unparsed is False
+    kinds = {(e.kind, e.target) for e in parsed.edges}
+    assert ("ref", "P&L!A1") in kinds
+    assert ("range", "P&L!B1:D1") in kinds
+    assert ("ref", "P&L!C2") in kinds
+    assert ("ref", "P&L!E1") in kinds
+    assert ("ref", "P&L!F1") in kinds
+
+
 def test_garbage_formula_is_unparsed() -> None:
     engine = FormulaEngine(locale_hint="en")
     parsed = engine.parse("=(((oops", sheet="Sheet1", addr="A1")

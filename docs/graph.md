@@ -16,13 +16,15 @@ Cell-level граф — отдельный IR-артефакт, не секци�
 | Ссылки как в формуле (в т.ч. диапазоны и named ranges) | `ir/edges.parquet` |
 | Cell→cell рёбра после expand, `dangling` / `dangling_reason` / `truncated`, `col_offset`, `period_lag` | `ir/cell_edges.parquet` + выгрузка `graph-edges.json` |
 | `row_key`, `concept_id`, `period_id`, `node_type` (включая materialized `empty` для дыр диапазона) | `ir/graph_index.parquet` |
-| Counts, циклы, `dangling_classes`, пути к parquet и JSON | `graph.json` (schema `1.1.0`) |
+| Counts, `iterate`, циклы (`class` / `breakers`), `circularity_hints`, `dangling_classes`, пути к parquet и JSON | `graph.json` (schema `1.2.0`) |
 | Полный список дыр без cap 32 | `graph-dangling.json` |
 | Строка отчёта (лейбл, mapping, числа и A1-формула по периодам) | `context.json` (schema `1.6.0`) |
 
 `context.json` хранит pointer `graph` (счётчики и пути) и **A1-текст** формулы на каждом `values[]` с `has_formula`. В нём нет `precedents_rows`, `dependents_rows`, `precedent_cells` и `formula_ast`.
 
-`graph.json` — сводка: source of truth для рёбер остаётся parquet; JSON-список рёбер — `graph-edges.json` для аудита. Формулы, AST и inventory в summary не копируются. Узел ревью (`node_id`, `formula_ast`) — `GET .../graph/trace` или `formulas.json`.
+`graph.json` — сводка: source of truth для рёбер остаётся parquet; JSON-список рёбер — `graph-edges.json` для аудита. Формулы, AST и inventory в summary не копируются. Полнота cell-графа **не** живёт в `context.blocks[].relations` (там только mapping alias/aggregate/difference/roll_forward). Узел ревью (`node_id`, `formula_ast`) — `GET .../graph/trace` или `formulas.json`.
+
+`context.graph` — pointer: счётчики циклов, `iterate` (флаг Excel `calcPr`), `dangling`. Само тело `graph.json` несёт `iterate`, классы SCC и, при необходимости, `breakers` / `circularity_hints`.
 
 Класс `dangling_reason`:
 
@@ -38,16 +40,18 @@ Cell-level граф — отдельный IR-артефакт, не секци�
 
 ## Циклы
 
-SCC на cell-edges (без unresolved/dangling):
+SCC на cell-edges `kind ∈ {ref, cross_sheet, range}` (без unresolved/dangling):
 
 | `class` | Когда |
 | --- | --- |
 | `iterative_ok` | Все рёбра в компоненте — сдвиг периода (`period_lag` ≠ 0 / `same`), типичный roll-forward |
-| `unexpected` | Прочий цикл, в том числе A1↔B1 в одном периоде |
+| `unexpected` | Прочий цикл, в том числе same-period Uses↔Interest |
+
+Пустой `cycles: []` **не** означает, что Excel iterate выключен. `graph.json.iterate` копирует `calcPr/@iterate` из workbook. Если SCC найден, у записи цикла есть `breakers`: cell id членов, чья строка в mapping `excluded` как `technical_bridge` (лейблы вроде *Uses of funds for circularity breakdown*). Если SCC нет, а лейбл содержит `circular` или строка — `technical_bridge`, пишется `circularity_hints[]` (`sheet`, `row`, `label`, `cell_ids`). Это объясняет банковский circularity-bridge без копирования всех рёбер в `context.json`.
 
 ## Трассировка
 
-CLI пишет `graph.json`, `graph-edges.json`, `graph-dangling.json` и `formulas.json` рядом с `context.json`. HTTP и `scripts/run.sh` (при живом `serve`) качают те же файлы; `scripts/check-graph.py` разрешает `formula` на `values[]`, запрещает `formula_ast` в context/summary, требует schema `1.1.x` и `artifacts.edges_json` / `dangling` / `formulas`, и с `--edges` / `--dangling` / `--formulas` проверяет, что sidecar’ы не обрезаны и не содержат формул в списке рёбер.
+CLI пишет `graph.json`, `graph-edges.json`, `graph-dangling.json` и `formulas.json` рядом с `context.json`. HTTP и `scripts/run.sh` (при живом `serve`) качают те же файлы; `scripts/check-graph.py` разрешает `formula` на `values[]`, запрещает `formula_ast` в context/summary, требует schema `1.2.x`, ключ `iterate` и `artifacts.edges_json` / `dangling` / `formulas`, и с `--edges` / `--dangling` / `--formulas` проверяет, что sidecar’ы не обрезаны и не содержат формул в списке рёбер.
 
 ```bash
 bash scripts/run.sh path/to/model.xlsx

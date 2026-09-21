@@ -24,10 +24,11 @@ def _write(path: Path, payload: dict) -> Path:
 
 def _ok_graph(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.1.0",
+        "schema_version": "1.2.0",
         "job_id": "job-1",
         "nodes": 3,
         "edges": 2,
+        "iterate": False,
         "artifacts": {
             "cells": "ir/cells.parquet",
             "edges": "ir/edges.parquet",
@@ -220,6 +221,28 @@ def test_rejects_graph_schema_1_0(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "schema_version" in result.stderr
+
+
+def test_rejects_graph_schema_1_1(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.1.0"))
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "schema_version" in result.stderr
+
+
+def test_rejects_missing_iterate(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    payload = _ok_graph()
+    del payload["iterate"]
+    graph = _write(tmp_path / "graph.json", payload)
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "iterate" in result.stderr
 
 
 def test_accepts_audit_sidecars(tmp_path: Path) -> None:

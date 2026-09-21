@@ -48,3 +48,14 @@ def test_single_missing_ref_is_missing_cell() -> None:
     rows = expand_cell_edges(edges, {"P&L!A1"}, known_sheets={"P&L", "Operation"})
     assert rows[0][5] is True
     assert rows[0][6] == "missing_cell"
+
+
+def test_ppmt_and_if_refs_expand_to_cell_edges() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=PPMT(B1,IF(C1>0,C1,D1),E1,F1)", sheet="Debt", addr="G1")
+    known = {"Debt!G1", "Debt!B1", "Debt!C1", "Debt!D1", "Debt!E1", "Debt!F1"}
+    rows = expand_cell_edges(parsed.edges, known, known_sheets={"Debt"})
+    targets = {row[1] for row in rows if not row[5]}
+    assert {"Debt!B1", "Debt!C1", "Debt!D1", "Debt!E1", "Debt!F1"} <= targets

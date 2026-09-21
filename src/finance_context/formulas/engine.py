@@ -8,6 +8,7 @@ from finance_context.excel.a1 import col_to_index, index_to_col, parse_addr
 from finance_context.formulas.models import Edge, ParsedFormula
 
 _DYNAMIC_FUNCS = {"INDIRECT", "OFFSET"}
+_XL_FUNC_PREFIXES = ("_xlfn.", "_xlws.")
 _ERRORS = (
     "#GETTING_DATA!",
     "#DIV/0!",
@@ -435,7 +436,7 @@ class _Parser:
                 self.eat("SEP")
                 args.append(self.parse_expr())
         self.eat("RPAREN")
-        return {"op": "func", "name": name, "args": args}
+        return {"op": "func", "name": _canonical_func_name(name), "args": args}
 
     def _parse_named_range(self, start: str) -> dict[str, Any]:
         self.eat("COLON")
@@ -450,6 +451,16 @@ class _Parser:
         return tok is not None and tok.kind == "OP" and tok.value == value
 
 
+def _canonical_func_name(name: str) -> str:
+    text = name
+    while True:
+        lowered = text.lower()
+        matched = next((p for p in _XL_FUNC_PREFIXES if lowered.startswith(p)), None)
+        if matched is None:
+            return text
+        text = text[len(matched) :]
+
+
 def _collect_edges(
     node: dict[str, Any],
     current_sheet: str,
@@ -460,7 +471,7 @@ def _collect_edges(
 ) -> None:
     op = node["op"]
     if op == "func":
-        dynamic = node["name"].upper() in _DYNAMIC_FUNCS
+        dynamic = _canonical_func_name(node["name"]).upper() in _DYNAMIC_FUNCS
         if dynamic and not suppress:
             edges.append(Edge(kind="dynamic", source=source, target=None, unresolved=True))
         for arg in node["args"]:
