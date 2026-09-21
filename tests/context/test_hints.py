@@ -82,6 +82,7 @@ def test_balance_sheet_line_is_stock_not_flow() -> None:
     assert hints.nature == "balance"
     assert hints.time_semantics == "stock"
     assert hints.statement == "bs"
+    assert hints.sign == "stock"
 
 
 def test_opening_balance_stays_bop() -> None:
@@ -98,3 +99,23 @@ def test_opening_balance_stays_bop() -> None:
     )
     hints = _hints_for(mapped, row, sheet="CF")
     assert hints.time_semantics == "bop"
+    assert hints.sign == "stock"
+
+
+def test_k_pound_in_label_sets_money_gbp() -> None:
+    row = LayoutRow(row=10, label="Revenue k£", kind="fact")
+    mapped = MappedRow(
+        row_key="P&L|10|b",
+        sheet="P&L",
+        row=10,
+        block_id="b",
+        label=row.label,
+        concept_id="pnl.revenue",
+        article_role="database_like",
+        source="rule",
+    )
+    hints = _hints_for(mapped, row, sheet="P&L")
+    assert hints.unit == "money"
+    assert hints.currency == "GBP"
+    assert hints.scale == "k"
+    assert hints.sign == "inflow"

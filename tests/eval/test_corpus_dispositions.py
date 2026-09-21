@@ -185,10 +185,25 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert selector.context_role == "scenario_selector"
         assert selector.disposition == "excluded"
         assert any(cell.role == "value" and str(cell.cached_value) == "1" for cell in selector.cells)
-        assert labels["concession duration"].unit == "count"
+        assert labels["concession duration"].unit == "years"
         toll = labels.get("toll rate")
         if toll is not None:
             assert toll.unit == "money"
+            assert toll.hints.currency == "GBP"
+        maint = labels.get("maintenance including heavy maintenance and spv costs")
+        if maint is None:
+            maint = next(
+                (
+                    row
+                    for row in ia
+                    if "maintenance" in normalize_label(row.label)
+                    and "heavy" in normalize_label(row.label)
+                ),
+                None,
+            )
+        if maint is not None:
+            assert maint.unit == "money"
+            assert maint.hints.currency == "GBP"
         stub = next(
             (
                 cell

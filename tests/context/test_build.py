@@ -103,7 +103,10 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.values[0].has_formula is False
     assert metric.values[0].formula is None
     assert metric.mapping.method == "rule"
-    assert metric.unit == "currency"
+    assert metric.unit == "money"
+    assert metric.hints.currency == "USD"
+    assert metric.hints.scale == "unit"
+    assert metric.hints.sign == "stock"
     assert doc.unmapped == []
 
 
