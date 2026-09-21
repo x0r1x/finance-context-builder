@@ -95,7 +95,9 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert graph["artifacts"]["edges_json"] == "graph-edges.json"
     assert graph["artifacts"]["dangling"] == "graph-dangling.json"
     assert graph["artifacts"]["formulas"] == "formulas.json"
-    assert "formula" not in json.dumps(graph)
+    assert "formula_ast" not in json.dumps(graph)
+    assert "formula" not in graph
+    assert "formula" not in graph.get("contract", {})
 
     edge_dump = json.loads((dest / "graph-edges.json").read_text(encoding="utf-8"))
     assert any(e["source"] == "P&L!C13" and e["target"] == "P&L!C9" for e in edge_dump["edges"])
