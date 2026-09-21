@@ -31,7 +31,7 @@ GRAPH_FORBIDDEN = frozenset(
         "blocks",
     }
 )
-GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "artifacts")
+GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "artifacts")
 ARTIFACT_REQUIRED = (
     "cells",
     "edges",
@@ -41,7 +41,7 @@ ARTIFACT_REQUIRED = (
     "dangling",
     "formulas",
 )
-GRAPH_SCHEMA_PREFIX = "1.1"
+GRAPH_SCHEMA_PREFIX = "1.2"
 
 
 def load_json(path: Path) -> Any:
@@ -91,6 +91,8 @@ def check_graph(graph: dict[str, Any]) -> list[str]:
     for key in ("nodes", "edges"):
         if key in graph and not isinstance(graph[key], int):
             errors.append(f"graph.json {key} must be an int count, not a list")
+    if "iterate" in graph and not isinstance(graph["iterate"], bool):
+        errors.append("graph.json iterate must be a boolean")
     forbidden = _walk_keys(graph) & GRAPH_FORBIDDEN
     if forbidden:
         errors.append(
@@ -113,7 +115,7 @@ def check_pointer_matches(context: dict[str, Any], graph: dict[str, Any]) -> lis
     if not isinstance(pointer, dict):
         return []
     errors: list[str] = []
-    for key in ("nodes", "edges"):
+    for key in ("nodes", "edges", "iterate"):
         if key in pointer and key in graph and pointer[key] != graph[key]:
             errors.append(
                 f"context.graph.{key}={pointer[key]} != graph.json {key}={graph[key]}"

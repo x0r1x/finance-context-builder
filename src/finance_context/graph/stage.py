@@ -7,7 +7,15 @@ from pathlib import Path
 from finance_context.excel.a1 import index_to_col
 from finance_context.formulas.stage import IR_CELL_EDGE_COLUMNS
 from finance_context.graph.cycles import classify_cycles
-from finance_context.graph.models import GRAPH_SCHEMA_VERSION, ID_CAP, GraphContract, GraphDocument, IdCount
+from finance_context.graph.models import (
+    GRAPH_SCHEMA_VERSION,
+    ID_CAP,
+    CircularityHint,
+    CycleRecord,
+    GraphContract,
+    GraphDocument,
+    IdCount,
+)
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
 from finance_context.mapping.models import MappingDocument
@@ -69,8 +77,10 @@ def build_formula_graph(
         ],
     )
 
-    cycles = classify_cycles(enriched)
-    doc = _summary(job_id, len(index_rows), edges, enriched, cycles)
+    cycles = attach_cycle_breakers(classify_cycles(enriched), mapping)
+    hints = circularity_hints(mapping, layout, index_rows, cycles)
+    iterate = _workbook_iterate(dest_dir)
+    doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
     write_json(dest_dir / "graph.json", doc.model_dump(mode="json", by_alias=True))
     _write_audit_sidecars(dest_dir, cells, enriched)
     unexpected = sum(1 for c in cycles if c.class_ == "unexpected")
@@ -84,10 +94,100 @@ def build_formula_graph(
         edges=doc.edges,
         cycles_unexpected=unexpected,
         cycles_iterative=iterative,
+        iterate=iterate,
         unresolved=doc.unresolved.count,
         dangling=doc.dangling.count,
         empty_range_members=int(classes.get("empty_range_member") or 0),
     )
+
+
+def _workbook_iterate(dest_dir: Path) -> bool:
+    path = dest_dir / "raw" / "workbook.json"
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(payload.get("iterate")) if isinstance(payload, dict) else False
+
+
+def _cells_by_row(index_rows: list[tuple[object, ...]]) -> dict[tuple[str, int], list[str]]:
+    out: dict[tuple[str, int], list[str]] = {}
+    for row in index_rows:
+        node_id = str(row[0])
+        parsed = parse_node_id(node_id)
+        if parsed is None:
+            continue
+        key = (parsed[0], parsed[2])
+        bucket = out.setdefault(key, [])
+        if node_id not in bucket:
+            bucket.append(node_id)
+    return out
+
+
+def attach_cycle_breakers(
+    cycles: list[CycleRecord],
+    mapping: MappingDocument,
+) -> list[CycleRecord]:
+    if not cycles:
+        return cycles
+    bridge_rows = {
+        (row.sheet, row.row)
+        for row in mapping.rows
+        if row.exclusion_reason == "technical_bridge"
+    }
+    if not bridge_rows:
+        return cycles
+    annotated: list[CycleRecord] = []
+    for cycle in cycles:
+        breakers: list[str] = []
+        for member in cycle.members:
+            parsed = parse_node_id(member)
+            if parsed is None:
+                continue
+            if (parsed[0], parsed[2]) in bridge_rows:
+                breakers.append(member)
+        annotated.append(cycle.model_copy(update={"breakers": sorted(breakers)}))
+    return annotated
+
+
+def circularity_hints(
+    mapping: MappingDocument,
+    layout: Layout,
+    index_rows: list[tuple[object, ...]],
+    cycles: list[CycleRecord],
+) -> list[CircularityHint]:
+    if cycles:
+        return []
+    cells = _cells_by_row(index_rows)
+    hints: list[CircularityHint] = []
+    seen: set[tuple[str, int]] = set()
+
+    def add(sheet: str, row: int, label: str) -> None:
+        key = (sheet, row)
+        if key in seen:
+            return
+        seen.add(key)
+        hints.append(
+            CircularityHint(
+                sheet=sheet,
+                row=row,
+                label=label,
+                cell_ids=sorted(cells.get(key, [])),
+            )
+        )
+
+    for row in mapping.rows:
+        blob = (row.label or "").casefold()
+        if row.exclusion_reason == "technical_bridge" or "circular" in blob:
+            add(row.sheet, row.row, row.label)
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            for row in block.rows:
+                if "circular" in (row.label or "").casefold():
+                    add(sheet.name, row.row, row.label)
+    return hints
 
 
 def _row_meta(
@@ -287,6 +387,8 @@ def _summary(
     formula_edges: list[dict],
     cell_edges: list[dict],
     cycles,
+    iterate: bool = False,
+    hints: list[CircularityHint] | None = None,
 ) -> GraphDocument:
     kinds = Counter(str(e.get("kind") or "ref") for e in cell_edges)
 
@@ -333,4 +435,6 @@ def _summary(
         dangling=IdCount(count=len(dangling_ids), ids=dangling_ids[:ID_CAP]),
         dangling_classes=dict(classes),
         cycles=cycles,
+        iterate=iterate,
+        circularity_hints=list(hints or []),
     )

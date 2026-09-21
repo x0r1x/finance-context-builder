@@ -32,7 +32,7 @@ Layout помечает тело блока видами строк. Каска�
 4. Нерезолвнутые fact + включённый EmbedPort → dense retrieve по лейблам концептов, затем снова fuse/decide вместе с lexical/glossary/structure.
 5. Оставшиеся + ChatPort → rerank короткого списка. Может вернуть `unknown`. **Не имеет права изобрести id** вне таксономии.
 6. Финальный проход только `structure` (подтянуть то, что открылось после embed/chat).
-7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations`.
+7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph-edges.json`, `GET .../graph/edges` и trace, не в `context.blocks[].relations`.
 
 Повторная загрузка той же книги на HTTP пересобирает compile, layout, mapping и context; parse (`raw/`) переиспользуется. Сам `mapping.json` при повторном CLI-прогоне в тот же каталог **скипается**, если файл уже лежит на диске.
 

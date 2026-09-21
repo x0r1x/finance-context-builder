@@ -150,6 +150,7 @@ class Pipeline:
                 edges=int(payload.get("edges") or 0),
                 cycles_unexpected=unexpected,
                 cycles_iterative=iterative,
+                iterate=bool(payload.get("iterate")),
                 unresolved=int((payload.get("unresolved") or {}).get("count") or 0),
                 dangling=int((payload.get("dangling") or {}).get("count") or 0),
                 empty_range_members=int(

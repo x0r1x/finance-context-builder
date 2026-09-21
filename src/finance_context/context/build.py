@@ -313,6 +313,7 @@ def build_context(
         locale_hint=workbook_meta.get("locale_hint"),
         date1904=bool(workbook_meta.get("date1904")),
         defined_names=list(workbook_meta.get("defined_names") or []),
+        iterate=bool(workbook_meta.get("iterate")),
         formula_count=formula_count,
         missing_cached_values=missing_cached,
         unparsed_formulas=unparsed,

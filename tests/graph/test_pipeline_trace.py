@@ -91,7 +91,8 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert "formula_ast" not in payload
     assert "precedents_rows" not in payload
     graph = json.loads(payload)
-    assert graph["schema_version"] == "1.1.0"
+    assert graph["schema_version"] == "1.2.0"
+    assert graph["iterate"] is False
     assert graph["artifacts"]["edges_json"] == "graph-edges.json"
     assert graph["artifacts"]["dangling"] == "graph-dangling.json"
     assert graph["artifacts"]["formulas"] == "formulas.json"
@@ -184,3 +185,49 @@ def test_pipeline_classifies_index_range_holes(tmp_path: Path) -> None:
     assert doc.graph.empty_range_members >= len(holes)
     traced = trace_graph(dest, origin="Input Assumptions!C8", direction="precedents", depth=2)
     assert "Input Assumptions!K8" in {n.node_id for n in traced.nodes}
+
+
+def _circular_book(path: Path) -> Path:
+    cells = [
+        CellSpec(addr="A1", value="Item", type="s"),
+        CellSpec(addr="B1", value="2023", type="s"),
+        CellSpec(addr="C1", value="2024", type="s"),
+        CellSpec(addr="A5", value="Interest", type="s"),
+        CellSpec(addr="B5", value="1", formula="=B6"),
+        CellSpec(addr="C5", value="1", formula="=C6"),
+        CellSpec(addr="A6", value="Uses of funds for circularity breakdown", type="s"),
+        CellSpec(addr="B6", value="1", formula="=B5"),
+        CellSpec(addr="C6", value="1", formula="=C5"),
+    ]
+    return build_xlsx(
+        path,
+        sheets=[SheetSpec(name="CF", cells=cells)],
+        shared_strings=[
+            "Item",
+            "2023",
+            "2024",
+            "Interest",
+            "Uses of funds for circularity breakdown",
+        ],
+        iterate=True,
+    )
+
+
+def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
+    source = _circular_book(tmp_path / "circular.xlsx")
+    dest = tmp_path / "job"
+    dest.mkdir()
+    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    doc = pipeline.run(dest, job_id="cycle-job", source_filename="circular.xlsx")
+    assert doc.workbook.iterate is True
+    assert doc.graph.iterate is True
+    graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
+    assert graph["schema_version"] == "1.2.0"
+    assert graph["iterate"] is True
+    assert graph["cycles"]
+    members = {m for cycle in graph["cycles"] for m in cycle["members"]}
+    assert {"CF!B5", "CF!B6"} <= members or {"CF!C5", "CF!C6"} <= members
+    breakers = {b for cycle in graph["cycles"] for b in cycle.get("breakers") or []}
+    assert "CF!B6" in breakers or "CF!C6" in breakers
+    assert all(cycle["class"] == "unexpected" for cycle in graph["cycles"])

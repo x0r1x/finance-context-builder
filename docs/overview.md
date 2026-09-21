@@ -26,11 +26,11 @@
 | `ir/` | Шаблоны, AST, `edges.parquet` (как в формуле) и `cell_edges.parquet` (развёрнутые ячейки) |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `graph.json` | Сводка графа schema `1.1.0`: counts, циклы, `dangling_classes`, пути к parquet и JSON (без формул и полного списка рёбер) |
+| `graph.json` | Сводка графа schema `1.2.0`: counts, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes`, пути к parquet и JSON (без формул и полного списка рёбер) |
 | `graph-edges.json` | Полный список cell→cell рёбер для JSON-аудита |
 | `graph-dangling.json` | Все дыры без cap 32, с `class` (`empty_range_member` / `missing_cell` / `missing_sheet`) |
 | `formulas.json` | A1, template и AST только для ячеек с формулой |
-| `context.json` | Схема `1.6.0`: `timeline`, блоки с `values` (кэш + A1 `formula` + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats`, pointer `graph`, `context_role` / `secondary_concepts`, hints `unit`/`currency`/`scale`/`sign` |
+| `context.json` | Схема `1.6.0`: `timeline`, блоки с `values` (кэш + A1 `formula` + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats`, pointer `graph` (`iterate` + counts), `context_role` / `secondary_concepts`, hints `unit`/`currency`/`scale`/`sign` |
 | `context.md` | Две метрики в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}` (включая выбранный сценарий); `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 
