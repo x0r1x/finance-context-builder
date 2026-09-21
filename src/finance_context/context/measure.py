@@ -2,7 +2,38 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
 _CURRENCY_SYM = {"GBP": "£", "EUR": "€", "USD": "$", "RUB": "₽"}
+_CURRENCY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "GBP",
+        re.compile(
+            r"£|\bgbp\b|\bpounds?\b|\bsterling\b|\bфунт(?:ов|а|ы)?\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "EUR",
+        re.compile(
+            r"€|\beur\b|\beuros?\b|\bевро\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "USD",
+        re.compile(
+            r"\$|\busd\b|\bdollars?\b|\bus\$|\bдолл(?:ар(?:ов|а|ы)?)?\.?\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "RUB",
+        re.compile(
+            r"₽|\brubs?\b|\bруб\.?\b|\bрубл(?:ей|я|ь)?\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
 _INFLOW_IDS = (
     "pnl.revenue",
     "pnl.other_income",
@@ -110,7 +141,7 @@ def _fill(base: Measure, extra: Measure) -> Measure:
 def _parse_text(text: str) -> Measure:
     if not text.strip():
         return Measure()
-    currency = _currency_from(text)
+    currency = currency_code_from_text(text)
     scale = _scale_from(text)
     unit = _unit_from(text, currency)
     return Measure(unit=unit, currency=currency, scale=scale)
@@ -121,22 +152,18 @@ def _parse_format(fmt: str) -> Measure:
         return Measure()
     if "%" in fmt:
         return Measure(unit="rate")
-    currency = _currency_from(fmt)
+    currency = currency_code_from_text(fmt)
     if currency:
         return Measure(unit="money", currency=currency)
     return Measure()
 
 
-def _currency_from(text: str) -> str | None:
-    blob = text.casefold()
-    if "£" in text or "gbp" in blob or "pound" in blob:
-        return "GBP"
-    if "€" in text or "eur" in blob:
-        return "EUR"
-    if "₽" in text or re.search(r"\brubs?\b", blob) or re.search(r"\bруб\.?\b", blob):
-        return "RUB"
-    if "$" in text or "usd" in blob:
-        return "USD"
+def currency_code_from_text(text: str | None) -> str | None:
+    if not text:
+        return None
+    for code, pattern in _CURRENCY_PATTERNS:
+        if pattern.search(text):
+            return code
     return None
 
 

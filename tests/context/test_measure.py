@@ -48,10 +48,31 @@ def test_per_year_without_percent_is_rate() -> None:
 
 
 def test_cyrillic_rub_aliases_are_rub() -> None:
-    for text in ("руб", "РУБ", "руб.", "тыс. руб"):
+    for text in ("руб", "РУБ", "руб.", "тыс. руб", "₽"):
         measure = parse_measure(unit_text=text)
         assert measure.unit == "money", text
         assert measure.currency == "RUB", text
+
+
+def test_gbp_aliases() -> None:
+    for text in ("£", "gbp", "GBP", "pound", "фунт", "£/year"):
+        measure = parse_measure(unit_text=text)
+        assert measure.unit == "money", text
+        assert measure.currency == "GBP", text
+
+
+def test_eur_aliases() -> None:
+    for text in ("€", "eur", "EUR", "euro", "евро", "€/year"):
+        measure = parse_measure(unit_text=text)
+        assert measure.unit == "money", text
+        assert measure.currency == "EUR", text
+
+
+def test_usd_aliases() -> None:
+    for text in ("$", "usd", "USD", "dollar", "долл", "доллар", "$/year"):
+        measure = parse_measure(unit_text=text)
+        assert measure.unit == "money", text
+        assert measure.currency == "USD", text
 
 
 def test_pound_per_year_is_money() -> None:

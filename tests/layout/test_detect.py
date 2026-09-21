@@ -681,6 +681,9 @@ def test_params_block_from_scenario_matrix() -> None:
     assert unit_kind_from_text("£/year") == "money"
     assert unit_kind_from_text("руб") == "money"
     assert unit_kind_from_text("РУБ") == "money"
+    assert unit_kind_from_text("gbp") == "money"
+    assert unit_kind_from_text("EUR") == "money"
+    assert unit_kind_from_text("долл") == "money"
     assert unit_kind_from_text("years") == "count"
     assert unit_kind_from_text("veh/year") == "count"
 
