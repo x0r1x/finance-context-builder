@@ -133,7 +133,7 @@ def _currency_from(text: str) -> str | None:
         return "GBP"
     if "€" in text or "eur" in blob:
         return "EUR"
-    if "₽" in text or "rub" in blob:
+    if "₽" in text or re.search(r"\brubs?\b", blob) or re.search(r"\bруб\.?\b", blob):
         return "RUB"
     if "$" in text or "usd" in blob:
         return "USD"

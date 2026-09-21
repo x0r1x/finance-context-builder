@@ -25,7 +25,7 @@ _HEADER_ROLES: dict[str, str] = {
     "notes": "note",
 }
 _UNIT_TEXT = re.compile(
-    r"^(k?£|k?\$|€|₽|%|years?|year|months?|month|days?|day|"
+    r"^(k?£|k?\$|€|₽|руб\.?|руб|%|years?|year|months?|month|days?|day|"
     r"veh/?year|per year|of margin|mw|mwh|£/year|\$/year|text|date|"
     r"1/2/3|k£)$",
     re.IGNORECASE,
@@ -110,7 +110,7 @@ def unit_kind_from_text(text: str | None) -> str | None:
         return None
     if "%" in blob or blob in {"per year", "of margin"}:
         return "rate"
-    if any(token in blob for token in ("£", "$", "€", "₽")):
+    if any(token in blob for token in ("£", "$", "€", "₽", "руб", "rub")):
         return "money"
     if any(token in blob for token in ("year", "month", "day", "veh", "mw", "count")):
         return "count"

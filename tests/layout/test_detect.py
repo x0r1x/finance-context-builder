@@ -679,6 +679,8 @@ def test_params_block_from_scenario_matrix() -> None:
     from finance_context.layout.params import unit_kind_from_text
 
     assert unit_kind_from_text("£/year") == "money"
+    assert unit_kind_from_text("руб") == "money"
+    assert unit_kind_from_text("РУБ") == "money"
     assert unit_kind_from_text("years") == "count"
     assert unit_kind_from_text("veh/year") == "count"
 

@@ -47,6 +47,13 @@ def test_per_year_without_percent_is_rate() -> None:
     assert measure.unit == "rate"
 
 
+def test_cyrillic_rub_aliases_are_rub() -> None:
+    for text in ("руб", "РУБ", "руб.", "тыс. руб"):
+        measure = parse_measure(unit_text=text)
+        assert measure.unit == "money", text
+        assert measure.currency == "RUB", text
+
+
 def test_pound_per_year_is_money() -> None:
     measure = parse_measure(unit_text="£/year")
     assert measure.unit == "money"
