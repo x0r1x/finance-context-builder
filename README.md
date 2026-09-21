@@ -2,9 +2,9 @@
 
 Read-only service that turns Excel cash-flow workbooks (`.xlsx` / `.xlsm`) into versioned JSON and Markdown context. Formulas are preserved; values come from Excel cached results and are not recalculated.
 
-Every layout row is kept in `context.json` (`inventory`, schema `1.4.0`), including assumption tables without a period axis (`params`) and left-of-timeline scalars with roles (`value` / `unit` / `total`). A workbook-level `timeline` annotates model years with construction/operation phases from timing flags. Coverage lives in `mapping_stats`; empty `unmapped` is not “every inventory row has a concept”. A small taxonomy may annotate a line with `concept_id`, or abstain: a wrong tag is worse than `unknown`. Structure (formula graph and neighbors) first, then labels, then embeddings, then an optional LLM rerank. Unknown rows still carry hints, neighbors, formula fingerprint, role-tagged cells, and top-3 candidates.
+Every layout row is kept in `context.json` (`inventory`, schema `1.4.0`), including assumption tables without a period axis (`params`) and left-of-timeline scalars with roles (`value` / `unit` / `total`). A workbook-level `timeline` annotates model years with construction/operation phases from timing flags. Coverage lives in `mapping_stats`; empty `unmapped` is not “every inventory row has a concept”. A small taxonomy may annotate a line with `concept_id`, or abstain: a wrong tag is worse than `unknown`. Structure (formula graph and neighbors) first, then labels, then embeddings, then an optional LLM rerank. Unknown rows still carry hints, neighbors, formula fingerprint, role-tagged cells, and top-3 candidates. The cell-level formula graph is a sidecar (`graph.json` + `ir/*.parquet`), not copied into the report — [graph](docs/graph.md).
 
-Guides: [overview](docs/overview.md), [layout](docs/layout.md), [mapping](docs/mapping.md), [taxonomy](docs/taxonomy.md), [unmapped review](docs/review.md), [architecture](docs/architecture.md).
+Guides: [overview](docs/overview.md), [layout](docs/layout.md), [mapping](docs/mapping.md), [taxonomy](docs/taxonomy.md), [graph](docs/graph.md), [unmapped review](docs/review.md), [architecture](docs/architecture.md).
 
 ## Limits (MVP)
 
@@ -42,7 +42,7 @@ Fill `LLM_API_KEY` / `EMBEDDING_API_KEY` (LM Studio token) and model ids if you 
 uv run finance-context build path/to/model.xlsx -o ./out
 ```
 
-Writes `context.json` and `context.md`.
+Writes `context.json`, `graph.json`, and `context.md`.
 
 To extract rows that the mapping stage left without a concept, run:
 
@@ -80,7 +80,7 @@ Submit a workbook. `POST` returns **202** and starts mapping. Repeated submissio
 | `degraded` | Same as `needs_input`, but LLM/embeddings were not configured |
 | `failed` | Pipeline error; no usable context |
 
-`needs_input` is not a crash. `context.json` and `context.md` are still served.
+`needs_input` is not a crash. `context.json`, `graph.json`, and `context.md` are still served.
 
 ```bash
 JOB=$(curl -sS -F "file=@path/to/model.xlsx" http://127.0.0.1:8080/v1/context-jobs)
@@ -89,6 +89,7 @@ ID=$(python -c "import json,sys; print(json.loads(sys.argv[1])['job_id'])" "$JOB
 
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID"
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/context.json" -o context.json
+curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.json" -o graph.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/context.md" -o context.md
 ```
 
@@ -97,6 +98,8 @@ Endpoints:
 - `POST /v1/context-jobs` — upload workbook
 - `GET /v1/context-jobs/{id}` — status
 - `GET /v1/context-jobs/{id}/context.json`
+- `GET /v1/context-jobs/{id}/graph.json`
+- `GET /v1/context-jobs/{id}/graph/trace?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs/{id}/context.md`
 - `GET /healthz`, `GET /readyz`
 
@@ -130,7 +133,7 @@ uv run pytest
 uv run ruff check src tests
 ```
 
-With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes HTTP bodies under `out/<timestamp>/` (`healthz.json`, `readyz.json`, `post-job.json`, `job-status.json`, `context.json`, `context.md`) plus extracted `unmapped.json`. The script exiting with `OK` means the client finished; the server should still be listening on 8080.
+With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes HTTP bodies under `out/<timestamp>/` (`healthz.json`, `readyz.json`, `post-job.json`, `job-status.json`, `context.json`, `context.md`) plus extracted `unmapped.json`. Graph artifacts stay on the job in `$DATA_DIR/jobs/{id}/` (`graph.json`, `ir/cell_edges.parquet`). The script exiting with `OK` means the client finished; the server should still be listening on 8080.
 
 ```bash
 bash scripts/run.sh path/to/model.xlsx

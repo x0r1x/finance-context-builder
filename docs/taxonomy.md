@@ -6,7 +6,7 @@
 
 Оси line item взяты из [FAST Standard 3.01](https://www.fast-standard.org/) и оформлены как атрибуты концепта, как `periodType` / `balance` в XBRL, а не как части составного ключа.
 
-Как каскад использует эти поля — в [mapping.md](mapping.md). Как собираются блоки — в [layout.md](layout.md). Как закрывать дыры после прогона — в [review.md](review.md).
+Как каскад использует эти поля — в [mapping.md](mapping.md). Как собираются блоки — в [layout.md](layout.md). Cell-level граф формул — в [graph.md](graph.md). Как закрывать дыры после прогона — в [review.md](review.md).
 
 ## Модель концепта
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from finance_context.excel.a1 import parse_addr
+from finance_context.formulas.csr import expand_range
 
 
 def cell_ref_row(ref: str | None) -> tuple[str, int] | None:
@@ -24,6 +25,19 @@ def row_key_ref(sheet: str, row: int) -> str:
     return f"{sheet}!{row}"
 
 
+def _targets(edge: dict) -> list[str]:
+    target = str(edge.get("target") or "")
+    if not target:
+        return []
+    if edge.get("kind") == "range" and not edge.get("unresolved"):
+        try:
+            cells, _trunc = expand_range(target)
+        except ValueError:
+            return [target]
+        return cells
+    return [target]
+
+
 def row_adjacency(
     edges: list[dict],
     *,
@@ -33,15 +47,18 @@ def row_adjacency(
     dependents: dict[tuple[str, int], list[str]] = defaultdict(list)
     for edge in edges:
         source = cell_ref_row(str(edge.get("source") or ""))
-        target = cell_ref_row(str(edge.get("target") or "") or None)
-        if source is None or target is None or source == target:
+        if source is None:
             continue
-        src_ref = row_key_ref(*source)
-        tgt_ref = row_key_ref(*target)
-        if tgt_ref not in precedents[source]:
-            precedents[source].append(tgt_ref)
-        if src_ref not in dependents[target]:
-            dependents[target].append(src_ref)
+        for target_ref in _targets(edge):
+            target = cell_ref_row(target_ref)
+            if target is None or source == target:
+                continue
+            src_ref = row_key_ref(*source)
+            tgt_ref = row_key_ref(*target)
+            if tgt_ref not in precedents[source]:
+                precedents[source].append(tgt_ref)
+            if src_ref not in dependents[target]:
+                dependents[target].append(src_ref)
     if limit > 0:
         for table in (precedents, dependents):
             for key, values in table.items():

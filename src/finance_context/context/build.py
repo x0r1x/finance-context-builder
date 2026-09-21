@@ -2,21 +2,21 @@ from __future__ import annotations
 
 from collections import Counter
 
-from finance_context.excel.a1 import format_addr, parse_addr
+from finance_context.context.timeline import annotate_block_periods, build_timeline
+from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
 from finance_context.layout.params import unit_kind_from_text
 from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.eval import context_report_metrics, inventory_coverage_counts
-from finance_context.mapping.graph import row_adjacency
 from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowRelation
 from finance_context.mapping.rules import is_noise_label
-from finance_context.context.timeline import annotate_block_periods, build_timeline
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
     CandidateHit,
     ContextDocument,
     FinancialBlock,
+    GraphPointer,
     InventoryRow,
     MappingEvidence,
     MappingStats,
@@ -61,11 +61,10 @@ def build_context(
     content_sha256: str | None = None,
     status: str = "succeeded",
     stage: str = "done",
-    edges: list[dict] | None = None,
+    graph: GraphPointer | None = None,
 ) -> ContextDocument:
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
     mapped_by_key = {row.row_key: row for row in mapping.rows}
-    precedents, dependents = row_adjacency(edges or [])
     warnings: list[str] = []
     formula_count = 0
     missing_cached = 0
@@ -120,7 +119,6 @@ def build_context(
                     headers=value_headers,
                     by_addr=by_addr,
                 )
-                loc = (sheet.name, layout_row.row)
                 role_cells = _role_cells(
                     sheet.name, layout_row, by_addr, bool(workbook_meta.get("date1904"))
                 )
@@ -135,15 +133,6 @@ def build_context(
                 hints = _hints_for(mapped, layout_row, unit_text)
                 series_unit = unit_kind_from_text(unit_text)
                 candidates = _candidates_for(mapped)
-                known_cols = {item.col for item in role_cells} | {h.col for h in value_headers}
-                extra_precs = _precedent_cells(
-                    sheet.name,
-                    layout_row.row,
-                    edges or [],
-                    by_addr,
-                    known_cols,
-                    bool(workbook_meta.get("date1904")),
-                )
                 if layout_row.kind in _SERIES_KINDS and not (
                     layout_row.kind == "fact" and is_noise_label(layout_row.label)
                 ):
@@ -162,12 +151,9 @@ def build_context(
                         formula_fingerprint=fingerprint,
                         formula_exceptions=exceptions,
                         numeric_summary=summary,
-                        precedents_rows=list(precedents.get(loc, [])),
-                        dependents_rows=list(dependents.get(loc, [])),
                         candidates=candidates,
                         hints=hints,
                         role_cells=role_cells,
-                        precedent_cells=extra_precs,
                     )
                     series_unit = series_unit or series.unit
                     if mapped is not None and mapped.disposition == "excluded":
@@ -200,12 +186,9 @@ def build_context(
                         formula_fingerprint=fingerprint,
                         formula_exceptions=exceptions,
                         numeric_summary=summary,
-                        precedents_rows=list(precedents.get(loc, [])),
-                        dependents_rows=list(dependents.get(loc, [])),
                         candidates=candidates,
                         hints=hints,
                         cells=role_cells,
-                        precedent_cells=extra_precs,
                     )
                 )
             blocks.append(
@@ -288,6 +271,7 @@ def build_context(
         excluded=excluded,
         inventory=inventory,
         mapping_stats=MappingStats.model_validate(stats),
+        graph=graph or GraphPointer(),
         warnings=warnings[:50],
     )
 
@@ -318,12 +302,9 @@ def _series_for_row(
     formula_fingerprint: str | None,
     formula_exceptions: list[str],
     numeric_summary: NumericSummary | None,
-    precedents_rows: list[str],
-    dependents_rows: list[str],
     candidates: list[CandidateHit],
     hints: RowHints,
     role_cells: list[RoleCell],
-    precedent_cells: list[RoleCell],
 ) -> MetricSeries:
     row_num = layout_row.row
     label_addr = format_addr(label_col, row_num)
@@ -359,9 +340,7 @@ def _series_for_row(
                 header_text=header.text,
                 role=header.role,
                 cached_value=cached,
-                formula=formula,
-                formula_template=(cell or {}).get("formula_template"),
-                unparsed=bool((cell or {}).get("unparsed")),
+                has_formula=bool(formula),
                 number_format=(cell or {}).get("number_format"),
                 source=SourceRef(sheet=sheet_name, addr=addr, row=row_num, col=header.col),
                 missing_cached_value=bool(formula) and cached in (None, ""),
@@ -394,12 +373,9 @@ def _series_for_row(
         formula_fingerprint=formula_fingerprint,
         formula_exceptions=formula_exceptions,
         numeric_summary=numeric_summary,
-        precedents_rows=precedents_rows,
-        dependents_rows=dependents_rows,
         candidates=candidates,
         hints=hints,
         cells=role_cells,
-        precedent_cells=precedent_cells,
     )
 
 
@@ -576,77 +552,6 @@ def _role_cells(
                 col=item.col,
                 role=item.role,
                 cached_value=displayed if displayed is not None else cached,
-                formula=None if cell is None else cell.get("formula_raw"),
-                formula_template=None if cell is None else cell.get("formula_template"),
             )
         )
     return out
-
-
-def _precedent_cells(
-    sheet: str,
-    row: int,
-    edges: list[dict],
-    by_addr: dict[tuple[str, int, int], dict],
-    known_cols: set[int],
-    date1904: bool,
-    *,
-    limit: int = 8,
-) -> list[RoleCell]:
-    out: list[RoleCell] = []
-    seen: set[tuple[str, int, int]] = set()
-    needle = f"{sheet}!{row}"
-    for edge in edges:
-        source = str(edge.get("source") or "")
-        target = str(edge.get("target") or "")
-        if not _ref_on_row(source, sheet, row) and needle not in source.replace("$", ""):
-            continue
-        parsed = _parse_sheet_addr(target)
-        if parsed is None:
-            continue
-        tgt_sheet, col, tgt_row = parsed
-        if (tgt_sheet, tgt_row, col) in seen:
-            continue
-        if tgt_sheet == sheet and tgt_row == row and col in known_cols:
-            continue
-        cell = by_addr.get((tgt_sheet, tgt_row, col))
-        cached = None if cell is None else cell.get("cached_value")
-        fmt = None if cell is None else cell.get("number_format")
-        displayed = display_cell_text(
-            cached if cached is not None else None, fmt, date1904=date1904
-        )
-        seen.add((tgt_sheet, tgt_row, col))
-        out.append(
-            RoleCell(
-                addr=f"{tgt_sheet}!{format_addr(col, tgt_row)}",
-                col=col,
-                role="value",
-                cached_value=displayed if displayed is not None else cached,
-                formula=None if cell is None else cell.get("formula_raw"),
-                formula_template=None if cell is None else cell.get("formula_template"),
-            )
-        )
-        if len(out) >= limit:
-            break
-    return out
-
-
-def _ref_on_row(ref: str, sheet: str, row: int) -> bool:
-    parsed = _parse_sheet_addr(ref)
-    if parsed is None:
-        return False
-    ref_sheet, _col, ref_row = parsed
-    return ref_sheet == sheet and ref_row == row
-
-
-def _parse_sheet_addr(ref: str) -> tuple[str, int, int] | None:
-    if "!" not in ref:
-        return None
-    sheet, addr = ref.rsplit("!", 1)
-    sheet = sheet.strip().strip("'").replace("''", "'")
-    addr = addr.split(":")[0].replace("$", "")
-    try:
-        col, row = parse_addr(addr)
-    except ValueError:
-        return None
-    return sheet, col, row

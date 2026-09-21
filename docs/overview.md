@@ -11,6 +11,7 @@
 | Блоки, оси периодов, лейблы строк | [layout.md](layout.md) |
 | Каскад маппинга, сигналы, пороги, glossary | [mapping.md](mapping.md) |
 | Таксономия: поля, семейства id, как добавлять смысл | [taxonomy.md](taxonomy.md) |
+| Cell-level граф формул, циклы, trace | [graph.md](graph.md) |
 | Разбор `unknown` / `unmapped.json` после прогона | [review.md](review.md) |
 
 ## Что на входе и на выходе
@@ -22,10 +23,11 @@
 | Артефакт | Содержание |
 | --- | --- |
 | `raw/` | Ячейки, формулы, кэш, форматы |
-| `ir/` | Шаблоны формул, AST, рёбра зависимостей |
+| `ir/` | Шаблоны, AST, `edges.parquet` (как в формуле) и `cell_edges.parquet` (развёрнутые ячейки) |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `context.json` | Схема `1.4.0`: `timeline` (фазы model year), блоки, `unmapped` (abstained серии), `excluded`, полный `inventory`, `mapping_stats` |
+| `graph.json` | Сводка графа: counts, циклы, пути к parquet (без формул и значений) |
+| `context.json` | Схема `1.4.0`: `timeline`, блоки с `values` (кэш + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats`, pointer `graph` |
 | `context.md` | Две метрики в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}`; `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 
@@ -33,11 +35,11 @@
 
 ## Пайплайн
 
-`parse → compile → layout → mapping → build → render`.
+`parse → compile → layout → mapping → graph → build → render`.
 
 Каскад маппинга резолвит `fact` / `flag` / `helper`. Если детектор не собрал ни timeline, ни params (проза / навигация) или не нашёл лейблы статей, fact-строк нет: статус может быть `succeeded` при пустом контексте — это layout, не таксономия. Подробности: [layout.md](layout.md).
 
-Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они в `inventory` без периодных рядов. Значения периодной оси — у `fact` / `flag` / `helper` timeline-блоков; у params — role-tagged ячейки (`value` / `unit` / `scenario` / `total` / `note`) и при необходимости `precedent_cells` с графа. Даунстрим видит лейбл, `label_path`, соседей ±2, отпечаток формулы, hints, кандидатов и эти ячейки — не сырой дамп всех чисел листа.
+Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они в `inventory` без периодных рядов. Значения периодной оси — у `fact` / `flag` / `helper` timeline-блоков; у params — role-tagged ячейки (`value` / `unit` / `scenario` / `total` / `note`). Формулы и adjacency — в IR / [graph.md](graph.md), не в inventory. Даунстрим в отчёте видит лейбл, `label_path`, соседей ±2, отпечаток формулы, hints, кандидатов и кэш по периодам.
 
 Опциональны embeddings и chat (OpenAI-совместимый endpoint, по умолчанию LM Studio). Без них остаются structure + lexical + glossary, затем `unknown` с кандидатами.
 

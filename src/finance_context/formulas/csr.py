@@ -82,28 +82,56 @@ def _take(
     return out, truncated
 
 
+def expand_cell_edges(
+    edges: list[Edge], known_nodes: set[str] | None = None
+) -> list[tuple[str, str, str, bool, bool, bool]]:
+    """Expand formula edges to cell-to-cell rows."""
+    known = known_nodes or set()
+    rows: list[tuple[str, str, str, bool, bool, bool]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for edge in edges:
+        for target, unresolved, truncated in _expanded_targets(edge):
+            dangling = bool(target) and target not in known and not unresolved
+            key = (edge.source, target, edge.kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append((edge.source, target, edge.kind, unresolved, truncated, dangling))
+    return rows
+
+
+def _expanded_targets(edge: Edge) -> list[tuple[str, bool, bool]]:
+    if not edge.target:
+        return []
+    if edge.kind == "range" and not edge.unresolved and "!" in edge.target:
+        try:
+            cells, trunc = expand_range(edge.target)
+        except ValueError:
+            return [(edge.target, True, False)]
+        if trunc:
+            edge.truncated = True
+        return [(cell, False, trunc) for cell in cells]
+    if edge.kind in {"ref", "cross_sheet"}:
+        return [(edge.target, edge.unresolved, edge.truncated)]
+    return [(edge.target, True, edge.truncated)]
+
+
 def build_csr(
     edges: list[Edge], extra_nodes: list[str] | None = None
 ) -> CsrGraph:
     nodes: set[str] = set(extra_nodes or [])
     pairs: list[tuple[str, str]] = []
     truncated_sources: set[str] = set()
-    for edge in edges:
-        nodes.add(edge.source)
-        if edge.kind == "range" and edge.target:
-            if edge.unresolved or "!" not in edge.target:
-                nodes.add(edge.target)
-                continue
-            cells, trunc = expand_range(edge.target)
-            if trunc:
-                truncated_sources.add(edge.source)
-                edge.truncated = True
-            for cell in cells:
-                nodes.add(cell)
-                pairs.append((edge.source, cell))
-        elif edge.target and edge.kind in {"ref", "cross_sheet"}:
-            nodes.add(edge.target)
-            pairs.append((edge.source, edge.target))
+    known = set(nodes)
+    for source, target, kind, unresolved, truncated, _dangling in expand_cell_edges(edges, known):
+        nodes.add(source)
+        nodes.add(target)
+        if truncated:
+            truncated_sources.add(source)
+        if unresolved or kind in {"dynamic", "external"}:
+            continue
+        if kind in {"ref", "cross_sheet", "range"}:
+            pairs.append((source, target))
 
     ordered = sorted(nodes)
     index = {name: i for i, name in enumerate(ordered)}

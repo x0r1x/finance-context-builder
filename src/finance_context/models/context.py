@@ -40,9 +40,7 @@ class PeriodValue(BaseModel):
     header_text: str
     role: str
     cached_value: str | None = None
-    formula: str | None = None
-    formula_template: str | None = None
-    unparsed: bool = False
+    has_formula: bool = False
     number_format: str | None = None
     source: SourceRef
     missing_cached_value: bool = False
@@ -77,8 +75,6 @@ class RoleCell(BaseModel):
     col: int
     role: str
     cached_value: str | None = None
-    formula: str | None = None
-    formula_template: str | None = None
 
 
 class MetricSeries(BaseModel):
@@ -102,12 +98,9 @@ class MetricSeries(BaseModel):
     formula_fingerprint: str | None = None
     formula_exceptions: list[str] = Field(default_factory=list)
     numeric_summary: NumericSummary | None = None
-    precedents_rows: list[str] = Field(default_factory=list)
-    dependents_rows: list[str] = Field(default_factory=list)
     candidates: list[CandidateHit] = Field(default_factory=list)
     hints: RowHints = Field(default_factory=RowHints)
     cells: list[RoleCell] = Field(default_factory=list)
-    precedent_cells: list[RoleCell] = Field(default_factory=list)
 
 
 class InventoryRow(BaseModel):
@@ -129,12 +122,9 @@ class InventoryRow(BaseModel):
     formula_fingerprint: str | None = None
     formula_exceptions: list[str] = Field(default_factory=list)
     numeric_summary: NumericSummary | None = None
-    precedents_rows: list[str] = Field(default_factory=list)
-    dependents_rows: list[str] = Field(default_factory=list)
     candidates: list[CandidateHit] = Field(default_factory=list)
     hints: RowHints = Field(default_factory=RowHints)
     cells: list[RoleCell] = Field(default_factory=list)
-    precedent_cells: list[RoleCell] = Field(default_factory=list)
 
 
 class ModelPeriod(BaseModel):
@@ -190,6 +180,18 @@ class ArtifactMeta(BaseModel):
     error: str | None = None
 
 
+class GraphPointer(BaseModel):
+    artifact: str = "graph.json"
+    cell_edges: str = "ir/cell_edges.parquet"
+    index: str = "ir/graph_index.parquet"
+    nodes: int = 0
+    edges: int = 0
+    cycles_unexpected: int = 0
+    cycles_iterative: int = 0
+    unresolved: int = 0
+    dangling: int = 0
+
+
 class MappingStats(BaseModel):
     """Coverage of layout rows. `unmapped` on the document is abstained series, not inventory without concept_id."""
 
@@ -213,4 +215,5 @@ class ContextDocument(BaseModel):
     excluded: list[MetricSeries] = Field(default_factory=list)
     inventory: list[InventoryRow] = Field(default_factory=list)
     mapping_stats: MappingStats = Field(default_factory=MappingStats)
+    graph: GraphPointer = Field(default_factory=GraphPointer)
     warnings: list[str] = Field(default_factory=list)

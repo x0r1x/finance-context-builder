@@ -97,7 +97,8 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.source.cell_ref == "CF!A2"
     assert metric.values[0].cached_value == "320000"
     assert metric.values[0].source.cell_ref == "CF!B2"
-    assert metric.values[1].formula == "=B2"
+    assert metric.values[1].has_formula is True
+    assert metric.values[0].has_formula is False
     assert metric.mapping.method == "rule"
     assert metric.unit == "currency"
     assert doc.unmapped == []
@@ -223,14 +224,12 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
             "cached_value": "10",
         }
     ]
-    edges = [{"source": "CF!B2", "target": "CF!C3", "kind": "ref"}]
     doc = build_context(
         job_id="abc",
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=layout,
         mapping=mapping,
-        edges=edges,
     )
     assert [row.kind for row in doc.inventory] == ["abstract", "fact", "helper"]
     assert len(doc.inventory) == 3
@@ -242,7 +241,6 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert cash.formula_fingerprint == "=RC[1]"
     assert cash.candidates[0].concept_id == "bs.cash"
     assert cash.hints.time_semantics in {"bop", "flow", "eop"}
-    assert "CF!3" in cash.precedents_rows
     assert not any("Content completeness" in warning for warning in doc.warnings)
     abstract = doc.inventory[0]
     assert abstract.concept_id is None
@@ -299,7 +297,7 @@ def test_zero_cached_formula_is_not_missing() -> None:
     assert "CF!C2" in summary[0]
 
 
-def test_build_exports_role_and_precedent_cells() -> None:
+def test_build_exports_role_cells_not_graph_samples() -> None:
     layout = Layout(
         sheets=[
             SheetLayout(
@@ -372,21 +370,15 @@ def test_build_exports_role_and_precedent_cells() -> None:
             "cached_value": "0.065",
         },
     ]
-    edges = [
-        {"source": "Construction!E26", "target": "Construction!C26"},
-        {"source": "Construction!E26", "target": "Debt!F3"},
-    ]
     doc = build_context(
         job_id="abc",
         workbook_meta={"sheets": [{"name": "Construction"}, {"name": "Debt"}]},
         cells=cells,
         layout=layout,
         mapping=mapping,
-        edges=edges,
     )
     series = doc.blocks[0].metrics[0]
     assert any(cell.role == "value" and cell.addr == "C26" for cell in series.cells)
-    assert any(cell.addr.endswith("F3") for cell in series.precedent_cells)
     assert len(series.candidates) == 3
     inv = doc.inventory[0]
-    assert inv.cells and inv.precedent_cells
+    assert inv.cells
