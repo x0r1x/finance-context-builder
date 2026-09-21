@@ -25,9 +25,10 @@ _HEADER_ROLES: dict[str, str] = {
     "notes": "note",
 }
 _UNIT_TEXT = re.compile(
-    r"^(k?£|k?\$|€|₽|%|years?|year|months?|month|days?|day|"
-    r"veh/?year|per year|of margin|mw|mwh|£/year|\$/year|text|date|"
-    r"1/2/3|k£)$",
+    r"^(k?[£$€₽]|gbp|usd|eur|euro|pound|руб\.?|долл\.?|евро|"
+    r"%|years?|year|months?|month|days?|day|"
+    r"veh/?year|per year|of margin|mw|mwh|£/year|\$/year|€/year|"
+    r"text|date|1/2/3|k£)$",
     re.IGNORECASE,
 )
 _PROSE_MIN = 80
@@ -110,7 +111,9 @@ def unit_kind_from_text(text: str | None) -> str | None:
         return None
     if "%" in blob or blob in {"per year", "of margin"}:
         return "rate"
-    if any(token in blob for token in ("£", "$", "€", "₽")):
+    from finance_context.context.measure import currency_code_from_text
+
+    if currency_code_from_text(text):
         return "money"
     if any(token in blob for token in ("year", "month", "day", "veh", "mw", "count")):
         return "count"

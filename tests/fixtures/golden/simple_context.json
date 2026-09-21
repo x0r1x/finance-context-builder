@@ -19,9 +19,12 @@
           "formula_fingerprint": null,
           "hidden": false,
           "hints": {
+            "currency": null,
             "escalation": null,
             "nature": null,
+            "scale": null,
             "segment": null,
+            "sign": null,
             "statement": null,
             "time_semantics": null,
             "unit": null

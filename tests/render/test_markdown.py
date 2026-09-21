@@ -11,6 +11,7 @@ from finance_context.models.context import (
     MetricSeries,
     PeriodValue,
     RoleCell,
+    RowHints,
     SourceRef,
     WorkbookRaw,
 )
@@ -355,6 +356,38 @@ def test_markdown_renders_parameters_table() -> None:
     assert "Tax Rate" in rendered
     assert "%" in rendered
     assert "pnl.tax_rate" in rendered
+
+
+def test_markdown_parameters_unit_from_measure_hints() -> None:
+    doc = ContextDocument(
+        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
+        workbook=WorkbookRaw(sheets=["P&L"], sheet_count=1, cell_count=1),
+        blocks=[
+            FinancialBlock(
+                block_id="P&L!r1",
+                sheet="P&L",
+                label_col=1,
+                kind="params",
+                periods=[{"col": 2, "text": "Values", "role": "value", "period_key": "value"}],
+                metrics=[
+                    MetricSeries(
+                        row_key="P&L|4|P&L!r1",
+                        label="Revenue k£",
+                        article_role="assumption",
+                        unit="money",
+                        mapping=MappingEvidence(method="rule", confidence="high", score=0.9),
+                        source=SourceRef(sheet="P&L", addr="A4", row=4, col=1),
+                        hints=RowHints(unit="money", currency="GBP", scale="k"),
+                        cells=[
+                            RoleCell(addr="B4", col=2, role="value", cached_value="10"),
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+    rendered = render_markdown(doc)
+    assert "| k£ |" in rendered
 
 
 def test_markdown_parameters_leads_with_scenario_selector() -> None:

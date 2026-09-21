@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from finance_context.context.measure import Measure
 from finance_context.mapping.eval import concept_coverage, content_completeness
 from finance_context.models.context import (
     ContextDocument,
@@ -237,7 +238,14 @@ def _params_table(
     ]
     for series in rows[:max_rows]:
         unit = next((c.cached_value for c in series.cells if c.role == "unit"), "") or (
-            series.unit or series.hints.unit or ""
+            Measure(
+                unit=series.hints.unit,
+                currency=series.hints.currency,
+                scale=series.hints.scale,
+            ).display()
+            or series.unit
+            or series.hints.unit
+            or ""
         )
         value = next(
             (c.cached_value for c in series.cells if c.role == "value"),

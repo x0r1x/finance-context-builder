@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+from finance_context.context.measure import parse_measure
 from finance_context.context.timeline import annotate_block_periods, build_timeline
 from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
-from finance_context.layout.params import is_scenario_selector_label, unit_kind_from_text
+from finance_context.layout.params import is_scenario_selector_label
 from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.eval import context_report_metrics, inventory_coverage_counts
 from finance_context.mapping.graph import cell_ref_row, row_adjacency, row_key_ref
@@ -144,13 +145,21 @@ def build_context(
                     ),
                     None,
                 )
+                formats = _row_number_formats(
+                    sheet_name=sheet.name,
+                    row_num=layout_row.row,
+                    headers=row_headers,
+                    by_addr=by_addr,
+                )
                 hints = _hints_for(
                     mapped,
                     layout_row,
                     unit_text,
                     sheet=sheet.name,
                     parent=parent,
+                    number_formats=formats,
                 )
+                series_unit = hints.unit
                 role_ctx = RowContext(
                     row_key=row_key,
                     sheet=sheet.name,
@@ -174,7 +183,6 @@ def build_context(
                     secondary = list(
                         dict.fromkeys([*mapped.secondary_concepts, *secondary])
                     )
-                series_unit = unit_kind_from_text(unit_text)
                 candidates = _candidates_for(mapped)
                 if layout_row.kind in _SERIES_KINDS and not (
                     layout_row.kind == "fact" and is_noise_label(layout_row.label)
@@ -419,12 +427,28 @@ def _series_for_row(
                 formula=str(formula) if formula else None,
             )
         )
-    unit_from_cell = unit_kind_from_text(
-        next((item.cached_value for item in role_cells if item.role == "unit"), None)
+    unit_from_cell = next(
+        (item.cached_value for item in role_cells if item.role == "unit"), None
     )
-    unit = unit_from_cell or _unit_from_values(values)
-    if hints.unit is None:
-        hints = hints.model_copy(update={"unit": unit})
+    formats = [item.number_format for item in values if item.number_format]
+    measure = parse_measure(
+        unit_from_cell,
+        layout_row.label,
+        formats,
+        concept_id=mapped.concept_id if mapped else None,
+        statement=hints.statement,
+        nature=hints.nature,
+        time_semantics=hints.time_semantics,
+    )
+    unit = measure.unit or hints.unit
+    hints = hints.model_copy(
+        update={
+            "unit": unit,
+            "currency": hints.currency or measure.currency,
+            "scale": hints.scale or measure.scale,
+            "sign": hints.sign or measure.sign,
+        }
+    )
     return MetricSeries(
         row_key=mapped.row_key if mapped else f"{sheet_name}|{row_num}|{block_id}",
         label=mapped.label if mapped else layout_row.label,
@@ -463,18 +487,20 @@ def _relations_for_block(relations: list[RowRelation], block_id: str) -> list[di
     return out
 
 
-def _unit_from_values(values: list[PeriodValue]) -> str | None:
-    for item in values:
-        fmt = item.number_format
-        if not fmt:
-            continue
-        if "%" in fmt:
-            return "percent"
-        if "$" in fmt or "USD" in fmt.upper():
-            return "currency"
-        if "₽" in fmt or "RUB" in fmt.upper():
-            return "currency"
-    return None
+def _row_number_formats(
+    *,
+    sheet_name: str,
+    row_num: int,
+    headers: list,
+    by_addr: dict[tuple[str, int, int], dict],
+) -> list[str]:
+    out: list[str] = []
+    for header in headers:
+        cell = by_addr.get((sheet_name, row_num, header.col))
+        fmt = None if cell is None else cell.get("number_format")
+        if fmt:
+            out.append(str(fmt))
+    return out
 
 
 def _neighbors(labels: list[str], index: int, span: int = 2) -> list[str]:
@@ -505,12 +531,12 @@ def _hints_for(
     *,
     sheet: str = "",
     parent: str | None = None,
+    number_formats: list[str] | None = None,
 ) -> RowHints:
     concept_id = mapped.concept_id if mapped else None
     blob, tokens = _hint_blob_and_tokens(layout_row.label or "")
     nature = None
     time_semantics = None
-    unit = unit_kind_from_text(unit_text)
     statement = statement_for_row(
         concept_id=concept_id,
         sheet=sheet,
@@ -526,21 +552,37 @@ def _hints_for(
     elif "closing" in tokens or "c/f" in blob or "carried forward" in blob:
         time_semantics = "eop"
         nature = "balance"
-    elif unit == "rate" or any(token in tokens for token in ("rate", "ratio", "%")):
-        time_semantics = "rate"
-    elif layout_row.kind == "fact":
-        time_semantics = "flow"
     if statement == "bs" or (concept_id and concept_id.startswith("bs.")):
         nature = nature or "balance"
     elif statement in {"pnl", "cf"}:
         nature = nature or "flow"
+    if time_semantics is None and (
+        any(token in tokens for token in ("rate", "ratio", "%"))
+    ):
+        time_semantics = "rate"
+    elif layout_row.kind == "fact" and time_semantics is None:
+        time_semantics = "flow"
     if time_semantics == "flow" and nature == "balance":
         time_semantics = "stock"
+    measure = parse_measure(
+        unit_text,
+        layout_row.label,
+        number_formats,
+        concept_id=concept_id,
+        statement=statement,
+        nature=nature,
+        time_semantics=time_semantics,
+    )
+    if measure.unit == "rate" and time_semantics in {None, "flow"}:
+        time_semantics = "rate"
     return RowHints(
         nature=nature,
         time_semantics=time_semantics,
         statement=statement,
-        unit=unit,
+        unit=measure.unit,
+        currency=measure.currency,
+        scale=measure.scale,
+        sign=measure.sign,
         segment=_segment_hint(blob, tokens),
         escalation=_escalation_hint(blob, tokens),
     )
