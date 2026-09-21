@@ -4,7 +4,6 @@ from collections import defaultdict
 
 from finance_context.mapping.facets import prune_candidates
 from finance_context.mapping.knn import COSINE_GAP, COSINE_MIN, TOP_K
-from finance_context.mapping.rowroles import infer_row_roles
 from finance_context.mapping.models import (
     Candidate,
     Concept,
@@ -13,6 +12,8 @@ from finance_context.mapping.models import (
     MappedRow,
     RowContext,
 )
+from finance_context.mapping.rowroles import infer_row_roles
+from finance_context.mapping.semantics import classify_semantics
 from finance_context.mapping.structure import BookView, Signal
 
 ACCEPT_MIN = 0.82
@@ -104,6 +105,15 @@ def to_mapped(
     if exclusion_reason is None and disposition == "abstained":
         exclusion_reason = _abstain_reason(ranked)
     role, secondary = infer_row_roles(ctx, concept_id)
+    alternatives = [(c.concept_id, c.score) for c in ranked[:TOP_K]]
+    identity, reporting_roles, cash = classify_semantics(
+        label=ctx.label,
+        concept_id=concept_id,
+        score=score if concept_id else None,
+        alternatives=alternatives,
+        context_role=role,
+        secondary_concepts=secondary,
+    )
     return MappedRow(
         row_key=ctx.row_key,
         sheet=ctx.sheet,
@@ -116,12 +126,15 @@ def to_mapped(
         source=source,  # type: ignore[arg-type]
         score=score if concept_id else None,
         confidence=_confidence(source, score),
-        alternatives=[(c.concept_id, c.score) for c in ranked[:TOP_K]],
+        alternatives=alternatives,
         evidence=picked.evidence if picked is not None else None,
         disposition=disposition,
         exclusion_reason=exclusion_reason,
         context_role=role,
         secondary_concepts=secondary,
+        semantic_identity=identity,
+        reporting_roles=reporting_roles,
+        cash_semantics=cash,
     )
 
 

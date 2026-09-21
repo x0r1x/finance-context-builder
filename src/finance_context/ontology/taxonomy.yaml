@@ -110,10 +110,10 @@ patterns:
       section_contains: [capex, uses]
       unless:
         any:
-          - {label_contains: [sources, drawdown, equity, interest, total uses, total sources,
-              lifetime, turbine, capacity, inflation, cpi, escalation, mw, share premium,
-              share capital, goodwill, balance b, balance c, brought forward, carried forward,
-              b/f, c/f, loan amount, full-wrap, due diligence, duration]}
+          - {label_contains: [sources, drawdown, equity, interest, fee, arrangement, total uses,
+              total sources, lifetime, turbine, capacity, inflation, cpi, escalation, mw,
+              share premium, share capital, goodwill, balance b, balance c, brought forward,
+              carried forward, b/f, c/f, loan amount, full-wrap, due diligence, duration]}
           - {label_in: [debt]}
   - concept: pnl.opex
     score: 0.9

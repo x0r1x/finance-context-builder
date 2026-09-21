@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finance_context.layout.models import RowKind
+from finance_context.models.context import CashSemantics, ReportingRole, SemanticIdentity
 
 ArticleRole = Literal[
     "assumption",
@@ -169,6 +170,9 @@ class MappedRow(BaseModel):
     exclusion_reason: ExclusionReason | None = None
     context_role: str | None = None
     secondary_concepts: list[str] = Field(default_factory=list)
+    semantic_identity: SemanticIdentity | None = None
+    reporting_roles: list[ReportingRole] = Field(default_factory=list)
+    cash_semantics: CashSemantics | None = None
 
 
 class MappingQuestion(BaseModel):

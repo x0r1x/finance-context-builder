@@ -30,12 +30,7 @@ class LexicalSignal:
         hits: dict[str, Candidate] = {}
         tokens = _expand_tokens(n.split())
         extra = section_tokens(ctx)
-        skipped = {
-            pattern.skip_concept
-            for pattern in self.patterns
-            if pattern.skip_concept
-            and pattern_matches(pattern.when, label=n, tokens=tokens, section=extra)
-        }
+        skipped = skipped_concept_ids(ctx, self.patterns)
         for pattern in self.patterns:
             if not pattern.concept or pattern.concept not in book.taxonomy:
                 continue
@@ -67,6 +62,21 @@ class LexicalSignal:
                     evidence=f"label matches {phrase!r}",
                 )
         return list(hits.values())
+
+
+def skipped_concept_ids(ctx: RowContext, patterns: list[LexicalPattern]) -> set[str]:
+    """Concepts a skip-pattern forbids in this row's section. Glossary must honor the same guard."""
+    label = normalize_label(ctx.label)
+    if not label:
+        return set()
+    tokens = _expand_tokens(label.split())
+    section = section_tokens(ctx)
+    return {
+        pattern.skip_concept
+        for pattern in patterns
+        if pattern.skip_concept
+        and pattern_matches(pattern.when, label=label, tokens=tokens, section=section)
+    }
 
 
 def _blocked_by_anti(label: str, concept: Concept, raw: str | None = None) -> bool:

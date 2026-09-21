@@ -97,7 +97,7 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 
 **Прочее** — `val.npv` / `irr` / `wacc` / `val.coc` (Cost of capital, если это не тот же WACC) / `val.fcfe_equity` / `val.total_investment`; `ops.headcount`; `fx.*` (курс и переоценки).
 
-Одинаковый человеческий лейбл может быть **двумя** концептами. Пример: `Other Income` в секции REVENUE EARNED → `pnl.other_income` (`basis: accrual`); в CASH INFLOWS → `cf.receipts.other` (`basis: cash`). `Income Tax` на P&L → `pnl.tax`; на CFS → `cf.tax_paid` (skip + pattern + statement crosswalk alias). `Gross Revenues` на CFS → `cf.receipts`, не `pnl.revenue` и не `cf.cfads`. `DSCR minimum` (константа ковенанта) → `cov.dscr_limit`; `Minimum Debt Service Coverage Ratio` (статистика ряда) → `cov.dscr`. Разведение — фасеты, паттерны и роли строки (`context_role`, `secondary_concepts`), не несколько победителей каскада.
+Одинаковый человеческий лейбл может быть **двумя** концептами. Пример: `Other Income` в секции REVENUE EARNED → `pnl.other_income` (`basis: accrual`); в CASH INFLOWS → `cf.receipts.other` (`basis: cash`). `Income Tax` на P&L → `pnl.tax`; на CFS → `cf.tax_paid` (skip + pattern + statement crosswalk alias). `Gross Revenues` на CFS → `cf.receipts`, не `pnl.revenue` и не `cf.cfads`. `DSCR minimum` (константа ковенанта) → `cov.dscr_limit`; `Minimum Debt Service Coverage Ratio` (статистика ряда) → `cov.dscr`. Разведение — фасеты, паттерны и роли строки (`context_role`, `secondary_concepts`, `semantic_identity`, `reporting_roles`, `cash_semantics`), не несколько победителей каскада. Выбранный `concept_id` — слот отчёта. Экономический смысл лежит в `semantic_identity` и может быть другим id того же семейства (`cf.receipts` при identity `pnl.revenue`).
 
 ## Когда что менять
 

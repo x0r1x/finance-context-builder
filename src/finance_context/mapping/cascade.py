@@ -78,7 +78,7 @@ def map_layout(
     resolver = Resolver(taxonomy)
     pending = _collect_contexts(book, templates)
     signals = [
-        GlossarySignal(glossary),
+        GlossarySignal(glossary, merged_patterns),
         LexicalSignal(taxonomy, merged_patterns),
         StructureSignal(),
     ]
