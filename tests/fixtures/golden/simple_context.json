@@ -5,9 +5,24 @@
       "grain": "year",
       "kind": "timeline",
       "label_col": 1,
-      "metrics": [
+      "periods": [
         {
-          "article_role": "database_like",
+          "col": 2,
+          "period_key": "2023",
+          "role": "historical",
+          "text": "2023"
+        },
+        {
+          "col": 3,
+          "period_key": "2024E",
+          "role": "forecast",
+          "text": "2024E"
+        }
+      ],
+      "relations": [],
+      "rows": [
+        {
+          "article_role": null,
           "candidates": [],
           "cash_semantics": null,
           "cells": [],
@@ -16,8 +31,8 @@
           "context_role": null,
           "disposition": "mapped",
           "exclusion_reason": null,
+          "formula": "=RC[-1]",
           "formula_exceptions": [],
-          "formula_fingerprint": null,
           "hidden": false,
           "hints": {
             "currency": null,
@@ -28,10 +43,10 @@
             "sign": null,
             "statement": null,
             "time_semantics": null,
-            "unit": null
+            "unit": "money"
           },
           "indent": 0,
-          "kind": null,
+          "kind": "fact",
           "label": "Opening cash",
           "label_path": [],
           "mapping": {
@@ -48,71 +63,21 @@
           "numeric_summary": null,
           "parent_label": null,
           "reporting_roles": [],
+          "row": 2,
           "row_key": "CF|2|CF!r1",
           "secondary_concepts": [],
           "semantic_identity": null,
-          "source": {
-            "addr": "A2",
-            "col": 1,
-            "row": 2,
-            "sheet": "CF"
-          },
-          "unit": null,
+          "sheet": "CF",
+          "unit": "money",
           "values": [
-            {
-              "cached_value": "100",
-              "formula": null,
-              "has_formula": false,
-              "header_text": "2023",
-              "missing_cached_value": false,
-              "number_format": null,
-              "period_key": "2023",
-              "role": "historical",
-              "source": {
-                "addr": "B2",
-                "col": 2,
-                "row": 2,
-                "sheet": "CF"
-              }
-            },
-            {
-              "cached_value": "110",
-              "formula": null,
-              "has_formula": true,
-              "header_text": "2024E",
-              "missing_cached_value": false,
-              "number_format": null,
-              "period_key": "2024E",
-              "role": "forecast",
-              "source": {
-                "addr": "C2",
-                "col": 3,
-                "row": 2,
-                "sheet": "CF"
-              }
-            }
+            "100",
+            "110"
           ]
         }
       ],
-      "periods": [
-        {
-          "col": 2,
-          "period_key": "2023",
-          "role": "historical",
-          "text": "2023"
-        },
-        {
-          "col": 3,
-          "period_key": "2024E",
-          "role": "forecast",
-          "text": "2024E"
-        }
-      ],
-      "relations": [],
       "sheet": "CF"
     }
   ],
-  "excluded": [],
   "graph": {
     "artifact": "graph.json",
     "cell_edges": "ir/cell_edges.parquet",
@@ -126,15 +91,14 @@
     "nodes": 0,
     "unresolved": 0
   },
-  "inventory": [],
   "mapping_stats": {
     "abstained": 0,
     "abstract": 0,
-    "concept_coverage": 0.0,
+    "concept_coverage": 1.0,
     "content_completeness": 1.0,
     "excluded": 0,
-    "inventory_rows": 0,
-    "mapped": 0,
+    "inventory_rows": 1,
+    "mapped": 1,
     "mapping_quality": {
       "confidence_threshold_passed": false,
       "formula_coverage": 0.0,
@@ -150,15 +114,14 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.8.0",
+    "schema_version": "1.9.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.8.0",
+  "schema_version": "1.9.0",
   "timeline": null,
-  "unmapped": [],
   "warnings": [],
   "workbook": {
     "cell_count": 4,

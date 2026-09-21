@@ -14,9 +14,7 @@ flowchart LR
   graph --> build
   build --> json[context.json]
   graph --> gjson[graph.json]
-  graph --> gedges[graph-edges.json]
-  graph --> gdangle[graph-dangling.json]
-  graph --> gform[formulas.json]
+  gjson --> gmd[graph.md]
   json --> render
   render --> md[context.md]
   mapping -.-> llm[ChatPort / EmbedPort]
@@ -28,9 +26,9 @@ flowchart LR
 2. **Formulas** (`ir/cells.parquet`, `ir/edges.parquet`, `ir/cell_edges.parquet`): templates, AST, formula-level edges, and expanded cell→cell edges (`dangling` / `dangling_reason` / `status` / `reason` / `evidence` / `range_ref` / `truncated`). Named ranges such as `DS_Drawn_C:DS_Drawn_N` stay unresolved. Unsupported formulas are marked `unparsed`. A range may repeat the sheet qualifier on the right (`SUM(TBA!$D$10:'TBA'!D10)`). Binary templates keep operator parentheses, e.g. `(1+Sub_Growth_M)^(R[-4]C[0]-1)`. A blank on a parsed sheet is `empty` / `actual_blank_cell`. A populated XML cell missing from the index is `parser_resolution_failure`.
 3. **Layout** (`layout.json`): statement-like blocks, period axes (calendar years/dates **or** model-year indices `Y1..Yn`), or `params` blocks when there is no axis; grain, label span, row kinds, section path, and role-tagged non-period cells. Details: [layout.md](layout.md).
 4. **Mapping** (`mapping.json`): entity linking with abstention. Signals propose candidates from label, section, ±2 neighbors, formula shape, and the IR edge graph; a resolver fuses, prunes by taxonomy facets, and maps only above a confidence threshold. Otherwise the row is `unknown` and may become a question. Top-3 candidates are always stored. LLM sees labels, section path, neighbors, and period headers — not numeric values.
-5. **Graph** (`graph.json` schema `1.4.0`, `graph-edges.json`, `graph-dangling.json`, `formulas.json`, `ir/graph_index.parquet`): cell-level formula graph of record. Index joins `period_id` / `row_key` / `concept_id`. Each audit edge names `formula_cell` (`source`: the cell that owns the formula) and `precedent` (`target`: the referenced cell), plus `period_id`, A1 `formula`, `anchors` (`abs_col` / `abs_row`, and range end flags), `reference_kind`, and `resolution_status`. `period_lag`, `col_offset`, `dangling_reason`, `status`, `reason`, and `evidence` stay on the edge. `graph.json` is stats, workbook `iterate`, cycle classes (`iterative_ok` vs `unexpected`) with optional `breakers`, `circularity_hints` when SCC is empty, and `dangling_classes` — not the full edge list. Verified blanks (`empty_range_member`, `empty_ref`) are materialized as `node_type=empty` and are not `graph.dangling`. `graph-dangling.json` records `period_id` and `sources` back to the formula cell and A1 range. Trace is `GET /v1/context-jobs/{id}/graph/trace`; JSON edges are `GET .../graph/edges`. Details: [graph.md](graph.md). There is no `report.json`.
-6. **Context** (`context.json`, schema `1.8.0`): canonical `ContextDocument`. `timeline` is a workbook-level model calendar (`Y1…Yn` with `phase` / `phase_year` from 0/1 flag rows on the master relative axis, or `calendar_year` on a calendar book). `inventory` lists **every** layout row (kind, `label_path`, neighbors, formula fingerprint, hints, candidates, role-tagged cells). Abstract rows use `disposition=header`. `mapping_stats.concept_coverage` is the share of annotatable rows with an accepted concept. `mapping_stats.mapping_quality` scores label support, statement/cash semantics, unit, time, and formula text. `unmapped` is abstained fact series, not inventory without `concept_id`. Period series live in `blocks` / `unmapped` / `excluded` as cached values, A1 `formula` text, and source addresses — not AST or adjacency. `graph` is a pointer plus counts (`iterate`, `dangling`, `empty_range_members`). Matching `phase` / `phase_year` are copied onto `blocks[].periods`. `block.kind` is `timeline` or `params`.
-7. **Markdown** (`context.md`): header reports **content completeness**, **concept coverage**, and **mapping quality**, then `## Timeline` when present. Timeline facts share period tables (unmapped Concept is `unknown`). Params blocks render as `## Parameters / {sheet}` (label, unit, value, scenarios, concept, ref), with the scenario selector row first when present. Then `## Excluded` and per-sheet `## Row navigator` (row, label, path, kind, concept, unit, formula fingerprint — no period values and no row-graph refs). Default cap is 16 period columns and 80 rows per table; mapping evidence, questions, and relations stay in JSON.
+5. **Graph** (`graph.json` and `graph.md`, schema `1.5.0`): summary plus one `links[]` record per formula cell (`cell`, A1 `formula` once, `refs`). `SUM(J9:J12)` stays one range ref. `nodes` and `edges` are cell-level parquet counts, not `len(links)`. The summary also carries workbook `iterate`, cycle classes (`iterative_ok` vs `unexpected`) with optional `breakers`, `circularity_hints` when SCC is empty, and `dangling_classes`. Verified blanks (`empty_range_member`, `empty_ref`) are `node_type=empty` in `ir/graph_index.parquet` and are not `graph.dangling`; they are not members of `links`. Expanded cell edges, anchors, and AST stay in `ir/cell_edges.parquet` and `ir/cells.parquet`. Trace is on demand: `GET /v1/context-jobs/{id}/graph/trace` and `GET .../graph/trace.md`. Details: [graph.md](graph.md). There is no `graph-edges.json`, `graph-dangling.json`, `formulas.json`, or `report.json`.
+6. **Context** (`context.json`, schema `1.9.0`): canonical `ContextDocument`. `timeline` is the only place for model phases (`Y1…Yn` with `phase` / `phase_year` / `flags` from 0/1 flag rows on the master relative axis, or `calendar_year` on a calendar book). Every layout row lives once inside its block (`blocks[].rows`): `row_key`, label, `label_path`, kind, `disposition`, `concept_id`, hints, candidates, one formula fingerprint, and `values` as a flat array aligned to that block’s period axis (cached value or `null`). Abstract rows use `disposition=header`. Abstained and excluded rows are the same row with `disposition`, not a second catalog. There is no top-level `inventory`, `unmapped`, or `excluded`, and no per-cell `source` or `number_format`. `mapping_stats.concept_coverage` is the share of annotatable rows with an accepted concept. `mapping_stats.mapping_quality` scores label support, statement/cash semantics, unit, time, and formula text. `graph` is a pointer plus counts (`iterate`, `dangling`, `empty_range_members`). Phase is not copied onto `blocks[].periods`. `block.kind` is `timeline` or `params`; a params block stores column roles, not a second copy of the year axis.
+7. **Markdown** (`context.md`, `graph.md`): the same documents as the JSON, rendered as tables and lists. The context header reports **content completeness**, **concept coverage**, and **mapping quality**, then `## Timeline` (including flags) when present. Every block, every row, and every period value is included. Params blocks are `## Parameters / {sheet}`. There is no 16-column or 80-row cap, no `## Excluded` section, and no row navigator. `graph.md` repeats summary, empty-cell classes, cycles, circularity hints, and every link. Trace markdown repeats the trace nodes and edges.
 
 ## Layout row kinds
 
@@ -39,10 +37,10 @@ Each body row gets `kind` and `section_path` from structure, not from label dict
 | kind | Meaning |
 | --- | --- |
 | `fact` | Period cells have numbers or formulas. Mapping candidates; period series in context. |
-| `abstract` | Section header: label without period values. Parent of following facts; kept in `inventory`. |
-| `index` | Счётчик `Week #` / `Month #`: подряд `0\|1..n` по оси и лейбл счётчика, либо без формул в периодных ячейках. In `inventory` only. |
-| `helper` | Check / tie-out / placeholder (`Spare`, `None`). Excluded from tagging; values stay in `excluded`. |
-| `flag` | 0/1 timing and scenario rows (`Mid case`, `Live Case`, `Covenant breach`, …) and params scenario **selector** (`Scenario Chosen`). Excluded; not financial `unknown`. |
+| `abstract` | Section header: label without period values. Parent of following facts; `disposition=header` on the block row. |
+| `index` | Счётчик `Week #` / `Month #`: подряд `0\|1..n` по оси и лейбл счётчика, либо без формул в периодных ячейках. Kept on the block row. |
+| `helper` | Check / tie-out / placeholder (`Spare`, `None`). `disposition=excluded`; values stay on the same row. |
+| `flag` | 0/1 timing and scenario rows (`Mid case`, `Live Case`, `Covenant breach`, …) and params scenario **selector** (`Scenario Chosen`). `disposition=excluded`; not financial `unknown`. |
 
 `needs_input` is driven only by questions on `fact` rows.
 
@@ -59,7 +57,7 @@ Mapping is retrieve-and-align, not closed-set classification. Taxonomy is a dict
 ```mermaid
 flowchart TD
   ir[IR cells and formula graph] --> struct[Structure patterns]
-  layout[Layout all rows] --> inv[Context inventory]
+  layout[Layout all rows] --> rows[Block rows]
   layout --> struct
   struct --> ctx[RowContext plus neighbors]
   ctx --> signals[Signal providers]
@@ -67,9 +65,9 @@ flowchart TD
   resolver --> decide{score >= ACCEPT_MIN}
   decide -->|yes| mapped[concept_id]
   decide -->|no| cand[top-3 candidates kept]
-  mapped --> inv
-  cand --> inv
-  inv --> json[context.json and md]
+  mapped --> rows
+  cand --> rows
+  rows --> json[context.json and md]
 ```
 
 ### Signals
@@ -92,11 +90,11 @@ Concept fields, id families, and the “new meaning vs alias” rule: [taxonomy.
 
 Concepts in [`taxonomy.yaml`](../src/finance_context/ontology/taxonomy.yaml) carry `definition`, `statements`, `value_kind` (`money` / `rate` / `ratio` / `count`), optional `role`, `broader`, `section_hints`, and `anti_labels`. Missing facets are filled from the id prefix. Division by a named constant or number is proration (still `money`). Lexical `patterns` may copy a section concept onto children (`cf.capex` under Uses); non-money assumptions must be listed in `unless`. `_semantic_ratio` matches **tokens**, not substrings. The row’s own label may mark `statement=cov` (`dscr` / `llcr` / `plcr`); a heading like DSCR does not reclassify a child `CFADS` line. A money cash-flow line cannot map to `ops.headcount` or `cov.llcr`. Covenant **limits** (`cov.dscr_limit`) are not the same id as observed DSCR.
 
-Each mapped fact/flag/helper row stores `disposition`: `mapped`, `excluded` (check/helper/flag/noise), or `abstained` (`unknown` plus a question). Always-on **hints** (`nature`, `time_semantics` flow/bop/eop/rate/stock, `statement`, `unit` money/count/rate/years, `currency` GBP/EUR/USD/RUB (symbol, ISO, and local aliases: `pound`/`фунт`, `euro`/`евро`, `dollar`/`долл`, `руб`/`РУБ`), `scale` unit/k/m/bn, `sign` inflow/outflow/stock, `segment`, `escalation`) are written even when `concept_id` is null. `k£` in a label or Units cell is money+GBP+k, not `unit: null`. Rows also carry `context_role` and `secondary_concepts` (any Uses line → secondary `cf.uses`, any Sources line → `cf.sources`) without a second cascade winner. `semantic_identity`, `reporting_roles`, and `cash_semantics` separate economic meaning, statement or layout role, and accrual/cash/noncash. A selected `concept_id` is the reporting slot, not the whole meaning. Glossary honors the same `skip_concept` guards as lexical, so one learned label cannot force `pnl.revenue` onto CFS or `bs.equity` onto Sources. The params INDEX selector is `context_role=scenario_selector` (inventory keeps the index cell; it is not an assumption article). Check and flag rows do not create review questions. A wrong tag is still worse than `unknown`; thresholds are not lowered to force a nearest concept.
+Each mapped fact/flag/helper row stores `disposition`: `mapped`, `excluded` (check/helper/flag/noise), or `abstained` (`unknown` plus a question). Always-on **hints** (`nature`, `time_semantics` flow/bop/eop/rate/stock, `statement`, `unit` money/count/rate/years, `currency` GBP/EUR/USD/RUB (symbol, ISO, and local aliases: `pound`/`фунт`, `euro`/`евро`, `dollar`/`долл`, `руб`/`РУБ`), `scale` unit/k/m/bn, `sign` inflow/outflow/stock, `segment`, `escalation`) are written even when `concept_id` is null. `k£` in a label or Units cell is money+GBP+k, not `unit: null`. Rows also carry `context_role` and `secondary_concepts` (any Uses line → secondary `cf.uses`, any Sources line → `cf.sources`) without a second cascade winner. `semantic_identity`, `reporting_roles`, and `cash_semantics` separate economic meaning, statement or layout role, and accrual/cash/noncash. A selected `concept_id` is the reporting slot, not the whole meaning. Glossary honors the same `skip_concept` guards as lexical, so one learned label cannot force `pnl.revenue` onto CFS or `bs.equity` onto Sources. The params INDEX selector is `context_role=scenario_selector` (the block row keeps the index cell; it is not an assumption article). Check and flag rows do not create review questions. A wrong tag is still worse than `unknown`; thresholds are not lowered to force a nearest concept.
 
 The resolver fuses scores, prunes incompatible facets, then accepts only above a threshold (stricter for embeddings). Empty or weak lists become `unknown` but keep top-3 `candidates`. Mapped rows store `evidence` (which signal, why). Calculation mismatch vs declared `calculations` is a **signed feature** (score down); it still abstains as `calculation_conflict` except a few keep-rules (exact `Cash Flow` under IRR/ratios).
 
-Quality is two numbers, not one: **content completeness** (`inventory` vs layout rows, must be 1.0) and **concept coverage** (share of annotatable rows with an accepted id). **Selective risk** is errors among accepted mappings. Helpers live in `finance_context.mapping.eval`.
+Quality is two numbers, not one: **content completeness** (block rows vs layout rows, must be 1.0) and **concept coverage** (share of annotatable rows with an accepted id). **Selective risk** is errors among accepted mappings. Helpers live in `finance_context.mapping.eval`.
 
 ### Learned glossary
 

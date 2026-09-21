@@ -52,8 +52,6 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("data")
     max_upload_bytes: int = 50 * 1024 * 1024
-    markdown_max_columns: int = 16
-    markdown_max_rows: int = 80
 
     llm_base_url: str | None = None
     llm_api_key: str | None = None

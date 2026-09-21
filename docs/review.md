@@ -2,29 +2,26 @@
 
 Сначала убедиться, что layout вообще отдал fact-строки. `succeeded` + `Unmapped: 0` + пустой `context.md` почти всегда значит: нет блоков или нет лейблов статей, а не «таксономия покрыла всё». Чеклист — [layout.md](layout.md).
 
-После прогона с ненулевым числом fact смотрят отказ **и** полный контент. Пустой `unmapped` / `unmapped.json` **не** значит, что у каждой строки `inventory` есть `concept_id`: заголовки (`kind=abstract`, `disposition=header`) и excluded не попадают в `unmapped`. `mapping_stats.concept_coverage` — доля annotatable facts с принятым `concept_id`. Семантику, единицы, время и формулы смотрят в `mapping_stats.mapping_quality`, не в длине массива `unmapped` и не в `concept_coverage`.
+После прогона с ненулевым числом fact смотрят отказ **и** полный контент. Пустой `unmapped.json` **не** значит, что у каждой строки блока есть `concept_id`: заголовки (`kind=abstract`, `disposition=header`) и excluded не попадают в выжимку. `mapping_stats.concept_coverage` — доля annotatable facts с принятым `concept_id`. Семантику, единицы, время и формулы смотрят в `mapping_stats.mapping_quality`, не в длине `unmapped.json` и не в `concept_coverage`.
 
 | Где | Что видно |
 | --- | --- |
 | `context.md` шапка | `Content completeness` (должно быть 1.00), `Concept coverage` (доля принятых слотов, может быть < 1) и шесть полей `mapping_quality` |
-| `context.md` блок | Timeline: строка с Concept `unknown` (плюс счётчик `Unmapped: N`). Params: `## Parameters / {sheet}` |
-| `context.md` `## Excluded` | Helper / flag / check |
-| `context.md` `## Row navigator / {sheet}` | Все layout-строки: kind, path, concept, formula fingerprint; без периодных значений и без row-graph refs |
+| `context.md` блок | Каждая строка: Kind, Disposition, Concept (`unknown` у abstain), формула и все значения оси. Params: `## Parameters / {sheet}` |
+| `context.json` → `blocks[].rows` | Все kind, включая abstract; `disposition`, role-tagged `cells`, ряд `values`; инвариант полноты |
 | `context.json` → `mapping_stats` | `inventory_rows`, `mapped`, `abstained`, `excluded`, `abstract`, `unmapped_series`, completeness, `concept_coverage`, `mapping_quality` |
-| `context.json` → `unmapped` | Серии с `values` по периодам (кэш + A1 `formula` + адрес) или `cells` (params), `candidates`, `hints`, `neighbors`. Это abstained fact-серии, не «inventory без concept_id» |
-| `context.json` → `inventory` | Все kind, включая abstract; role-tagged `cells`; инвариант полноты |
-| `context.json` → `graph` | Pointer на `graph.json` / parquet, counts, циклы, `empty_range_members` |
-| `graph.json` + `graph-edges.json` + `graph-dangling.json` + `GET .../graph/trace` | Cell-level зависимости: `formula_cell` → `precedent`, `period_id`, формула, `anchors`, `resolution_status=empty` отдельно от `unresolved`; AST в `formulas.json` / parquet |
-| `unmapped.json` | Та же выжимка атрибутов **без** `values`, плюс `ref` как в колонке Ref |
+| `context.json` → `graph` | Pointer на `graph.json` / parquet, counts, `empty_range_members` |
+| `graph.json` / `graph.md` + `GET .../graph/trace` | Сводка и formula-level `links` (диапазон одной ссылкой). Cell-level рёбра и AST — в `ir/*.parquet` |
+| `unmapped.json` | Abstained-строки **без** `values` |
 
-`scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `unmapped` из context или `rows` из mapping, оставляет `concept_id is null` и `disposition != excluded`, выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown, не с длиной navigator.
+`scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `blocks[].rows` из context (или `rows` из mapping), оставляет `disposition=abstained` и выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown.
 
-Excluded (check / helper / flag / technical) в `unmapped.json` не входят — они в `context.excluded` и в навигаторе.
+Excluded (check / helper / flag / technical) в `unmapped.json` не входят — они те же строки блока с `disposition=excluded`.
 
 ## Цикл правки
 
-1. Прогнать книгу (`uv run finance-context build …` или `bash scripts/run.sh path/to/model.xlsx` при живом `serve`). `run.sh` кладёт в `out/<run>/` ещё `graph.json`, `graph-edges.json`, `graph-dangling.json`, `formulas.json` и `graph-trace.json`.
-2. Открыть `unmapped.json` и ту же строку в `inventory` / navigator: `label`, `parent_label`, `label_path`, `neighbors`, `candidates`, `hints`, `sheet`, `ref`, `disposition`, `exclusion_reason`, `article_role`, `cells`, `unit`. Формулы и влияние на CFS — `GET .../graph/trace` ([graph.md](graph.md)).
+1. Прогнать книгу (`uv run finance-context build …` или `bash scripts/run.sh path/to/model.xlsx` при живом `serve`). `run.sh` кладёт документы в `out/<run>/json/` и `out/<run>/md/` (`context`, `graph`, `trace`) и `unmapped.json` в корень прогона.
+2. Открыть `unmapped.json` и ту же строку в `blocks[].rows` / таблице блока: `label`, `parent_label`, `label_path`, `neighbors`, `candidates`, `hints`, `sheet`, `disposition`, `exclusion_reason`, `article_role`, `cells`, `unit`, `formula`. Влияние на CFS — `GET .../graph/trace` ([graph.md](graph.md)).
 3. Для каждой строки решить класс:
 
 | Класс | Действие |
@@ -60,12 +57,12 @@ Excluded (check / helper / flag / technical) в `unmapped.json` не входя�
 
 Их либо заводят как новый концепт (если смысл повторяется между книгами), либо оставляют `unknown`. Ложный `pnl.opex` на Operating lifetime хуже, чем unknown.
 
-В Markdown таблицы режутся (по умолчанию 16 колонок и 80 строк). Navigator тоже режется по `max_rows` на лист. Если видите `_Truncated in Markdown; full series remain in JSON._`, полнота — в JSON, не в MD. На число **строк**-атрибутов в `unmapped.json` это не влияет, пока N ≤ 80 на блок.
+Markdown повторяет JSON: все колонки оси и все строки блока. Обрезки таблиц нет.
 
 ## Команды
 
 ```bash
-uv run python scripts/extract-unmapped.py out/<run>/context.json -o out/<run>/unmapped.json
+uv run python scripts/extract-unmapped.py out/<run>/json/context.json -o out/<run>/unmapped.json
 uv run python scripts/extract-unmapped.py data/jobs/<job-id>/mapping.json
 uv run pytest tests/test_extract_unmapped.py tests/eval/test_cashflow_dispositions.py tests/eval/test_corpus_dispositions.py
 ```

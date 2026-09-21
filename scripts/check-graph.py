@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the published formula-graph sidecar against context.json."""
+"""Validate context.json and graph.json, and that Markdown repeats them."""
 
 from __future__ import annotations
 
@@ -25,40 +25,16 @@ GRAPH_FORBIDDEN = frozenset(
         "precedent_cells",
         "formula_ast",
         "formula_raw",
-        "formula",
+        "formula_cell",
+        "range_member",
         "inventory",
-        "values",
         "blocks",
     }
 )
-GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "artifacts")
-ARTIFACT_REQUIRED = (
-    "cells",
-    "edges",
-    "cell_edges",
-    "index",
-    "edges_json",
-    "dangling",
-    "formulas",
-)
-GRAPH_SCHEMA_PREFIX = "1.4"
-EDGE_FIELDS = (
-    "edge_id",
-    "direction",
-    "formula_cell",
-    "precedent",
-    "source",
-    "target",
-    "relation_type",
-    "reference_kind",
-    "anchors",
-    "formula",
-    "resolution_status",
-)
-REFERENCE_KINDS = frozenset({"direct", "range_member", "external", "dynamic", "named"})
-RESOLUTION_STATUSES = frozenset(
-    {"resolved", "empty", "unresolved", "truncated", "external", "dynamic"}
-)
+GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "links", "artifacts")
+ARTIFACT_REQUIRED = ("cells", "edges", "cell_edges", "index")
+GRAPH_SCHEMA_PREFIX = "1.5"
+LINK_FIELDS = ("cell", "formula", "refs")
 
 
 def load_json(path: Path) -> Any:
@@ -80,18 +56,47 @@ def _walk_keys(node: Any) -> set[str]:
 
 def check_context(context: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    catalog = [key for key in ("inventory", "unmapped", "excluded") if key in context]
+    if catalog:
+        errors.append(
+            "context.json must not keep a second row catalog: " + ", ".join(catalog)
+        )
     forbidden = _walk_keys(context) & CONTEXT_FORBIDDEN
     if forbidden:
         errors.append(
-            "context.json must not embed formula/row-graph fields: "
-            + ", ".join(sorted(forbidden))
+            "context.json must not embed formula AST: " + ", ".join(sorted(forbidden))
         )
     pointer = context.get("graph")
     if not isinstance(pointer, dict):
         errors.append("context.json missing graph pointer")
-        return errors
-    if pointer.get("artifact") != "graph.json":
+    elif pointer.get("artifact") != "graph.json":
         errors.append("context.graph.artifact must be graph.json")
+    blocks = context.get("blocks")
+    if not isinstance(blocks, list):
+        errors.append("context.json blocks must be a list")
+        return errors
+    for block in blocks:
+        if not isinstance(block, dict):
+            errors.append("context.json blocks must be objects")
+            break
+        if "metrics" in block:
+            errors.append("context.json block must not copy rows into metrics")
+            break
+        rows = block.get("rows")
+        if not isinstance(rows, list):
+            errors.append("context.json block missing rows")
+            break
+        for row in rows:
+            if not isinstance(row, dict):
+                errors.append("context.json rows must be objects")
+                break
+            if "source" in row:
+                errors.append("context.json row must not repeat a per-cell source")
+                break
+            values = row.get("values")
+            if isinstance(values, list) and any(isinstance(item, dict) for item in values):
+                errors.append("context.json values must be a flat list aligned to the block axis")
+                break
     return errors
 
 
@@ -113,7 +118,7 @@ def check_graph(graph: dict[str, Any]) -> list[str]:
     forbidden = _walk_keys(graph) & GRAPH_FORBIDDEN
     if forbidden:
         errors.append(
-            "graph.json must not embed formulas or report rows: "
+            "graph.json must not embed AST or exploded range members: "
             + ", ".join(sorted(forbidden))
         )
     artifacts = graph.get("artifacts")
@@ -122,8 +127,27 @@ def check_graph(graph: dict[str, Any]) -> list[str]:
             path = artifacts.get(name)
             if not isinstance(path, str) or not path:
                 errors.append(f"graph.json artifacts.{name} missing")
+        for retired in ("edges_json", "dangling", "formulas"):
+            if retired in artifacts:
+                errors.append(f"graph.json artifacts.{retired} is not a public file")
     elif "artifacts" in graph:
         errors.append("graph.json artifacts must be an object")
+    links = graph.get("links")
+    if isinstance(links, list):
+        for link in links:
+            if not isinstance(link, dict):
+                errors.append("graph.json links must be objects")
+                break
+            missing_link = [key for key in LINK_FIELDS if key not in link]
+            if missing_link:
+                errors.append("graph.json links need " + ", ".join(missing_link))
+                break
+            refs = link.get("refs")
+            if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
+                errors.append("graph.json link refs must be a list of addresses")
+                break
+    elif "links" in graph:
+        errors.append("graph.json links must be a list")
     return errors
 
 
@@ -140,31 +164,83 @@ def check_pointer_matches(context: dict[str, Any], graph: dict[str, Any]) -> lis
     return errors
 
 
-def pick_origin(context: dict[str, Any]) -> str:
+def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
+    errors: list[str] = []
     for block in context.get("blocks") or []:
         if not isinstance(block, dict):
             continue
-        for metric in block.get("metrics") or []:
-            if not isinstance(metric, dict):
+        block_id = str(block.get("block_id") or "")
+        if block_id and block_id not in markdown:
+            errors.append(f"context.md missing block {block_id}")
+        for row in block.get("rows") or []:
+            if not isinstance(row, dict):
                 continue
-            for value in metric.get("values") or []:
-                if not isinstance(value, dict) or not value.get("has_formula"):
-                    continue
-                source = value.get("source") if isinstance(value.get("source"), dict) else {}
-                sheet, addr = source.get("sheet"), source.get("addr")
-                if sheet and addr:
-                    return f"{sheet}!{addr}"
-            if metric.get("concept_id"):
-                return str(metric["concept_id"])
-            if metric.get("row_key"):
-                return str(metric["row_key"])
-    for row in context.get("inventory") or []:
-        if not isinstance(row, dict):
+            label = str(row.get("label") or "")
+            if label and label not in markdown:
+                errors.append(f"context.md missing row {label}")
+                break
+            concept = row.get("concept_id")
+            if concept and str(concept) not in markdown:
+                errors.append(f"context.md missing concept {concept}")
+                break
+            formula = row.get("formula")
+            if formula and str(formula) not in markdown:
+                errors.append(f"context.md missing formula {formula}")
+                break
+    return errors
+
+
+def check_graph_markdown(graph: dict[str, Any], markdown: str) -> list[str]:
+    errors: list[str] = []
+    for key in ("nodes", "edges"):
+        if key in graph and str(graph[key]) not in markdown:
+            errors.append(f"graph.md missing {key} count {graph[key]}")
+    for link in graph.get("links") or []:
+        if not isinstance(link, dict):
             continue
-        if row.get("concept_id"):
-            return str(row["concept_id"])
-        if row.get("row_key"):
-            return str(row["row_key"])
+        cell = str(link.get("cell") or "")
+        if cell and cell not in markdown:
+            errors.append(f"graph.md missing link {cell}")
+            break
+        formula = link.get("formula")
+        if formula and str(formula) not in markdown:
+            errors.append(f"graph.md missing formula {formula}")
+            break
+    return errors
+
+
+def check_trace_markdown(trace: dict[str, Any], markdown: str) -> list[str]:
+    errors: list[str] = []
+    origin = str(trace.get("origin") or "")
+    if origin and origin not in markdown:
+        errors.append(f"trace.md missing origin {origin}")
+    for node in trace.get("nodes") or []:
+        if isinstance(node, dict) and node.get("node_id") and str(node["node_id"]) not in markdown:
+            errors.append(f"trace.md missing node {node['node_id']}")
+            break
+    for edge in trace.get("edges") or []:
+        if isinstance(edge, dict) and edge.get("target") and str(edge["target"]) not in markdown:
+            errors.append(f"trace.md missing edge target {edge['target']}")
+            break
+    if "formula_ast" in markdown:
+        errors.append("trace.md must not include formula AST")
+    return errors
+
+
+def pick_origin(context: dict[str, Any], graph: dict[str, Any] | None = None) -> str:
+    for link in (graph or {}).get("links") or []:
+        if isinstance(link, dict) and link.get("cell") and link.get("formula"):
+            return str(link["cell"])
+    for block in context.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for row in block.get("rows") or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get("concept_id"):
+                return str(row["concept_id"])
+            if row.get("row_key"):
+                return str(row["row_key"])
     return ""
 
 
@@ -173,193 +249,30 @@ def check_trace(trace: dict[str, Any], origin: str) -> list[str]:
     if trace.get("origin") != origin:
         errors.append(f"trace origin {trace.get('origin')!r} != {origin!r}")
     if not isinstance(trace.get("nodes"), list):
-        errors.append("graph-trace.json missing nodes list")
+        errors.append("trace.json missing nodes list")
     if not isinstance(trace.get("edges"), list):
-        errors.append("graph-trace.json missing edges list")
-    return errors
-
-
-def _endpoint_errors(edge: dict[str, Any], key: str, node_id: str) -> str | None:
-    endpoint = edge.get(key)
-    if not isinstance(endpoint, dict):
-        return f"graph-edges.json {key} must be an object"
-    required = ("sheet", "address", "period_id", "node_id")
-    missing = [name for name in required if name not in endpoint]
-    if missing:
-        return f"graph-edges.json {key} missing " + ", ".join(missing)
-    if endpoint.get("node_id") != node_id:
-        return f"graph-edges.json {key}.node_id must match {key and node_id}"
-    return None
-
-
-def check_edges_json(doc: Any) -> list[str]:
-    if not isinstance(doc, dict) or not isinstance(doc.get("edges"), list):
-        return ["graph-edges.json must be an object with an edges list"]
-    errors: list[str] = []
-    if doc.get("direction") != "formula_depends_on_precedent":
-        errors.append(
-            "graph-edges.json direction must be formula_depends_on_precedent"
-        )
-    if _walk_keys(doc) & {"formula_ast", "formula_raw"}:
-        errors.append("graph-edges.json must not embed formula AST")
-    for edge in doc["edges"]:
-        if not isinstance(edge, dict):
-            errors.append("graph-edges.json entries must be objects")
-            break
-        missing = [key for key in EDGE_FIELDS if key not in edge]
-        if missing:
-            errors.append("graph-edges.json entries need " + ", ".join(missing))
-            break
-        if edge.get("direction") != "formula_depends_on_precedent":
-            errors.append("graph-edges.json edge direction must be formula_depends_on_precedent")
-            break
-        if edge.get("relation_type") != "formula_reference":
-            errors.append("graph-edges.json relation_type must be formula_reference")
-            break
-        if edge.get("reference_kind") not in REFERENCE_KINDS:
-            errors.append(
-                "graph-edges.json reference_kind must be direct, range_member, "
-                "external, dynamic, or named"
-            )
-            break
-        if edge.get("resolution_status") not in RESOLUTION_STATUSES:
-            errors.append(
-                "graph-edges.json resolution_status must be resolved, empty, "
-                "unresolved, truncated, external, or dynamic"
-            )
-            break
-        if not isinstance(edge.get("formula"), str) or not edge.get("formula"):
-            errors.append("graph-edges.json formula must be the A1 formula text")
-            break
-        anchors = edge.get("anchors")
-        if not isinstance(anchors, dict) or "abs_col" not in anchors or "abs_row" not in anchors:
-            errors.append("graph-edges.json anchors need abs_col and abs_row")
-            break
-        source = str(edge.get("source") or "")
-        target = str(edge.get("target") or "")
-        formula_cell = _endpoint_errors(edge, "formula_cell", source)
-        if formula_cell:
-            errors.append(
-                "graph-edges.json source must equal formula_cell.node_id"
-                if "must match" in formula_cell
-                else formula_cell
-            )
-            break
-        precedent = _endpoint_errors(edge, "precedent", target)
-        if precedent:
-            errors.append(
-                "graph-edges.json target must equal precedent.node_id"
-                if "must match" in precedent
-                else precedent
-            )
-            break
-    return errors
-
-
-def check_dangling_json(doc: Any) -> list[str]:
-    if not isinstance(doc, dict):
-        return ["graph-dangling.json must be a JSON object"]
-    errors: list[str] = []
-    ids = doc.get("ids")
-    if not isinstance(ids, list):
-        errors.append("graph-dangling.json missing ids list")
-        return errors
-    if doc.get("count") != len(ids):
-        errors.append(
-            f"graph-dangling.json count={doc.get('count')!r} != len(ids)={len(ids)}"
-        )
-    if not isinstance(doc.get("by_class"), dict):
-        errors.append("graph-dangling.json missing by_class object")
-    for item in ids:
-        if not isinstance(item, dict):
-            errors.append("graph-dangling.json ids must be objects")
-            break
-        missing = [
-            key
-            for key in (
-                "node_id",
-                "period_id",
-                "class",
-                "status",
-                "reason",
-                "evidence",
-                "included_in_formula_semantics",
-                "sources",
-            )
-            if key not in item
-        ]
-        if missing:
-            errors.append(
-                "graph-dangling.json entries need " + ", ".join(missing)
-            )
-            break
-        status = item.get("status")
-        reason = item.get("reason")
-        if status == "empty" and reason == "parser_resolution_failure":
-            errors.append(
-                "graph-dangling.json status=empty cannot use reason=parser_resolution_failure"
-            )
-            break
-        if status == "empty":
-            sources = item.get("sources")
-            if not isinstance(sources, list) or not sources:
-                errors.append("graph-dangling.json empty entries need sources")
-                break
-            if any(
-                not isinstance(source, dict) or not source.get("node_id") or not source.get("range")
-                for source in sources
-            ):
-                errors.append("graph-dangling.json sources need node_id and range")
-                break
-            if item.get("included_in_formula_semantics") is not True:
-                errors.append(
-                    "graph-dangling.json empty entries include the cell in formula semantics"
-                )
-                break
-        elif status == "unresolved":
-            if item.get("included_in_formula_semantics") != "unknown":
-                errors.append(
-                    "graph-dangling.json unresolved included_in_formula_semantics must be unknown"
-                )
-                break
-        else:
-            errors.append(
-                "graph-dangling.json status must be empty or unresolved"
-            )
-            break
-        if not item.get("evidence") or not reason:
-            errors.append("graph-dangling.json entries need reason and evidence")
-            break
-    return errors
-
-
-def check_formulas_json(doc: Any) -> list[str]:
-    if not isinstance(doc, dict) or not isinstance(doc.get("cells"), list):
-        return ["formulas.json must be an object with a cells list"]
-    errors: list[str] = []
-    for cell in doc["cells"]:
-        if not isinstance(cell, dict) or not cell.get("node_id") or not cell.get("formula"):
-            errors.append("formulas.json cells need node_id and formula")
-            break
+        errors.append("trace.json missing edges list")
+    if _walk_keys(trace) & {"formula_ast"}:
+        errors.append("trace.json must not embed formula AST")
     return errors
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Check that context.json and graph.json keep one fact in one place."
+        description="Check that context and graph JSON match their Markdown twins."
     )
     parser.add_argument("context", type=Path, nargs="?", help="path to context.json")
     parser.add_argument("graph", type=Path, nargs="?", help="path to graph.json")
+    parser.add_argument("--context-md", type=Path, help="path to context.md")
+    parser.add_argument("--graph-md", type=Path, help="path to graph.md")
     parser.add_argument(
         "--print-origin",
         action="store_true",
         help="print a smoke-trace origin (formula cell, else concept_id / row_key)",
     )
-    parser.add_argument("--trace", type=Path, help="path to graph-trace.json")
+    parser.add_argument("--trace", type=Path, help="path to trace.json")
+    parser.add_argument("--trace-md", type=Path, help="path to trace.md")
     parser.add_argument("--origin", help="expected trace origin (required with --trace)")
-    parser.add_argument("--edges", type=Path, help="path to graph-edges.json")
-    parser.add_argument("--dangling", type=Path, help="path to graph-dangling.json")
-    parser.add_argument("--formulas", type=Path, help="path to formulas.json")
     return parser
 
 
@@ -378,6 +291,12 @@ def main() -> int:
         if not isinstance(trace, dict):
             parser.error("trace document must be a JSON object")
         errors.extend(check_trace(trace, args.origin))
+        if args.trace_md is not None:
+            try:
+                markdown = args.trace_md.read_text(encoding="utf-8")
+            except OSError as exc:
+                parser.error(str(exc))
+            errors.extend(check_trace_markdown(trace, markdown))
     else:
         if args.context is None or args.graph is None:
             parser.error("context.json and graph.json are required unless --trace is set")
@@ -391,20 +310,20 @@ def main() -> int:
         errors.extend(check_context(context))
         errors.extend(check_graph(graph))
         errors.extend(check_pointer_matches(context, graph))
-        for path, checker in (
-            (args.edges, check_edges_json),
-            (args.dangling, check_dangling_json),
-            (args.formulas, check_formulas_json),
-        ):
-            if path is None:
-                continue
+        if args.context_md is not None:
             try:
-                payload = load_json(path)
-            except (OSError, json.JSONDecodeError) as exc:
+                markdown = args.context_md.read_text(encoding="utf-8")
+                errors.extend(check_context_markdown(context, markdown))
+            except OSError as exc:
                 parser.error(str(exc))
-            errors.extend(checker(payload))
+        if args.graph_md is not None:
+            try:
+                markdown = args.graph_md.read_text(encoding="utf-8")
+                errors.extend(check_graph_markdown(graph, markdown))
+            except OSError as exc:
+                parser.error(str(exc))
         if args.print_origin and not errors:
-            print(pick_origin(context))
+            print(pick_origin(context, graph))
             return 0
 
     if errors:

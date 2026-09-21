@@ -126,24 +126,28 @@ def test_upload_and_download(tmp_path: Path) -> None:
         graph_doc = client.get(f"/v1/context-jobs/{job_id}/graph.json")
         assert graph_doc.status_code == 200
         assert "nodes" in graph_doc.json()
+        assert body.get("context_json_url") == f"/v1/context-jobs/{job_id}/context.json"
+        assert body.get("context_md_url") == f"/v1/context-jobs/{job_id}/context.md"
         assert body.get("graph_json_url") == f"/v1/context-jobs/{job_id}/graph.json"
-        assert body.get("graph_edges_url") == f"/v1/context-jobs/{job_id}/graph/edges"
-        assert body.get("graph_dangling_url") == f"/v1/context-jobs/{job_id}/graph-dangling.json"
-        assert body.get("formulas_json_url") == f"/v1/context-jobs/{job_id}/formulas.json"
-        edges_doc = client.get(f"/v1/context-jobs/{job_id}/graph/edges")
-        dangling_doc = client.get(f"/v1/context-jobs/{job_id}/graph-dangling.json")
-        formulas_doc = client.get(f"/v1/context-jobs/{job_id}/formulas.json")
-        assert edges_doc.status_code == 200
-        assert "edges" in edges_doc.json()
-        assert dangling_doc.status_code == 200
-        assert "by_class" in dangling_doc.json()
-        assert formulas_doc.status_code == 200
-        assert "cells" in formulas_doc.json()
+        assert body.get("graph_md_url") == f"/v1/context-jobs/{job_id}/graph.md"
+        assert "graph_edges_url" not in body
+        assert "formulas_json_url" not in body
+        graph_md = client.get(f"/v1/context-jobs/{job_id}/graph.md")
+        assert graph_md.status_code == 200
+        assert "Formula graph" in graph_md.text
+        assert "links" in graph_doc.json()
         traced = client.get(f"/v1/context-jobs/{job_id}/graph/trace", params={"from": "P&L!C2"})
         assert traced.status_code == 200
         assert traced.json()["origin"] == "P&L!C2"
+        assert "formula_ast" not in traced.text
+        traced_md = client.get(
+            f"/v1/context-jobs/{job_id}/graph/trace.md", params={"from": "P&L!C2"}
+        )
+        assert traced_md.status_code == 200
+        assert "P&L!C2" in traced_md.text
         assert md_doc.status_code == 200
         assert "Financial context" in md_doc.text
+        assert json_doc.json()["schema_version"] == "1.9.0"
 
 
 def test_repeated_upload_rebuilds_compile_layout_mapping_and_reuses_parse(tmp_path: Path) -> None:

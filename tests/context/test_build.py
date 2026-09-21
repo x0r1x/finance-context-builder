@@ -93,21 +93,19 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
         source_filename="cashflow.xlsx",
         content_sha256="deadbeef",
     )
-    metric = doc.blocks[0].metrics[0]
+    metric = doc.blocks[0].rows[0]
     assert metric.concept_id == "bs.cash"
-    assert metric.source.cell_ref == "CF!A2"
-    assert metric.values[0].cached_value == "320000"
-    assert metric.values[0].source.cell_ref == "CF!B2"
-    assert metric.values[1].has_formula is True
-    assert metric.values[1].formula == "=B2"
-    assert metric.values[0].has_formula is False
-    assert metric.values[0].formula is None
+    assert metric.sheet == "CF"
+    assert metric.row == 2
+    assert metric.values == ["320000", "320000"]
+    assert metric.formula == "=RC[-1]"
+    assert metric.mapping is not None
     assert metric.mapping.method == "rule"
     assert metric.unit == "money"
     assert metric.hints.currency == "USD"
     assert metric.hints.scale == "unit"
     assert metric.hints.sign == "stock"
-    assert doc.unmapped == []
+    assert doc.mapping_stats.unmapped_series == 0
 
 
 def test_build_warns_on_missing_graph_targets() -> None:
@@ -145,7 +143,7 @@ def test_build_warns_on_missing_graph_targets() -> None:
         mapping=mapping,
         graph=GraphPointer(dangling=12, empty_range_members=718),
     )
-    assert "Graph: 12 unresolved formula targets (see graph-dangling.json)" in doc.warnings
+    assert "Graph: 12 unresolved formula targets (see graph.json)" in doc.warnings
     assert all("empty range" not in warning for warning in doc.warnings)
 
 
@@ -193,7 +191,7 @@ def test_build_decodes_excel_date_serials() -> None:
         layout=_layout(),
         mapping=mapping,
     )
-    assert doc.blocks[0].metrics[0].values[0].cached_value == "31.12.2023"
+    assert doc.blocks[0].rows[0].values[0] == "31.12.2023"
 
 
 def test_build_keeps_inventory_for_every_layout_row() -> None:
@@ -276,18 +274,19 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
         layout=layout,
         mapping=mapping,
     )
-    assert [row.kind for row in doc.inventory] == ["abstract", "fact", "helper"]
-    assert len(doc.inventory) == 3
-    assert len(doc.blocks[0].metrics) == 1
-    assert len(doc.excluded) == 1
-    cash = doc.blocks[0].metrics[0]
+    rows = doc.blocks[0].rows
+    assert [row.kind for row in rows] == ["abstract", "fact", "helper"]
+    assert len(rows) == 3
+    cash = rows[1]
     assert cash.kind == "fact"
+    assert cash.disposition == "mapped"
     assert cash.label_path == ["Cashflow"]
-    assert cash.formula_fingerprint == "=RC[1]"
+    assert cash.formula == "=RC[1]"
     assert cash.candidates[0].concept_id == "bs.cash"
     assert cash.hints.time_semantics in {"bop", "flow", "eop", "stock"}
+    assert rows[2].disposition == "excluded"
     assert not any("Content completeness" in warning for warning in doc.warnings)
-    abstract = doc.inventory[0]
+    abstract = rows[0]
     assert abstract.concept_id is None
     assert abstract.disposition == "header"
     assert abstract.neighbors == ["Opening cash", "Spare"]
@@ -297,7 +296,7 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert doc.mapping_stats.abstract == 1
     assert doc.mapping_stats.unmapped_series == 0
     assert doc.mapping_stats.concept_coverage == 1.0
-    assert doc.schema_version == "1.8.0"
+    assert doc.schema_version == "1.9.0"
     quality = doc.mapping_stats.mapping_quality
     assert quality.label_coverage == 1.0
     assert quality.semantic_coverage == 1.0
@@ -427,8 +426,7 @@ def test_build_exports_role_cells_not_graph_samples() -> None:
         layout=layout,
         mapping=mapping,
     )
-    series = doc.blocks[0].metrics[0]
+    series = doc.blocks[0].rows[0]
     assert any(cell.role == "value" and cell.addr == "C26" for cell in series.cells)
     assert len(series.candidates) == 3
-    inv = doc.inventory[0]
-    assert inv.cells
+    assert series.values == ["50"]

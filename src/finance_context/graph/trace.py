@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -69,17 +68,39 @@ def trace_graph(
         if level >= depth:
             continue
         outgoing = fwd[current] if direction == "precedents" else rev[current]
+        emitted: set[tuple[str, str]] = set()
         for edge in outgoing:
             nxt = str(edge["target"] if direction == "precedents" else edge["source"])
-            used_edges.append(
-                TraceEdge(
-                    source=str(edge["source"]),
-                    target=str(edge["target"]),
-                    kind=edge.get("kind"),
-                    period_lag=edge.get("period_lag"),
-                    col_offset=edge.get("col_offset"),
+            if index.get(nxt, {}).get("node_type") == "empty":
+                range_ref = edge.get("range_ref")
+                target = str(range_ref) if range_ref else nxt
+                key = (str(edge["source"]), target)
+                if key not in emitted:
+                    emitted.add(key)
+                    used_edges.append(
+                        TraceEdge(
+                            source=str(edge["source"]),
+                            target=target,
+                            kind=edge.get("kind"),
+                            period_lag=edge.get("period_lag"),
+                            col_offset=edge.get("col_offset"),
+                        )
+                    )
+                continue
+            range_ref = edge.get("range_ref")
+            target = str(range_ref) if range_ref else str(edge["target"])
+            key = (str(edge["source"]), target)
+            if key not in emitted:
+                emitted.add(key)
+                used_edges.append(
+                    TraceEdge(
+                        source=str(edge["source"]),
+                        target=target,
+                        kind=edge.get("kind"),
+                        period_lag=edge.get("period_lag"),
+                        col_offset=edge.get("col_offset"),
+                    )
                 )
-            )
             if nxt in seen:
                 stopped = "cycle"
                 continue
@@ -108,13 +129,6 @@ def _resolve_origin(origin: str, index: dict[str, dict]) -> list[str]:
 
 
 def _node(node_id: str, cell: dict, meta: dict, depth: int) -> TraceNode:
-    ast = None
-    raw_ast = cell.get("ast_json")
-    if raw_ast:
-        try:
-            ast = json.loads(raw_ast)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            ast = None
     sheet = meta.get("sheet") or cell.get("sheet")
     addr = meta.get("addr") or cell.get("addr")
     cached = cell.get("cached_value")
@@ -129,7 +143,6 @@ def _node(node_id: str, cell: dict, meta: dict, depth: int) -> TraceNode:
         formula=cell.get("formula_raw"),
         formula_template=cell.get("formula_template"),
         cached_value=None if cached is None else str(cached),
-        formula_ast=ast,
         depth=depth,
     )
 

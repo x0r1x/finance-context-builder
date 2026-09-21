@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-GRAPH_SCHEMA_VERSION = "1.4.0"
+GRAPH_SCHEMA_VERSION = "1.5.0"
 CycleClass = Literal["iterative_ok", "unexpected"]
 ID_CAP = 32
 
@@ -30,13 +30,18 @@ class IdCount(BaseModel):
     ids: list[str] = Field(default_factory=list)
 
 
+class FormulaLink(BaseModel):
+    """One formula cell. A range stays one ref."""
+
+    cell: str
+    formula: str | None = None
+    refs: list[str] = Field(default_factory=list)
+
+
 class GraphContract(BaseModel):
     source_of_truth: str = "parquet"
     edges: str = "ir/cell_edges.parquet"
     formulas: str = "ir/cells.parquet"
-    edges_json: str = "graph-edges.json"
-    dangling: str = "graph-dangling.json"
-    formulas_json: str = "formulas.json"
 
 
 class GraphDocument(BaseModel):
@@ -55,15 +60,13 @@ class GraphDocument(BaseModel):
     dangling_classes: dict[str, int] = Field(default_factory=dict)
     cycles: list[CycleRecord] = Field(default_factory=list)
     circularity_hints: list[CircularityHint] = Field(default_factory=list)
+    links: list[FormulaLink] = Field(default_factory=list)
     artifacts: dict[str, str] = Field(
         default_factory=lambda: {
             "cells": "ir/cells.parquet",
             "edges": "ir/edges.parquet",
             "cell_edges": "ir/cell_edges.parquet",
             "index": "ir/graph_index.parquet",
-            "edges_json": "graph-edges.json",
-            "dangling": "graph-dangling.json",
-            "formulas": "formulas.json",
         }
     )
 
@@ -79,7 +82,6 @@ class TraceNode(BaseModel):
     formula: str | None = None
     formula_template: str | None = None
     cached_value: str | None = None
-    formula_ast: dict[str, Any] | None = None
     depth: int = 0
 
 

@@ -102,9 +102,9 @@ def _assert_layout_geometry(filename: str, layout: Layout) -> None:
         assert ia is not None and ia.blocks
         assert all(block.kind == "params" for block in ia.blocks)
         flag_labels = {normalize_label(row.label) for row in flags}
-        assert any("construction" == label or "construction" in label for label in flag_labels) or any(
-            "beginning of construction" in label for label in flag_labels
-        )
+        assert any(
+            "construction" == label or "construction" in label for label in flag_labels
+        ) or any("beginning of construction" in label for label in flag_labels)
         return
     if filename == "rvi-project-finance.xlsx":
         short = [block.block_id for block in blocks if _period_count(block) == 2]
@@ -157,15 +157,12 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         edges=edges,
     )
     layout_n = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
-    assert len(ctx_doc.inventory) == layout_n
-    assert content_completeness(layout_n, len(ctx_doc.inventory)) == 1.0
+    context_rows = [row for block in ctx_doc.blocks for row in block.rows]
+    assert len(context_rows) == layout_n
+    assert content_completeness(layout_n, len(context_rows)) == 1.0
     assert 0.0 <= stats["concept_coverage"] <= 1.0
-    series_n = sum(len(block.metrics) for block in ctx_doc.blocks) + len(ctx_doc.unmapped) + len(
-        ctx_doc.excluded
-    )
-    assert series_n <= layout_n
     if filename == "packt-project-finance.xlsx":
-        ia = [row for row in ctx_doc.inventory if row.sheet == "Input Assumptions"]
+        ia = [row for row in context_rows if row.sheet == "Input Assumptions"]
         assert ia, "Input Assumptions must appear in inventory"
         labels = {normalize_label(row.label): row for row in ia}
         assert "concession duration" in labels
@@ -184,7 +181,9 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert selector.row == 3
         assert selector.context_role == "scenario_selector"
         assert selector.disposition == "excluded"
-        assert any(cell.role == "value" and str(cell.cached_value) == "1" for cell in selector.cells)
+        assert any(
+            cell.role == "value" and str(cell.cached_value) == "1" for cell in selector.cells
+        )
         assert labels["concession duration"].unit == "years"
         toll = labels.get("toll rate")
         if toll is not None:
@@ -207,7 +206,7 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         stub = next(
             (
                 cell
-                for row in ctx_doc.inventory
+                for row in context_rows
                 if row.sheet == "Construction" and row.row == 22
                 for cell in row.cells
                 if cell.role == "value"
@@ -218,7 +217,7 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         total = next(
             (
                 cell
-                for row in ctx_doc.inventory
+                for row in context_rows
                 if row.sheet == "Construction" and row.row == 16
                 for cell in row.cells
                 if cell.role == "total"
@@ -233,7 +232,8 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert by_id["Y5"].phase == "operation" and by_id["Y5"].phase_year == 1
         construction = next(block for block in ctx_doc.blocks if block.sheet == "Construction")
         y5 = next(item for item in construction.periods if item["period_key"] == "Y5")
-        assert y5["phase"] == "operation" and y5["phase_year"] == 1
+        assert y5["period_key"] == "Y5"
+        assert "phase" not in y5
         flag_mapped = [row for row in doc.rows if row.exclusion_reason == "flag"]
         assert flag_mapped
         assert all(row.concept_id is None for row in flag_mapped)
@@ -248,7 +248,7 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
             assert 0.0 <= rate <= 1.0
         repayments = [
             row
-            for row in ctx_doc.inventory
+            for row in context_rows
             if normalize_label(row.label) == "principal repayment"
             and normalize_label(row.parent_label or "") == "debt repayment schedule"
         ]
@@ -259,11 +259,11 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         for row in repayments:
             assert any(
                 other.concept_id == "bs.debt" and other.label_path == row.label_path
-                for other in ctx_doc.inventory
+                for other in context_rows
             )
         revenues = [
             row
-            for row in ctx_doc.inventory
+            for row in context_rows
             if row.sheet == "CFS" and row.label == "Gross Revenues"
         ]
         assert revenues

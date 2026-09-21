@@ -76,12 +76,11 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
     )
     revenue_block = next(block for block in doc.blocks if block.sheet == "TBA")
     y3 = next(item for item in revenue_block.periods if item["period_key"] == "Y3")
-    assert y3["phase"] == "operation"
-    assert y3["phase_year"] == 1
+    assert "phase" not in y3
     rendered = render_markdown(doc)
     assert "## Timeline" in rendered
     assert "construction" in rendered
-    flag_rows = [row for row in doc.inventory if row.kind == "flag"]
+    flag_rows = [row for block in doc.blocks for row in block.rows if row.kind == "flag"]
     assert flag_rows
     assert all(row.concept_id is None for row in flag_rows)
 

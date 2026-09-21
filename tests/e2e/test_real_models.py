@@ -30,13 +30,10 @@ def test_real_models_produce_context(tmp_path: Path, workbook: Path) -> None:
     assert (dest / "raw" / "workbook.json").is_file()
     assert (dest / "context.json").is_file()
     assert (dest / "context.md").is_file()
+    assert (dest / "graph.json").is_file()
+    assert (dest / "graph.md").is_file()
     assert doc.workbook.cell_count > 0
     assert doc.meta.status in {"succeeded", "degraded", "needs_input"}
-    traced = [
-        value.source.cell_ref
-        for block in doc.blocks
-        for metric in block.metrics
-        for value in metric.values
-    ]
-    traced.extend(series.source.cell_ref for series in doc.unmapped)
-    assert all("!" in ref for ref in traced)
+    rows = [row for block in doc.blocks for row in block.rows]
+    assert rows
+    assert all(row.sheet for row in rows)

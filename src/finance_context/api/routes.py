@@ -101,6 +101,7 @@ def _clear_downstream_artifacts(dest: Path) -> None:
         "context.md",
         "meta.json",
         "graph.json",
+        "graph.md",
         "graph-edges.json",
         "graph-dangling.json",
         "formulas.json",
@@ -121,7 +122,9 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     meta_path = dest / "meta.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        artifacts_ready = (dest / "context.json").exists() and (dest / "context.md").exists()
+        artifacts_ready = (dest / "context.json").exists() and (dest / "context.md").exists() and (
+            dest / "graph.json"
+        ).exists() and (dest / "graph.md").exists()
         if live is not None and live.status in {"queued", "running"} and not artifacts_ready:
             meta["status"] = live.status
             meta["stage"] = live.stage
@@ -154,25 +157,10 @@ async def get_graph_json(request: Request, job_id: str) -> JSONResponse:
     return JSONResponse(payload)
 
 
-@router.get("/v1/context-jobs/{job_id}/graph/edges")
-async def get_graph_edges(request: Request, job_id: str) -> JSONResponse:
-    path = _require_artifact(request, job_id, "graph-edges.json")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return JSONResponse(payload)
-
-
-@router.get("/v1/context-jobs/{job_id}/graph-dangling.json")
-async def get_graph_dangling(request: Request, job_id: str) -> JSONResponse:
-    path = _require_artifact(request, job_id, "graph-dangling.json")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return JSONResponse(payload)
-
-
-@router.get("/v1/context-jobs/{job_id}/formulas.json")
-async def get_formulas_json(request: Request, job_id: str) -> JSONResponse:
-    path = _require_artifact(request, job_id, "formulas.json")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return JSONResponse(payload)
+@router.get("/v1/context-jobs/{job_id}/graph.md")
+async def get_graph_md(request: Request, job_id: str) -> PlainTextResponse:
+    path = _require_artifact(request, job_id, "graph.md")
+    return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/markdown")
 
 
 @router.get("/v1/context-jobs/{job_id}/graph/trace")
@@ -192,6 +180,26 @@ async def get_graph_trace(
 
     doc = trace_graph(dest, origin=origin, direction=direction, depth=depth)
     return JSONResponse(doc.model_dump(mode="json"))
+
+
+@router.get("/v1/context-jobs/{job_id}/graph/trace.md")
+async def get_graph_trace_md(
+    request: Request,
+    job_id: str,
+    origin: Annotated[str, Query(alias="from")],
+    direction: str = "precedents",
+    depth: int = 8,
+) -> PlainTextResponse:
+    dest = _ctx(request).store.dest_dir(job_id)
+    if not dest.exists():
+        raise ApiError(404, "not_found")
+    if not (dest / "ir" / "cell_edges.parquet").is_file():
+        raise ApiError(409, "report_not_ready")
+    from finance_context.graph.trace import trace_graph
+    from finance_context.render.graph import render_trace_markdown
+
+    doc = trace_graph(dest, origin=origin, direction=direction, depth=depth)
+    return PlainTextResponse(render_trace_markdown(doc), media_type="text/markdown")
 
 
 def _require_artifact(request: Request, job_id: str, name: str) -> Path:
@@ -216,9 +224,7 @@ def _job_body(job_id: str, meta: dict) -> dict:
         body["context_json_url"] = f"/v1/context-jobs/{job_id}/context.json"
         body["context_md_url"] = f"/v1/context-jobs/{job_id}/context.md"
         body["graph_json_url"] = f"/v1/context-jobs/{job_id}/graph.json"
-        body["graph_edges_url"] = f"/v1/context-jobs/{job_id}/graph/edges"
-        body["graph_dangling_url"] = f"/v1/context-jobs/{job_id}/graph-dangling.json"
-        body["formulas_json_url"] = f"/v1/context-jobs/{job_id}/formulas.json"
+        body["graph_md_url"] = f"/v1/context-jobs/{job_id}/graph.md"
     return body
 
 

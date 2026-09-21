@@ -32,6 +32,36 @@ def test_extracts_only_rows_without_concept_id(tmp_path: Path) -> None:
     assert output == {"count": 1, "rows": [rows[1]]}
 
 
+def test_extracts_abstained_rows_from_blocks(tmp_path: Path) -> None:
+    context_path = tmp_path / "context.json"
+    context_path.write_text(
+        json.dumps(
+            {
+                "blocks": [
+                    {
+                        "block_id": "P&L!r2",
+                        "rows": [
+                            {
+                                "label": "Revenue",
+                                "concept_id": "pnl.revenue",
+                                "disposition": "mapped",
+                            },
+                            {"label": "Mystery", "concept_id": None, "disposition": "abstained"},
+                            {"label": "Spare", "concept_id": None, "disposition": "excluded"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = _run(context_path)
+    assert result.returncode == 0
+    output = json.loads((tmp_path / "unmapped.json").read_text(encoding="utf-8"))
+    assert output["count"] == 1
+    assert output["rows"][0]["label"] == "Mystery"
+
+
 def test_extracts_existing_unmapped_rows_from_context(tmp_path: Path) -> None:
     context_path = tmp_path / "context.json"
     rows = [

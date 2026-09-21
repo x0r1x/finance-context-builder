@@ -17,30 +17,31 @@ workbook="$(resolve_workbook "${1:-}")"
 "$SCRIPTS/check-service.sh"
 "$SCRIPTS/run-context-job.sh" "$workbook"
 
-if [[ ! -f "$RUN_DIR/context.json" ]]; then
-  echo "context.json missing; cannot extract unmapped rows" >&2
+if [[ ! -f "$RUN_DIR/json/context.json" ]]; then
+  echo "json/context.json missing; cannot extract unmapped rows" >&2
   exit 1
 fi
-if [[ ! -f "$RUN_DIR/graph.json" ]]; then
-  echo "graph.json missing; job did not publish the formula-graph sidecar" >&2
+if [[ ! -f "$RUN_DIR/json/graph.json" ]]; then
+  echo "json/graph.json missing; job did not publish the formula graph" >&2
   exit 1
 fi
-for name in graph-edges.json graph-dangling.json formulas.json; do
-  if [[ ! -f "$RUN_DIR/$name" ]]; then
-    echo "${name} missing; job did not publish the JSON graph audit sidecar" >&2
+for name in context.md graph.md; do
+  if [[ ! -f "$RUN_DIR/md/$name" ]]; then
+    echo "md/${name} missing; job did not publish the markdown twin" >&2
     exit 1
   fi
 done
 python3 "$SCRIPTS/extract-unmapped.py" \
-  "$RUN_DIR/context.json" \
+  "$RUN_DIR/json/context.json" \
   --output "$RUN_DIR/unmapped.json"
 log_summary "unmapped=$RUN_DIR/unmapped.json"
-log_summary "graph=$RUN_DIR/graph.json"
-log_summary "graph_edges=$RUN_DIR/graph-edges.json"
-log_summary "graph_dangling=$RUN_DIR/graph-dangling.json"
-log_summary "formulas=$RUN_DIR/formulas.json"
-if [[ -f "$RUN_DIR/graph-trace.json" ]]; then
-  log_summary "graph_trace=$RUN_DIR/graph-trace.json"
+log_summary "context_json=$RUN_DIR/json/context.json"
+log_summary "context_md=$RUN_DIR/md/context.md"
+log_summary "graph_json=$RUN_DIR/json/graph.json"
+log_summary "graph_md=$RUN_DIR/md/graph.md"
+if [[ -f "$RUN_DIR/json/trace.json" ]]; then
+  log_summary "trace_json=$RUN_DIR/json/trace.json"
+  log_summary "trace_md=$RUN_DIR/md/trace.md"
 fi
 
 log_summary "ok"

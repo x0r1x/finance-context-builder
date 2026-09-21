@@ -1,24 +1,18 @@
 from __future__ import annotations
 
 from finance_context.context.measure import Measure
-from finance_context.mapping.eval import concept_coverage, content_completeness
 from finance_context.models.context import (
+    BlockRow,
     ContextDocument,
     FinancialBlock,
-    InventoryRow,
-    MetricSeries,
     WorkbookTimeline,
 )
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
 
 
-def render_markdown(
-    doc: ContextDocument,
-    *,
-    max_columns: int = 16,
-    max_rows: int = 80,
-) -> str:
+def render_markdown(doc: ContextDocument) -> str:
+    """Markdown with the same blocks, rows, and values as context.json."""
     lines: list[str] = [
         "# Financial context",
         "",
@@ -36,78 +30,26 @@ def render_markdown(
         lines.extend(_timeline_section(doc.timeline))
     if doc.warnings:
         lines.extend(["## Warnings", ""])
-        for warning in doc.warnings[:20]:
+        for warning in doc.warnings:
             lines.append(f"- {_cell(warning)}")
         lines.append("")
-    by_block = _unmapped_by_block(doc.unmapped)
-    selectors = _selectors_by_block(doc.excluded, doc.unmapped)
     for block in doc.blocks:
-        extra = by_block.pop(block.block_id, [])
-        lines.extend(
-            _block_section(
-                block,
-                unmapped=extra,
-                selectors=selectors.get(block.block_id, []),
-                max_columns=max_columns,
-                max_rows=max_rows,
-            )
-        )
-    for block_id, leftover in by_block.items():
-        lines.extend(
-            _orphan_unmapped_section(
-                block_id, leftover, max_columns=max_columns, max_rows=max_rows
-            )
-        )
-    if doc.excluded:
-        lines.extend(_excluded_section(doc.excluded, max_rows=max_rows))
-    if doc.inventory:
-        lines.extend(_navigator_sections(doc.inventory, max_rows=max_rows))
+        lines.extend(_block_section(block))
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _annotatable_counts(rows: list) -> tuple[int, int]:
-    mapped = 0
-    abstained = 0
-    for row in rows:
-        disposition = getattr(row, "disposition", None)
-        if disposition in {"excluded", "header"}:
-            continue
-        if getattr(row, "concept_id", None):
-            mapped += 1
-        elif disposition == "abstained" or getattr(row, "kind", None) in {None, "fact", "flag"}:
-            abstained += 1
-    return mapped, abstained
-
-
 def _coverage_lines(doc: ContextDocument) -> list[str]:
-    if doc.inventory:
-        layout_n = len(doc.inventory)
-        mapped, abstained = _annotatable_counts(doc.inventory)
-        completeness = content_completeness(layout_n, layout_n)
-        coverage = concept_coverage(mapped, abstained)
-        annotatable = mapped + abstained
-        return [
-            (
-                f"- Content completeness: {completeness:.2f} "
-                f"({layout_n}/{layout_n} layout rows)"
-            ),
-            (
-                f"- Concept coverage: {coverage:.2f} "
-                f"({mapped}/{annotatable} annotatable)"
-            ),
-            *_quality_lines(doc),
-        ]
-    series = [
-        *[metric for block in doc.blocks for metric in block.metrics],
-        *doc.unmapped,
-    ]
-    mapped, abstained = _annotatable_counts(series)
-    n = mapped + abstained
-    completeness = content_completeness(n, n)
-    coverage = concept_coverage(mapped, abstained)
+    stats = doc.mapping_stats
+    annotatable = stats.mapped + stats.abstained
     return [
-        f"- Content completeness: {completeness:.2f} ({n}/{n} layout rows)",
-        f"- Concept coverage: {coverage:.2f} ({mapped}/{n} annotatable)",
+        (
+            f"- Content completeness: {stats.content_completeness:.2f} "
+            f"({stats.inventory_rows}/{stats.inventory_rows} layout rows)"
+        ),
+        (
+            f"- Concept coverage: {stats.concept_coverage:.2f} "
+            f"({stats.mapped}/{annotatable} annotatable)"
+        ),
         *_quality_lines(doc),
     ]
 
@@ -126,10 +68,6 @@ def _quality_lines(doc: ContextDocument) -> list[str]:
 
 
 def _timeline_section(timeline: WorkbookTimeline) -> list[str]:
-    rows = list(timeline.periods)
-    truncated = len(rows) > 16
-    if truncated:
-        rows = rows[:16]
     lines = [
         "## Timeline",
         "",
@@ -139,250 +77,80 @@ def _timeline_section(timeline: WorkbookTimeline) -> list[str]:
             f"Periods: {len(timeline.periods)}."
         ),
         "",
-        "| Period | Phase | Phase year | Calendar |",
-        "| --- | --- | --- | --- |",
+        "| Period | Phase | Phase year | Calendar | Flags |",
+        "| --- | --- | --- | --- | --- |",
     ]
-    for item in rows:
+    for item in timeline.periods:
+        flags = ", ".join(name for name, on in item.flags.items() if on)
         lines.append(
             "| "
             f"{_cell(item.period_id)} | "
             f"{_cell(item.phase or '')} | "
             f"{item.phase_year if item.phase_year is not None else ''} | "
-            f"{_cell(item.calendar_year or '')} |"
+            f"{_cell(item.calendar_year or '')} | "
+            f"{_cell(flags)} |"
         )
-    if truncated:
-        lines.extend(["", "_Truncated in Markdown; full timeline remains in JSON._"])
     lines.append("")
     return lines
 
 
-def _unmapped_by_block(rows: list[MetricSeries]) -> dict[str, list[MetricSeries]]:
-    grouped: dict[str, list[MetricSeries]] = {}
-    for series in rows:
-        block_id = series.row_key.rsplit("|", 1)[-1] if "|" in series.row_key else series.row_key
-        grouped.setdefault(block_id, []).append(series)
-    return grouped
-
-
-def _selectors_by_block(
-    excluded: list[MetricSeries], unmapped: list[MetricSeries]
-) -> dict[str, list[MetricSeries]]:
-    grouped: dict[str, list[MetricSeries]] = {}
-    seen: set[str] = set()
-    for series in [*excluded, *unmapped]:
-        if series.context_role != "scenario_selector":
-            continue
-        if series.row_key in seen:
-            continue
-        seen.add(series.row_key)
-        block_id = series.row_key.rsplit("|", 1)[-1] if "|" in series.row_key else series.row_key
-        grouped.setdefault(block_id, []).append(series)
-    return grouped
-
-
-def _block_section(
-    block: FinancialBlock,
-    *,
-    unmapped: list[MetricSeries],
-    max_columns: int,
-    max_rows: int,
-    selectors: list[MetricSeries] | None = None,
-) -> list[str]:
-    headers = block.periods
-    if max_columns > 0 and len(headers) > max_columns:
-        headers = block.periods[:max_columns]
+def _block_section(block: FinancialBlock) -> list[str]:
     grain = f" grain={block.grain}" if block.grain else ""
+    title = (
+        f"## Parameters / {block.sheet}"
+        if block.kind == "params"
+        else f"## {block.sheet} / `{block.block_id}`"
+    )
     lines = [
-        f"## {block.sheet} / `{block.block_id}`",
+        title,
         "",
         (
-            f"Periods:{grain} {len(block.periods)}. "
-            f"Metrics: {len(block.metrics)}. Unmapped: {len(unmapped)}."
+            f"Block: `{block.block_id}`. Kind: `{block.kind}`.{grain} "
+            f"Periods: {len(block.periods)}. Rows: {len(block.rows)}."
         ),
         "",
     ]
-    if getattr(block, "kind", "timeline") == "params":
-        lines[0] = f"## Parameters / {block.sheet}"
-        lines.extend(
-            _params_table(
-                block,
-                unmapped=unmapped,
-                selectors=selectors or [],
-                max_rows=max_rows,
-            )
-        )
+    if not block.rows:
         return lines
-    if not headers:
-        return lines
-    truncated = (max_columns > 0 and len(block.periods) > max_columns) or (
-        len(block.metrics) > max_rows
-    ) or (len(unmapped) > max_rows)
-    lines.extend(
-        _period_table(block.metrics, headers, max_rows=max_rows)
-    )
-    if unmapped:
-        lines.extend(["### Unmapped", ""])
-        lines.extend(_period_table(unmapped, headers, max_rows=max_rows))
-    if truncated:
-        lines.append("_Truncated in Markdown; full series remain in JSON._")
-        lines.append("")
+    headers = [_period_label(item) for item in block.periods]
+    cols = ["Label", "Kind", "Disposition", "Concept", "Unit", "Formula", *headers]
+    lines.append("| " + " | ".join(_cell(col) for col in cols) + " |")
+    lines.append("| " + " | ".join("---" for _ in cols) + " |")
+    for row in block.rows:
+        lines.append(_row_line(row, len(block.periods)))
+    lines.append("")
     return lines
 
 
-def _params_table(
-    block: FinancialBlock,
-    *,
-    unmapped: list[MetricSeries],
-    max_rows: int,
-    selectors: list[MetricSeries] | None = None,
-) -> list[str]:
-    skip = {series.row_key for series in (selectors or [])}
-    rows = [
-        *(selectors or []),
-        *[
-            series
-            for series in [*block.metrics, *unmapped]
-            if series.row_key not in skip
-        ],
-    ]
-    if not rows:
-        return []
-    lines = [
-        "| Label | Unit | Value | Scenarios | Concept | Ref |",
-        "| --- | --- | --- | --- | --- | --- |",
-    ]
-    for series in rows[:max_rows]:
-        unit = next((c.cached_value for c in series.cells if c.role == "unit"), "") or (
+def _row_line(row: BlockRow, period_count: int) -> str:
+    unit = next((cell.cached_value for cell in row.cells if cell.role == "unit"), None)
+    if not unit:
+        unit = (
             Measure(
-                unit=series.hints.unit,
-                currency=series.hints.currency,
-                scale=series.hints.scale,
+                unit=row.hints.unit,
+                currency=row.hints.currency,
+                scale=row.hints.scale,
             ).display()
-            or series.unit
-            or series.hints.unit
+            or row.unit
+            or row.hints.unit
             or ""
         )
-        value = next(
-            (c.cached_value for c in series.cells if c.role == "value"),
-            None,
-        )
-        if value is None:
-            value_period = next((v for v in series.values if v.role == "value"), None)
-            if value_period is None and series.values:
-                value_period = series.values[0]
-            value = None if value_period is None else value_period.cached_value
-        scenarios = [
-            f"{c.role}:{_format_value(c.cached_value)}"
-            for c in series.cells
-            if c.role == "scenario" and c.cached_value not in (None, "")
-        ][:4]
-        concept = series.concept_id or "unknown"
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    _cell(series.label),
-                    _cell(unit),
-                    _cell(_format_value(value)),
-                    _cell(" ".join(scenarios)),
-                    _cell(concept),
-                    _cell(series.source.cell_ref),
-                ]
-            )
-            + " |"
-        )
-    lines.append("")
-    if len(rows) > max_rows:
-        lines.extend(["_Truncated in Markdown; full series remain in JSON._", ""])
-    return lines
-
-
-def _orphan_unmapped_section(
-    block_id: str,
-    series: list[MetricSeries],
-    *,
-    max_columns: int,
-    max_rows: int,
-) -> list[str]:
-    if not series:
-        return []
-    periods = _periods_from_series(series[0])
-    headers = periods[:max_columns] if max_columns > 0 else periods
-    sheet = series[0].source.sheet
-    lines = [
-        f"## {sheet} / `{block_id}`",
-        "",
-        f"Unmapped: {len(series)}.",
-        "",
-        "### Unmapped",
-        "",
-    ]
-    if not headers:
-        return lines
-    truncated = (max_columns > 0 and len(periods) > max_columns) or len(series) > max_rows
-    lines.extend(_period_table(series, headers, max_rows=max_rows))
-    if truncated:
-        lines.append("_Truncated in Markdown; full series remain in JSON._")
-        lines.append("")
-    return lines
-
-
-def _periods_from_series(series: MetricSeries) -> list[dict]:
-    return [
-        {
-            "col": value.source.col,
-            "text": value.header_text,
-            "role": value.role,
-            "period_key": value.period_key,
-        }
-        for value in series.values
-    ]
-
-
-def _period_table(
-    metrics: list[MetricSeries],
-    headers: list[dict],
-    *,
-    max_rows: int,
-) -> list[str]:
-    if not metrics:
-        return []
-    period_labels = [_period_label(item) for item in headers]
-    cols = ["Label", "Concept", "Ref", *period_labels]
-    lines = [
-        "| " + " | ".join(_cell(c) for c in cols) + " |",
-        "| " + " | ".join("---" for _ in cols) + " |",
-    ]
-    for series in metrics[:max_rows]:
-        lines.append(_metric_row(series, headers))
-    lines.append("")
-    return lines
-
-
-def _metric_row(series: MetricSeries, headers: list[dict]) -> str:
-    by_col = {v.source.col: v for v in series.values}
-    conf = series.mapping.confidence or ""
-    concept = series.concept_id or "unknown"
-    if series.concept_id and conf:
-        concept = f"{series.concept_id} ({conf})"
+    concept = row.concept_id or ""
+    confidence = row.mapping.confidence if row.mapping and row.mapping.confidence else ""
+    if concept and confidence:
+        concept = f"{concept} ({confidence})"
+    values = list(row.values)
+    if len(values) < period_count:
+        values.extend([None] * (period_count - len(values)))
     cells = [
-        _cell(series.label),
+        _cell(row.label),
+        _cell(row.kind),
+        _cell(row.disposition or ""),
         _cell(concept),
-        _cell(series.source.cell_ref),
+        _cell(unit or ""),
+        _cell(row.formula or ""),
+        *[_cell(_raw(value)) for value in values[:period_count]],
     ]
-    for header in headers:
-        col = header.get("col")
-        value = by_col.get(int(col)) if col is not None else None
-        if value is None:
-            cells.append("")
-            continue
-        shown = _format_value(value.cached_value)
-        mark = ""
-        if value.has_formula:
-            mark = "*"
-        if value.missing_cached_value:
-            mark = "?"
-        cells.append(_cell(f"{shown}{mark} `{value.source.cell_ref}`".strip()))
     return "| " + " | ".join(cells) + " |"
 
 
@@ -392,87 +160,11 @@ def _period_label(header: dict) -> str:
     return text or key
 
 
-def _format_value(raw: str | None) -> str:
-    if raw in (None, ""):
+def _raw(value: str | None) -> str:
+    if value in (None, ""):
         return ""
-    text = str(raw).strip()
-    try:
-        number = float(text.replace(",", ""))
-    except ValueError:
-        return text
-    if number.is_integer():
-        return f"{int(number):,}"
-    return f"{number:,.4f}".rstrip("0").rstrip(".")
+    return str(value)
 
 
 def _cell(value: object) -> str:
     return str(value).translate(_MD_ESCAPE).strip()
-
-
-def _excluded_section(rows: list[MetricSeries], *, max_rows: int) -> list[str]:
-    lines = [
-        "## Excluded",
-        "",
-        f"Excluded: {len(rows)}.",
-        "",
-        "| Row | Label | Kind | Reason | Ref |",
-        "| --- | --- | --- | --- | --- |",
-    ]
-    for series in rows[:max_rows]:
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    _cell(series.source.row),
-                    _cell(series.label),
-                    _cell(series.kind or ""),
-                    _cell(series.exclusion_reason or series.disposition),
-                    _cell(series.source.cell_ref),
-                ]
-            )
-            + " |"
-        )
-    lines.append("")
-    if len(rows) > max_rows:
-        lines.extend(["_Truncated in Markdown; full series remain in JSON._", ""])
-    return lines
-
-
-def _navigator_sections(rows: list[InventoryRow], *, max_rows: int) -> list[str]:
-    by_sheet: dict[str, list[InventoryRow]] = {}
-    for row in rows:
-        by_sheet.setdefault(row.sheet, []).append(row)
-    lines: list[str] = []
-    for sheet, items in by_sheet.items():
-        lines.extend(
-            [
-                f"## Row navigator / {sheet}",
-                "",
-                f"Rows: {len(items)}.",
-                "",
-                "| Row | Label | Path | Kind | Concept | Unit | Formula | Refs |",
-                "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            ]
-        )
-        for item in items[:max_rows]:
-            refs = ""
-            lines.append(
-                "| "
-                + " | ".join(
-                    [
-                        _cell(item.row),
-                        _cell(item.label),
-                        _cell(" / ".join(item.label_path)),
-                        _cell(item.kind),
-                        _cell(item.concept_id or "unknown"),
-                        _cell(item.unit or item.hints.unit or ""),
-                        _cell(item.formula_fingerprint or ""),
-                        _cell(refs),
-                    ]
-                )
-                + " |"
-            )
-        lines.append("")
-        if len(items) > max_rows:
-            lines.extend(["_Truncated in Markdown; full series remain in JSON._", ""])
-    return lines
