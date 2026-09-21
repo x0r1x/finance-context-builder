@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.3.0"
+SCHEMA_VERSION = "1.4.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -190,6 +190,19 @@ class ArtifactMeta(BaseModel):
     error: str | None = None
 
 
+class MappingStats(BaseModel):
+    """Coverage of layout rows. `unmapped` on the document is abstained series, not inventory without concept_id."""
+
+    inventory_rows: int = 0
+    mapped: int = 0
+    abstained: int = 0
+    excluded: int = 0
+    abstract: int = 0
+    unmapped_series: int = 0
+    content_completeness: float = 1.0
+    concept_coverage: float = 0.0
+
+
 class ContextDocument(BaseModel):
     schema_version: str = SCHEMA_VERSION
     meta: ArtifactMeta
@@ -199,4 +212,5 @@ class ContextDocument(BaseModel):
     unmapped: list[MetricSeries] = Field(default_factory=list)
     excluded: list[MetricSeries] = Field(default_factory=list)
     inventory: list[InventoryRow] = Field(default_factory=list)
+    mapping_stats: MappingStats = Field(default_factory=MappingStats)
     warnings: list[str] = Field(default_factory=list)

@@ -246,7 +246,14 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert not any("Content completeness" in warning for warning in doc.warnings)
     abstract = doc.inventory[0]
     assert abstract.concept_id is None
+    assert abstract.disposition == "header"
     assert abstract.neighbors == ["Opening cash", "Spare"]
+    assert doc.mapping_stats.inventory_rows == 3
+    assert doc.mapping_stats.mapped == 1
+    assert doc.mapping_stats.excluded == 1
+    assert doc.mapping_stats.abstract == 1
+    assert doc.mapping_stats.unmapped_series == 0
+    assert doc.mapping_stats.concept_coverage == 1.0
 
 
 def test_zero_cached_formula_is_not_missing() -> None:

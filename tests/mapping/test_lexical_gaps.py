@@ -223,7 +223,7 @@ def test_parent_rollup_skips_lifetime_capacity_inflation_balance() -> None:
         slots=GrantSlots(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
-    assert by_label["Operating lifetime"] == "ops.lifetime"
+    assert by_label["Operating lifetime"] == "ops.operating_period"
     assert by_label["Number of wind turbines"] == "ops.asset_count"
     assert by_label["Installed capacity MW"] == "ops.capacity"
     assert by_label["PPA escalation"] == "ops.inflation"
@@ -493,7 +493,7 @@ def test_unit_column_sets_value_kind() -> None:
     by_label = {row.label: row for row in doc.rows}
     assert by_label["Tax Rate"].concept_id == "pnl.tax_rate"
     assert by_label["Toll Rate"].concept_id == "pnl.price"
-    assert by_label["Concession Duration"].concept_id == "ops.lifetime"
+    assert by_label["Concession Duration"].concept_id == "ops.concession_duration"
     assert by_label["Concession Duration"].article_role == "assumption"
 
 def test_income_tax_on_cfs_is_cash_tax_not_pnl() -> None:
@@ -759,3 +759,60 @@ def test_rvi_leftovers_map_dividends_balances_and_rates() -> None:
     assert by_key[("Balance b/f", "No depreciation (goodwill)")] == "bs.goodwill"
     assert by_key[("Balance b/f", "Straight line depreciation")] == "bs.ppe"
     assert by_label["Full-wrap EPC"] is None
+
+
+def test_concession_and_operations_duration_are_not_the_same_concept() -> None:
+    taxonomy = load_taxonomy()
+    rows = [
+        LayoutRow(
+            row=8,
+            label="Concession Duration",
+            kind="fact",
+            cells=[RowCell(col=3, role="unit"), RowCell(col=4, role="value")],
+        ),
+        LayoutRow(
+            row=9,
+            label="Construction Duration",
+            kind="fact",
+            cells=[RowCell(col=3, role="unit"), RowCell(col=4, role="value")],
+        ),
+        LayoutRow(
+            row=10,
+            label="Operations Duration",
+            kind="fact",
+            cells=[RowCell(col=3, role="unit"), RowCell(col=4, role="value")],
+        ),
+    ]
+    block = Block(
+        block_id="Input Assumptions!r5",
+        label_col=2,
+        kind="params",
+        axis=Axis(
+            id="Input Assumptions!r5",
+            row=5,
+            headers=[AxisHeader(col=4, text="Values", role="value", period_key="value")],
+        ),
+        rows=rows,
+    )
+    layout = Layout(sheets=[SheetLayout(name="Input Assumptions", blocks=[block])])
+    cells = [
+        {"sheet": "Input Assumptions", "row": row, "col": 3, "addr": f"C{row}", "cached_value": "years"}
+        for row in (8, 9, 10)
+    ]
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={
+            ("concession duration", ""): "ops.lifetime",
+            ("operations duration", ""): "ops.lifetime",
+        },
+        cells=cells,
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_label = {row.label: row.concept_id for row in doc.rows}
+    assert by_label["Concession Duration"] == "ops.concession_duration"
+    assert by_label["Operations Duration"] == "ops.operating_period"
+    assert by_label["Construction Duration"] == "ops.construction_period"
+    assert by_label["Concession Duration"] != by_label["Operations Duration"]

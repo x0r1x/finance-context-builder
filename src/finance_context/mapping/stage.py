@@ -7,7 +7,12 @@ from pathlib import Path
 
 from finance_context.layout.models import Layout
 from finance_context.mapping.cascade import map_layout
-from finance_context.mapping.glossary import learn_from_rows, load_glossary, save_glossary
+from finance_context.mapping.glossary import (
+    learn_from_rows,
+    load_glossary,
+    reconcile_glossary,
+    save_glossary,
+)
 from finance_context.mapping.models import Concept, MappingDocument
 from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.observability import log_event
@@ -46,11 +51,13 @@ def mapping_workbook(
     ir_edges = dest_dir / "ir" / "edges.parquet"
     if ir_edges.exists():
         edges = read_parquet(ir_edges)
+    tax = taxonomy or load_taxonomy()
     merged = dict(load_glossary(glossary_path))
     merged.update(glossary or {})
+    merged = reconcile_glossary(merged, tax)
     doc = map_layout(
         layout,
-        taxonomy=taxonomy or load_taxonomy(),
+        taxonomy=tax,
         glossary=merged,
         embed=embed,
         chat=chat,

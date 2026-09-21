@@ -2,7 +2,7 @@
 
 Сначала убедиться, что layout вообще отдал fact-строки. `succeeded` + `Unmapped: 0` + пустой `context.md` почти всегда значит: нет блоков или нет лейблов статей, а не «таксономия покрыла всё». Чеклист — [layout.md](layout.md).
 
-После прогона с ненулевым числом fact смотрят отказ **и** полный контент:
+После прогона с ненулевым числом fact смотрят отказ **и** полный контент. Пустой `unmapped` / `unmapped.json` **не** значит, что у каждой строки `inventory` есть `concept_id`: заголовки (`kind=abstract`, `disposition=header`) и excluded не попадают в `unmapped`. Полнота семантики — `mapping_stats.concept_coverage` (annotatable facts), не длина массива `unmapped`.
 
 | Где | Что видно |
 | --- | --- |
@@ -10,7 +10,8 @@
 | `context.md` блок | Timeline: строка с Concept `unknown` (плюс счётчик `Unmapped: N`). Params: `## Parameters / {sheet}` |
 | `context.md` `## Excluded` | Helper / flag / check |
 | `context.md` `## Row navigator / {sheet}` | Все layout-строки: kind, path, concept, formula, refs; без периодных значений |
-| `context.json` → `unmapped` | Полные серии с `values` по периодам (timeline) или `cells` (params), `candidates`, `hints`, `neighbors` |
+| `context.json` → `mapping_stats` | `inventory_rows`, `mapped`, `abstained`, `excluded`, `abstract`, `unmapped_series`, completeness, coverage |
+| `context.json` → `unmapped` | Полные серии с `values` по периодам (timeline) или `cells` (params), `candidates`, `hints`, `neighbors`. Это abstained fact-серии, не «inventory без concept_id» |
 | `context.json` → `inventory` | Все kind, включая abstract; `cells` / `precedent_cells`; инвариант полноты |
 | `unmapped.json` | Та же выжимка атрибутов **без** `values`, плюс `ref` как в колонке Ref |
 

@@ -21,7 +21,8 @@ expectations:
   - {label: Operating cashflow, concept_id: cf.cfo}
   - {label: Total operating costs, concept_id: pnl.opex}
   - {label: DSCR minimum, concept_id: cov.dscr_limit}
-  - {label: Operating lifetime, concept_id: ops.lifetime}
+  - {label: Operating lifetime, concept_id: ops.operating_period}
+  - {label: Operating lifetime, forbidden_concept_id: ops.lifetime}
   - {label: Share premium, parent: Cashflow Statement, concept_id: bs.share_premium}
   - {label: Share premium, parent: Uses of funds, concept_id: bs.share_premium}
   - {label: Variable land lease, parent: Cashflow Statement, concept_id: pnl.opex}
