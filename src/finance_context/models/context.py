@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.5.0"
+SCHEMA_VERSION = "1.6.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -44,6 +44,7 @@ class PeriodValue(BaseModel):
     number_format: str | None = None
     source: SourceRef
     missing_cached_value: bool = False
+    formula: str | None = None
 
 
 class CandidateHit(BaseModel):
@@ -194,6 +195,7 @@ class GraphPointer(BaseModel):
     cycles_iterative: int = 0
     unresolved: int = 0
     dangling: int = 0
+    empty_range_members: int = 0
 
 
 class MappingStats(BaseModel):

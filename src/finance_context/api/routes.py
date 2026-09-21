@@ -101,6 +101,9 @@ def _clear_downstream_artifacts(dest: Path) -> None:
         "context.md",
         "meta.json",
         "graph.json",
+        "graph-edges.json",
+        "graph-dangling.json",
+        "formulas.json",
     ):
         (dest / name).unlink(missing_ok=True)
     ir = dest / "ir"
@@ -151,6 +154,27 @@ async def get_graph_json(request: Request, job_id: str) -> JSONResponse:
     return JSONResponse(payload)
 
 
+@router.get("/v1/context-jobs/{job_id}/graph/edges")
+async def get_graph_edges(request: Request, job_id: str) -> JSONResponse:
+    path = _require_artifact(request, job_id, "graph-edges.json")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return JSONResponse(payload)
+
+
+@router.get("/v1/context-jobs/{job_id}/graph-dangling.json")
+async def get_graph_dangling(request: Request, job_id: str) -> JSONResponse:
+    path = _require_artifact(request, job_id, "graph-dangling.json")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return JSONResponse(payload)
+
+
+@router.get("/v1/context-jobs/{job_id}/formulas.json")
+async def get_formulas_json(request: Request, job_id: str) -> JSONResponse:
+    path = _require_artifact(request, job_id, "formulas.json")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return JSONResponse(payload)
+
+
 @router.get("/v1/context-jobs/{job_id}/graph/trace")
 async def get_graph_trace(
     request: Request,
@@ -192,6 +216,9 @@ def _job_body(job_id: str, meta: dict) -> dict:
         body["context_json_url"] = f"/v1/context-jobs/{job_id}/context.json"
         body["context_md_url"] = f"/v1/context-jobs/{job_id}/context.md"
         body["graph_json_url"] = f"/v1/context-jobs/{job_id}/graph.json"
+        body["graph_edges_url"] = f"/v1/context-jobs/{job_id}/graph/edges"
+        body["graph_dangling_url"] = f"/v1/context-jobs/{job_id}/graph-dangling.json"
+        body["formulas_json_url"] = f"/v1/context-jobs/{job_id}/formulas.json"
     return body
 
 

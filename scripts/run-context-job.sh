@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Upload a workbook, poll the job, download context.json, graph.json, context.md,
+# Upload a workbook, poll the job, download context.json, graph.json,
+# graph-edges.json, graph-dangling.json, formulas.json, context.md,
 # and a smoke graph/trace into OUT_DIR.
 # Usage: run-context-job.sh [path/to/model.xlsx]
 # Env: BASE_URL, OUT_DIR, RUN_DIR, JOB_TIMEOUT_SEC
@@ -39,9 +40,17 @@ if [[ "$graph_url" != "/v1/context-jobs/${job_id}/graph.json" ]]; then
   echo "job status missing graph_json_url for ${job_id}" >&2
   exit 1
 fi
+edges_url="$(json_field "$RUN_DIR/job-status.json" graph_edges_url)"
+if [[ "$edges_url" != "/v1/context-jobs/${job_id}/graph/edges" ]]; then
+  echo "job status missing graph_edges_url for ${job_id}" >&2
+  exit 1
+fi
 
 require_get "/v1/context-jobs/${job_id}/context.json" "$RUN_DIR/context.json"
 require_get "/v1/context-jobs/${job_id}/graph.json" "$RUN_DIR/graph.json"
+require_get "/v1/context-jobs/${job_id}/graph/edges" "$RUN_DIR/graph-edges.json"
+require_get "/v1/context-jobs/${job_id}/graph-dangling.json" "$RUN_DIR/graph-dangling.json"
+require_get "/v1/context-jobs/${job_id}/formulas.json" "$RUN_DIR/formulas.json"
 require_get "/v1/context-jobs/${job_id}/context.md" "$RUN_DIR/context.md"
 
 origin="$(

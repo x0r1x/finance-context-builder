@@ -11,6 +11,7 @@ from finance_context.layout.models import (
     SheetLayout,
 )
 from finance_context.mapping.models import MappedRow, MappingDocument
+from finance_context.models.context import GraphPointer
 
 
 def _layout() -> Layout:
@@ -98,10 +99,51 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.values[0].cached_value == "320000"
     assert metric.values[0].source.cell_ref == "CF!B2"
     assert metric.values[1].has_formula is True
+    assert metric.values[1].formula == "=B2"
     assert metric.values[0].has_formula is False
+    assert metric.values[0].formula is None
     assert metric.mapping.method == "rule"
     assert metric.unit == "currency"
     assert doc.unmapped == []
+
+
+def test_build_warns_on_missing_graph_targets() -> None:
+    mapping = MappingDocument(
+        rows=[
+            MappedRow(
+                row_key="CF|2|CF!r1",
+                sheet="CF",
+                row=2,
+                block_id="CF!r1",
+                label="Opening cash",
+                concept_id="bs.cash",
+                article_role="database_like",
+                source="glossary",
+                confidence="high",
+                score=1.0,
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 2,
+            "addr": "B2",
+            "formula_raw": None,
+            "cached_value": "1",
+        }
+    ]
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF"}]},
+        cells=cells,
+        layout=_layout(),
+        mapping=mapping,
+        graph=GraphPointer(dangling=12, empty_range_members=718),
+    )
+    assert "Graph: 12 missing formula targets (see graph-dangling.json)" in doc.warnings
+    assert "Graph: 718 empty range members (see graph-dangling.json)" in doc.warnings
 
 
 def test_build_decodes_excel_date_serials() -> None:

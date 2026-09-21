@@ -40,6 +40,7 @@ IR_CELL_EDGE_COLUMNS = (
     ("dangling", "BOOLEAN"),
     ("col_offset", "INTEGER"),
     ("period_lag", "VARCHAR"),
+    ("dangling_reason", "VARCHAR"),
 )
 
 
@@ -80,8 +81,12 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
             )
         )
     known = set(extra_nodes)
+    sheets = {
+        str(item["name"] if isinstance(item, dict) else item.name)
+        for item in (meta.get("sheets") or [])
+    }
     csr = build_csr(edges, extra_nodes=extra_nodes)
-    cell_edges = expand_cell_edges(edges, known)
+    cell_edges = expand_cell_edges(edges, known, known_sheets=sheets)
     write_parquet(dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, ir_rows)
     write_parquet(
         dest_dir / "ir" / "edges.parquet",
@@ -92,8 +97,8 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         dest_dir / "ir" / "cell_edges.parquet",
         IR_CELL_EDGE_COLUMNS,
         [
-            (source, target, kind, unresolved, truncated, dangling, None, None)
-            for source, target, kind, unresolved, truncated, dangling in cell_edges
+            (source, target, kind, unresolved, truncated, dangling, None, None, reason)
+            for source, target, kind, unresolved, truncated, dangling, reason in cell_edges
         ],
     )
     return CompileResult(csr=csr)

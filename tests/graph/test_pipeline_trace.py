@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
@@ -89,6 +90,30 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     payload = (dest / "graph.json").read_text(encoding="utf-8")
     assert "formula_ast" not in payload
     assert "precedents_rows" not in payload
+    graph = json.loads(payload)
+    assert graph["schema_version"] == "1.1.0"
+    assert graph["artifacts"]["edges_json"] == "graph-edges.json"
+    assert graph["artifacts"]["dangling"] == "graph-dangling.json"
+    assert graph["artifacts"]["formulas"] == "formulas.json"
+    assert "formula" not in json.dumps(graph)
+
+    edge_dump = json.loads((dest / "graph-edges.json").read_text(encoding="utf-8"))
+    assert any(e["source"] == "P&L!C13" and e["target"] == "P&L!C9" for e in edge_dump["edges"])
+    formulas = json.loads((dest / "formulas.json").read_text(encoding="utf-8"))
+    by_id = {cell["node_id"]: cell for cell in formulas["cells"]}
+    assert by_id["P&L!C13"]["formula"] == "=SUM(C9:C12)"
+    dangling = json.loads((dest / "graph-dangling.json").read_text(encoding="utf-8"))
+    assert dangling["count"] == len(dangling["ids"])
+
+    context = json.loads((dest / "context.json").read_text(encoding="utf-8"))
+    ebitda_values = [
+        value
+        for block in context["blocks"]
+        for metric in block["metrics"]
+        if metric.get("label") == "EBITDA"
+        for value in metric["values"]
+    ]
+    assert any(value.get("formula") == "=SUM(C9:C12)" for value in ebitda_values)
 
     edges = read_parquet(dest / "ir" / "cell_edges.parquet")
     ebitda = [e for e in edges if e["source"] == "P&L!C13"]
@@ -104,3 +129,56 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert "P&L!C9" in node_ids
     assert "P&L!C12" in node_ids
     assert any(n.node_id.startswith("Operation!") for n in traced.nodes)
+
+
+def test_pipeline_classifies_index_range_holes(tmp_path: Path) -> None:
+    source = build_xlsx(
+        tmp_path / "index.xlsx",
+        sheets=[
+            SheetSpec(
+                name="Input Assumptions",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="C1", value="2024", type="s"),
+                    CellSpec(addr="A8", value="Inflation", type="s"),
+                    CellSpec(addr="C8", value="0.02", formula="=INDEX(J8:O8,1)"),
+                    CellSpec(addr="J8", value="0.02"),
+                ],
+            )
+        ],
+        shared_strings=["Item", "2023", "2024", "Inflation"],
+    )
+    dest = tmp_path / "job"
+    dest.mkdir()
+    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    doc = pipeline.run(dest, job_id="index-job", source_filename="index.xlsx")
+    edges = read_parquet(dest / "ir" / "cell_edges.parquet")
+    holes = [
+        e
+        for e in edges
+        if e["source"] == "Input Assumptions!C8"
+        and str(e["target"]).endswith(("K8", "L8", "M8", "N8", "O8"))
+    ]
+    assert holes
+    assert all(e["dangling_reason"] == "empty_range_member" for e in holes)
+    assert all(not e["dangling"] for e in holes)
+    index = {row["node_id"]: row for row in read_parquet(dest / "ir" / "graph_index.parquet")}
+    assert index["Input Assumptions!K8"]["node_type"] == "empty"
+    dangling = json.loads((dest / "graph-dangling.json").read_text(encoding="utf-8"))
+    hole_ids = [
+        item["node_id"]
+        for item in dangling["ids"]
+        if item["class"] == "empty_range_member"
+    ]
+    assert "Input Assumptions!K8" in hole_ids
+    assert dangling["count"] == len(dangling["ids"])
+    assert dangling["count"] > 32 or dangling["count"] >= len(holes)
+    graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
+    assert graph["dangling"]["count"] == 0
+    assert graph["dangling_classes"].get("empty_range_member", 0) >= len(holes)
+    assert doc.graph.dangling == 0
+    assert doc.graph.empty_range_members >= len(holes)
+    traced = trace_graph(dest, origin="Input Assumptions!C8", direction="precedents", depth=2)
+    assert "Input Assumptions!K8" in {n.node_id for n in traced.nodes}

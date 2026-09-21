@@ -265,6 +265,14 @@ def build_context(
         sample = ", ".join(missing_addrs[:3])
         extra = f" (e.g. {sample})" if sample else ""
         warnings.append(f"{missing_cached} formula cell(s) missing cached values{extra}")
+    if graph is not None and graph.dangling:
+        warnings.append(
+            f"Graph: {graph.dangling} missing formula targets (see graph-dangling.json)"
+        )
+    if graph is not None and graph.empty_range_members:
+        warnings.append(
+            f"Graph: {graph.empty_range_members} empty range members (see graph-dangling.json)"
+        )
 
     sheets = [
         s["name"] if isinstance(s, dict) else getattr(s, "name", str(s))
@@ -389,6 +397,7 @@ def _series_for_row(
                 number_format=(cell or {}).get("number_format"),
                 source=SourceRef(sheet=sheet_name, addr=addr, row=row_num, col=header.col),
                 missing_cached_value=bool(formula) and cached in (None, ""),
+                formula=str(formula) if formula else None,
             )
         )
     unit_from_cell = unit_kind_from_text(
