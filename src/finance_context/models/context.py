@@ -4,9 +4,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.3.0"
+SCHEMA_VERSION = "1.4.0"
 
 TimelinePhase = Literal["construction", "operation"]
+UnitDimension = Literal["money", "rate", "ratio", "count"]
+PeriodUnit = Literal["year", "month", "day"]
 
 Confidence = Literal["high", "medium", "low"]
 MapMethod = Literal["rule", "embed", "llm", "unmapped", "structure"]
@@ -72,6 +74,14 @@ class RowHints(BaseModel):
     escalation: str | None = None
 
 
+class DisplayUnit(BaseModel):
+    raw: str
+    dimension: UnitDimension | None = None
+    currency: str | None = None
+    scale: float | None = None
+    per: PeriodUnit | None = None
+
+
 class RoleCell(BaseModel):
     addr: str
     col: int
@@ -88,6 +98,7 @@ class MetricSeries(BaseModel):
     concept_id: str | None = None
     article_role: str
     unit: str | None = None
+    display_unit: DisplayUnit | None = None
     mapping: MappingEvidence
     values: list[PeriodValue] = Field(default_factory=list)
     source: SourceRef
@@ -126,6 +137,7 @@ class InventoryRow(BaseModel):
     disposition: str | None = None
     exclusion_reason: str | None = None
     unit: str | None = None
+    display_unit: DisplayUnit | None = None
     formula_fingerprint: str | None = None
     formula_exceptions: list[str] = Field(default_factory=list)
     numeric_summary: NumericSummary | None = None

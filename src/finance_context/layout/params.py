@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text
+from finance_context.models.context import DisplayUnit
 
 _HEADER_ROLES: dict[str, str] = {
     "parameter": "label",
@@ -112,6 +113,59 @@ def unit_kind_from_text(text: str | None) -> str | None:
     return None
 
 
+def parse_display_unit(text: str | None) -> DisplayUnit | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    folded = raw.casefold()
+    compact = folded.replace(" ", "")
+    dimension = unit_kind_from_text(raw)
+    per = _period_unit(folded, compact)
+    currency = _currency_code(raw, compact)
+    scale: float | None = None
+    if currency is not None:
+        scale = 1000.0 if _thousands_scale(compact) else 1.0
+    kind = dimension if dimension in {"money", "rate", "ratio", "count"} else None
+    return DisplayUnit(raw=raw, dimension=kind, currency=currency, scale=scale, per=per)
+
+
+def _period_unit(folded: str, compact: str) -> str | None:
+    if compact in {"year", "years", "month", "months", "day", "days"}:
+        return None
+    if compact.endswith("/year") or "peryear" in compact or folded.strip() == "per year":
+        return "year"
+    if compact.endswith("/month") or "permonth" in compact:
+        return "month"
+    if compact.endswith("/day") or "perday" in compact:
+        return "day"
+    return None
+
+
+def _currency_code(raw: str, compact: str) -> str | None:
+    if "£" in raw or "gbp" in compact:
+        return "GBP"
+    if "$" in raw or "usd" in compact:
+        return "USD"
+    if "€" in raw or "eur" in compact:
+        return "EUR"
+    if "₽" in raw or "rub" in compact:
+        return "RUB"
+    return None
+
+
+def _thousands_scale(compact: str) -> bool:
+    return bool(
+        compact.startswith("k")
+        or "k£" in compact
+        or "k$" in compact
+        or "k€" in compact
+        or "£k" in compact
+        or "$k" in compact
+        or "'000" in compact
+        or "000" in compact and compact.startswith("£")
+    )
+
+
 def _looks_like_grid(by_row: dict[int, list[dict]], date1904: bool) -> bool:
     numeric_labels = 0
     numeric_bodies = 0
@@ -174,7 +228,7 @@ def _column_roles(
     header_votes: dict[int, Counter[str]] = defaultdict(Counter)
     numeric_counts: Counter[int] = Counter()
     text_counts: Counter[int] = Counter()
-    for row_n, cells in by_row.items():
+    for _row_n, cells in by_row.items():
         for cell in cells:
             col = int(cell["col"])
             text = _text(cell, date1904)

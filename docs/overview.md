@@ -25,7 +25,7 @@
 | `ir/` | Шаблоны формул, AST, рёбра зависимостей |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `context.json` | Схема `1.3.0`: `timeline` (фазы model year), блоки с периодами или параметрами, `unmapped`, `excluded`, полный `inventory` |
+| `context.json` | Схема `1.4.0`: `timeline`, `display_unit` (сырой k£ / £/year рядом с фасетом `unit`), блоки, `unmapped`, `excluded`, полный `inventory` |
 | `context.md` | Две метрики в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}`; `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 

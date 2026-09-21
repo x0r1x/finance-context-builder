@@ -2,7 +2,7 @@
 
 Маппинг — retrieve-and-align, не классификация на закрытом множестве. Таксономия — **словарь**, не воронка контента: строка не выбрасывается, если концепт не найден. Резолвер принимает `concept_id` только выше порога; иначе fact остаётся `unknown`, но в context остаются подпись, hints, соседи, формула и top-3 кандидатов.
 
-Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.3.0`.
+Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.4.0`.
 
 Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [разбор unmapped](review.md), [архитектура](architecture.md).
 
@@ -140,7 +140,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 
 Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, не concept.
 
-`inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `precedents_rows` / `dependents_rows`, `cells` (роли `value` / `unit` / `scenario` / `total` / `note`), `precedent_cells` (до 8 ссылок с графа, которых нет среди уже экспортированных ячеек строки). Period values не дублируются на inventory. Инвариант: `len(inventory) ==` сумма layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
+`inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `precedents_rows` / `dependents_rows`, `unit` (FAST dimension) и `display_unit` (сырой k£ / £/year), `cells` (роли `value` / `unit` / `scenario` / `total` / `note`), `precedent_cells` (до 8 ссылок с графа, которых нет среди уже экспортированных ячеек строки). Period values не дублируются на inventory. Инвариант: `len(inventory) ==` сумма layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
 
 Top-3 `candidates` пишутся и при abstain: если prune опустошил fused-список, в context остаются сырые proposals.
 

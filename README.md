@@ -2,7 +2,7 @@
 
 Read-only service that turns Excel cash-flow workbooks (`.xlsx` / `.xlsm`) into versioned JSON and Markdown context. Formulas are preserved; values come from Excel cached results and are not recalculated.
 
-Every layout row is kept in `context.json` (`inventory`, schema `1.3.0`), including assumption tables without a period axis (`params`) and left-of-timeline scalars with roles (`value` / `unit` / `total`). A workbook-level `timeline` annotates model years with construction/operation phases from timing flags. A small taxonomy may annotate a line with `concept_id`, or abstain: a wrong tag is worse than `unknown`. Structure (formula graph and neighbors) first, then labels, then embeddings, then an optional LLM rerank. Unknown rows still carry hints, neighbors, formula fingerprint, role-tagged cells, and top-3 candidates.
+Every layout row is kept in `context.json` (`inventory`, schema `1.4.0`), including assumption tables without a period axis (`params`) and left-of-timeline scalars with roles (`value` / `unit` / `total`). `unit` is the mapping dimension; `display_unit` preserves sheet labels such as `k£` or `£/year`. A workbook-level `timeline` annotates model years with construction/operation phases from timing flags. A small taxonomy may annotate a line with `concept_id`, or abstain: a wrong tag is worse than `unknown`. Structure (formula graph and neighbors) first, then labels, then embeddings, then an optional LLM rerank. Unknown rows still carry hints, neighbors, formula fingerprint, role-tagged cells, and top-3 candidates.
 
 Guides: [overview](docs/overview.md), [layout](docs/layout.md), [mapping](docs/mapping.md), [taxonomy](docs/taxonomy.md), [unmapped review](docs/review.md), [architecture](docs/architecture.md).
 

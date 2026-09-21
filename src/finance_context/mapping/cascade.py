@@ -395,6 +395,7 @@ def _ask_chat(
                 f"parent: {ctx.parent_label or ''}\n"
                 f"section: {' / '.join(ctx.section_path)}\n"
                 f"value_kind: {ctx.value_kind}\n"
+                f"unit_raw: {ctx.unit_raw or ''}\n"
                 f"facets: {ctx.inferred_facets.model_dump()}\n"
                 f"period_headers: {', '.join(ctx.period_headers)}\n"
                 f"options: {listed}\n"

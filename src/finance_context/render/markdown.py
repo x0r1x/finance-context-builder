@@ -285,7 +285,7 @@ def _period_table(
     if not metrics:
         return []
     period_labels = [_period_label(item) for item in headers]
-    cols = ["Label", "Concept", "Ref", *period_labels]
+    cols = ["Label", "Unit", "Concept", "Ref", *period_labels]
     lines = [
         "| " + " | ".join(_cell(c) for c in cols) + " |",
         "| " + " | ".join("---" for _ in cols) + " |",
@@ -304,6 +304,7 @@ def _metric_row(series: MetricSeries, headers: list[dict]) -> str:
         concept = f"{series.concept_id} ({conf})"
     cells = [
         _cell(series.label),
+        _cell(_unit_label(series)),
         _cell(concept),
         _cell(series.source.cell_ref),
     ]
@@ -344,6 +345,13 @@ def _format_value(raw: str | None) -> str:
 
 def _cell(value: object) -> str:
     return str(value).translate(_MD_ESCAPE).strip()
+
+
+def _unit_label(item: MetricSeries | InventoryRow) -> str:
+    display = getattr(item, "display_unit", None)
+    if display is not None and display.raw:
+        return display.raw
+    return item.unit or item.hints.unit or ""
 
 
 def _excluded_section(rows: list[MetricSeries], *, max_rows: int) -> list[str]:
@@ -402,7 +410,7 @@ def _navigator_sections(rows: list[InventoryRow], *, max_rows: int) -> list[str]
                         _cell(" / ".join(item.label_path)),
                         _cell(item.kind),
                         _cell(item.concept_id or "unknown"),
-                        _cell(item.unit or item.hints.unit or ""),
+                        _cell(_unit_label(item)),
                         _cell(item.formula_fingerprint or ""),
                         _cell(refs),
                     ]

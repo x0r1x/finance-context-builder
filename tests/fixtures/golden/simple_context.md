@@ -1,6 +1,6 @@
 # Financial context
 
-- Schema: `1.3.0`
+- Schema: `1.4.0`
 - Job: `job1`
 - Status: `succeeded`
 - Source: `simple.xlsx`
@@ -14,6 +14,6 @@
 
 Periods: grain=year 2. Metrics: 1. Unmapped: 0.
 
-| Label | Concept | Ref | 2023 | 2024E |
-| --- | --- | --- | --- | --- |
-| Opening cash | bs.cash (high) | CF!A2 | 100 `CF!B2` | 110* `CF!C2` |
+| Label | Unit | Concept | Ref | 2023 | 2024E |
+| --- | --- | --- | --- | --- | --- |
+| Opening cash |  | bs.cash (high) | CF!A2 | 100 `CF!B2` | 110* `CF!C2` |

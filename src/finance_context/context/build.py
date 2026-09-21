@@ -2,19 +2,20 @@ from __future__ import annotations
 
 from collections import Counter
 
+from finance_context.context.timeline import annotate_block_periods, build_timeline
 from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.layout.models import Layout, LayoutRow
-from finance_context.layout.params import unit_kind_from_text
+from finance_context.layout.params import parse_display_unit, unit_kind_from_text
 from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.graph import row_adjacency
 from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowRelation
 from finance_context.mapping.rules import is_noise_label
-from finance_context.context.timeline import annotate_block_periods, build_timeline
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
     CandidateHit,
     ContextDocument,
+    DisplayUnit,
     FinancialBlock,
     InventoryRow,
     MappingEvidence,
@@ -130,8 +131,13 @@ def build_context(
                     ),
                     None,
                 )
+                display_unit = parse_display_unit(unit_text)
                 hints = _hints_for(mapped, layout_row, unit_text)
-                series_unit = unit_kind_from_text(unit_text)
+                series_unit = (
+                    display_unit.dimension
+                    if display_unit is not None
+                    else unit_kind_from_text(unit_text)
+                )
                 candidates = _candidates_for(mapped)
                 known_cols = {item.col for item in role_cells} | {h.col for h in value_headers}
                 extra_precs = _precedent_cells(
@@ -166,8 +172,11 @@ def build_context(
                         hints=hints,
                         role_cells=role_cells,
                         precedent_cells=extra_precs,
+                        display_unit=display_unit,
                     )
                     series_unit = series_unit or series.unit
+                    if display_unit is None:
+                        display_unit = series.display_unit
                     if mapped is not None and mapped.disposition == "excluded":
                         excluded.append(series)
                     elif mapped is None or mapped.concept_id is None:
@@ -199,6 +208,7 @@ def build_context(
                             else ("noise" if is_noise_label(layout_row.label) else None)
                         ),
                         unit=series_unit,
+                        display_unit=display_unit,
                         formula_fingerprint=fingerprint,
                         formula_exceptions=exceptions,
                         numeric_summary=summary,
@@ -305,6 +315,7 @@ def _series_for_row(
     hints: RowHints,
     role_cells: list[RoleCell],
     precedent_cells: list[RoleCell],
+    display_unit: DisplayUnit | None = None,
 ) -> MetricSeries:
     row_num = layout_row.row
     label_addr = format_addr(label_col, row_num)
@@ -348,8 +359,12 @@ def _series_for_row(
                 missing_cached_value=bool(formula) and cached in (None, ""),
             )
         )
-    unit_from_cell = unit_kind_from_text(
-        next((item.cached_value for item in role_cells if item.role == "unit"), None)
+    unit_from_cell = (
+        display_unit.dimension
+        if display_unit is not None
+        else unit_kind_from_text(
+            next((item.cached_value for item in role_cells if item.role == "unit"), None)
+        )
     )
     unit = unit_from_cell or _unit_from_values(values)
     if hints.unit is None:
@@ -361,6 +376,7 @@ def _series_for_row(
         concept_id=mapped.concept_id if mapped else None,
         article_role=mapped.article_role if mapped else "database_like",
         unit=unit,
+        display_unit=display_unit,
         mapping=evidence,
         values=values,
         source=source,
@@ -399,11 +415,11 @@ def _unit_from_values(values: list[PeriodValue]) -> str | None:
         if not fmt:
             continue
         if "%" in fmt:
-            return "percent"
+            return "rate"
         if "$" in fmt or "USD" in fmt.upper():
-            return "currency"
-        if "₽" in fmt or "RUB" in fmt.upper():
-            return "currency"
+            return "money"
+        if "₽" in fmt or "RUB" in fmt.upper() or "£" in fmt or "€" in fmt:
+            return "money"
     return None
 
 

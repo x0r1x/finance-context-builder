@@ -178,10 +178,58 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
             assert costs.kind == "abstract"
         assert "tax rate" in labels
         assert labels["tax rate"].unit == "rate"
+        tax_du = labels["tax rate"].display_unit
+        assert tax_du is not None and tax_du.raw == "%" and tax_du.dimension == "rate"
         assert labels["concession duration"].unit == "count"
+        dur = labels["concession duration"].display_unit
+        assert dur is not None and dur.raw == "years" and dur.per is None
+        capex = labels.get("capex including spv costs")
+        if capex is not None and capex.display_unit is not None:
+            assert capex.unit == "money"
+            assert capex.display_unit.raw == "£"
+            assert capex.display_unit.currency == "GBP"
+            assert capex.display_unit.scale == 1
+        maint = labels.get("maintenance including heavy maintenance and spv costs")
+        if maint is not None and maint.display_unit is not None:
+            assert maint.display_unit.raw == "£/year"
+            assert maint.display_unit.per == "year"
+            assert maint.display_unit.scale == 1
+        traffic = labels.get("traffic passenger car pc")
+        if traffic is None:
+            traffic = next(
+                (
+                    row
+                    for row in ia
+                    if "passenger car" in normalize_label(row.label) and "traffic" in normalize_label(row.label)
+                ),
+                None,
+            )
+        if traffic is not None and traffic.display_unit is not None:
+            assert traffic.unit == "count"
+            assert traffic.display_unit.raw == "veh/year"
+            assert traffic.display_unit.per == "year"
         toll = labels.get("toll rate")
+        if toll is None:
+            toll = next((row for row in ia if normalize_label(row.label).startswith("toll rate")), None)
         if toll is not None:
             assert toll.unit == "money"
+            if toll.display_unit is not None:
+                assert toll.display_unit.raw == "£"
+                assert toll.display_unit.scale == 1
+        op_rev = next(
+            (
+                row
+                for row in ctx_doc.inventory
+                if row.sheet == "Operation"
+                and "revenue" in normalize_label(row.label)
+                and "passenger" in normalize_label(row.label)
+            ),
+            None,
+        )
+        if op_rev is not None and op_rev.display_unit is not None:
+            assert op_rev.unit == "money"
+            assert op_rev.display_unit.raw == "k£"
+            assert op_rev.display_unit.scale == 1000
         stub = next(
             (
                 cell
