@@ -134,6 +134,7 @@ def build_row_context(
         headers = [h.text for h in block.axis.headers[:12]]
     value_kind = _value_kind(book, sheet, layout_row.row, block, pattern)
     unit_kind = _unit_from_row_cells(book, sheet, layout_row)
+    unit_raw = _unit_raw_from_row_cells(book, sheet, layout_row)
     if unit_kind:
         value_kind = unit_kind
     else:
@@ -174,6 +175,7 @@ def build_row_context(
             templates,
             block_kind=getattr(block, "kind", "timeline"),
         ),
+        unit_raw=unit_raw,
         query_text=query,
         label_col=layout_row.label_col or block.label_col,
         prev_labels=prev_labels,
@@ -214,14 +216,21 @@ def _value_kind(
 def _unit_from_row_cells(book: BookView, sheet: str, layout_row: LayoutRow) -> ValueKind | None:
     from finance_context.layout.params import unit_kind_from_text
 
+    raw = _unit_raw_from_row_cells(book, sheet, layout_row)
+    kind = unit_kind_from_text(raw)
+    if kind in {"money", "rate", "ratio", "count"}:
+        return kind  # type: ignore[return-value]
+    return None
+
+
+def _unit_raw_from_row_cells(book: BookView, sheet: str, layout_row: LayoutRow) -> str | None:
     for item in layout_row.cells:
         if item.role != "unit":
             continue
         cell = book.cells.get((sheet, layout_row.row, item.col))
-        text = None if cell is None else str(cell.get("cached_value") or "")
-        kind = unit_kind_from_text(text)
-        if kind in {"money", "rate", "ratio", "count"}:
-            return kind  # type: ignore[return-value]
+        text = None if cell is None else str(cell.get("cached_value") or "").strip()
+        if text:
+            return text
     return None
 
 

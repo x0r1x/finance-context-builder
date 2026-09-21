@@ -99,7 +99,7 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.values[0].source.cell_ref == "CF!B2"
     assert metric.values[1].formula == "=B2"
     assert metric.mapping.method == "rule"
-    assert metric.unit == "currency"
+    assert metric.unit == "money"
     assert doc.unmapped == []
 
 

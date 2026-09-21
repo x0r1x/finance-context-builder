@@ -212,6 +212,7 @@ class RowContext(BaseModel):
     period_grain: str | None = None
     period_headers: list[str] = Field(default_factory=list)
     article_role: ArticleRole = "database_like"
+    unit_raw: str | None = None
     query_text: str = ""
     label_col: int = 1
     inferred_facets: InferredFacets = Field(default_factory=InferredFacets)

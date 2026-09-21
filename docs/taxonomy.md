@@ -123,7 +123,7 @@ Structure на `SUM` ищет общий id детей, общий `broader` и�
 
 ## `facets.unit` (`value_kind`)
 
-Совместимость при prune: money только к money; count к count; rate к rate; ratio совместим с rate. Строка с денежным рядом не мапится на headcount.
+Совместимость при prune: money только к money; count к count; rate к rate; ratio совместим с rate. Строка с денежным рядом не мапится на headcount. Сырые единицы книги (`k£`, `£/year`) живут в `display_unit`, не здесь.
 
 - Процент / ставка налога / FX rate / WACC / CoC / IRR / эскалация → `rate` (ratio-строка совместима с rate-концептом)
 - DSCR, leverage, conversion, runway, coverage, CPI, availability, FCFE/Equity → `ratio`
