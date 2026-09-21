@@ -24,7 +24,7 @@ def _write(path: Path, payload: dict) -> Path:
 
 def _ok_graph(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "job_id": "job-1",
         "nodes": 3,
         "edges": 2,
@@ -35,6 +35,7 @@ def _ok_graph(**overrides: object) -> dict:
             "index": "ir/graph_index.parquet",
             "edges_json": "graph-edges.json",
             "dangling": "graph-dangling.json",
+            "formulas": "formulas.json",
         },
     }
     body.update(overrides)
@@ -150,6 +151,7 @@ def test_rejects_missing_edges_json_artifact(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "artifacts.edges_json" in result.stderr
     assert "artifacts.dangling" in result.stderr
+    assert "artifacts.formulas" in result.stderr
 
 
 def test_accepts_sidecar_and_prints_formula_cell_origin(tmp_path: Path) -> None:
@@ -208,3 +210,66 @@ def test_validates_trace_origin(tmp_path: Path) -> None:
     assert ok.returncode == 0, ok.stderr
     assert bad.returncode == 1
     assert "trace origin" in bad.stderr
+
+
+def test_rejects_graph_schema_1_0(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.0.0"))
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "schema_version" in result.stderr
+
+
+def test_accepts_audit_sidecars(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    edges = _write(
+        tmp_path / "graph-edges.json",
+        {"edges": [{"source": "P&L!C13", "target": "P&L!C9", "kind": "range"}]},
+    )
+    dangling = _write(
+        tmp_path / "graph-dangling.json",
+        {
+            "count": 2,
+            "by_class": {"empty_range_member": 2},
+            "ids": [
+                {"node_id": "P&L!K8", "class": "empty_range_member"},
+                {"node_id": "P&L!L8", "class": "empty_range_member"},
+            ],
+        },
+    )
+    formulas = _write(
+        tmp_path / "formulas.json",
+        {"cells": [{"node_id": "P&L!C13", "formula": "=SUM(C9:C12)"}]},
+    )
+
+    result = _run(
+        str(context),
+        str(graph),
+        "--edges",
+        str(edges),
+        "--dangling",
+        str(dangling),
+        "--formulas",
+        str(formulas),
+        "--print-origin",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "P&L!C13"
+
+
+def test_rejects_truncated_dangling_list(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    dangling = _write(
+        tmp_path / "graph-dangling.json",
+        {"count": 718, "by_class": {}, "ids": [{"node_id": "A!J8", "class": "empty_range_member"}]},
+    )
+
+    result = _run(str(context), str(graph), "--dangling", str(dangling))
+
+    assert result.returncode == 1
+    assert "len(ids)" in result.stderr

@@ -14,7 +14,7 @@
 | `context.json` → `unmapped` | Серии с `values` по периодам (кэш + A1 `formula` + адрес) или `cells` (params), `candidates`, `hints`, `neighbors`. Это abstained fact-серии, не «inventory без concept_id» |
 | `context.json` → `inventory` | Все kind, включая abstract; role-tagged `cells`; инвариант полноты |
 | `context.json` → `graph` | Pointer на `graph.json` / parquet, counts, циклы, `empty_range_members` |
-| `graph.json` + `graph-edges.json` + `GET .../graph/trace` | Cell-level зависимости, `period_lag`, классы dangling; AST в `formulas.json` / parquet |
+| `graph.json` + `graph-edges.json` + `graph-dangling.json` + `GET .../graph/trace` | Cell-level зависимости, `period_lag`, классы dangling; AST в `formulas.json` / parquet |
 | `unmapped.json` | Та же выжимка атрибутов **без** `values`, плюс `ref` как в колонке Ref |
 
 `scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `unmapped` из context или `rows` из mapping, оставляет `concept_id is null` и `disposition != excluded`, выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown, не с длиной navigator.

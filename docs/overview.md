@@ -58,7 +58,7 @@
 | `degraded` | Как `needs_input`, но LLM и embeddings не настроены |
 | `failed` | Ошибка пайплайна, usable context нет |
 
-`needs_input` — не падение: `context.json` и `context.md` всё равно отдаются.
+`needs_input` — не падение: `context.json`, sidecar’ы графа и `context.md` всё равно отдаются.
 
 ## Два рычага покрытия
 

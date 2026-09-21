@@ -45,6 +45,8 @@ def build(
     typer.echo(dest / "context.json")
     typer.echo(dest / "graph.json")
     typer.echo(dest / "graph-edges.json")
+    typer.echo(dest / "graph-dangling.json")
+    typer.echo(dest / "formulas.json")
     typer.echo(dest / "context.md")
     typer.echo(doc.meta.status)
 

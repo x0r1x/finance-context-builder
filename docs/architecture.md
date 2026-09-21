@@ -15,6 +15,8 @@ flowchart LR
   build --> json[context.json]
   graph --> gjson[graph.json]
   graph --> gedges[graph-edges.json]
+  graph --> gdangle[graph-dangling.json]
+  graph --> gform[formulas.json]
   json --> render
   render --> md[context.md]
   mapping -.-> llm[ChatPort / EmbedPort]
