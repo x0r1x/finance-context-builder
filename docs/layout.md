@@ -64,6 +64,8 @@ Compile помечает формулу `unparsed`, если токен не р�
 
 Шапка params может быть многострочной: имена сценариев и `Units` / `Values` / `Active` / `Notes` собираются по колонкам. Неизвестные текстовые имена над числовыми колонками → роль `scenario`. Колонка **active value** выбирается по числу кросс-листовых dependents в `ir/edges.parquet`; лексикон шапки — подсказка.
 
+Строка **Scenario Chosen** / selected scenario — не шапка колонок, а control (`kind=flag`). Индекс живого сценария (часто `D3`) остаётся в inventory и `excluded` с `context_role=scenario_selector`; колонка D — выбранное значение, F:… — матрица кейсов. Числа `1..n` в строке селектора не перезаписывают имена оси (`Base Case`). Лейбл селектора не голосует за колонку `value`, иначе `label_col` съезжает вправо.
+
 Капс-строка без значений → `abstract`. Таблица `Check` / `Result` → `helper` / `check_row`; exclusion сам снимет её с тегирования.
 
 ## Непериодные ячейки на таймлайне
@@ -77,6 +79,7 @@ Compile помечает формулу `unparsed`, если токен не р�
 | 0 блоков | Нет календарной оси, нет `Year`+`1..n`, нет длинного `1..n` на formula-copy, и шейп не params (проза / nav) |
 | Много блоков по 2 периода, 0 fact | Ложные Start/End не отфильтровались; или лейблы правее `label_col` |
 | Блоки есть, fact = 0 | Зона лейблов / skip пустого `label_col` |
+| Нет `D3` / Scenario Chosen в inventory | Control-строка попала в header params (`params.py`) |
 | `Unparsed formula` на шапке или SUM | `formulas/engine.py`, не таксономия |
 
 Публичный корпус: Packt (индекс лет + `Input Assumptions` как params) и RVI (календарь + секции в нескольких колонках; `Top Shortcuts` не даёт строк). Gold: `tests/fixtures/mapping/*_dispositions.yaml`. `three-statement.xlsx` в lock может быть недоступен — тест корпуса skip.

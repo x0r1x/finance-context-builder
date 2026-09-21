@@ -356,3 +356,54 @@ def test_markdown_renders_parameters_table() -> None:
     assert "%" in rendered
     assert "pnl.tax_rate" in rendered
 
+
+def test_markdown_parameters_leads_with_scenario_selector() -> None:
+    doc = ContextDocument(
+        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
+        workbook=WorkbookRaw(sheets=["Input Assumptions"], sheet_count=1, cell_count=4),
+        blocks=[
+            FinancialBlock(
+                block_id="Input Assumptions!r5",
+                sheet="Input Assumptions",
+                label_col=2,
+                kind="params",
+                periods=[
+                    {"col": 4, "text": "Values", "role": "value", "period_key": "value"},
+                ],
+                metrics=[
+                    MetricSeries(
+                        row_key="Input Assumptions|8|Input Assumptions!r5",
+                        label="Tax Rate",
+                        article_role="assumption",
+                        mapping=MappingEvidence(method="rule", confidence="high", score=0.9),
+                        source=SourceRef(sheet="Input Assumptions", addr="B8", row=8, col=2),
+                        cells=[
+                            RoleCell(addr="D8", col=4, role="value", cached_value="0.3"),
+                        ],
+                    )
+                ],
+            )
+        ],
+        excluded=[
+            MetricSeries(
+                row_key="Input Assumptions|3|Input Assumptions!r5",
+                label="Scenario Chosen",
+                article_role="assumption",
+                mapping=MappingEvidence(method="unmapped", confidence="low"),
+                source=SourceRef(sheet="Input Assumptions", addr="B3", row=3, col=2),
+                kind="flag",
+                disposition="excluded",
+                exclusion_reason="flag",
+                context_role="scenario_selector",
+                cells=[
+                    RoleCell(addr="D3", col=4, role="value", cached_value="1"),
+                ],
+            )
+        ],
+    )
+    rendered = render_markdown(doc)
+    params = rendered.split("## Parameters / Input Assumptions", 1)[1]
+    assert params.find("Scenario Chosen") < params.find("Tax Rate")
+    assert "| Scenario Chosen |" in rendered
+    assert "| 1 |" in rendered
+

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from finance_context.layout.params import is_scenario_selector_label
 from finance_context.mapping.models import RowContext
 from finance_context.mapping.statement import context_tokens, is_cashflow_context
 
@@ -11,6 +12,8 @@ _CFADS_INPUTS = {"cf.receipts", "pnl.revenue", "cf.opex_paid", "pnl.opex"}
 
 
 def infer_context_role(ctx: RowContext, concept_id: str | None = None) -> str:
+    if is_scenario_selector_label(ctx.label):
+        return "scenario_selector"
     tokens = context_tokens(
         sheet=ctx.sheet,
         section_path=ctx.section_path,

@@ -620,6 +620,10 @@ def test_params_block_from_scenario_matrix() -> None:
         _c("Input Assumptions", "D5", "Values"),
         _c("Input Assumptions", "F2", "Base Case"),
         _c("Input Assumptions", "G2", "Scenario 2"),
+        _c("Input Assumptions", "B3", "Scenario Chosen"),
+        _c("Input Assumptions", "D3", "1"),
+        _c("Input Assumptions", "F3", "1"),
+        _c("Input Assumptions", "G3", "2"),
         _c("Input Assumptions", "B7", "TIME ASSUMPTIONS"),
         _c("Input Assumptions", "B8", "Concession Duration"),
         _c("Input Assumptions", "C8", "years"),
@@ -658,6 +662,17 @@ def test_params_block_from_scenario_matrix() -> None:
     assert labels["TIME ASSUMPTIONS"].kind == "abstract"
     assert labels["TRAFFIC & REVENUE ASSUMPTIONS"].kind == "abstract"
     assert labels["Concession Duration"].kind == "fact"
+    selector = labels["Scenario Chosen"]
+    assert selector.kind == "flag"
+    assert selector.row == 3
+    assert selector.label_col == 2
+    assert {cell.col: cell.role for cell in selector.cells}[4] == "value"
+    assert all(cell.role != "scenario" for cell in selector.cells)
+    by_col = {header.col: header for header in block.axis.headers}
+    assert by_col[6].text == "Base Case"
+    assert by_col[6].role == "scenario"
+    assert by_col[7].text == "Scenario 2"
+    assert block.label_col == 2
     unit_cols = {cell.role for cell in labels["Tax Rate"].cells}
     assert "unit" in unit_cols
     assert "value" in unit_cols
