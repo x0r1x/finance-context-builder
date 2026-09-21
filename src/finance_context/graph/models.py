@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-GRAPH_SCHEMA_VERSION = "1.0.0"
+GRAPH_SCHEMA_VERSION = "1.1.0"
 CycleClass = Literal["iterative_ok", "unexpected"]
 ID_CAP = 32
 
@@ -22,17 +22,28 @@ class IdCount(BaseModel):
     ids: list[str] = Field(default_factory=list)
 
 
+class GraphContract(BaseModel):
+    source_of_truth: str = "parquet"
+    edges: str = "ir/cell_edges.parquet"
+    formulas: str = "ir/cells.parquet"
+    edges_json: str = "graph-edges.json"
+    dangling: str = "graph-dangling.json"
+    formulas_json: str = "formulas.json"
+
+
 class GraphDocument(BaseModel):
     schema_version: str = GRAPH_SCHEMA_VERSION
     job_id: str
     nodes: int = 0
     edges: int = 0
     kinds: dict[str, int] = Field(default_factory=dict)
+    contract: GraphContract = Field(default_factory=GraphContract)
     unresolved: IdCount = Field(default_factory=IdCount)
     dynamic: IdCount = Field(default_factory=IdCount)
     external: IdCount = Field(default_factory=IdCount)
     truncated: IdCount = Field(default_factory=IdCount)
     dangling: IdCount = Field(default_factory=IdCount)
+    dangling_classes: dict[str, int] = Field(default_factory=dict)
     cycles: list[CycleRecord] = Field(default_factory=list)
     artifacts: dict[str, str] = Field(
         default_factory=lambda: {
@@ -40,6 +51,9 @@ class GraphDocument(BaseModel):
             "edges": "ir/edges.parquet",
             "cell_edges": "ir/cell_edges.parquet",
             "index": "ir/graph_index.parquet",
+            "edges_json": "graph-edges.json",
+            "dangling": "graph-dangling.json",
+            "formulas": "formulas.json",
         }
     )
 

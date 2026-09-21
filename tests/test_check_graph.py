@@ -33,6 +33,8 @@ def _ok_graph(**overrides: object) -> dict:
             "edges": "ir/edges.parquet",
             "cell_edges": "ir/cell_edges.parquet",
             "index": "ir/graph_index.parquet",
+            "edges_json": "graph-edges.json",
+            "dangling": "graph-dangling.json",
         },
     }
     body.update(overrides)
@@ -67,6 +69,87 @@ def _ok_context(**overrides: object) -> dict:
     }
     body.update(overrides)
     return body
+
+
+def test_accepts_a1_formula_on_period_values(tmp_path: Path) -> None:
+    context = _write(
+        tmp_path / "context.json",
+        _ok_context(
+            blocks=[
+                {
+                    "metrics": [
+                        {
+                            "concept_id": "pnl.ebitda",
+                            "values": [
+                                {
+                                    "has_formula": True,
+                                    "formula": "=$C$20*0.35",
+                                    "source": {"sheet": "P&L", "addr": "C13"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ]
+        ),
+    )
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+
+    result = _run(str(context), str(graph), "--print-origin")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "P&L!C13"
+
+
+def test_rejects_formula_ast_in_context(tmp_path: Path) -> None:
+    context = _write(
+        tmp_path / "context.json",
+        _ok_context(
+            blocks=[
+                {
+                    "metrics": [
+                        {
+                            "values": [
+                                {
+                                    "has_formula": True,
+                                    "formula": "=C2",
+                                    "formula_ast": {"op": "ref"},
+                                    "source": {"sheet": "P&L", "addr": "C13"},
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        ),
+    )
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "formula_ast" in result.stderr
+
+
+def test_rejects_missing_edges_json_artifact(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(
+        tmp_path / "graph.json",
+        _ok_graph(
+            artifacts={
+                "cells": "ir/cells.parquet",
+                "edges": "ir/edges.parquet",
+                "cell_edges": "ir/cell_edges.parquet",
+                "index": "ir/graph_index.parquet",
+            }
+        ),
+    )
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "artifacts.edges_json" in result.stderr
+    assert "artifacts.dangling" in result.stderr
 
 
 def test_accepts_sidecar_and_prints_formula_cell_origin(tmp_path: Path) -> None:

@@ -23,7 +23,7 @@ def build(
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     data_dir: Annotated[Path, typer.Option("--data-dir")] = _DEFAULT_DATA_DIR,
 ) -> None:
-    """Parse an Excel workbook and write context.json, graph.json, and context.md."""
+    """Parse an Excel workbook and write context.json, graph sidecars, and context.md."""
     settings = Settings(data_dir=data_dir)
     configure_logging(level=settings.log_level, json_output=False)
     data = source.read_bytes()
@@ -44,6 +44,7 @@ def build(
     )
     typer.echo(dest / "context.json")
     typer.echo(dest / "graph.json")
+    typer.echo(dest / "graph-edges.json")
     typer.echo(dest / "context.md")
     typer.echo(doc.meta.status)
 

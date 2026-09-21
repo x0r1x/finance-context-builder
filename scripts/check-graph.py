@@ -16,7 +16,6 @@ CONTEXT_FORBIDDEN = frozenset(
         "precedent_cells",
         "formula_ast",
         "formula_raw",
-        "formula",
     }
 )
 GRAPH_FORBIDDEN = frozenset(
@@ -33,7 +32,14 @@ GRAPH_FORBIDDEN = frozenset(
     }
 )
 GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "artifacts")
-ARTIFACT_REQUIRED = ("cells", "edges", "cell_edges", "index")
+ARTIFACT_REQUIRED = (
+    "cells",
+    "edges",
+    "cell_edges",
+    "index",
+    "edges_json",
+    "dangling",
+)
 
 
 def load_json(path: Path) -> Any:

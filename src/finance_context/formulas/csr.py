@@ -83,21 +83,57 @@ def _take(
 
 
 def expand_cell_edges(
-    edges: list[Edge], known_nodes: set[str] | None = None
-) -> list[tuple[str, str, str, bool, bool, bool]]:
-    """Expand formula edges to cell-to-cell rows."""
+    edges: list[Edge],
+    known_nodes: set[str] | None = None,
+    *,
+    known_sheets: set[str] | None = None,
+) -> list[tuple[str, str, str, bool, bool, bool, str | None]]:
+    """Expand formula edges to cell-to-cell rows with dangling classification."""
     known = known_nodes or set()
-    rows: list[tuple[str, str, str, bool, bool, bool]] = []
+    sheets = known_sheets or set()
+    rows: list[tuple[str, str, str, bool, bool, bool, str | None]] = []
     seen: set[tuple[str, str, str]] = set()
     for edge in edges:
         for target, unresolved, truncated in _expanded_targets(edge):
-            dangling = bool(target) and target not in known and not unresolved
+            reason = classify_dangling_reason(
+                target,
+                kind=edge.kind,
+                known=known,
+                sheets=sheets,
+                unresolved=unresolved,
+            )
+            dangling = reason in {"missing_cell", "missing_sheet"}
             key = (edge.source, target, edge.kind)
             if key in seen:
                 continue
             seen.add(key)
-            rows.append((edge.source, target, edge.kind, unresolved, truncated, dangling))
+            rows.append(
+                (edge.source, target, edge.kind, unresolved, truncated, dangling, reason)
+            )
     return rows
+
+
+def classify_dangling_reason(
+    target: str,
+    *,
+    kind: str,
+    known: set[str],
+    sheets: set[str],
+    unresolved: bool,
+) -> str | None:
+    if not target or unresolved:
+        return None
+    if target in known:
+        return None
+    try:
+        sheet, _body = split_sheet_ref(target)
+    except ValueError:
+        return "missing_cell"
+    if sheets and sheet not in sheets:
+        return "missing_sheet"
+    if kind == "range":
+        return "empty_range_member"
+    return "missing_cell"
 
 
 def _expanded_targets(edge: Edge) -> list[tuple[str, bool, bool]]:
@@ -123,7 +159,9 @@ def build_csr(
     pairs: list[tuple[str, str]] = []
     truncated_sources: set[str] = set()
     known = set(nodes)
-    for source, target, kind, unresolved, truncated, _dangling in expand_cell_edges(edges, known):
+    for source, target, kind, unresolved, truncated, _dangling, _reason in expand_cell_edges(
+        edges, known
+    ):
         nodes.add(source)
         nodes.add(target)
         if truncated:

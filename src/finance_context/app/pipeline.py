@@ -152,6 +152,9 @@ class Pipeline:
                 cycles_iterative=iterative,
                 unresolved=int((payload.get("unresolved") or {}).get("count") or 0),
                 dangling=int((payload.get("dangling") or {}).get("count") or 0),
+                empty_range_members=int(
+                    (payload.get("dangling_classes") or {}).get("empty_range_member") or 0
+                ),
             )
         set_stage("build", status="running")
         doc = _timed(

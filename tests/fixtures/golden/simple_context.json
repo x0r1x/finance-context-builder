@@ -55,6 +55,7 @@
           "values": [
             {
               "cached_value": "100",
+              "formula": null,
               "has_formula": false,
               "header_text": "2023",
               "missing_cached_value": false,
@@ -70,6 +71,7 @@
             },
             {
               "cached_value": "110",
+              "formula": null,
               "has_formula": true,
               "header_text": "2024E",
               "missing_cached_value": false,
@@ -112,6 +114,7 @@
     "cycles_unexpected": 0,
     "dangling": 0,
     "edges": 0,
+    "empty_range_members": 0,
     "index": "ir/graph_index.parquet",
     "nodes": 0,
     "unresolved": 0
@@ -132,13 +135,13 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.5.0",
+    "schema_version": "1.6.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.5.0",
+  "schema_version": "1.6.0",
   "timeline": null,
   "unmapped": [],
   "warnings": [],
