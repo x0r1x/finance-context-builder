@@ -297,6 +297,11 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert doc.mapping_stats.abstract == 1
     assert doc.mapping_stats.unmapped_series == 0
     assert doc.mapping_stats.concept_coverage == 1.0
+    assert doc.schema_version == "1.8.0"
+    quality = doc.mapping_stats.mapping_quality
+    assert quality.label_coverage == 1.0
+    assert quality.semantic_coverage == 1.0
+    assert quality.confidence_threshold_passed is True
 
 
 def test_zero_cached_formula_is_not_missing() -> None:

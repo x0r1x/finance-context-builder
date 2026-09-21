@@ -237,6 +237,40 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         flag_mapped = [row for row in doc.rows if row.exclusion_reason == "flag"]
         assert flag_mapped
         assert all(row.concept_id is None for row in flag_mapped)
+        quality = ctx_doc.mapping_stats.mapping_quality
+        for rate in (
+            quality.label_coverage,
+            quality.semantic_coverage,
+            quality.unit_coverage,
+            quality.temporal_coverage,
+            quality.formula_coverage,
+        ):
+            assert 0.0 <= rate <= 1.0
+        repayments = [
+            row
+            for row in ctx_doc.inventory
+            if normalize_label(row.label) == "principal repayment"
+            and normalize_label(row.parent_label or "") == "debt repayment schedule"
+        ]
+        assert repayments
+        assert all(
+            row.hints.sign == "outflow" and row.concept_id == "cf.repayment" for row in repayments
+        )
+        for row in repayments:
+            assert any(
+                other.concept_id == "bs.debt" and other.label_path == row.label_path
+                for other in ctx_doc.inventory
+            )
+        revenues = [
+            row
+            for row in ctx_doc.inventory
+            if row.sheet == "CFS" and row.label == "Gross Revenues"
+        ]
+        assert revenues
+        assert all(row.concept_id == "cf.receipts" for row in revenues)
+        assert ctx_doc.mapping_stats.concept_coverage == 1.0
+        assert quality.semantic_coverage < 1.0
+        assert quality.confidence_threshold_passed is False
     if not expectations:
         pytest.skip("gold expectations not filled yet")
     errors = []

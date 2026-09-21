@@ -2,15 +2,15 @@
 
 Сначала убедиться, что layout вообще отдал fact-строки. `succeeded` + `Unmapped: 0` + пустой `context.md` почти всегда значит: нет блоков или нет лейблов статей, а не «таксономия покрыла всё». Чеклист — [layout.md](layout.md).
 
-После прогона с ненулевым числом fact смотрят отказ **и** полный контент. Пустой `unmapped` / `unmapped.json` **не** значит, что у каждой строки `inventory` есть `concept_id`: заголовки (`kind=abstract`, `disposition=header`) и excluded не попадают в `unmapped`. Полнота семантики — `mapping_stats.concept_coverage` (annotatable facts), не длина массива `unmapped`.
+После прогона с ненулевым числом fact смотрят отказ **и** полный контент. Пустой `unmapped` / `unmapped.json` **не** значит, что у каждой строки `inventory` есть `concept_id`: заголовки (`kind=abstract`, `disposition=header`) и excluded не попадают в `unmapped`. `mapping_stats.concept_coverage` — доля annotatable facts с принятым `concept_id`. Семантику, единицы, время и формулы смотрят в `mapping_stats.mapping_quality`, не в длине массива `unmapped` и не в `concept_coverage`.
 
 | Где | Что видно |
 | --- | --- |
-| `context.md` шапка | `Content completeness` (должно быть 1.00) и `Concept coverage` (может быть < 1) |
+| `context.md` шапка | `Content completeness` (должно быть 1.00), `Concept coverage` (доля принятых слотов, может быть < 1) и шесть полей `mapping_quality` |
 | `context.md` блок | Timeline: строка с Concept `unknown` (плюс счётчик `Unmapped: N`). Params: `## Parameters / {sheet}` |
 | `context.md` `## Excluded` | Helper / flag / check |
 | `context.md` `## Row navigator / {sheet}` | Все layout-строки: kind, path, concept, formula fingerprint; без периодных значений и без row-graph refs |
-| `context.json` → `mapping_stats` | `inventory_rows`, `mapped`, `abstained`, `excluded`, `abstract`, `unmapped_series`, completeness, coverage |
+| `context.json` → `mapping_stats` | `inventory_rows`, `mapped`, `abstained`, `excluded`, `abstract`, `unmapped_series`, completeness, `concept_coverage`, `mapping_quality` |
 | `context.json` → `unmapped` | Серии с `values` по периодам (кэш + A1 `formula` + адрес) или `cells` (params), `candidates`, `hints`, `neighbors`. Это abstained fact-серии, не «inventory без concept_id» |
 | `context.json` → `inventory` | Все kind, включая abstract; role-tagged `cells`; инвариант полноты |
 | `context.json` → `graph` | Pointer на `graph.json` / parquet, counts, циклы, `empty_range_members` |

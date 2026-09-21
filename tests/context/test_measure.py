@@ -100,3 +100,28 @@ def test_sign_inflow_from_revenue() -> None:
 def test_sign_outflow_from_opex() -> None:
     measure = parse_measure(label="Operating costs", concept_id="pnl.opex", statement="pnl")
     assert measure.sign == "outflow"
+
+
+def test_sign_outflow_for_principal_repayment() -> None:
+    measure = parse_measure(
+        label="Principal Repayment",
+        concept_id="cf.repayment",
+        statement="cf",
+    )
+    assert measure.sign == "outflow"
+    directed = parse_measure(
+        label="Principal Repayment",
+        concept_id="cf.repayment",
+        statement="cf",
+        direction="outflow",
+    )
+    assert directed.sign == "outflow"
+
+
+def test_sign_pre_tax_income_is_not_outflow() -> None:
+    measure = parse_measure(
+        label="EBT (Taxable Profit)",
+        concept_id="pnl.pre_tax_income",
+        statement="pnl",
+    )
+    assert measure.sign != "outflow"
