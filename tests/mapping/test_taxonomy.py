@@ -45,6 +45,8 @@ def test_taxonomy_includes_fcf_repayment_drawdown() -> None:
         "debt.sculpting",
         "cov.dscr_limit",
         "ops.lifetime",
+        "ops.concession_duration",
+        "ops.operating_period",
         "ops.capacity",
         "ops.asset_count",
         "ops.generation",
@@ -316,3 +318,21 @@ def test_cash_fx_labels_are_specific() -> None:
     assert "usd/rub" not in labels
     assert "cash" not in labels
     assert "fcf" not in labels
+
+
+def test_duration_concepts_are_distinct() -> None:
+    by_id = {c.id: c for c in load_taxonomy()}
+    concession = {label.lower() for label in by_id["ops.concession_duration"].labels}
+    operating = {label.lower() for label in by_id["ops.operating_period"].labels}
+    lifetime = {label.lower() for label in by_id["ops.lifetime"].labels}
+    assert "concession duration" in concession
+    assert "operations duration" in operating
+    assert "operating lifetime" in operating
+    assert "concession duration" not in lifetime
+    assert "operations duration" not in lifetime
+    from finance_context.mapping.taxonomy import load_taxonomy_document
+
+    calcs = load_taxonomy_document().calculations
+    match = next(c for c in calcs if c.parent == "ops.concession_duration")
+    terms = {item.concept: item.weight for item in match.terms}
+    assert terms == {"ops.construction_period": 1, "ops.operating_period": 1}

@@ -93,7 +93,7 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 
 **Ковенанты (`cov.*`, `covenant.headroom`)** — факт DSCR / Average / Minimum DSCR по ряду (`cov.dscr`); порог `DSCR minimum` (`cov.dscr_limit`); LLCR, PLCR, leverage limit / headroom. Не путать с `liq.cash_headroom`.
 
-**Операции (`ops.*`)** — lifetime (Concession / Operations Duration), construction period, capacity / MW, число турбин (`ops.asset_count`, не headcount), generation / MWh, availability, CPI, inflation / PPA escalation, `ops.volume_growth` (Traffic Evolution). Не мапить phasing 0.2/0.8 на финансовый id. PC/HV и revenue vs cost inflation — `hints.segment` / `hints.escalation`, не отдельные id.
+**Операции (`ops.*`)** — `ops.concession_duration` (Concession Duration), `ops.operating_period` (Operations Duration / Operating lifetime), `ops.construction_period`; generic `ops.lifetime` только для неспецифичных Lifetime / Project life. Концессия объявлена как сумма construction + operating в `calculations`. Capacity / MW, число турбин (`ops.asset_count`, не headcount), generation / MWh, availability, CPI, inflation / PPA escalation, `ops.volume_growth` (Traffic Evolution). Не мапить phasing 0.2/0.8 на финансовый id. PC/HV и revenue vs cost inflation — `hints.segment` / `hints.escalation`, не отдельные id.
 
 **Прочее** — `val.npv` / `irr` / `wacc` / `val.coc` (Cost of capital, если это не тот же WACC) / `val.fcfe_equity` / `val.total_investment`; `ops.headcount`; `fx.*` (курс и переоценки).
 

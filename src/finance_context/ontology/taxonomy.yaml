@@ -15,6 +15,10 @@ calculations:
     terms:
       - {concept: cf.receipts, weight: 1}
       - {concept: cf.disbursements, weight: -1}
+  - parent: ops.concession_duration
+    terms:
+      - {concept: ops.construction_period, weight: 1}
+      - {concept: ops.operating_period, weight: 1}
 patterns:
   - concept: cf.net
     score: 0.93
@@ -479,7 +483,18 @@ concepts:
     labels: [Liquidity coverage]
     facets: {unit: ratio}
   - id: ops.lifetime
-    labels: [Operating lifetime, Lifetime, Project life, Concession Duration, Operations Duration]
+    labels: [Lifetime, Project life]
+    anti_labels: [concession duration, operations duration, operating lifetime]
+    facets: {unit: count}
+  - id: ops.concession_duration
+    labels: [Concession Duration, Concession period]
+    exact_labels: [Concession Duration]
+    anti_labels: [operations duration, operating lifetime, operating period]
+    facets: {unit: count}
+  - id: ops.operating_period
+    labels: [Operations Duration, Operating lifetime, Operating period]
+    exact_labels: [Operations Duration, Operating lifetime]
+    anti_labels: [concession]
     facets: {unit: count}
   - id: ops.capacity
     labels: [Installed capacity, Capacity]

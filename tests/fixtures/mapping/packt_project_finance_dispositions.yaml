@@ -42,9 +42,11 @@ expectations:
   - {label: Equity Injected, forbidden_concept_id: bs.equity}
   - {label: Total Cash in/Cash out, concept_id: cf.equity_cashflow}
   - {label: Cash out End of Concession, forbidden_concept_id: bs.cash}
-  - {label: Concession Duration, concept_id: ops.lifetime}
+  - {label: Concession Duration, concept_id: ops.concession_duration}
+  - {label: Concession Duration, forbidden_concept_id: ops.lifetime}
   - {label: Construction Duration, concept_id: ops.construction_period}
-  - {label: Operations Duration, concept_id: ops.lifetime}
+  - {label: Operations Duration, concept_id: ops.operating_period}
+  - {label: Operations Duration, forbidden_concept_id: ops.lifetime}
   - {label: Traffic Evolution per year (PC & HV), concept_id: ops.volume_growth}
   - {label: Maintenance (including heavy maintenance & SPV costs), concept_id: pnl.opex}
   - {label: Fixed Rate Margin, concept_id: debt.margin_rate}

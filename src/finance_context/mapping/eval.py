@@ -57,6 +57,9 @@ def context_report_metrics(
     inventory_rows: int,
     mapped: int,
     abstained: int,
+    excluded: int = 0,
+    abstract: int = 0,
+    unmapped_series: int = 0,
 ) -> dict[str, float | int]:
     return {
         "layout_rows": layout_rows,
@@ -64,7 +67,38 @@ def context_report_metrics(
         "content_completeness": content_completeness(layout_rows, inventory_rows),
         "mapped": mapped,
         "abstained": abstained,
+        "excluded": excluded,
+        "abstract": abstract,
+        "unmapped_series": unmapped_series,
         "concept_coverage": concept_coverage(mapped, abstained),
+    }
+
+
+def inventory_coverage_counts(rows: list) -> dict[str, int]:
+    mapped = 0
+    abstained = 0
+    excluded = 0
+    abstract = 0
+    for row in rows:
+        kind = getattr(row, "kind", None)
+        disposition = getattr(row, "disposition", None)
+        if kind == "abstract" or disposition == "header":
+            abstract += 1
+        if disposition == "mapped":
+            mapped += 1
+        elif disposition == "excluded":
+            excluded += 1
+        elif disposition == "abstained":
+            abstained += 1
+        elif getattr(row, "concept_id", None):
+            mapped += 1
+        elif kind in {None, "fact", "flag"}:
+            abstained += 1
+    return {
+        "mapped": mapped,
+        "abstained": abstained,
+        "excluded": excluded,
+        "abstract": abstract,
     }
 
 

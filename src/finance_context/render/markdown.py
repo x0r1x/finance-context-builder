@@ -62,7 +62,7 @@ def _annotatable_counts(rows: list) -> tuple[int, int]:
     abstained = 0
     for row in rows:
         disposition = getattr(row, "disposition", None)
-        if disposition == "excluded":
+        if disposition in {"excluded", "header"}:
             continue
         if getattr(row, "concept_id", None):
             mapped += 1

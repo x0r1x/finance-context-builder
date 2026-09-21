@@ -9,7 +9,7 @@ from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
 from finance_context.mapping.exclusion import exclusion_reason
 from finance_context.mapping.facets import prune_candidates
-from finance_context.mapping.glossary import GlossarySignal
+from finance_context.mapping.glossary import GlossarySignal, reconcile_glossary
 from finance_context.mapping.knn import TOP_K, rank_concepts
 from finance_context.mapping.lexical import LexicalSignal
 from finance_context.mapping.models import (
@@ -64,6 +64,7 @@ def map_layout(
     merged_calcs = list(calculations or (attached.calculations if attached else []))
     merged_calcs.extend(implicit_calculations(taxonomy))
     merged_patterns = list(patterns or (attached.patterns if attached else []))
+    glossary = reconcile_glossary(glossary, taxonomy)
     book = BookView(
         layout,
         cells or [],

@@ -6,6 +6,7 @@ from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.layout.models import Layout, LayoutRow
 from finance_context.layout.params import unit_kind_from_text
 from finance_context.layout.periods import display_cell_text, infer_grain
+from finance_context.mapping.eval import context_report_metrics, inventory_coverage_counts
 from finance_context.mapping.graph import row_adjacency
 from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowRelation
 from finance_context.mapping.rules import is_noise_label
@@ -18,6 +19,7 @@ from finance_context.models.context import (
     FinancialBlock,
     InventoryRow,
     MappingEvidence,
+    MappingStats,
     MetricSeries,
     NumericSummary,
     PeriodValue,
@@ -188,11 +190,7 @@ def build_context(
                         check_row=layout_row.check_row,
                         neighbors=neighbors,
                         concept_id=mapped.concept_id if mapped else None,
-                        disposition=(
-                            mapped.disposition
-                            if mapped
-                            else ("excluded" if is_noise_label(layout_row.label) else None)
-                        ),
+                        disposition=_inventory_disposition(mapped, layout_row),
                         exclusion_reason=(
                             mapped.exclusion_reason
                             if mapped
@@ -270,6 +268,16 @@ def build_context(
         warnings=warnings[:50],
         questions=[q.model_dump(mode="json") for q in mapping.questions],
     )
+    counts = inventory_coverage_counts(inventory)
+    stats = context_report_metrics(
+        layout_rows=expected_rows,
+        inventory_rows=len(inventory),
+        mapped=int(counts["mapped"]),
+        abstained=int(counts["abstained"]),
+        excluded=int(counts["excluded"]),
+        abstract=int(counts["abstract"]),
+        unmapped_series=len(unmapped),
+    )
     return ContextDocument(
         schema_version=SCHEMA_VERSION,
         meta=meta,
@@ -279,8 +287,19 @@ def build_context(
         unmapped=unmapped,
         excluded=excluded,
         inventory=inventory,
+        mapping_stats=MappingStats.model_validate(stats),
         warnings=warnings[:50],
     )
+
+
+def _inventory_disposition(mapped: MappedRow | None, layout_row: LayoutRow) -> str | None:
+    if mapped is not None:
+        return mapped.disposition
+    if is_noise_label(layout_row.label):
+        return "excluded"
+    if layout_row.kind == "abstract":
+        return "header"
+    return None
 
 
 def _series_for_row(

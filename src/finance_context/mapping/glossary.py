@@ -49,6 +49,44 @@ def merge_glossary(
     return merged
 
 
+def reconcile_glossary(
+    glossary: dict[tuple[str, str], str],
+    taxonomy: list,
+) -> dict[tuple[str, str], str]:
+    """Rewrite stale learned ids when a label now belongs to a different concept."""
+    phrase_to_ids: dict[str, set[str]] = {}
+    known_ids: set[str] = set()
+    for concept in taxonomy:
+        cid = getattr(concept, "id", None)
+        if not cid:
+            continue
+        known_ids.add(cid)
+        phrases = [
+            *getattr(concept, "labels", []),
+            *getattr(concept, "aliases", []),
+            *getattr(concept, "exact_labels", []),
+        ]
+        for phrase in phrases:
+            n = normalize_label(phrase)
+            if n:
+                phrase_to_ids.setdefault(n, set()).add(cid)
+    out: dict[tuple[str, str], str] = {}
+    for key, concept_id in glossary.items():
+        label, _parent = key
+        owners = phrase_to_ids.get(label, set())
+        if len(owners) == 1:
+            out[key] = next(iter(owners))
+            continue
+        if concept_id in owners:
+            out[key] = concept_id
+            continue
+        if owners:
+            continue
+        if concept_id in known_ids:
+            out[key] = concept_id
+    return out
+
+
 def learn_from_rows(
     existing: dict[tuple[str, str], str],
     rows: list,

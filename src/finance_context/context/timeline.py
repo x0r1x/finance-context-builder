@@ -215,6 +215,16 @@ def _duration_warnings(
                     out.append(
                         f"Operations Duration {assumed:g} does not match operation timeline length {operation_n}"
                     )
+                if (
+                    "concession" in n
+                    and "duration" in n
+                    and construction_n
+                    and operation_n
+                    and assumed != construction_n + operation_n
+                ):
+                    out.append(
+                        f"Concession Duration {assumed:g} does not match construction+operation timeline length {construction_n + operation_n}"
+                    )
     return out
 
 

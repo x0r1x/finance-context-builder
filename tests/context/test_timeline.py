@@ -133,9 +133,12 @@ def test_duration_mismatch_warns_without_overriding_flags() -> None:
         _c("Input Assumptions", "B9", "Operations Duration"),
         _c("Input Assumptions", "C9", "years"),
         _c("Input Assumptions", "D9", "1"),
-        _c("Input Assumptions", "B10", "Tax Rate"),
-        _c("Input Assumptions", "C10", "%"),
-        _c("Input Assumptions", "D10", "0.3"),
+        _c("Input Assumptions", "B10", "Concession Duration"),
+        _c("Input Assumptions", "C10", "years"),
+        _c("Input Assumptions", "D10", "10"),
+        _c("Input Assumptions", "B11", "Tax Rate"),
+        _c("Input Assumptions", "C11", "%"),
+        _c("Input Assumptions", "D11", "0.3"),
     ]
     layout = detect_layout(cells)
     timeline, warnings = build_timeline(layout, cells)
@@ -146,4 +149,5 @@ def test_duration_mismatch_warns_without_overriding_flags() -> None:
         "operation",
     ]
     assert any("Construction Duration" in item for item in warnings)
+    assert any("Concession Duration" in item for item in warnings)
     assert not any("Operations Duration" in item for item in warnings)

@@ -6,9 +6,10 @@ from finance_context.mapping.glossary import (
     GlossarySignal,
     learn_from_rows,
     load_glossary,
+    reconcile_glossary,
     save_glossary,
 )
-from finance_context.mapping.models import MappedRow
+from finance_context.mapping.models import Concept, MappedRow
 
 
 def test_glossary_roundtrip(tmp_path: Path) -> None:
@@ -95,3 +96,30 @@ def test_glossary_truncated_parent_uses_section_class() -> None:
     )
     proposed = signal.propose(ctx, book)
     assert proposed[0].concept_id == "cf.receipts.other"
+
+
+def test_reconcile_glossary_rewrites_stale_duration_ids() -> None:
+    taxonomy = [
+        Concept(id="ops.lifetime", labels=["Lifetime", "Project life"]),
+        Concept(
+            id="ops.concession_duration",
+            labels=["Concession Duration"],
+            exact_labels=["Concession Duration"],
+        ),
+        Concept(
+            id="ops.operating_period",
+            labels=["Operations Duration", "Operating lifetime"],
+        ),
+        Concept(id="bs.cash", labels=["Cash"]),
+    ]
+    rewritten = reconcile_glossary(
+        {
+            ("concession duration", ""): "ops.lifetime",
+            ("operations duration", "time"): "ops.lifetime",
+            ("opening cash", ""): "bs.cash",
+        },
+        taxonomy,
+    )
+    assert rewritten[("concession duration", "")] == "ops.concession_duration"
+    assert rewritten[("operations duration", "time")] == "ops.operating_period"
+    assert rewritten[("opening cash", "")] == "bs.cash"
