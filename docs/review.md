@@ -9,10 +9,12 @@
 | `context.md` шапка | `Content completeness` (должно быть 1.00) и `Concept coverage` (может быть < 1) |
 | `context.md` блок | Timeline: строка с Concept `unknown` (плюс счётчик `Unmapped: N`). Params: `## Parameters / {sheet}` |
 | `context.md` `## Excluded` | Helper / flag / check |
-| `context.md` `## Row navigator / {sheet}` | Все layout-строки: kind, path, concept, formula, refs; без периодных значений |
+| `context.md` `## Row navigator / {sheet}` | Все layout-строки: kind, path, concept, formula fingerprint; без периодных значений и без row-graph refs |
 | `context.json` → `mapping_stats` | `inventory_rows`, `mapped`, `abstained`, `excluded`, `abstract`, `unmapped_series`, completeness, coverage |
-| `context.json` → `unmapped` | Полные серии с `values` по периодам (timeline) или `cells` (params), `candidates`, `hints`, `neighbors`. Это abstained fact-серии, не «inventory без concept_id» |
-| `context.json` → `inventory` | Все kind, включая abstract; `cells` / `precedent_cells`; инвариант полноты |
+| `context.json` → `unmapped` | Серии с `values` по периодам (кэш + адрес) или `cells` (params), `candidates`, `hints`, `neighbors`. Это abstained fact-серии, не «inventory без concept_id» |
+| `context.json` → `inventory` | Все kind, включая abstract; role-tagged `cells`; инвариант полноты |
+| `context.json` → `graph` | Pointer на `graph.json` / parquet, counts и циклы |
+| `graph.json` + `GET .../graph/trace` | Cell-level зависимости, `period_lag`, циклы; формулы из `ir/cells.parquet` |
 | `unmapped.json` | Та же выжимка атрибутов **без** `values`, плюс `ref` как в колонке Ref |
 
 `scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `unmapped` из context или `rows` из mapping, оставляет `concept_id is null` и `disposition != excluded`, выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown, не с длиной navigator.
@@ -21,8 +23,8 @@ Excluded (check / helper / flag / technical) в `unmapped.json` не входя�
 
 ## Цикл правки
 
-1. Прогнать книгу (`uv run finance-context build …` или `bash scripts/run.sh path/to/model.xlsx` при живом `serve`).
-2. Открыть `unmapped.json` и ту же строку в `inventory` / navigator: `label`, `parent_label`, `label_path`, `neighbors`, `candidates`, `hints`, `sheet`, `ref`, `disposition`, `exclusion_reason`, `article_role`, `cells`, `unit`.
+1. Прогнать книгу (`uv run finance-context build …` или `bash scripts/run.sh path/to/model.xlsx` при живом `serve`). `run.sh` кладёт в `out/<run>/` ещё `graph.json` и `graph-trace.json`.
+2. Открыть `unmapped.json` и ту же строку в `inventory` / navigator: `label`, `parent_label`, `label_path`, `neighbors`, `candidates`, `hints`, `sheet`, `ref`, `disposition`, `exclusion_reason`, `article_role`, `cells`, `unit`. Формулы и влияние на CFS — `GET .../graph/trace` ([graph.md](graph.md)).
 3. Для каждой строки решить класс:
 
 | Класс | Действие |

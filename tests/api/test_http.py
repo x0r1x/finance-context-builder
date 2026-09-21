@@ -123,6 +123,13 @@ def test_upload_and_download(tmp_path: Path) -> None:
         md_doc = client.get(f"/v1/context-jobs/{job_id}/context.md")
         assert json_doc.status_code == 200
         assert "schema_version" in json_doc.json()
+        graph_doc = client.get(f"/v1/context-jobs/{job_id}/graph.json")
+        assert graph_doc.status_code == 200
+        assert "nodes" in graph_doc.json()
+        assert body.get("graph_json_url") == f"/v1/context-jobs/{job_id}/graph.json"
+        traced = client.get(f"/v1/context-jobs/{job_id}/graph/trace", params={"from": "P&L!C2"})
+        assert traced.status_code == 200
+        assert traced.json()["origin"] == "P&L!C2"
         assert md_doc.status_code == 200
         assert "Financial context" in md_doc.text
 

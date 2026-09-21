@@ -10,11 +10,12 @@ from finance_context.context.build import build_context
 from finance_context.errors import ContextError, PortError
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook
+from finance_context.graph.stage import build_formula_graph
 from finance_context.layout.models import Layout
 from finance_context.layout.stage import layout_workbook
 from finance_context.mapping.models import MappingDocument
 from finance_context.mapping.stage import mapping_workbook
-from finance_context.models.context import ArtifactMeta, ContextDocument
+from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
 from finance_context.observability import job_id_var, log_event, stage_var
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 from finance_context.render.markdown import render_markdown
@@ -98,7 +99,9 @@ class Pipeline:
         if not (dest_dir / "raw" / "workbook.json").is_file():
             _timed("parse", lambda: parse_workbook(source, dest_dir))
         set_stage("compile")
-        if not (dest_dir / "ir" / "cells.parquet").is_file():
+        if not (dest_dir / "ir" / "cells.parquet").is_file() or not (
+            dest_dir / "ir" / "cell_edges.parquet"
+        ).is_file():
             _timed("compile", lambda: compile_workbook(dest_dir))
         set_stage("layout")
         if not (dest_dir / "layout.json").is_file():
@@ -119,10 +122,35 @@ class Pipeline:
         )
         layout = Layout.model_validate_json((dest_dir / "layout.json").read_text(encoding="utf-8"))
         cells = read_parquet(dest_dir / "ir" / "cells.parquet")
-        edges_path = dest_dir / "ir" / "edges.parquet"
-        edges = read_parquet(edges_path) if edges_path.is_file() else []
         workbook_meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status(mapping, embed=self.embed, chat=self.chat)
+        set_stage("graph", status="running")
+        if not (dest_dir / "graph.json").is_file():
+            graph = _timed(
+                "graph",
+                lambda: build_formula_graph(
+                    dest_dir, job_id=job_id, layout=layout, mapping=mapping
+                ),
+            )
+        else:
+            payload = json.loads((dest_dir / "graph.json").read_text(encoding="utf-8"))
+            unexpected = sum(
+                1 for c in payload.get("cycles") or [] if c.get("class") == "unexpected"
+            )
+            iterative = sum(
+                1 for c in payload.get("cycles") or [] if c.get("class") == "iterative_ok"
+            )
+            graph = GraphPointer(
+                artifact="graph.json",
+                cell_edges="ir/cell_edges.parquet",
+                index="ir/graph_index.parquet",
+                nodes=int(payload.get("nodes") or 0),
+                edges=int(payload.get("edges") or 0),
+                cycles_unexpected=unexpected,
+                cycles_iterative=iterative,
+                unresolved=int((payload.get("unresolved") or {}).get("count") or 0),
+                dangling=int((payload.get("dangling") or {}).get("count") or 0),
+            )
         set_stage("build", status="running")
         doc = _timed(
             "build",
@@ -136,7 +164,7 @@ class Pipeline:
                 content_sha256=content_sha256,
                 status=status,
                 stage="done",
-                edges=edges,
+                graph=graph,
             ),
         )
         _write_sorted_json(dest_dir / "context.json", doc.model_dump(mode="json"))

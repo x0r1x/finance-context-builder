@@ -315,7 +315,7 @@ def _metric_row(series: MetricSeries, headers: list[dict]) -> str:
             continue
         shown = _format_value(value.cached_value)
         mark = ""
-        if value.formula:
+        if value.has_formula:
             mark = "*"
         if value.missing_cached_value:
             mark = "?"
@@ -392,7 +392,7 @@ def _navigator_sections(rows: list[InventoryRow], *, max_rows: int) -> list[str]
             ]
         )
         for item in items[:max_rows]:
-            refs = " ".join([*item.precedents_rows[:3], *item.dependents_rows[:3]])
+            refs = ""
             lines.append(
                 "| "
                 + " | ".join(

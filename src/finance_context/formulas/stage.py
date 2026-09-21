@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from finance_context.formulas.csr import build_csr
+from finance_context.formulas.csr import build_csr, expand_cell_edges
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.formulas.models import CompileResult, Edge
 from finance_context.store.fs import read_parquet, write_parquet
@@ -29,6 +29,17 @@ IR_EDGE_COLUMNS = (
     ("target", "VARCHAR"),
     ("unresolved", "BOOLEAN"),
     ("truncated", "BOOLEAN"),
+)
+
+IR_CELL_EDGE_COLUMNS = (
+    ("source", "VARCHAR"),
+    ("target", "VARCHAR"),
+    ("kind", "VARCHAR"),
+    ("unresolved", "BOOLEAN"),
+    ("truncated", "BOOLEAN"),
+    ("dangling", "BOOLEAN"),
+    ("col_offset", "INTEGER"),
+    ("period_lag", "VARCHAR"),
 )
 
 
@@ -68,11 +79,21 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
                 ast_json,
             )
         )
+    known = set(extra_nodes)
     csr = build_csr(edges, extra_nodes=extra_nodes)
+    cell_edges = expand_cell_edges(edges, known)
     write_parquet(dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, ir_rows)
     write_parquet(
         dest_dir / "ir" / "edges.parquet",
         IR_EDGE_COLUMNS,
         [(e.source, e.kind, e.target, e.unresolved, e.truncated) for e in edges],
+    )
+    write_parquet(
+        dest_dir / "ir" / "cell_edges.parquet",
+        IR_CELL_EDGE_COLUMNS,
+        [
+            (source, target, kind, unresolved, truncated, dangling, None, None)
+            for source, target, kind, unresolved, truncated, dangling in cell_edges
+        ],
     )
     return CompileResult(csr=csr)

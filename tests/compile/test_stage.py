@@ -39,6 +39,9 @@ def test_compile_writes_ir_artifacts_and_templates(tmp_path: Path, dest: Path) -
     assert result.csr.matrix.shape[0] == result.csr.matrix.shape[1]
     assert (dest / "ir" / "cells.parquet").is_file()
     assert (dest / "ir" / "edges.parquet").is_file()
+    assert (dest / "ir" / "cell_edges.parquet").is_file()
+    cell_edges = load_parquet(dest / "ir" / "cell_edges.parquet")
+    assert any(e["source"] == "P&L!D24" and e["target"] == "Inputs!D5" for e in cell_edges)
 
 
 def test_compile_does_not_reparse_when_reading_ir_via_catalog(

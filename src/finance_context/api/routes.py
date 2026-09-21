@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from finance_context.adapters.memory_bus import MemoryJobBus
@@ -100,10 +100,11 @@ def _clear_downstream_artifacts(dest: Path) -> None:
         "context.json",
         "context.md",
         "meta.json",
+        "graph.json",
     ):
         (dest / name).unlink(missing_ok=True)
     ir = dest / "ir"
-    for name in ("cells.parquet", "edges.parquet"):
+    for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet", "graph_index.parquet"):
         (ir / name).unlink(missing_ok=True)
 
 
@@ -143,6 +144,32 @@ async def get_context_md(request: Request, job_id: str) -> PlainTextResponse:
     return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/markdown")
 
 
+@router.get("/v1/context-jobs/{job_id}/graph.json")
+async def get_graph_json(request: Request, job_id: str) -> JSONResponse:
+    path = _require_artifact(request, job_id, "graph.json")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return JSONResponse(payload)
+
+
+@router.get("/v1/context-jobs/{job_id}/graph/trace")
+async def get_graph_trace(
+    request: Request,
+    job_id: str,
+    origin: Annotated[str, Query(alias="from")],
+    direction: str = "precedents",
+    depth: int = 8,
+) -> JSONResponse:
+    dest = _ctx(request).store.dest_dir(job_id)
+    if not dest.exists():
+        raise ApiError(404, "not_found")
+    if not (dest / "ir" / "cell_edges.parquet").is_file():
+        raise ApiError(409, "report_not_ready")
+    from finance_context.graph.trace import trace_graph
+
+    doc = trace_graph(dest, origin=origin, direction=direction, depth=depth)
+    return JSONResponse(doc.model_dump(mode="json"))
+
+
 def _require_artifact(request: Request, job_id: str, name: str) -> Path:
     dest = _ctx(request).store.dest_dir(job_id)
     path = dest / name
@@ -164,6 +191,7 @@ def _job_body(job_id: str, meta: dict) -> dict:
     if meta.get("status") not in {"queued", "running", None}:
         body["context_json_url"] = f"/v1/context-jobs/{job_id}/context.json"
         body["context_md_url"] = f"/v1/context-jobs/{job_id}/context.md"
+        body["graph_json_url"] = f"/v1/context-jobs/{job_id}/graph.json"
     return body
 
 

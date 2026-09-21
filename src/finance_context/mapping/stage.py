@@ -48,8 +48,11 @@ def mapping_workbook(
     if ir_cells.exists():
         cells = read_parquet(ir_cells)
     edges: list[dict] = []
+    ir_cell_edges = dest_dir / "ir" / "cell_edges.parquet"
     ir_edges = dest_dir / "ir" / "edges.parquet"
-    if ir_edges.exists():
+    if ir_cell_edges.exists():
+        edges = read_parquet(ir_cell_edges)
+    elif ir_edges.exists():
         edges = read_parquet(ir_edges)
     tax = taxonomy or load_taxonomy()
     merged = dict(load_glossary(glossary_path))

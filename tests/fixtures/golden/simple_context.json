@@ -12,7 +12,6 @@
           "cells": [],
           "check_row": false,
           "concept_id": "bs.cash",
-          "dependents_rows": [],
           "disposition": "mapped",
           "exclusion_reason": null,
           "formula_exceptions": [],
@@ -43,8 +42,6 @@
           "neighbors": [],
           "numeric_summary": null,
           "parent_label": null,
-          "precedent_cells": [],
-          "precedents_rows": [],
           "row_key": "CF|2|CF!r1",
           "source": {
             "addr": "A2",
@@ -56,8 +53,7 @@
           "values": [
             {
               "cached_value": "100",
-              "formula": null,
-              "formula_template": null,
+              "has_formula": false,
               "header_text": "2023",
               "missing_cached_value": false,
               "number_format": null,
@@ -68,13 +64,11 @@
                 "col": 2,
                 "row": 2,
                 "sheet": "CF"
-              },
-              "unparsed": false
+              }
             },
             {
               "cached_value": "110",
-              "formula": "=B2+10",
-              "formula_template": null,
+              "has_formula": true,
               "header_text": "2024E",
               "missing_cached_value": false,
               "number_format": null,
@@ -85,8 +79,7 @@
                 "col": 3,
                 "row": 2,
                 "sheet": "CF"
-              },
-              "unparsed": false
+              }
             }
           ]
         }
@@ -110,6 +103,17 @@
     }
   ],
   "excluded": [],
+  "graph": {
+    "artifact": "graph.json",
+    "cell_edges": "ir/cell_edges.parquet",
+    "cycles_iterative": 0,
+    "cycles_unexpected": 0,
+    "dangling": 0,
+    "edges": 0,
+    "index": "ir/graph_index.parquet",
+    "nodes": 0,
+    "unresolved": 0
+  },
   "inventory": [],
   "mapping_stats": {
     "abstained": 0,

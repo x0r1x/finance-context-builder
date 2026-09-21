@@ -49,6 +49,7 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     )
     doc = pipeline.run(dest, job_id="job-test", source_filename="model.xlsx")
     assert (dest / "context.json").is_file()
+    assert (dest / "graph.json").is_file()
     assert (dest / "context.md").is_file()
     assert doc.workbook.cell_count >= 1
     refs = [m.source.cell_ref for b in doc.blocks for m in b.metrics]

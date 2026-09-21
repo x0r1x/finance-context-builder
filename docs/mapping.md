@@ -4,7 +4,7 @@
 
 Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.4.0`.
 
-Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [разбор unmapped](review.md), [архитектура](architecture.md).
+Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [граф](graph.md), [разбор unmapped](review.md), [архитектура](architecture.md).
 
 ## Что участвует
 
@@ -79,7 +79,7 @@ Lexical дополнительно знает устойчивые констр�
 
 Совместимость с объявленными `calculations`: совпадение **поднимает** score; несовпадение **снижает**. Abstain `calculation_conflict` остаётся для SUM vs declared DIFF (например Total Inflows ≠ `cf.net`). Исключение keep-rule: exact `Cash Flow` под IRR/ratios не аннулируется.
 
-Relations (`alias`, `aggregate`, `difference`, `roll_forward`) пишутся в `mapping.json` и в блоки `context.json`. В Markdown их нет; row-level refs видны в навигаторе.
+Relations (`alias`, `aggregate`, `difference`, `roll_forward`) — семантические связи mapping, не формульный граф. Они пишутся в `mapping.json` и в блоки `context.json`. Cell-level рёбра — в IR, см. [graph.md](graph.md).
 
 ## Resolver
 
@@ -142,7 +142,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 
 Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, `disposition=header`, не concept.
 
-`inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `precedents_rows` / `dependents_rows`, `cells` (роли `value` / `unit` / `scenario` / `total` / `note`), `precedent_cells` (до 8 ссылок с графа, которых нет среди уже экспортированных ячеек строки). Period values не дублируются на inventory. Инвариант: `len(inventory) ==` сумма layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
+`inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `cells` (роли `value` / `unit` / `scenario` / `total` / `note`). Формулы и adjacency в inventory не копируются — см. [graph.md](graph.md). Period values не дублируются на inventory. Инвариант: `len(inventory) ==` сумма layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
 
 Top-3 `candidates` пишутся и при abstain: если prune опустошил fused-список, в context остаются сырые proposals.
 

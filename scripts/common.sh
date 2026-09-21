@@ -38,6 +38,23 @@ json_field() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],"") or "")' "$1" "$2"
 }
 
+# Usage: require_get PATH OUTFILE
+# GET and fail the script unless HTTP 200.
+require_get() {
+  local path="$1"
+  local outfile="$2"
+  local code
+  code="$(http_get "$path" "$outfile")"
+  if [[ "$code" != "200" ]]; then
+    echo "${path} expected HTTP 200, got ${code}" >&2
+    exit 1
+  fi
+}
+
+urlencode() {
+  python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+}
+
 # Usage: http_get PATH OUTFILE [quiet]
 # Prints HTTP status code. Body is written to OUTFILE.
 http_get() {

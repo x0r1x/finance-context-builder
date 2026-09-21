@@ -4,7 +4,7 @@
 
 Код: `src/finance_context/layout/` (`detect.py`, `periods.py`, `params.py`) и разбор ссылок в `src/finance_context/formulas/engine.py`.
 
-Связанные документы: [обзор](overview.md), [маппинг](mapping.md), [архитектура](architecture.md).
+Связанные документы: [обзор](overview.md), [маппинг](mapping.md), [граф](graph.md), [архитектура](architecture.md).
 
 ## Что считается блоком
 

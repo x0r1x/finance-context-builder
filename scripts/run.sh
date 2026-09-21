@@ -21,10 +21,18 @@ if [[ ! -f "$RUN_DIR/context.json" ]]; then
   echo "context.json missing; cannot extract unmapped rows" >&2
   exit 1
 fi
+if [[ ! -f "$RUN_DIR/graph.json" ]]; then
+  echo "graph.json missing; job did not publish the formula-graph sidecar" >&2
+  exit 1
+fi
 python3 "$SCRIPTS/extract-unmapped.py" \
   "$RUN_DIR/context.json" \
   --output "$RUN_DIR/unmapped.json"
 log_summary "unmapped=$RUN_DIR/unmapped.json"
+log_summary "graph=$RUN_DIR/graph.json"
+if [[ -f "$RUN_DIR/graph-trace.json" ]]; then
+  log_summary "graph_trace=$RUN_DIR/graph-trace.json"
+fi
 
 log_summary "ok"
 echo "OK  wrote ${RUN_DIR}"
