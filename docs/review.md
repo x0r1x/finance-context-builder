@@ -7,11 +7,11 @@
 | Где | Что видно |
 | --- | --- |
 | `context.md` шапка | `Content completeness` (должно быть 1.00), `Concept coverage` (доля принятых слотов, может быть < 1) и шесть полей `mapping_quality` |
-| `context.md` блок | Каждая строка: Kind, Disposition, Concept (`unknown` у abstain), формула и все значения оси. Params: `## Parameters / {sheet}` |
+| `context.md` блок | Каждая строка: `Row` (`row_key`), Kind, Disposition, Concept (`unknown` у abstain), формула и все значения оси. Заголовок периода — `Y23 (AA)` (ключ и буква колонки). Под таблицей `relations` с теми же `row_key`. Пустая формула у строки, на которую есть ссылка в `graph.md`, — дефект. Params: `## Parameters / {sheet}` |
 | `context.json` → `blocks[].rows` | Все kind, включая abstract; `disposition`, role-tagged `cells`, ряд `values`; инвариант полноты |
 | `context.json` → `mapping_stats` | `inventory_rows`, `mapped`, `abstained`, `excluded`, `abstract`, `unmapped_series`, completeness, `concept_coverage`, `mapping_quality` |
 | `context.json` → `graph` | Pointer на `graph.json` / parquet, counts, `empty_range_members` |
-| `graph.json` / `graph.md` + `GET .../graph/trace` | Сводка и formula-level `links` (диапазон одной ссылкой). Cell-level рёбра и AST — в `ir/*.parquet` |
+| `graph.json` / `graph.md` + `GET .../graph/trace` | Сводка и formula-level `links` (`cell`, A1, `row_key`, `period_id`; диапазон одной ссылкой). `row_key` ссылки есть в строке `context.md`. Cell-level рёбра и AST — в `ir/*.parquet` |
 | `unmapped.json` | Abstained-строки **без** `values` |
 
 `scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `blocks[].rows` из context (или `rows` из mapping), оставляет `disposition=abstained` и выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown.

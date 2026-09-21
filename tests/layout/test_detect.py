@@ -397,6 +397,41 @@ def test_model_year_row_forms_relative_axis() -> None:
     assert rows["Gross revenues"].section_path == ["P&L"]
 
 
+def test_total_label_and_check_left_of_axis_stay_rows() -> None:
+    cells = [
+        _c("BS", "B3", "Year"),
+        _c("BS", "F3", "1"),
+        _c("BS", "G3", "2"),
+        _c("BS", "H3", "3"),
+        _c("BS", "B8", "Asset"),
+        _c("BS", "C8", "k£"),
+        _c("BS", "F8", "10"),
+        _c("BS", "G8", "11"),
+        _c("BS", "H8", "12"),
+        _c("BS", "B9", "Cash in hand"),
+        _c("BS", "C9", "k£"),
+        _c("BS", "F9", "1"),
+        _c("BS", "G9", "2"),
+        _c("BS", "H9", "3"),
+        _c("BS", "B10", "Total"),
+        _c("BS", "C10", "k£"),
+        _c("BS", "F10", "11", formula="=SUM(F8:F9)"),
+        _c("BS", "G10", "13", formula="=SUM(G8:G9)"),
+        _c("BS", "H10", "15", formula="=SUM(H8:H9)"),
+        _c("BS", "E19", "CHECK"),
+        _c("BS", "F19", "1", formula="=F10-F16<0.01"),
+        _c("BS", "G19", "1", formula="=G10-G16<0.01"),
+        _c("BS", "H19", "1", formula="=H10-H16<0.01"),
+    ]
+    layout = detect_layout(cells)
+    rows = {row.row: row for row in layout.sheets[0].blocks[0].rows}
+    assert rows[10].label == "Total"
+    assert rows[10].kind == "fact"
+    assert rows[19].label == "CHECK"
+    assert rows[19].kind == "helper"
+    assert rows[19].check_row is True
+
+
 def test_start_end_dates_left_of_timeline_are_not_a_block() -> None:
     cells = [
         _c("PF", "D1", "Item"),

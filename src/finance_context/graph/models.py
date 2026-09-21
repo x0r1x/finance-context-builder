@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-GRAPH_SCHEMA_VERSION = "1.5.0"
+GRAPH_SCHEMA_VERSION = "1.6.0"
 CycleClass = Literal["iterative_ok", "unexpected"]
 ID_CAP = 32
 
@@ -31,11 +31,17 @@ class IdCount(BaseModel):
 
 
 class FormulaLink(BaseModel):
-    """One formula cell. A range stays one ref."""
+    """One formula cell. A range stays one ref.
+
+    `row_key` and `period_id` join the cell to a context row and its axis.
+    Both are null when the cell is outside layout.
+    """
 
     cell: str
     formula: str | None = None
     refs: list[str] = Field(default_factory=list)
+    row_key: str | None = None
+    period_id: str | None = None
 
 
 class GraphContract(BaseModel):

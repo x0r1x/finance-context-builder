@@ -20,6 +20,6 @@
 
 Block: `CF!r1`. Kind: `timeline`. grain=year Periods: 2. Rows: 1.
 
-| Label | Kind | Disposition | Concept | Unit | Formula | 2023 | 2024E |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Opening cash | fact | mapped | bs.cash (high) | money | =RC[-1] | 100 | 110 |
+| Label | Row | Kind | Disposition | Concept | Unit | Formula | 2023 (B) | 2024E (C) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Opening cash | CF\|2\|CF!r1 | fact | mapped | bs.cash (high) | money | =RC[-1] | 100 | 110 |

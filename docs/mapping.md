@@ -193,7 +193,7 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
   - `semantic_coverage` — есть `semantic_identity` и `cash_semantics`; на CFS revenue/opex/tax/interest стоят денежные близнецы, а identity хранит экономический `pnl.*`, если лейбл его называет; `bs.*` — stock и время `stock|bop|eop`; capitalized interest — `noncash`; `cf.repayment` — outflow и stock `bs.debt` в том же блоке; начисление и выплата одного family не схлопываются в один `concept_id`;
   - `unit_coverage` — `hints.unit` совпадает с единицей концепта (`*_rate` и `facets.unit=rate` → rate, `pnl.volume` → count, денежные pnl/cf/bs → money, длительности → years);
   - `temporal_coverage` — opening → `bop`, closing → `eop`, balance/`bs.*` не `flow`, rate-концепт → `rate`;
-  - `formula_coverage` — у строки с формулой есть fingerprint (`formula`); ряд значений — кэш, отдельный A1 на ячейку в context не копируется (нет таких строк → 1.0);
+  - `formula_coverage` — у строки с формулой есть fingerprint (`formula`); ряд значений — кэш, отдельный A1 на ячейку в context не копируется (нет таких строк → 1.0). Если по периодным колонкам шаблона нет, fingerprint берётся из скаляра слева от оси;
   - `confidence_threshold_passed` — нет провалов semantic-проверок, у каждой принятой строки `confidence=high` и `score >= 0.82`.
 - **selective risk** — ошибки среди **принятых** маппингов (abstain в риск не входит);
 - **abstain rate** и **risk–coverage** кривая — качество права отказаться.

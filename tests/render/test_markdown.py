@@ -192,7 +192,13 @@ def test_graph_and_trace_markdown_repeat_json_facts() -> None:
         edges=9,
         iterate=False,
         links=[
-            FormulaLink(cell="P&L!C13", formula="=SUM(C9:C12)", refs=["P&L!C9:C12"]),
+            FormulaLink(
+                cell="P&L!C13",
+                formula="=SUM(C9:C12)",
+                refs=["P&L!C9:C12"],
+                row_key="P&L|13|P&L!r1",
+                period_id="2024",
+            ),
         ],
     )
     rendered = render_graph_markdown(graph)
@@ -201,6 +207,8 @@ def test_graph_and_trace_markdown_repeat_json_facts() -> None:
     assert "P&L!C13" in rendered
     assert "=SUM(C9:C12)" in rendered
     assert "P&L!C9:C12" in rendered
+    assert "P&L\\|13\\|P&L!r1" in rendered
+    assert "2024" in rendered
     trace = TraceDocument(
         origin="P&L!C13",
         direction="precedents",

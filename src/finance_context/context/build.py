@@ -142,6 +142,7 @@ def build_context(
                     row_num=layout_row.row,
                     headers=row_headers,
                     by_addr=by_addr,
+                    stub_cols=[item.col for item in layout_row.cells],
                 )
                 role_cells = _role_cells(
                     sheet.name, layout_row, by_addr, bool(workbook_meta.get("date1904"))
@@ -642,6 +643,7 @@ def _row_formula_and_numbers(
     row_num: int,
     headers: list,
     by_addr: dict[tuple[str, int, int], dict],
+    stub_cols: list[int] | None = None,
 ) -> tuple[str | None, list[str], NumericSummary | None]:
     templates: list[str] = []
     exceptions: list[str] = []
@@ -667,6 +669,13 @@ def _row_formula_and_numbers(
         except ValueError:
             continue
     fingerprint = Counter(templates).most_common(1)[0][0] if templates else None
+    if fingerprint is None:
+        for col in stub_cols or []:
+            cell = by_addr.get((sheet_name, row_num, col))
+            template = None if cell is None else cell.get("formula_template")
+            if template:
+                fingerprint = str(template)
+                break
     if fingerprint:
         for header in headers:
             cell = by_addr.get((sheet_name, row_num, header.col))
