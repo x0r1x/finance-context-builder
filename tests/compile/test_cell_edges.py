@@ -43,11 +43,35 @@ def test_unknown_sheet_is_missing_sheet() -> None:
     assert rows[0][6] == "missing_sheet"
 
 
-def test_single_missing_ref_is_missing_cell() -> None:
+def test_single_blank_ref_is_empty_ref() -> None:
     edges = [Edge(kind="cross_sheet", source="P&L!A1", target="Operation!C14")]
     rows = expand_cell_edges(edges, {"P&L!A1"}, known_sheets={"P&L", "Operation"})
-    assert rows[0][5] is True
-    assert rows[0][6] == "missing_cell"
+    assert rows[0][5] is False
+    assert rows[0][6] == "empty_ref"
+    assert rows[0].status == "empty"
+    assert rows[0].reason == "actual_blank_cell"
+    assert rows[0].evidence == "omitted_by_excel"
+    assert rows[0].range_ref == "Operation!C14"
+
+
+def test_styled_blank_and_populated_mismatch() -> None:
+    edges = [
+        Edge(kind="range", source="P&L!A1", target="P&L!B1:B2"),
+    ]
+    rows = expand_cell_edges(
+        edges,
+        {"P&L!A1"},
+        known_sheets={"P&L"},
+        presence={"P&L!B1": "styled_blank", "P&L!B2": "populated"},
+    )
+    by_target = {row.target: row for row in rows}
+    assert by_target["P&L!B1"].evidence == "styled_blank"
+    assert by_target["P&L!B1"].status == "empty"
+    assert by_target["P&L!B1"].dangling is False
+    assert by_target["P&L!B2"].dangling_reason == "parser_resolution_failure"
+    assert by_target["P&L!B2"].status == "unresolved"
+    assert by_target["P&L!B2"].evidence == "populated_missing_from_index"
+    assert by_target["P&L!B2"].dangling is True
 
 
 def test_ppmt_and_if_refs_expand_to_cell_edges() -> None:

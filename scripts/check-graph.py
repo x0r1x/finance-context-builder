@@ -41,7 +41,7 @@ ARTIFACT_REQUIRED = (
     "dangling",
     "formulas",
 )
-GRAPH_SCHEMA_PREFIX = "1.2"
+GRAPH_SCHEMA_PREFIX = "1.3"
 
 
 def load_json(path: Path) -> Any:
@@ -189,6 +189,65 @@ def check_dangling_json(doc: Any) -> list[str]:
         )
     if not isinstance(doc.get("by_class"), dict):
         errors.append("graph-dangling.json missing by_class object")
+    for item in ids:
+        if not isinstance(item, dict):
+            errors.append("graph-dangling.json ids must be objects")
+            break
+        missing = [
+            key
+            for key in (
+                "node_id",
+                "class",
+                "status",
+                "reason",
+                "evidence",
+                "included_in_formula_semantics",
+                "sources",
+            )
+            if key not in item
+        ]
+        if missing:
+            errors.append(
+                "graph-dangling.json entries need " + ", ".join(missing)
+            )
+            break
+        status = item.get("status")
+        reason = item.get("reason")
+        if status == "empty" and reason == "parser_resolution_failure":
+            errors.append(
+                "graph-dangling.json status=empty cannot use reason=parser_resolution_failure"
+            )
+            break
+        if status == "empty":
+            sources = item.get("sources")
+            if not isinstance(sources, list) or not sources:
+                errors.append("graph-dangling.json empty entries need sources")
+                break
+            if any(
+                not isinstance(source, dict) or not source.get("node_id") or not source.get("range")
+                for source in sources
+            ):
+                errors.append("graph-dangling.json sources need node_id and range")
+                break
+            if item.get("included_in_formula_semantics") is not True:
+                errors.append(
+                    "graph-dangling.json empty entries include the cell in formula semantics"
+                )
+                break
+        elif status == "unresolved":
+            if item.get("included_in_formula_semantics") != "unknown":
+                errors.append(
+                    "graph-dangling.json unresolved included_in_formula_semantics must be unknown"
+                )
+                break
+        else:
+            errors.append(
+                "graph-dangling.json status must be empty or unresolved"
+            )
+            break
+        if not item.get("evidence") or not reason:
+            errors.append("graph-dangling.json entries need reason and evidence")
+            break
     return errors
 
 

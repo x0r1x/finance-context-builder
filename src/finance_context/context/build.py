@@ -292,11 +292,7 @@ def build_context(
         warnings.append(f"{missing_cached} formula cell(s) missing cached values{extra}")
     if graph is not None and graph.dangling:
         warnings.append(
-            f"Graph: {graph.dangling} missing formula targets (see graph-dangling.json)"
-        )
-    if graph is not None and graph.empty_range_members:
-        warnings.append(
-            f"Graph: {graph.empty_range_members} empty range members (see graph-dangling.json)"
+            f"Graph: {graph.dangling} unresolved formula targets (see graph-dangling.json)"
         )
 
     sheets = [

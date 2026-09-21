@@ -119,6 +119,7 @@
     "edges": 0,
     "empty_range_members": 0,
     "index": "ir/graph_index.parquet",
+    "iterate": false,
     "nodes": 0,
     "unresolved": 0
   },
@@ -156,6 +157,7 @@
     "formula_count": 1,
     "has_vba": false,
     "has_xlm": false,
+    "iterate": false,
     "locale_hint": null,
     "missing_cached_values": 0,
     "sheet_count": 1,

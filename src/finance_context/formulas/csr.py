@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 import numpy as np
 from scipy import sparse
@@ -82,33 +83,69 @@ def _take(
     return out, truncated
 
 
+class CellEdge(NamedTuple):
+    source: str
+    target: str
+    kind: str
+    unresolved: bool
+    truncated: bool
+    dangling: bool
+    dangling_reason: str | None
+    status: str | None
+    reason: str | None
+    evidence: str | None
+    range_ref: str | None
+
+
+class MemberStatus(NamedTuple):
+    dangling_reason: str | None
+    dangling: bool
+    status: str | None
+    reason: str | None
+    evidence: str | None
+
+
 def expand_cell_edges(
     edges: list[Edge],
     known_nodes: set[str] | None = None,
     *,
     known_sheets: set[str] | None = None,
-) -> list[tuple[str, str, str, bool, bool, bool, str | None]]:
-    """Expand formula edges to cell-to-cell rows with dangling classification."""
+    presence: dict[str, str] | None = None,
+) -> list[CellEdge]:
+    """Expand formula edges to cell-to-cell rows with blank vs unresolved status."""
     known = known_nodes or set()
     sheets = known_sheets or set()
-    rows: list[tuple[str, str, str, bool, bool, bool, str | None]] = []
+    seen_cells = presence or {}
+    rows: list[CellEdge] = []
     seen: set[tuple[str, str, str]] = set()
     for edge in edges:
         for target, unresolved, truncated in _expanded_targets(edge):
-            reason = classify_dangling_reason(
+            classified = classify_member(
                 target,
                 kind=edge.kind,
                 known=known,
                 sheets=sheets,
                 unresolved=unresolved,
+                presence=seen_cells,
             )
-            dangling = reason in {"missing_cell", "missing_sheet"}
             key = (edge.source, target, edge.kind)
             if key in seen:
                 continue
             seen.add(key)
             rows.append(
-                (edge.source, target, edge.kind, unresolved, truncated, dangling, reason)
+                CellEdge(
+                    edge.source,
+                    target,
+                    edge.kind,
+                    unresolved,
+                    truncated,
+                    classified.dangling,
+                    classified.dangling_reason,
+                    classified.status,
+                    classified.reason,
+                    classified.evidence,
+                    edge.target,
+                )
             )
     return rows
 
@@ -120,20 +157,75 @@ def classify_dangling_reason(
     known: set[str],
     sheets: set[str],
     unresolved: bool,
+    presence: dict[str, str] | None = None,
 ) -> str | None:
+    return classify_member(
+        target,
+        kind=kind,
+        known=known,
+        sheets=sheets,
+        unresolved=unresolved,
+        presence=presence,
+    ).dangling_reason
+
+
+def classify_member(
+    target: str,
+    *,
+    kind: str,
+    known: set[str],
+    sheets: set[str],
+    unresolved: bool,
+    presence: dict[str, str] | None = None,
+) -> MemberStatus:
     if not target or unresolved:
-        return None
+        return MemberStatus(None, False, None, None, None)
     if target in known:
-        return None
+        return MemberStatus(None, False, None, None, None)
     try:
         sheet, _body = split_sheet_ref(target)
     except ValueError:
-        return "missing_cell"
+        return MemberStatus(
+            "parser_resolution_failure",
+            True,
+            "unresolved",
+            "parser_resolution_failure",
+            "bad_address",
+        )
     if sheets and sheet not in sheets:
-        return "missing_sheet"
-    if kind == "range":
-        return "empty_range_member"
-    return "missing_cell"
+        return MemberStatus(
+            "missing_sheet",
+            True,
+            "unresolved",
+            "missing_sheet",
+            "sheet_not_in_workbook",
+        )
+    seen = (presence or {}).get(target)
+    if seen == "populated":
+        return MemberStatus(
+            "parser_resolution_failure",
+            True,
+            "unresolved",
+            "parser_resolution_failure",
+            "populated_missing_from_index",
+        )
+    if not sheets:
+        if kind == "range":
+            return _blank("empty_range_member", "omitted_by_excel")
+        return MemberStatus(
+            "missing_cell",
+            True,
+            "unresolved",
+            "parser_resolution_failure",
+            "not_in_sparse_index",
+        )
+    evidence = "styled_blank" if seen == "styled_blank" else "omitted_by_excel"
+    klass = "empty_range_member" if kind == "range" else "empty_ref"
+    return _blank(klass, evidence)
+
+
+def _blank(klass: str, evidence: str) -> MemberStatus:
+    return MemberStatus(klass, False, "empty", "actual_blank_cell", evidence)
 
 
 def _expanded_targets(edge: Edge) -> list[tuple[str, bool, bool]]:
@@ -159,9 +251,9 @@ def build_csr(
     pairs: list[tuple[str, str]] = []
     truncated_sources: set[str] = set()
     known = set(nodes)
-    for source, target, kind, unresolved, truncated, _dangling, _reason in expand_cell_edges(
-        edges, known
-    ):
+    for edge in expand_cell_edges(edges, known):
+        source, target, kind = edge.source, edge.target, edge.kind
+        unresolved, truncated = edge.unresolved, edge.truncated
         nodes.add(source)
         nodes.add(target)
         if truncated:

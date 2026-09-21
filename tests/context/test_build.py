@@ -145,8 +145,8 @@ def test_build_warns_on_missing_graph_targets() -> None:
         mapping=mapping,
         graph=GraphPointer(dangling=12, empty_range_members=718),
     )
-    assert "Graph: 12 missing formula targets (see graph-dangling.json)" in doc.warnings
-    assert "Graph: 718 empty range members (see graph-dangling.json)" in doc.warnings
+    assert "Graph: 12 unresolved formula targets (see graph-dangling.json)" in doc.warnings
+    assert all("empty range" not in warning for warning in doc.warnings)
 
 
 def test_build_decodes_excel_date_serials() -> None:

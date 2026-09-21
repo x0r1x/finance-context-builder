@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -24,6 +26,12 @@ class WorkbookMeta(BaseModel):
     iterate: bool = False
     date1904: bool = False
     defined_names: list[DefinedName] = Field(default_factory=list)
+
+
+class CellPresence(BaseModel):
+    sheet: str
+    addr: str
+    presence: Literal["populated", "styled_blank"]
 
 
 class RawCell(BaseModel):
