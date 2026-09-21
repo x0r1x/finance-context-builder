@@ -47,7 +47,7 @@ SCC на cell-edges (без unresolved/dangling):
 
 ## Трассировка
 
-CLI пишет `graph.json`, `graph-edges.json`, `graph-dangling.json` и `formulas.json` рядом с `context.json`. HTTP и `scripts/run.sh` (при живом `serve`) качают те же файлы; `scripts/check-graph.py` разрешает `formula` на `values[]`, запрещает `formula_ast` в context/summary и требует `artifacts.edges_json` / `dangling`.
+CLI пишет `graph.json`, `graph-edges.json`, `graph-dangling.json` и `formulas.json` рядом с `context.json`. HTTP и `scripts/run.sh` (при живом `serve`) качают те же файлы; `scripts/check-graph.py` разрешает `formula` на `values[]`, запрещает `formula_ast` в context/summary, требует schema `1.1.x` и `artifacts.edges_json` / `dangling` / `formulas`, и с `--edges` / `--dangling` / `--formulas` проверяет, что sidecar’ы не обрезаны и не содержат формул в списке рёбер.
 
 ```bash
 bash scripts/run.sh path/to/model.xlsx

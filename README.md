@@ -80,7 +80,7 @@ Submit a workbook. `POST` returns **202** and starts mapping. Repeated submissio
 | `degraded` | Same as `needs_input`, but LLM/embeddings were not configured |
 | `failed` | Pipeline error; no usable context |
 
-`needs_input` is not a crash. `context.json`, `graph.json`, and `context.md` are still served.
+`needs_input` is not a crash. `context.json`, graph sidecars, and `context.md` are still served.
 
 ```bash
 JOB=$(curl -sS -F "file=@path/to/model.xlsx" http://127.0.0.1:8080/v1/context-jobs)
@@ -91,6 +91,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID"
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/context.json" -o context.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.json" -o graph.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph/edges" -o graph-edges.json
+curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph-dangling.json" -o graph-dangling.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/formulas.json" -o formulas.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/context.md" -o context.md
 ```
@@ -138,7 +139,7 @@ uv run pytest
 uv run ruff check src tests
 ```
 
-With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes HTTP bodies under `out/<timestamp>/` (`healthz.json`, `readyz.json`, `post-job.json`, `job-status.json`, `context.json`, `graph.json`, `graph-edges.json`, `graph-dangling.json`, `formulas.json`, `graph-trace.json`, `context.md`) plus extracted `unmapped.json`. The client checks that `context.json` does not embed AST or row-graph fields (A1 `formula` on values is allowed) and that `graph.json` is stats-only, then smokes `GET .../graph/trace`. The script exiting with `OK` means the client finished; the server should still be listening on 8080.
+With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes HTTP bodies under `out/<timestamp>/` (`healthz.json`, `readyz.json`, `post-job.json`, `job-status.json`, `context.json`, `graph.json`, `graph-edges.json`, `graph-dangling.json`, `formulas.json`, `graph-trace.json`, `context.md`) plus extracted `unmapped.json`. The client checks job URLs, that `context.json` does not embed AST or row-graph fields (A1 `formula` on values is allowed), that `graph.json` is schema `1.1.x` stats-only with `artifacts.edges_json` / `dangling` / `formulas`, and that the downloaded sidecars are well-formed, then smokes `GET .../graph/trace`. The script exiting with `OK` means the client finished; the server should still be listening on 8080.
 
 ```bash
 bash scripts/run.sh path/to/model.xlsx
