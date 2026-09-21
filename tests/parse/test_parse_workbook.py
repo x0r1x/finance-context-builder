@@ -8,6 +8,7 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.errors import ContextError
 from finance_context.excel import parse_workbook
+from finance_context.store.fs import read_parquet
 
 
 def _by_addr(cells: list[dict]) -> dict[tuple[str, str], dict]:
@@ -251,7 +252,11 @@ def test_parse_writes_only_raw_artifacts_no_findings(tmp_path: Path, dest: Path)
     )
     parse_workbook(source, dest)
     written = {p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file()}
-    assert written == {"raw/cells.parquet", "raw/workbook.json"}
+    assert written == {
+        "raw/cells.parquet",
+        "raw/cell_presence.parquet",
+        "raw/workbook.json",
+    }
     assert "findings" not in load_workbook_json(dest)
 
 
@@ -264,6 +269,32 @@ def test_success_leaves_no_tmp_files(tmp_path: Path, dest: Path) -> None:
     parse_workbook(source, dest)
     tmps = [p for p in dest.rglob("*") if p.name.endswith(".tmp") or ".tmp." in p.name]
     assert tmps == []
+
+
+def test_cell_presence_splits_populated_and_styled_blank(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "presence.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="1"),
+                    CellSpec(addr="B1", style=1),
+                ],
+            )
+        ],
+    )
+    parse_workbook(source, dest)
+    cells = {(row["sheet"], row["addr"]) for row in load_cells(dest)}
+    presence = {
+        (row["sheet"], row["addr"]): row["presence"]
+        for row in read_parquet(dest / "raw" / "cell_presence.parquet")
+    }
+    assert ("P&L", "A1") in cells
+    assert ("P&L", "B1") not in cells
+    assert presence[("P&L", "A1")] == "populated"
+    assert presence[("P&L", "B1")] == "styled_blank"
 
 
 def test_not_a_zip_rejected(tmp_path: Path, dest: Path) -> None:

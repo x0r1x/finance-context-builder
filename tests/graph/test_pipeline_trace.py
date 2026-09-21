@@ -91,7 +91,7 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert "formula_ast" not in payload
     assert "precedents_rows" not in payload
     graph = json.loads(payload)
-    assert graph["schema_version"] == "1.2.0"
+    assert graph["schema_version"] == "1.3.0"
     assert graph["iterate"] is False
     assert graph["artifacts"]["edges_json"] == "graph-edges.json"
     assert graph["artifacts"]["dangling"] == "graph-dangling.json"
@@ -166,6 +166,8 @@ def test_pipeline_classifies_index_range_holes(tmp_path: Path) -> None:
     ]
     assert holes
     assert all(e["dangling_reason"] == "empty_range_member" for e in holes)
+    assert all(e["status"] == "empty" and e["reason"] == "actual_blank_cell" for e in holes)
+    assert all(e["evidence"] == "omitted_by_excel" for e in holes)
     assert all(not e["dangling"] for e in holes)
     index = {row["node_id"]: row for row in read_parquet(dest / "ir" / "graph_index.parquet")}
     assert index["Input Assumptions!K8"]["node_type"] == "empty"
@@ -176,6 +178,12 @@ def test_pipeline_classifies_index_range_holes(tmp_path: Path) -> None:
         if item["class"] == "empty_range_member"
     ]
     assert "Input Assumptions!K8" in hole_ids
+    hole = next(item for item in dangling["ids"] if item["node_id"] == "Input Assumptions!K8")
+    assert hole["status"] == "empty"
+    assert hole["included_in_formula_semantics"] is True
+    source = {"node_id": "Input Assumptions!C8", "range": "Input Assumptions!J8:O8"}
+    assert source in hole["sources"]
+    assert all("empty range" not in warning for warning in doc.warnings)
     assert dangling["count"] == len(dangling["ids"])
     assert dangling["count"] > 32 or dangling["count"] >= len(holes)
     graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
@@ -213,6 +221,62 @@ def _circular_book(path: Path) -> Path:
     )
 
 
+def test_pipeline_traces_blank_ref_and_styled_blank(tmp_path: Path) -> None:
+    source = build_xlsx(
+        tmp_path / "blanks.xlsx",
+        sheets=[
+            SheetSpec(
+                name="CF",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="C1", value="2024", type="s"),
+                    CellSpec(addr="A5", value="Opening", type="s"),
+                    CellSpec(addr="B5", value="1", formula="=A5+B4"),
+                    CellSpec(addr="C5", value="1", formula="=SUM(C3:C4)"),
+                    CellSpec(addr="C3", style=1),
+                ],
+            ),
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="A2", value="Link", type="s"),
+                    CellSpec(addr="B2", value="1", formula="=Ghost!A1"),
+                ],
+            ),
+        ],
+        shared_strings=["Item", "2023", "2024", "Opening", "Link"],
+    )
+    dest = tmp_path / "job"
+    dest.mkdir()
+    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    doc = pipeline.run(dest, job_id="blank-job", source_filename="blanks.xlsx")
+    dangling = json.loads((dest / "graph-dangling.json").read_text(encoding="utf-8"))
+    by_id = {item["node_id"]: item for item in dangling["ids"]}
+    opening = by_id["CF!B4"]
+    assert opening["class"] == "empty_ref"
+    assert opening["status"] == "empty"
+    assert opening["reason"] == "actual_blank_cell"
+    assert opening["evidence"] == "omitted_by_excel"
+    assert opening["sources"] == [{"node_id": "CF!B5", "range": "CF!B4"}]
+    styled = by_id["CF!C3"]
+    assert styled["class"] == "empty_range_member"
+    assert styled["evidence"] == "styled_blank"
+    assert styled["sources"] == [{"node_id": "CF!C5", "range": "CF!C3:C4"}]
+    omitted = by_id["CF!C4"]
+    assert omitted["evidence"] == "omitted_by_excel"
+    ghost = by_id["Ghost!A1"]
+    assert ghost["status"] == "unresolved"
+    assert ghost["reason"] == "missing_sheet"
+    assert ghost["included_in_formula_semantics"] == "unknown"
+    assert doc.graph.dangling == 1
+    assert any("unresolved formula targets" in warning for warning in doc.warnings)
+    assert all("empty range" not in warning for warning in doc.warnings)
+
+
 def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
     source = _circular_book(tmp_path / "circular.xlsx")
     dest = tmp_path / "job"
@@ -223,7 +287,7 @@ def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
     assert doc.workbook.iterate is True
     assert doc.graph.iterate is True
     graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
-    assert graph["schema_version"] == "1.2.0"
+    assert graph["schema_version"] == "1.3.0"
     assert graph["iterate"] is True
     assert graph["cycles"]
     members = {m for cycle in graph["cycles"] for m in cycle["members"]}

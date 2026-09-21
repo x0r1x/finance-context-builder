@@ -7,8 +7,14 @@ from dataclasses import dataclass, field
 from lxml import etree
 
 from finance_context.errors import ContextError
-from finance_context.excel.a1 import formula_uses_semicolon, parse_addr, shift_formula
-from finance_context.excel.models import DefinedName, RawCell, SheetInfo, WorkbookMeta
+from finance_context.excel.a1 import format_addr, formula_uses_semicolon, parse_addr, shift_formula
+from finance_context.excel.models import (
+    CellPresence,
+    DefinedName,
+    RawCell,
+    SheetInfo,
+    WorkbookMeta,
+)
 from finance_context.excel.zip_guard import read_part
 
 NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -188,7 +194,9 @@ def text_of(el: etree._Element | None) -> str:
     return "".join(el.itertext())
 
 
-def parse_ooxml(zf: zipfile.ZipFile) -> tuple[list[RawCell], WorkbookMeta]:
+def parse_ooxml(
+    zf: zipfile.ZipFile,
+) -> tuple[list[RawCell], WorkbookMeta, list[CellPresence]]:
     root_rels = parse_rels(zf, "_rels/.rels")
     wb_part = next(
         (rel.target for rel in root_rels.values() if rel.type.endswith("/officeDocument")),
@@ -237,10 +245,12 @@ def parse_ooxml(zf: zipfile.ZipFile) -> tuple[list[RawCell], WorkbookMeta]:
     has_xlm = has_xlm or any("/macrosheets/" in path for path in nameset)
 
     cells: list[RawCell] = []
+    presence: list[CellPresence] = []
     locale_ru = False
     for sheet in sheets:
-        parsed, ru = _parse_sheet(zf, sheet, sst, formats)
+        parsed, ru, sheet_presence = _parse_sheet(zf, sheet, sst, formats)
         cells.extend(parsed)
+        presence.extend(sheet_presence)
         locale_ru = locale_ru or ru
 
     meta = WorkbookMeta(
@@ -253,7 +263,7 @@ def parse_ooxml(zf: zipfile.ZipFile) -> tuple[list[RawCell], WorkbookMeta]:
         date1904=date1904,
         defined_names=names,
     )
-    return cells, meta
+    return cells, meta, presence
 
 
 def _load_sst(zf: zipfile.ZipFile, wb_rels: dict[str, Rel]) -> list[str]:
@@ -345,7 +355,7 @@ def _parse_sheet(
     sheet: _SheetParse,
     sst: list[str],
     formats: list[str | None],
-) -> tuple[list[RawCell], bool]:
+) -> tuple[list[RawCell], bool, list[CellPresence]]:
     member = zip_member(zf, sheet.part)
     if member is None:
         raise ContextError("zip_rejected", f"missing sheet {sheet.part}")
@@ -353,6 +363,7 @@ def _parse_sheet(
     comments = _load_comments(zf, sheet.part)
     hidden_cols = _hidden_cols(root)
     pending: list[_PendingCell] = []
+    presence: list[CellPresence] = []
     masters: dict[int, tuple[int, int, str]] = {}
 
     sheet_data = find_child(root, "sheetData")
@@ -360,7 +371,7 @@ def _parse_sheet(
         for row_el in children(sheet_data, "row"):
             row_hidden = as_bool(row_el.get("hidden"))
             for cell_el in children(row_el, "c"):
-                built = _pending_from_cell(
+                built, cell_presence = _pending_from_cell(
                     cell_el,
                     sst=sst,
                     formats=formats,
@@ -369,6 +380,14 @@ def _parse_sheet(
                     row_hidden=row_hidden,
                     sheet_hidden=sheet.info.hidden,
                 )
+                if cell_presence is not None:
+                    presence.append(
+                        CellPresence(
+                            sheet=sheet.info.name,
+                            addr=cell_presence[0],
+                            presence=cell_presence[1],
+                        )
+                    )
                 if built is None:
                     continue
                 pending.append(built)
@@ -397,7 +416,7 @@ def _parse_sheet(
                 comment=item.comment,
             )
         )
-    return cells, locale_ru
+    return cells, locale_ru, presence
 
 
 def _hidden_cols(root: etree._Element) -> set[int]:
@@ -441,14 +460,15 @@ def _pending_from_cell(
     hidden_cols: set[int],
     row_hidden: bool,
     sheet_hidden: bool,
-) -> _PendingCell | None:
+) -> tuple[_PendingCell | None, tuple[str, str] | None]:
     addr = cell_el.get("r")
     if not addr:
-        return None
+        return None, None
     try:
         col, row = parse_addr(addr)
     except ValueError:
-        return None
+        return None, None
+    addr = format_addr(col, row)
     f_el = find_child(cell_el, "f")
     formula: str | None = None
     shared_si: int | None = None
@@ -460,9 +480,9 @@ def _pending_from_cell(
             if si_raw is not None:
                 shared_si = int(si_raw)
     cached = _cached_value(cell_el, sst)
-    comment = comments.get(addr)
+    comment = comments.get(cell_el.get("r") or addr)
     if formula is None and cached is None and comment is None and shared_si is None:
-        return None
+        return None, (addr, "styled_blank")
     style = cell_el.get("s")
     number_format = None
     if style is not None:
@@ -470,16 +490,19 @@ def _pending_from_cell(
         if 0 <= idx < len(formats):
             number_format = formats[idx]
     hidden = sheet_hidden or row_hidden or col in hidden_cols
-    return _PendingCell(
-        addr=addr,
-        col=col,
-        row=row,
-        formula=formula,
-        shared_si=shared_si,
-        cached=cached,
-        hidden=hidden,
-        number_format=number_format,
-        comment=comment,
+    return (
+        _PendingCell(
+            addr=addr,
+            col=col,
+            row=row,
+            formula=formula,
+            shared_si=shared_si,
+            cached=cached,
+            hidden=hidden,
+            number_format=number_format,
+            comment=comment,
+        ),
+        (addr, "populated"),
     )
 
 

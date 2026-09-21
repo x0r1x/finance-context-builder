@@ -72,6 +72,10 @@ def build_formula_graph(
                 e.get("col_offset"),
                 e.get("period_lag"),
                 e.get("dangling_reason"),
+                e.get("status"),
+                e.get("reason"),
+                e.get("evidence"),
+                e.get("range_ref"),
             )
             for e in enriched
         ],
@@ -259,7 +263,7 @@ def _empty_range_nodes(cell_edges: list[dict], existing: set[str]) -> list[str]:
     found: list[str] = []
     seen: set[str] = set(existing)
     for edge in cell_edges:
-        if str(edge.get("dangling_reason") or "") != "empty_range_member":
+        if str(edge.get("status") or "") != "empty":
             continue
         target = str(edge.get("target") or "")
         if not target or target in seen:
@@ -324,6 +328,10 @@ def _write_audit_sidecars(dest_dir: Path, cells: list[dict], cell_edges: list[di
                     "kind": e.get("kind"),
                     "dangling": bool(e.get("dangling")),
                     "dangling_reason": e.get("dangling_reason"),
+                    "status": e.get("status"),
+                    "reason": e.get("reason"),
+                    "evidence": e.get("evidence"),
+                    "range_ref": e.get("range_ref"),
                     "period_lag": e.get("period_lag"),
                     "col_offset": e.get("col_offset"),
                 }
@@ -331,25 +339,50 @@ def _write_audit_sidecars(dest_dir: Path, cells: list[dict], cell_edges: list[di
             ]
         },
     )
-    items: list[dict[str, str]] = []
+    items: list[dict[str, object]] = []
     seen: set[tuple[str, str]] = set()
     by_class: Counter[str] = Counter()
+    by_status: Counter[str] = Counter()
+    sources: dict[tuple[str, str], list[dict[str, str]]] = {}
+    source_seen: dict[tuple[str, str], set[tuple[str, str]]] = {}
     for edge in cell_edges:
-        reason = str(edge.get("dangling_reason") or "")
+        klass = str(edge.get("dangling_reason") or "")
         target = str(edge.get("target") or "")
-        if not reason or not target:
+        status = str(edge.get("status") or "")
+        if not klass or not target or not status:
             continue
-        key = (target, reason)
+        key = (target, klass)
+        bucket = sources.setdefault(key, [])
+        seen_sources = source_seen.setdefault(key, set())
+        source = str(edge.get("source") or "")
+        range_ref = str(edge.get("range_ref") or "")
+        pair = (source, range_ref)
+        if source and pair not in seen_sources:
+            seen_sources.add(pair)
+            bucket.append({"node_id": source, "range": range_ref})
         if key in seen:
             continue
         seen.add(key)
-        by_class[reason] += 1
-        items.append({"node_id": target, "class": reason})
+        by_class[klass] += 1
+        by_status[status] += 1
+        included: bool | str = True if status == "empty" else "unknown"
+        items.append(
+            {
+                "node_id": target,
+                "status": status,
+                "reason": edge.get("reason"),
+                "evidence": edge.get("evidence"),
+                "included_in_formula_semantics": included,
+                "class": klass,
+                "sources": bucket,
+            }
+        )
     write_json(
         dest_dir / "graph-dangling.json",
         {
             "count": len(items),
             "by_class": dict(by_class),
+            "by_status": dict(by_status),
             "ids": items,
         },
     )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.formulas.csr import build_csr, expand_cell_edges
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.formulas.models import CompileResult, Edge
@@ -41,7 +42,19 @@ IR_CELL_EDGE_COLUMNS = (
     ("col_offset", "INTEGER"),
     ("period_lag", "VARCHAR"),
     ("dangling_reason", "VARCHAR"),
+    ("status", "VARCHAR"),
+    ("reason", "VARCHAR"),
+    ("evidence", "VARCHAR"),
+    ("range_ref", "VARCHAR"),
 )
+
+
+def canonical_node_id(sheet: str, addr: str) -> str:
+    try:
+        col, row = parse_addr(str(addr))
+    except ValueError:
+        return f"{sheet}!{addr}"
+    return f"{sheet}!{format_addr(col, row)}"
 
 
 def compile_workbook(dest_dir: Path) -> CompileResult:
@@ -52,7 +65,7 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
     edges: list[Edge] = []
     extra_nodes: list[str] = []
     for row in raw_rows:
-        extra_nodes.append(f"{row['sheet']}!{row['addr']}")
+        extra_nodes.append(canonical_node_id(str(row["sheet"]), str(row["addr"])))
         formula = row.get("formula_raw")
         template = None
         unparsed = False
@@ -85,8 +98,11 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         str(item["name"] if isinstance(item, dict) else item.name)
         for item in (meta.get("sheets") or [])
     }
+    presence = _presence_index(dest_dir)
     csr = build_csr(edges, extra_nodes=extra_nodes)
-    cell_edges = expand_cell_edges(edges, known, known_sheets=sheets)
+    cell_edges = expand_cell_edges(
+        edges, known, known_sheets=sheets, presence=presence
+    )
     write_parquet(dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, ir_rows)
     write_parquet(
         dest_dir / "ir" / "edges.parquet",
@@ -97,8 +113,32 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         dest_dir / "ir" / "cell_edges.parquet",
         IR_CELL_EDGE_COLUMNS,
         [
-            (source, target, kind, unresolved, truncated, dangling, None, None, reason)
-            for source, target, kind, unresolved, truncated, dangling, reason in cell_edges
+            (
+                edge.source,
+                edge.target,
+                edge.kind,
+                edge.unresolved,
+                edge.truncated,
+                edge.dangling,
+                None,
+                None,
+                edge.dangling_reason,
+                edge.status,
+                edge.reason,
+                edge.evidence,
+                edge.range_ref,
+            )
+            for edge in cell_edges
         ],
     )
     return CompileResult(csr=csr)
+
+
+def _presence_index(dest_dir: Path) -> dict[str, str]:
+    path = dest_dir / "raw" / "cell_presence.parquet"
+    if not path.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for row in read_parquet(path):
+        out[canonical_node_id(str(row["sheet"]), str(row["addr"]))] = str(row["presence"])
+    return out

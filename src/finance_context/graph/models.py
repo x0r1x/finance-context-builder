@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-GRAPH_SCHEMA_VERSION = "1.2.0"
+GRAPH_SCHEMA_VERSION = "1.3.0"
 CycleClass = Literal["iterative_ok", "unexpected"]
 ID_CAP = 32
 

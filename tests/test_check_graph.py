@@ -24,7 +24,7 @@ def _write(path: Path, payload: dict) -> Path:
 
 def _ok_graph(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.2.0",
+        "schema_version": "1.3.0",
         "job_id": "job-1",
         "nodes": 3,
         "edges": 2,
@@ -258,8 +258,24 @@ def test_accepts_audit_sidecars(tmp_path: Path) -> None:
             "count": 2,
             "by_class": {"empty_range_member": 2},
             "ids": [
-                {"node_id": "P&L!K8", "class": "empty_range_member"},
-                {"node_id": "P&L!L8", "class": "empty_range_member"},
+                {
+                    "node_id": "P&L!K8",
+                    "class": "empty_range_member",
+                    "status": "empty",
+                    "reason": "actual_blank_cell",
+                    "evidence": "omitted_by_excel",
+                    "included_in_formula_semantics": True,
+                    "sources": [{"node_id": "P&L!C13", "range": "P&L!K8:L8"}],
+                },
+                {
+                    "node_id": "P&L!L8",
+                    "class": "empty_range_member",
+                    "status": "empty",
+                    "reason": "actual_blank_cell",
+                    "evidence": "styled_blank",
+                    "included_in_formula_semantics": True,
+                    "sources": [{"node_id": "P&L!C13", "range": "P&L!K8:L8"}],
+                },
             ],
         },
     )
@@ -282,6 +298,44 @@ def test_accepts_audit_sidecars(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "P&L!C13"
+
+
+def test_rejects_schema_1_2(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.2.0"))
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "schema_version" in result.stderr
+
+
+def test_rejects_empty_status_with_parser_failure(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    dangling = _write(
+        tmp_path / "graph-dangling.json",
+        {
+            "count": 1,
+            "by_class": {"empty_range_member": 1},
+            "ids": [
+                {
+                    "node_id": "P&L!K8",
+                    "class": "empty_range_member",
+                    "status": "empty",
+                    "reason": "parser_resolution_failure",
+                    "evidence": "populated_missing_from_index",
+                    "included_in_formula_semantics": True,
+                    "sources": [{"node_id": "P&L!C13", "range": "P&L!K8:K8"}],
+                }
+            ],
+        },
+    )
+
+    result = _run(str(context), str(graph), "--dangling", str(dangling))
+
+    assert result.returncode == 1
+    assert "parser_resolution_failure" in result.stderr
 
 
 def test_rejects_truncated_dangling_list(tmp_path: Path) -> None:
