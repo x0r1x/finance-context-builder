@@ -41,7 +41,24 @@ ARTIFACT_REQUIRED = (
     "dangling",
     "formulas",
 )
-GRAPH_SCHEMA_PREFIX = "1.3"
+GRAPH_SCHEMA_PREFIX = "1.4"
+EDGE_FIELDS = (
+    "edge_id",
+    "direction",
+    "formula_cell",
+    "precedent",
+    "source",
+    "target",
+    "relation_type",
+    "reference_kind",
+    "anchors",
+    "formula",
+    "resolution_status",
+)
+REFERENCE_KINDS = frozenset({"direct", "range_member", "external", "dynamic", "named"})
+RESOLUTION_STATUSES = frozenset(
+    {"resolved", "empty", "unresolved", "truncated", "external", "dynamic"}
+)
 
 
 def load_json(path: Path) -> Any:
@@ -162,15 +179,79 @@ def check_trace(trace: dict[str, Any], origin: str) -> list[str]:
     return errors
 
 
+def _endpoint_errors(edge: dict[str, Any], key: str, node_id: str) -> str | None:
+    endpoint = edge.get(key)
+    if not isinstance(endpoint, dict):
+        return f"graph-edges.json {key} must be an object"
+    required = ("sheet", "address", "period_id", "node_id")
+    missing = [name for name in required if name not in endpoint]
+    if missing:
+        return f"graph-edges.json {key} missing " + ", ".join(missing)
+    if endpoint.get("node_id") != node_id:
+        return f"graph-edges.json {key}.node_id must match {key and node_id}"
+    return None
+
+
 def check_edges_json(doc: Any) -> list[str]:
     if not isinstance(doc, dict) or not isinstance(doc.get("edges"), list):
         return ["graph-edges.json must be an object with an edges list"]
     errors: list[str] = []
-    if _walk_keys(doc) & {"formula", "formula_ast", "formula_raw"}:
-        errors.append("graph-edges.json must not embed formula text or AST")
+    if doc.get("direction") != "formula_depends_on_precedent":
+        errors.append(
+            "graph-edges.json direction must be formula_depends_on_precedent"
+        )
+    if _walk_keys(doc) & {"formula_ast", "formula_raw"}:
+        errors.append("graph-edges.json must not embed formula AST")
     for edge in doc["edges"]:
-        if not isinstance(edge, dict) or not edge.get("source") or "target" not in edge:
-            errors.append("graph-edges.json entries need source and target")
+        if not isinstance(edge, dict):
+            errors.append("graph-edges.json entries must be objects")
+            break
+        missing = [key for key in EDGE_FIELDS if key not in edge]
+        if missing:
+            errors.append("graph-edges.json entries need " + ", ".join(missing))
+            break
+        if edge.get("direction") != "formula_depends_on_precedent":
+            errors.append("graph-edges.json edge direction must be formula_depends_on_precedent")
+            break
+        if edge.get("relation_type") != "formula_reference":
+            errors.append("graph-edges.json relation_type must be formula_reference")
+            break
+        if edge.get("reference_kind") not in REFERENCE_KINDS:
+            errors.append(
+                "graph-edges.json reference_kind must be direct, range_member, "
+                "external, dynamic, or named"
+            )
+            break
+        if edge.get("resolution_status") not in RESOLUTION_STATUSES:
+            errors.append(
+                "graph-edges.json resolution_status must be resolved, empty, "
+                "unresolved, truncated, external, or dynamic"
+            )
+            break
+        if not isinstance(edge.get("formula"), str) or not edge.get("formula"):
+            errors.append("graph-edges.json formula must be the A1 formula text")
+            break
+        anchors = edge.get("anchors")
+        if not isinstance(anchors, dict) or "abs_col" not in anchors or "abs_row" not in anchors:
+            errors.append("graph-edges.json anchors need abs_col and abs_row")
+            break
+        source = str(edge.get("source") or "")
+        target = str(edge.get("target") or "")
+        formula_cell = _endpoint_errors(edge, "formula_cell", source)
+        if formula_cell:
+            errors.append(
+                "graph-edges.json source must equal formula_cell.node_id"
+                if "must match" in formula_cell
+                else formula_cell
+            )
+            break
+        precedent = _endpoint_errors(edge, "precedent", target)
+        if precedent:
+            errors.append(
+                "graph-edges.json target must equal precedent.node_id"
+                if "must match" in precedent
+                else precedent
+            )
             break
     return errors
 
@@ -197,6 +278,7 @@ def check_dangling_json(doc: Any) -> list[str]:
             key
             for key in (
                 "node_id",
+                "period_id",
                 "class",
                 "status",
                 "reason",

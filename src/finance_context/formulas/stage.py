@@ -46,6 +46,11 @@ IR_CELL_EDGE_COLUMNS = (
     ("reason", "VARCHAR"),
     ("evidence", "VARCHAR"),
     ("range_ref", "VARCHAR"),
+    ("abs_col", "BOOLEAN"),
+    ("abs_row", "BOOLEAN"),
+    ("abs_col_end", "BOOLEAN"),
+    ("abs_row_end", "BOOLEAN"),
+    ("named", "BOOLEAN"),
 )
 
 
@@ -127,6 +132,11 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
                 edge.reason,
                 edge.evidence,
                 edge.range_ref,
+                edge.abs_col,
+                edge.abs_row,
+                edge.abs_col_end,
+                edge.abs_row_end,
+                edge.named,
             )
             for edge in cell_edges
         ],

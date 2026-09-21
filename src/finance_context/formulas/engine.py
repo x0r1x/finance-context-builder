@@ -492,7 +492,9 @@ def _collect_edges(
     if op == "range":
         if node.get("named"):
             target = f"{node['start_name']}:{node['end_name']}"
-            edges.append(Edge(kind="range", source=source, target=target, unresolved=True))
+            edges.append(
+                Edge(kind="range", source=source, target=target, unresolved=True, named=True)
+            )
             return
         edges.append(_range_edge(node, current_sheet, source))
 
@@ -500,11 +502,25 @@ def _collect_edges(
 def _ref_edge(node: dict[str, Any], current_sheet: str, source: str) -> Edge:
     sheet = node.get("sheet") or current_sheet
     target = f"{sheet}!{index_to_col(node['col'])}{node['row']}"
+    abs_col = bool(node.get("abs_col"))
+    abs_row = bool(node.get("abs_row"))
     if node.get("external"):
         spec = node["external"]
-        return Edge(kind="external", source=source, target=f"[{spec}]{target}")
+        return Edge(
+            kind="external",
+            source=source,
+            target=f"[{spec}]{target}",
+            abs_col=abs_col,
+            abs_row=abs_row,
+        )
     kind: str = "cross_sheet" if node.get("sheet") and node["sheet"] != current_sheet else "ref"
-    return Edge(kind=kind, source=source, target=target)  # type: ignore[arg-type]
+    return Edge(
+        kind=kind,  # type: ignore[arg-type]
+        source=source,
+        target=target,
+        abs_col=abs_col,
+        abs_row=abs_row,
+    )
 
 
 def _range_target(node: dict[str, Any], sheet: str) -> str:
@@ -522,9 +538,22 @@ def _range_target(node: dict[str, Any], sheet: str) -> str:
 def _range_edge(node: dict[str, Any], current_sheet: str, source: str) -> Edge:
     sheet = node.get("sheet") or current_sheet
     target = _range_target(node, sheet)
+    start = node.get("start") or {}
+    end = node.get("end") or {}
+    anchors = {
+        "abs_col": start.get("abs_col"),
+        "abs_row": start.get("abs_row"),
+        "abs_col_end": end.get("abs_col"),
+        "abs_row_end": end.get("abs_row"),
+    }
     if node.get("external"):
-        return Edge(kind="external", source=source, target=f"[{node['external']}]{target}")
-    return Edge(kind="range", source=source, target=target)
+        return Edge(
+            kind="external",
+            source=source,
+            target=f"[{node['external']}]{target}",
+            **anchors,
+        )
+    return Edge(kind="range", source=source, target=target, **anchors)
 
 
 def _r1c1(col: int, row: int, abs_col: bool, abs_row: bool, ocol: int, orow: int) -> str:

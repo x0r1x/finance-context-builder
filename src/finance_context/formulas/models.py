@@ -14,6 +14,11 @@ class Edge(BaseModel):
     target: str | None = None
     unresolved: bool = False
     truncated: bool = False
+    abs_col: bool | None = None
+    abs_row: bool | None = None
+    abs_col_end: bool | None = None
+    abs_row_end: bool | None = None
+    named: bool = False
 
 
 class ParsedFormula(BaseModel):

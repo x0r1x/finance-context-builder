@@ -95,6 +95,11 @@ class CellEdge(NamedTuple):
     reason: str | None
     evidence: str | None
     range_ref: str | None
+    abs_col: bool | None = None
+    abs_row: bool | None = None
+    abs_col_end: bool | None = None
+    abs_row_end: bool | None = None
+    named: bool = False
 
 
 class MemberStatus(NamedTuple):
@@ -145,6 +150,11 @@ def expand_cell_edges(
                     classified.reason,
                     classified.evidence,
                     edge.target,
+                    edge.abs_col,
+                    edge.abs_row,
+                    edge.abs_col_end,
+                    edge.abs_row_end,
+                    edge.named,
                 )
             )
     return rows

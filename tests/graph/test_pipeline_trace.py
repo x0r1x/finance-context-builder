@@ -91,7 +91,7 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert "formula_ast" not in payload
     assert "precedents_rows" not in payload
     graph = json.loads(payload)
-    assert graph["schema_version"] == "1.3.0"
+    assert graph["schema_version"] == "1.4.0"
     assert graph["iterate"] is False
     assert graph["artifacts"]["edges_json"] == "graph-edges.json"
     assert graph["artifacts"]["dangling"] == "graph-dangling.json"
@@ -101,7 +101,31 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert "formula" not in graph.get("contract", {})
 
     edge_dump = json.loads((dest / "graph-edges.json").read_text(encoding="utf-8"))
-    assert any(e["source"] == "P&L!C13" and e["target"] == "P&L!C9" for e in edge_dump["edges"])
+    assert edge_dump["direction"] == "formula_depends_on_precedent"
+    ebitda_edge = next(
+        e for e in edge_dump["edges"] if e["source"] == "P&L!C13" and e["target"] == "P&L!C9"
+    )
+    assert ebitda_edge["formula_cell"]["node_id"] == "P&L!C13"
+    assert ebitda_edge["precedent"]["node_id"] == "P&L!C9"
+    assert ebitda_edge["formula_cell"]["sheet"] == "P&L"
+    assert ebitda_edge["formula_cell"]["address"] == "C13"
+    assert ebitda_edge["precedent"]["address"] == "C9"
+    assert ebitda_edge["formula_cell"]["period_id"]
+    assert ebitda_edge["reference_kind"] == "range_member"
+    assert ebitda_edge["relation_type"] == "formula_reference"
+    assert ebitda_edge["anchors"]["abs_col"] is False
+    assert ebitda_edge["anchors"]["abs_row"] is False
+    assert ebitda_edge["formula"] == "=SUM(C9:C12)"
+    assert ebitda_edge["resolution_status"] == "resolved"
+    assert ebitda_edge["edge_id"]
+    direct = next(
+        e
+        for e in edge_dump["edges"]
+        if e["source"] == "P&L!B9" and e["target"] == "Operation!C14"
+    )
+    assert direct["reference_kind"] == "direct"
+    assert direct["formula"] == "=Operation!C14"
+    assert direct["resolution_status"] == "resolved"
     formulas = json.loads((dest / "formulas.json").read_text(encoding="utf-8"))
     by_id = {cell["node_id"]: cell for cell in formulas["cells"]}
     assert by_id["P&L!C13"]["formula"] == "=SUM(C9:C12)"
@@ -180,7 +204,16 @@ def test_pipeline_classifies_index_range_holes(tmp_path: Path) -> None:
     assert "Input Assumptions!K8" in hole_ids
     hole = next(item for item in dangling["ids"] if item["node_id"] == "Input Assumptions!K8")
     assert hole["status"] == "empty"
+    assert "period_id" in hole
     assert hole["included_in_formula_semantics"] is True
+    edge_dump = json.loads((dest / "graph-edges.json").read_text(encoding="utf-8"))
+    empty_edge = next(
+        edge
+        for edge in edge_dump["edges"]
+        if edge["target"] == "Input Assumptions!K8"
+    )
+    assert empty_edge["resolution_status"] == "empty"
+    assert empty_edge["formula_cell"]["node_id"] == empty_edge["source"]
     source = {"node_id": "Input Assumptions!C8", "range": "Input Assumptions!J8:O8"}
     assert source in hole["sources"]
     assert all("empty range" not in warning for warning in doc.warnings)
@@ -287,7 +320,7 @@ def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
     assert doc.workbook.iterate is True
     assert doc.graph.iterate is True
     graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
-    assert graph["schema_version"] == "1.3.0"
+    assert graph["schema_version"] == "1.4.0"
     assert graph["iterate"] is True
     assert graph["cycles"]
     members = {m for cycle in graph["cycles"] for m in cycle["members"]}

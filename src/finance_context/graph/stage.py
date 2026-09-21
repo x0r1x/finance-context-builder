@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -76,6 +77,11 @@ def build_formula_graph(
                 e.get("reason"),
                 e.get("evidence"),
                 e.get("range_ref"),
+                _opt_bool(e.get("abs_col")),
+                _opt_bool(e.get("abs_row")),
+                _opt_bool(e.get("abs_col_end")),
+                _opt_bool(e.get("abs_row_end")),
+                bool(e.get("named")),
             )
             for e in enriched
         ],
@@ -86,7 +92,7 @@ def build_formula_graph(
     iterate = _workbook_iterate(dest_dir)
     doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
     write_json(dest_dir / "graph.json", doc.model_dump(mode="json", by_alias=True))
-    _write_audit_sidecars(dest_dir, cells, enriched)
+    _write_audit_sidecars(dest_dir, cells, enriched, period_of)
     unexpected = sum(1 for c in cycles if c.class_ == "unexpected")
     iterative = sum(1 for c in cycles if c.class_ == "iterative_ok")
     classes = doc.dangling_classes
@@ -295,12 +301,126 @@ def _empty_index_row(
     )
 
 
-def _write_audit_sidecars(dest_dir: Path, cells: list[dict], cell_edges: list[dict]) -> None:
+def _opt_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _endpoint(node_id: str, period_of: dict[str, str | None]) -> dict[str, object]:
+    parsed = parse_node_id(node_id)
+    if parsed is None:
+        return {
+            "sheet": None,
+            "address": None,
+            "period_id": period_of.get(node_id),
+            "node_id": node_id,
+        }
+    sheet, col_n, row_n = parsed
+    return {
+        "sheet": sheet,
+        "address": f"{index_to_col(col_n)}{row_n}",
+        "period_id": period_of.get(node_id),
+        "node_id": node_id,
+    }
+
+
+def _reference_kind(edge: dict) -> str:
+    kind = str(edge.get("kind") or "")
+    if kind == "external":
+        return "external"
+    if kind == "dynamic":
+        return "dynamic"
+    if edge.get("named"):
+        return "named"
+    if kind == "range":
+        return "range_member"
+    return "direct"
+
+
+def _resolution_status(edge: dict) -> str:
+    kind = str(edge.get("kind") or "")
+    if kind == "dynamic":
+        return "dynamic"
+    if kind == "external":
+        return "external"
+    status = str(edge.get("status") or "")
+    if status == "empty":
+        return "empty"
+    if edge.get("dangling") or edge.get("unresolved") or status == "unresolved":
+        return "unresolved"
+    if edge.get("truncated"):
+        return "truncated"
+    return "resolved"
+
+
+def _anchors(edge: dict) -> dict[str, bool | None]:
+    anchors: dict[str, bool | None] = {
+        "abs_col": _opt_bool(edge.get("abs_col")),
+        "abs_row": _opt_bool(edge.get("abs_row")),
+    }
+    if (
+        str(edge.get("kind") or "") == "range"
+        or edge.get("abs_col_end") is not None
+        or edge.get("abs_row_end") is not None
+    ):
+        anchors["abs_col_end"] = _opt_bool(edge.get("abs_col_end"))
+        anchors["abs_row_end"] = _opt_bool(edge.get("abs_row_end"))
+    return anchors
+
+
+def _edge_id(source: str, target: str, kind: str, range_ref: str) -> str:
+    payload = f"{source}\0{target}\0{kind}\0{range_ref}".encode()
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def _audit_edge(
+    edge: dict,
+    period_of: dict[str, str | None],
+    formula_by_node: dict[str, str],
+) -> dict[str, object]:
+    source = str(edge.get("source") or "")
+    target = str(edge.get("target") or "")
+    kind = str(edge.get("kind") or "")
+    range_ref = edge.get("range_ref")
+    return {
+        "edge_id": _edge_id(source, target, kind, str(range_ref or "")),
+        "direction": "formula_depends_on_precedent",
+        "formula_cell": _endpoint(source, period_of),
+        "precedent": _endpoint(target, period_of),
+        "source": source,
+        "target": target,
+        "relation_type": "formula_reference",
+        "reference_kind": _reference_kind(edge),
+        "anchors": _anchors(edge),
+        "formula": formula_by_node.get(source),
+        "resolution_status": _resolution_status(edge),
+        "kind": kind or None,
+        "dangling": bool(edge.get("dangling")),
+        "dangling_reason": edge.get("dangling_reason"),
+        "status": edge.get("status"),
+        "reason": edge.get("reason"),
+        "evidence": edge.get("evidence"),
+        "range_ref": range_ref,
+        "period_lag": edge.get("period_lag"),
+        "col_offset": edge.get("col_offset"),
+    }
+
+
+def _write_audit_sidecars(
+    dest_dir: Path,
+    cells: list[dict],
+    cell_edges: list[dict],
+    period_of: dict[str, str | None],
+) -> None:
     formula_cells = []
+    formula_by_node: dict[str, str] = {}
     for cell in cells:
         raw = cell.get("formula_raw")
         if not raw:
             continue
+        node_id = f"{cell['sheet']}!{cell['addr']}"
+        formula_by_node[node_id] = str(raw)
         ast = cell.get("ast_json")
         if isinstance(ast, str) and ast:
             try:
@@ -311,7 +431,7 @@ def _write_audit_sidecars(dest_dir: Path, cells: list[dict], cell_edges: list[di
             ast = None
         formula_cells.append(
             {
-                "node_id": f"{cell['sheet']}!{cell['addr']}",
+                "node_id": node_id,
                 "formula": raw,
                 "formula_template": cell.get("formula_template"),
                 "formula_ast": ast,
@@ -321,22 +441,10 @@ def _write_audit_sidecars(dest_dir: Path, cells: list[dict], cell_edges: list[di
     write_json(
         dest_dir / "graph-edges.json",
         {
+            "direction": "formula_depends_on_precedent",
             "edges": [
-                {
-                    "source": e.get("source"),
-                    "target": e.get("target"),
-                    "kind": e.get("kind"),
-                    "dangling": bool(e.get("dangling")),
-                    "dangling_reason": e.get("dangling_reason"),
-                    "status": e.get("status"),
-                    "reason": e.get("reason"),
-                    "evidence": e.get("evidence"),
-                    "range_ref": e.get("range_ref"),
-                    "period_lag": e.get("period_lag"),
-                    "col_offset": e.get("col_offset"),
-                }
-                for e in cell_edges
-            ]
+                _audit_edge(edge, period_of, formula_by_node) for edge in cell_edges
+            ],
         },
     )
     items: list[dict[str, object]] = []
@@ -369,6 +477,7 @@ def _write_audit_sidecars(dest_dir: Path, cells: list[dict], cell_edges: list[di
         items.append(
             {
                 "node_id": target,
+                "period_id": period_of.get(target),
                 "status": status,
                 "reason": edge.get("reason"),
                 "evidence": edge.get("evidence"),

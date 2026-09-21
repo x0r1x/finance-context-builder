@@ -24,7 +24,7 @@ def _write(path: Path, payload: dict) -> Path:
 
 def _ok_graph(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.3.0",
+        "schema_version": "1.4.0",
         "job_id": "job-1",
         "nodes": 3,
         "edges": 2,
@@ -245,12 +245,42 @@ def test_rejects_missing_iterate(tmp_path: Path) -> None:
     assert "iterate" in result.stderr
 
 
+def _ok_edge() -> dict:
+    return {
+        "edge_id": "edge001",
+        "direction": "formula_depends_on_precedent",
+        "formula_cell": {
+            "sheet": "P&L",
+            "address": "C13",
+            "period_id": "2024",
+            "node_id": "P&L!C13",
+        },
+        "precedent": {
+            "sheet": "P&L",
+            "address": "C9",
+            "period_id": "2024",
+            "node_id": "P&L!C9",
+        },
+        "source": "P&L!C13",
+        "target": "P&L!C9",
+        "relation_type": "formula_reference",
+        "reference_kind": "range_member",
+        "anchors": {"abs_col": False, "abs_row": False},
+        "formula": "=SUM(C9:C12)",
+        "resolution_status": "resolved",
+        "kind": "range",
+    }
+
+
 def test_accepts_audit_sidecars(tmp_path: Path) -> None:
     context = _write(tmp_path / "context.json", _ok_context())
     graph = _write(tmp_path / "graph.json", _ok_graph())
     edges = _write(
         tmp_path / "graph-edges.json",
-        {"edges": [{"source": "P&L!C13", "target": "P&L!C9", "kind": "range"}]},
+        {
+            "direction": "formula_depends_on_precedent",
+            "edges": [_ok_edge()],
+        },
     )
     dangling = _write(
         tmp_path / "graph-dangling.json",
@@ -260,6 +290,7 @@ def test_accepts_audit_sidecars(tmp_path: Path) -> None:
             "ids": [
                 {
                     "node_id": "P&L!K8",
+                    "period_id": "2024",
                     "class": "empty_range_member",
                     "status": "empty",
                     "reason": "actual_blank_cell",
@@ -269,6 +300,7 @@ def test_accepts_audit_sidecars(tmp_path: Path) -> None:
                 },
                 {
                     "node_id": "P&L!L8",
+                    "period_id": None,
                     "class": "empty_range_member",
                     "status": "empty",
                     "reason": "actual_blank_cell",
@@ -300,9 +332,35 @@ def test_accepts_audit_sidecars(tmp_path: Path) -> None:
     assert result.stdout.strip() == "P&L!C13"
 
 
+def test_rejects_swapped_edge_roles(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    swapped = _ok_edge()
+    swapped["source"] = "P&L!C9"
+    edges = _write(
+        tmp_path / "graph-edges.json",
+        {"direction": "formula_depends_on_precedent", "edges": [swapped]},
+    )
+
+    result = _run(str(context), str(graph), "--edges", str(edges))
+
+    assert result.returncode == 1
+    assert "formula_cell.node_id" in result.stderr
+
+
 def test_rejects_schema_1_2(tmp_path: Path) -> None:
     context = _write(tmp_path / "context.json", _ok_context())
     graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.2.0"))
+
+    result = _run(str(context), str(graph))
+
+    assert result.returncode == 1
+    assert "schema_version" in result.stderr
+
+
+def test_rejects_schema_1_3(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.3.0"))
 
     result = _run(str(context), str(graph))
 
@@ -321,6 +379,7 @@ def test_rejects_empty_status_with_parser_failure(tmp_path: Path) -> None:
             "ids": [
                 {
                     "node_id": "P&L!K8",
+                    "period_id": "2024",
                     "class": "empty_range_member",
                     "status": "empty",
                     "reason": "parser_resolution_failure",
