@@ -34,6 +34,10 @@ _PROSE_MIN = 80
 _MIN_VALUE_ROWS = 3
 _CHECK = re.compile(r"check|проверк|контроль|tie[- ]?out", re.IGNORECASE)
 _CAPS_SECTION = re.compile(r"^[A-Z0-9][A-Z0-9 &/,'-]{2,}$")
+_SELECTOR_LABEL = re.compile(
+    r"\bscenario\s+(chosen|selected|choice)\b|\b(chosen|selected)\s+scenario\b",
+    re.IGNORECASE,
+)
 
 
 def detect_params_block(
@@ -93,6 +97,11 @@ def attach_stub_cells(
     if tagged:
         row.cells = tagged
     return row
+
+
+def is_scenario_selector_label(text: str | None) -> bool:
+    blob = re.sub(r"[^a-z0-9]+", " ", (text or "").casefold()).strip()
+    return bool(blob and _SELECTOR_LABEL.search(blob))
 
 
 def unit_kind_from_text(text: str | None) -> str | None:
@@ -243,6 +252,9 @@ def _header_rows(
 ) -> tuple[set[int], int]:
     hits: list[int] = []
     for row_n in sorted(by_row):
+        left = _left_text(by_row[row_n], date1904)
+        if is_scenario_selector_label(left):
+            continue
         named = 0
         scenario_names = 0
         for cell in by_row[row_n]:
@@ -296,7 +308,11 @@ def _params_data_rows(
                 numeric_value = True
                 break
         check_row = bool(_CHECK.search(label)) or check_table
-        if _is_section_label(label, numeric_value):
+        selector = is_scenario_selector_label(label)
+        if selector:
+            tagged = [item for item in tagged if item.role != "scenario"]
+            kind = "flag"
+        elif _is_section_label(label, numeric_value):
             kind = "abstract"
         elif not numeric_value:
             if len(label) >= _PROSE_MIN:
@@ -365,6 +381,8 @@ def _axis_headers(
             col = int(cell["col"])
             text = _text(cell, date1904)
             if not text:
+                continue
+            if roles.get(col) == "scenario" and _is_number(text):
                 continue
             if _header_role(text) in {None, "label"} and roles.get(col) not in {
                 "scenario",
@@ -476,8 +494,6 @@ def _header_role(text: str) -> str | None:
     n = re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
     if n in _HEADER_ROLES:
         return _HEADER_ROLES[n]
-    if n.startswith("scenario") and "chosen" in n:
-        return "value"
     return None
 
 

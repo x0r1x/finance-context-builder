@@ -39,10 +39,17 @@ def render_markdown(
             lines.append(f"- {_cell(warning)}")
         lines.append("")
     by_block = _unmapped_by_block(doc.unmapped)
+    selectors = _selectors_by_block(doc.excluded, doc.unmapped)
     for block in doc.blocks:
         extra = by_block.pop(block.block_id, [])
         lines.extend(
-            _block_section(block, unmapped=extra, max_columns=max_columns, max_rows=max_rows)
+            _block_section(
+                block,
+                unmapped=extra,
+                selectors=selectors.get(block.block_id, []),
+                max_columns=max_columns,
+                max_rows=max_rows,
+            )
         )
     for block_id, leftover in by_block.items():
         lines.extend(
@@ -141,12 +148,29 @@ def _unmapped_by_block(rows: list[MetricSeries]) -> dict[str, list[MetricSeries]
     return grouped
 
 
+def _selectors_by_block(
+    excluded: list[MetricSeries], unmapped: list[MetricSeries]
+) -> dict[str, list[MetricSeries]]:
+    grouped: dict[str, list[MetricSeries]] = {}
+    seen: set[str] = set()
+    for series in [*excluded, *unmapped]:
+        if series.context_role != "scenario_selector":
+            continue
+        if series.row_key in seen:
+            continue
+        seen.add(series.row_key)
+        block_id = series.row_key.rsplit("|", 1)[-1] if "|" in series.row_key else series.row_key
+        grouped.setdefault(block_id, []).append(series)
+    return grouped
+
+
 def _block_section(
     block: FinancialBlock,
     *,
     unmapped: list[MetricSeries],
     max_columns: int,
     max_rows: int,
+    selectors: list[MetricSeries] | None = None,
 ) -> list[str]:
     headers = block.periods
     if max_columns > 0 and len(headers) > max_columns:
@@ -163,7 +187,14 @@ def _block_section(
     ]
     if getattr(block, "kind", "timeline") == "params":
         lines[0] = f"## Parameters / {block.sheet}"
-        lines.extend(_params_table(block, unmapped=unmapped, max_rows=max_rows))
+        lines.extend(
+            _params_table(
+                block,
+                unmapped=unmapped,
+                selectors=selectors or [],
+                max_rows=max_rows,
+            )
+        )
         return lines
     if not headers:
         return lines
@@ -187,8 +218,17 @@ def _params_table(
     *,
     unmapped: list[MetricSeries],
     max_rows: int,
+    selectors: list[MetricSeries] | None = None,
 ) -> list[str]:
-    rows = [*block.metrics, *unmapped]
+    skip = {series.row_key for series in (selectors or [])}
+    rows = [
+        *(selectors or []),
+        *[
+            series
+            for series in [*block.metrics, *unmapped]
+            if series.row_key not in skip
+        ],
+    ]
     if not rows:
         return []
     lines = [

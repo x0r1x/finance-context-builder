@@ -30,8 +30,8 @@
 | `graph-edges.json` | Полный список cell→cell рёбер для JSON-аудита |
 | `graph-dangling.json` | Все дыры без cap 32, с `class` (`empty_range_member` / `missing_cell` / `missing_sheet`) |
 | `formulas.json` | A1, template и AST только для ячеек с формулой |
-| `context.json` | Схема `1.6.0`: `timeline`, блоки с `values` (кэш + A1 `formula` + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats`, pointer `graph`, `context_role` / `secondary_concepts` |
-| `context.md` | Две метрики в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}`; `## Excluded`; row navigator без значений |
+| `context.json` | Схема `1.6.0`: `timeline`, блоки с `values` (кэш + A1 `formula` + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats`, pointer `graph`, `context_role` / `secondary_concepts` (selector сценария — `scenario_selector`) |
+| `context.md` | Две метрики в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}` (включая выбранный сценарий); `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 
 Между джобами: `$DATA_DIR/glossary.json` (выученные high-confidence пары) и `taxonomy_embeddings.npz` (кэш эмбеддингов концептов).

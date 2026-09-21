@@ -6,7 +6,7 @@ from collections import Counter
 from finance_context.context.timeline import annotate_block_periods, build_timeline
 from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
-from finance_context.layout.params import unit_kind_from_text
+from finance_context.layout.params import is_scenario_selector_label, unit_kind_from_text
 from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.eval import context_report_metrics, inventory_coverage_counts
 from finance_context.mapping.graph import cell_ref_row, row_adjacency, row_key_ref
@@ -124,10 +124,13 @@ def build_context(
                 label_path = list(layout_row.section_path)
                 if parent and parent not in label_path:
                     label_path = [*label_path, parent]
+                row_headers = value_headers
+                if is_scenario_selector_label(layout_row.label):
+                    row_headers = [h for h in value_headers if h.role == "value"]
                 fingerprint, exceptions, summary = _row_formula_and_numbers(
                     sheet_name=sheet.name,
                     row_num=layout_row.row,
-                    headers=value_headers,
+                    headers=row_headers,
                     by_addr=by_addr,
                 )
                 role_cells = _role_cells(
@@ -156,6 +159,7 @@ def build_context(
                     label=layout_row.label,
                     parent_label=parent,
                     section_path=list(layout_row.section_path),
+                    kind=layout_row.kind,
                     article_role=mapped.article_role if mapped else "database_like",
                 )
                 feeds_cfads = _row_feeds_cfads(
@@ -182,7 +186,7 @@ def build_context(
                         layout_row=layout_row,
                         layout_row_parent=parent,
                         mapped=mapped,
-                        headers=value_headers,
+                        headers=row_headers,
                         by_addr=by_addr,
                         date1904=bool(workbook_meta.get("date1904")),
                         label_path=label_path,
@@ -199,6 +203,15 @@ def build_context(
                     series_unit = series_unit or series.unit
                     if mapped is not None and mapped.disposition == "excluded":
                         excluded.append(series)
+                    elif layout_row.kind == "flag":
+                        excluded.append(
+                            series.model_copy(
+                                update={
+                                    "disposition": "excluded",
+                                    "exclusion_reason": series.exclusion_reason or "flag",
+                                }
+                            )
+                        )
                     elif mapped is None or mapped.concept_id is None:
                         unmapped.append(series)
                     else:
@@ -221,7 +234,11 @@ def build_context(
                         exclusion_reason=(
                             mapped.exclusion_reason
                             if mapped
-                            else ("noise" if is_noise_label(layout_row.label) else None)
+                            else (
+                                "noise"
+                                if is_noise_label(layout_row.label)
+                                else ("flag" if layout_row.kind == "flag" else None)
+                            )
                         ),
                         unit=series_unit,
                         formula_fingerprint=fingerprint,
@@ -334,6 +351,8 @@ def _inventory_disposition(mapped: MappedRow | None, layout_row: LayoutRow) -> s
         return "excluded"
     if layout_row.kind == "abstract":
         return "header"
+    if layout_row.kind == "flag":
+        return "excluded"
     return None
 
 

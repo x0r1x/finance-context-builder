@@ -140,7 +140,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 
 Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate), `statement`, `unit`, плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`) когда это видно из лейбла. Unknown сразу полезен даунстриму.
 
-Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, `disposition=header`, не concept.
+Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, `disposition=header`, не concept. Строка **Scenario Chosen** — `flag` / `context_role=scenario_selector`: каскад её не тегирует, но inventory обязан держать индекс (ячейка D).
 
 `inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `cells` (роли `value` / `unit` / `scenario` / `total` / `note`). Формулы и adjacency в inventory не копируются — см. [graph.md](graph.md). Period values не дублируются на inventory. Инвариант: `len(inventory) ==` сумма layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
 
