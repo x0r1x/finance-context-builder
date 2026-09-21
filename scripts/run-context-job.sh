@@ -45,6 +45,16 @@ if [[ "$edges_url" != "/v1/context-jobs/${job_id}/graph/edges" ]]; then
   echo "job status missing graph_edges_url for ${job_id}" >&2
   exit 1
 fi
+dangling_url="$(json_field "$RUN_DIR/job-status.json" graph_dangling_url)"
+if [[ "$dangling_url" != "/v1/context-jobs/${job_id}/graph-dangling.json" ]]; then
+  echo "job status missing graph_dangling_url for ${job_id}" >&2
+  exit 1
+fi
+formulas_url="$(json_field "$RUN_DIR/job-status.json" formulas_json_url)"
+if [[ "$formulas_url" != "/v1/context-jobs/${job_id}/formulas.json" ]]; then
+  echo "job status missing formulas_json_url for ${job_id}" >&2
+  exit 1
+fi
 
 require_get "/v1/context-jobs/${job_id}/context.json" "$RUN_DIR/context.json"
 require_get "/v1/context-jobs/${job_id}/graph.json" "$RUN_DIR/graph.json"
@@ -57,6 +67,9 @@ origin="$(
   python3 "$_COMMON_DIR/check-graph.py" \
     "$RUN_DIR/context.json" \
     "$RUN_DIR/graph.json" \
+    --edges "$RUN_DIR/graph-edges.json" \
+    --dangling "$RUN_DIR/graph-dangling.json" \
+    --formulas "$RUN_DIR/formulas.json" \
     --print-origin
 )"
 if [[ -n "$origin" ]]; then

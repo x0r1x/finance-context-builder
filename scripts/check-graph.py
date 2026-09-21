@@ -39,7 +39,9 @@ ARTIFACT_REQUIRED = (
     "index",
     "edges_json",
     "dangling",
+    "formulas",
 )
+GRAPH_SCHEMA_PREFIX = "1.1"
 
 
 def load_json(path: Path) -> Any:
@@ -81,6 +83,11 @@ def check_graph(graph: dict[str, Any]) -> list[str]:
     missing = [key for key in GRAPH_REQUIRED if key not in graph]
     if missing:
         errors.append("graph.json missing " + ", ".join(missing))
+    schema = str(graph.get("schema_version") or "")
+    if schema and not schema.startswith(GRAPH_SCHEMA_PREFIX):
+        errors.append(
+            f"graph.json schema_version must be {GRAPH_SCHEMA_PREFIX}.x, got {schema!r}"
+        )
     for key in ("nodes", "edges"):
         if key in graph and not isinstance(graph[key], int):
             errors.append(f"graph.json {key} must be an int count, not a list")
@@ -153,6 +160,47 @@ def check_trace(trace: dict[str, Any], origin: str) -> list[str]:
     return errors
 
 
+def check_edges_json(doc: Any) -> list[str]:
+    if not isinstance(doc, dict) or not isinstance(doc.get("edges"), list):
+        return ["graph-edges.json must be an object with an edges list"]
+    errors: list[str] = []
+    if _walk_keys(doc) & {"formula", "formula_ast", "formula_raw"}:
+        errors.append("graph-edges.json must not embed formula text or AST")
+    for edge in doc["edges"]:
+        if not isinstance(edge, dict) or not edge.get("source") or "target" not in edge:
+            errors.append("graph-edges.json entries need source and target")
+            break
+    return errors
+
+
+def check_dangling_json(doc: Any) -> list[str]:
+    if not isinstance(doc, dict):
+        return ["graph-dangling.json must be a JSON object"]
+    errors: list[str] = []
+    ids = doc.get("ids")
+    if not isinstance(ids, list):
+        errors.append("graph-dangling.json missing ids list")
+        return errors
+    if doc.get("count") != len(ids):
+        errors.append(
+            f"graph-dangling.json count={doc.get('count')!r} != len(ids)={len(ids)}"
+        )
+    if not isinstance(doc.get("by_class"), dict):
+        errors.append("graph-dangling.json missing by_class object")
+    return errors
+
+
+def check_formulas_json(doc: Any) -> list[str]:
+    if not isinstance(doc, dict) or not isinstance(doc.get("cells"), list):
+        return ["formulas.json must be an object with a cells list"]
+    errors: list[str] = []
+    for cell in doc["cells"]:
+        if not isinstance(cell, dict) or not cell.get("node_id") or not cell.get("formula"):
+            errors.append("formulas.json cells need node_id and formula")
+            break
+    return errors
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Check that context.json and graph.json keep one fact in one place."
@@ -166,6 +214,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--trace", type=Path, help="path to graph-trace.json")
     parser.add_argument("--origin", help="expected trace origin (required with --trace)")
+    parser.add_argument("--edges", type=Path, help="path to graph-edges.json")
+    parser.add_argument("--dangling", type=Path, help="path to graph-dangling.json")
+    parser.add_argument("--formulas", type=Path, help="path to formulas.json")
     return parser
 
 
@@ -197,6 +248,18 @@ def main() -> int:
         errors.extend(check_context(context))
         errors.extend(check_graph(graph))
         errors.extend(check_pointer_matches(context, graph))
+        for path, checker in (
+            (args.edges, check_edges_json),
+            (args.dangling, check_dangling_json),
+            (args.formulas, check_formulas_json),
+        ):
+            if path is None:
+                continue
+            try:
+                payload = load_json(path)
+            except (OSError, json.JSONDecodeError) as exc:
+                parser.error(str(exc))
+            errors.extend(checker(payload))
         if args.print_origin and not errors:
             print(pick_origin(context))
             return 0
