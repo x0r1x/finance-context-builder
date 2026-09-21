@@ -1,6 +1,6 @@
 # Financial context
 
-- Schema: `1.8.0`
+- Schema: `1.9.0`
 - Job: `job1`
 - Status: `succeeded`
 - Source: `simple.xlsx`
@@ -18,8 +18,8 @@
 
 ## CF / `CF!r1`
 
-Periods: grain=year 2. Metrics: 1. Unmapped: 0.
+Block: `CF!r1`. Kind: `timeline`. grain=year Periods: 2. Rows: 1.
 
-| Label | Concept | Ref | 2023 | 2024E |
-| --- | --- | --- | --- | --- |
-| Opening cash | bs.cash (high) | CF!A2 | 100 `CF!B2` | 110* `CF!C2` |
+| Label | Kind | Disposition | Concept | Unit | Formula | 2023 | 2024E |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Opening cash | fact | mapped | bs.cash (high) | money | =RC[-1] | 100 | 110 |

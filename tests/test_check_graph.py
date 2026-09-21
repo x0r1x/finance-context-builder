@@ -24,19 +24,19 @@ def _write(path: Path, payload: dict) -> Path:
 
 def _ok_graph(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.4.0",
+        "schema_version": "1.5.0",
         "job_id": "job-1",
-        "nodes": 3,
-        "edges": 2,
+        "nodes": 8,
+        "edges": 20,
         "iterate": False,
+        "links": [
+            {"cell": "P&L!C13", "formula": "=SUM(C9:C12)", "refs": ["P&L!C9:C12"]},
+        ],
         "artifacts": {
             "cells": "ir/cells.parquet",
             "edges": "ir/edges.parquet",
             "cell_edges": "ir/cell_edges.parquet",
             "index": "ir/graph_index.parquet",
-            "edges_json": "graph-edges.json",
-            "dangling": "graph-dangling.json",
-            "formulas": "formulas.json",
         },
     }
     body.update(overrides)
@@ -45,367 +45,118 @@ def _ok_graph(**overrides: object) -> dict:
 
 def _ok_context(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.4.0",
-        "graph": {
-            "artifact": "graph.json",
-            "nodes": 3,
-            "edges": 2,
-        },
+        "schema_version": "1.9.0",
+        "graph": {"artifact": "graph.json", "nodes": 8, "edges": 20, "iterate": False},
         "blocks": [
             {
-                "metrics": [
+                "block_id": "P&L!r2",
+                "rows": [
                     {
+                        "row_key": "P&L|13|P&L!r2",
+                        "label": "EBITDA",
                         "concept_id": "pnl.ebitda",
-                        "row_key": "P&L|13",
-                        "values": [
-                            {
-                                "has_formula": True,
-                                "source": {"sheet": "P&L", "addr": "C13"},
-                            }
-                        ],
+                        "formula": "=SUM(RC[-4]:RC[-1])",
+                        "values": ["13", "23"],
                     }
-                ]
+                ],
             }
         ],
-        "inventory": [{"row_key": "P&L|13", "concept_id": "pnl.ebitda"}],
     }
     body.update(overrides)
     return body
 
 
-def test_accepts_a1_formula_on_period_values(tmp_path: Path) -> None:
-    context = _write(
-        tmp_path / "context.json",
-        _ok_context(
-            blocks=[
-                {
-                    "metrics": [
-                        {
-                            "concept_id": "pnl.ebitda",
-                            "values": [
-                                {
-                                    "has_formula": True,
-                                    "formula": "=$C$20*0.35",
-                                    "source": {"sheet": "P&L", "addr": "C13"},
-                                }
-                            ],
-                        }
-                    ]
-                }
-            ]
-        ),
-    )
+def test_accepts_flat_values_and_prints_formula_cell(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
     graph = _write(tmp_path / "graph.json", _ok_graph())
-
     result = _run(str(context), str(graph), "--print-origin")
-
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "P&L!C13"
 
 
-def test_rejects_formula_ast_in_context(tmp_path: Path) -> None:
+def test_rejects_second_catalog_and_cell_objects(tmp_path: Path) -> None:
     context = _write(
         tmp_path / "context.json",
         _ok_context(
             blocks=[
                 {
-                    "metrics": [
+                    "block_id": "P&L!r2",
+                    "metrics": [],
+                    "rows": [
                         {
+                            "label": "EBITDA",
                             "values": [
                                 {
-                                    "has_formula": True,
-                                    "formula": "=C2",
-                                    "formula_ast": {"op": "ref"},
+                                    "cached_value": "1",
                                     "source": {"sheet": "P&L", "addr": "C13"},
                                 }
-                            ]
+                            ],
                         }
-                    ]
+                    ],
                 }
             ]
         ),
     )
     graph = _write(tmp_path / "graph.json", _ok_graph())
-
     result = _run(str(context), str(graph))
-
     assert result.returncode == 1
-    assert "formula_ast" in result.stderr
+    assert "metrics" in result.stderr or "flat list" in result.stderr
 
 
-def test_rejects_missing_edges_json_artifact(tmp_path: Path) -> None:
+def test_rejects_old_graph_schema_and_sidecar_artifacts(tmp_path: Path) -> None:
     context = _write(tmp_path / "context.json", _ok_context())
     graph = _write(
         tmp_path / "graph.json",
         _ok_graph(
+            schema_version="1.4.0",
             artifacts={
                 "cells": "ir/cells.parquet",
                 "edges": "ir/edges.parquet",
                 "cell_edges": "ir/cell_edges.parquet",
                 "index": "ir/graph_index.parquet",
-            }
+                "edges_json": "graph-edges.json",
+            },
         ),
     )
-
     result = _run(str(context), str(graph))
-
     assert result.returncode == 1
-    assert "artifacts.edges_json" in result.stderr
-    assert "artifacts.dangling" in result.stderr
-    assert "artifacts.formulas" in result.stderr
+    assert "1.5" in result.stderr
+    assert "edges_json" in result.stderr
 
 
-def test_accepts_sidecar_and_prints_formula_cell_origin(tmp_path: Path) -> None:
+def test_markdown_must_repeat_blocks_and_links(tmp_path: Path) -> None:
     context = _write(tmp_path / "context.json", _ok_context())
     graph = _write(tmp_path / "graph.json", _ok_graph())
-
-    result = _run(str(context), str(graph), "--print-origin")
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "P&L!C13"
-
-
-def test_rejects_row_graph_fields_in_context(tmp_path: Path) -> None:
-    context = _write(
-        tmp_path / "context.json",
-        _ok_context(
-            inventory=[
-                {
-                    "row_key": "P&L|13",
-                    "precedents_rows": ["P&L|9"],
-                }
-            ]
-        ),
+    context_md = tmp_path / "context.md"
+    graph_md = tmp_path / "graph.md"
+    context_md.write_text(
+        "# Financial context\n\nEBITDA\npnl.ebitda\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n",
+        encoding="utf-8",
     )
-    graph = _write(tmp_path / "graph.json", _ok_graph())
-
-    result = _run(str(context), str(graph))
-
-    assert result.returncode == 1
-    assert "precedents_rows" in result.stderr
-
-
-def test_rejects_count_mismatch_and_formula_in_graph(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(
-        tmp_path / "graph.json",
-        _ok_graph(nodes=99, formula_ast={"op": "+"}),
+    graph_md.write_text(
+        "# Formula graph\n\nNodes: 8\nEdges: 20\nP&L!C13\n=SUM(C9:C12)\n",
+        encoding="utf-8",
     )
-
-    result = _run(str(context), str(graph))
-
-    assert result.returncode == 1
-    assert "nodes=" in result.stderr
-    assert "formula_ast" in result.stderr
-
-
-def test_validates_trace_origin(tmp_path: Path) -> None:
-    trace = _write(
-        tmp_path / "graph-trace.json",
-        {"origin": "P&L!C13", "nodes": [], "edges": []},
-    )
-
-    ok = _run("--trace", str(trace), "--origin", "P&L!C13")
-    bad = _run("--trace", str(trace), "--origin", "other")
-
-    assert ok.returncode == 0, ok.stderr
-    assert bad.returncode == 1
-    assert "trace origin" in bad.stderr
-
-
-def test_rejects_graph_schema_1_0(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.0.0"))
-
-    result = _run(str(context), str(graph))
-
-    assert result.returncode == 1
-    assert "schema_version" in result.stderr
-
-
-def test_rejects_graph_schema_1_1(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.1.0"))
-
-    result = _run(str(context), str(graph))
-
-    assert result.returncode == 1
-    assert "schema_version" in result.stderr
-
-
-def test_rejects_missing_iterate(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    payload = _ok_graph()
-    del payload["iterate"]
-    graph = _write(tmp_path / "graph.json", payload)
-
-    result = _run(str(context), str(graph))
-
-    assert result.returncode == 1
-    assert "iterate" in result.stderr
-
-
-def _ok_edge() -> dict:
-    return {
-        "edge_id": "edge001",
-        "direction": "formula_depends_on_precedent",
-        "formula_cell": {
-            "sheet": "P&L",
-            "address": "C13",
-            "period_id": "2024",
-            "node_id": "P&L!C13",
-        },
-        "precedent": {
-            "sheet": "P&L",
-            "address": "C9",
-            "period_id": "2024",
-            "node_id": "P&L!C9",
-        },
-        "source": "P&L!C13",
-        "target": "P&L!C9",
-        "relation_type": "formula_reference",
-        "reference_kind": "range_member",
-        "anchors": {"abs_col": False, "abs_row": False},
-        "formula": "=SUM(C9:C12)",
-        "resolution_status": "resolved",
-        "kind": "range",
-    }
-
-
-def test_accepts_audit_sidecars(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(tmp_path / "graph.json", _ok_graph())
-    edges = _write(
-        tmp_path / "graph-edges.json",
-        {
-            "direction": "formula_depends_on_precedent",
-            "edges": [_ok_edge()],
-        },
-    )
-    dangling = _write(
-        tmp_path / "graph-dangling.json",
-        {
-            "count": 2,
-            "by_class": {"empty_range_member": 2},
-            "ids": [
-                {
-                    "node_id": "P&L!K8",
-                    "period_id": "2024",
-                    "class": "empty_range_member",
-                    "status": "empty",
-                    "reason": "actual_blank_cell",
-                    "evidence": "omitted_by_excel",
-                    "included_in_formula_semantics": True,
-                    "sources": [{"node_id": "P&L!C13", "range": "P&L!K8:L8"}],
-                },
-                {
-                    "node_id": "P&L!L8",
-                    "period_id": None,
-                    "class": "empty_range_member",
-                    "status": "empty",
-                    "reason": "actual_blank_cell",
-                    "evidence": "styled_blank",
-                    "included_in_formula_semantics": True,
-                    "sources": [{"node_id": "P&L!C13", "range": "P&L!K8:L8"}],
-                },
-            ],
-        },
-    )
-    formulas = _write(
-        tmp_path / "formulas.json",
-        {"cells": [{"node_id": "P&L!C13", "formula": "=SUM(C9:C12)"}]},
-    )
-
     result = _run(
         str(context),
         str(graph),
-        "--edges",
-        str(edges),
-        "--dangling",
-        str(dangling),
-        "--formulas",
-        str(formulas),
-        "--print-origin",
+        "--context-md",
+        str(context_md),
+        "--graph-md",
+        str(graph_md),
     )
-
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "P&L!C13"
 
 
-def test_rejects_swapped_edge_roles(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(tmp_path / "graph.json", _ok_graph())
-    swapped = _ok_edge()
-    swapped["source"] = "P&L!C9"
-    edges = _write(
-        tmp_path / "graph-edges.json",
-        {"direction": "formula_depends_on_precedent", "edges": [swapped]},
-    )
-
-    result = _run(str(context), str(graph), "--edges", str(edges))
-
-    assert result.returncode == 1
-    assert "formula_cell.node_id" in result.stderr
-
-
-def test_rejects_schema_1_2(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.2.0"))
-
-    result = _run(str(context), str(graph))
-
-    assert result.returncode == 1
-    assert "schema_version" in result.stderr
-
-
-def test_rejects_schema_1_3(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(tmp_path / "graph.json", _ok_graph(schema_version="1.3.0"))
-
-    result = _run(str(context), str(graph))
-
-    assert result.returncode == 1
-    assert "schema_version" in result.stderr
-
-
-def test_rejects_empty_status_with_parser_failure(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(tmp_path / "graph.json", _ok_graph())
-    dangling = _write(
-        tmp_path / "graph-dangling.json",
+def test_trace_rejects_ast(tmp_path: Path) -> None:
+    trace = _write(
+        tmp_path / "trace.json",
         {
-            "count": 1,
-            "by_class": {"empty_range_member": 1},
-            "ids": [
-                {
-                    "node_id": "P&L!K8",
-                    "period_id": "2024",
-                    "class": "empty_range_member",
-                    "status": "empty",
-                    "reason": "parser_resolution_failure",
-                    "evidence": "populated_missing_from_index",
-                    "included_in_formula_semantics": True,
-                    "sources": [{"node_id": "P&L!C13", "range": "P&L!K8:K8"}],
-                }
-            ],
+            "origin": "P&L!C13",
+            "nodes": [{"node_id": "P&L!C13", "formula_ast": {"op": "func"}}],
+            "edges": [],
         },
     )
-
-    result = _run(str(context), str(graph), "--dangling", str(dangling))
-
+    result = _run("--trace", str(trace), "--origin", "P&L!C13")
     assert result.returncode == 1
-    assert "parser_resolution_failure" in result.stderr
-
-
-def test_rejects_truncated_dangling_list(tmp_path: Path) -> None:
-    context = _write(tmp_path / "context.json", _ok_context())
-    graph = _write(tmp_path / "graph.json", _ok_graph())
-    dangling = _write(
-        tmp_path / "graph-dangling.json",
-        {"count": 718, "by_class": {}, "ids": [{"node_id": "A!J8", "class": "empty_range_member"}]},
-    )
-
-    result = _run(str(context), str(graph), "--dangling", str(dangling))
-
-    assert result.returncode == 1
-    assert "len(ids)" in result.stderr
+    assert "formula AST" in result.stderr

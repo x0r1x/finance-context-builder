@@ -13,12 +13,19 @@ def extract_unmapped(document: Any) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ValueError("input document must be a JSON object")
 
-    if isinstance(document.get("unmapped"), list):
+    if isinstance(document.get("blocks"), list):
+        rows = []
+        for block in document["blocks"]:
+            if isinstance(block, dict):
+                block_rows = block.get("rows")
+                if isinstance(block_rows, list):
+                    rows.extend(row for row in block_rows if isinstance(row, dict))
+    elif isinstance(document.get("unmapped"), list):
         rows = document["unmapped"]
     elif isinstance(document.get("rows"), list):
         rows = document["rows"]
     else:
-        raise ValueError("input document must contain a 'rows' or 'unmapped' array")
+        raise ValueError("input document must contain blocks, rows, or unmapped")
     if not all(isinstance(row, dict) for row in rows):
         raise ValueError("every extracted row must be a JSON object")
 
@@ -31,7 +38,7 @@ def _is_unmapped(row: dict[str, Any]) -> bool:
         return False
     mapping = row.get("mapping") if isinstance(row.get("mapping"), dict) else {}
     disposition = row.get("disposition") or mapping.get("disposition") or "abstained"
-    return disposition != "excluded"
+    return disposition == "abstained"
 
 
 def _compact(row: dict[str, Any]) -> dict[str, Any]:

@@ -68,15 +68,14 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
         layout=layout,
         mapping=MappingDocument(),
     )
-    selector = next(row for row in doc.inventory if row.label == "Scenario Chosen")
+    rows = [row for block in doc.blocks for row in block.rows]
+    selector = next(row for row in rows if row.label == "Scenario Chosen")
     assert selector.kind == "flag"
     assert selector.row == 3
     assert selector.context_role == "scenario_selector"
     assert selector.disposition == "excluded"
     assert any(cell.addr == "D3" and str(cell.cached_value) == "1" for cell in selector.cells)
-    excluded = next(series for series in doc.excluded if series.label == "Scenario Chosen")
-    assert excluded.context_role == "scenario_selector"
-    assert any(str(val.cached_value) == "1" and val.role == "value" for val in excluded.values)
+    assert "1" in selector.values
     rendered = render_markdown(doc)
     assert "## Parameters / Input Assumptions" in rendered
     assert "| Scenario Chosen |" in rendered

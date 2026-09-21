@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -13,6 +12,7 @@ from finance_context.graph.models import (
     ID_CAP,
     CircularityHint,
     CycleRecord,
+    FormulaLink,
     GraphContract,
     GraphDocument,
     IdCount,
@@ -91,8 +91,14 @@ def build_formula_graph(
     hints = circularity_hints(mapping, layout, index_rows, cycles)
     iterate = _workbook_iterate(dest_dir)
     doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
+    doc.links = _formula_links(cells, edges)
     write_json(dest_dir / "graph.json", doc.model_dump(mode="json", by_alias=True))
-    _write_audit_sidecars(dest_dir, cells, enriched, period_of)
+    from finance_context.render.graph import render_graph_markdown
+
+    markdown = render_graph_markdown(doc)
+    tmp = dest_dir / "graph.md.tmp"
+    tmp.write_text(markdown, encoding="utf-8")
+    tmp.replace(dest_dir / "graph.md")
     unexpected = sum(1 for c in cycles if c.class_ == "unexpected")
     iterative = sum(1 for c in cycles if c.class_ == "iterative_ok")
     classes = doc.dangling_classes
@@ -307,194 +313,28 @@ def _opt_bool(value: object) -> bool | None:
     return bool(value)
 
 
-def _endpoint(node_id: str, period_of: dict[str, str | None]) -> dict[str, object]:
-    parsed = parse_node_id(node_id)
-    if parsed is None:
-        return {
-            "sheet": None,
-            "address": None,
-            "period_id": period_of.get(node_id),
-            "node_id": node_id,
-        }
-    sheet, col_n, row_n = parsed
-    return {
-        "sheet": sheet,
-        "address": f"{index_to_col(col_n)}{row_n}",
-        "period_id": period_of.get(node_id),
-        "node_id": node_id,
-    }
-
-
-def _reference_kind(edge: dict) -> str:
-    kind = str(edge.get("kind") or "")
-    if kind == "external":
-        return "external"
-    if kind == "dynamic":
-        return "dynamic"
-    if edge.get("named"):
-        return "named"
-    if kind == "range":
-        return "range_member"
-    return "direct"
-
-
-def _resolution_status(edge: dict) -> str:
-    kind = str(edge.get("kind") or "")
-    if kind == "dynamic":
-        return "dynamic"
-    if kind == "external":
-        return "external"
-    status = str(edge.get("status") or "")
-    if status == "empty":
-        return "empty"
-    if edge.get("dangling") or edge.get("unresolved") or status == "unresolved":
-        return "unresolved"
-    if edge.get("truncated"):
-        return "truncated"
-    return "resolved"
-
-
-def _anchors(edge: dict) -> dict[str, bool | None]:
-    anchors: dict[str, bool | None] = {
-        "abs_col": _opt_bool(edge.get("abs_col")),
-        "abs_row": _opt_bool(edge.get("abs_row")),
-    }
-    if (
-        str(edge.get("kind") or "") == "range"
-        or edge.get("abs_col_end") is not None
-        or edge.get("abs_row_end") is not None
-    ):
-        anchors["abs_col_end"] = _opt_bool(edge.get("abs_col_end"))
-        anchors["abs_row_end"] = _opt_bool(edge.get("abs_row_end"))
-    return anchors
-
-
-def _edge_id(source: str, target: str, kind: str, range_ref: str) -> str:
-    payload = f"{source}\0{target}\0{kind}\0{range_ref}".encode()
-    return hashlib.sha256(payload).hexdigest()[:16]
-
-
-def _audit_edge(
-    edge: dict,
-    period_of: dict[str, str | None],
-    formula_by_node: dict[str, str],
-) -> dict[str, object]:
-    source = str(edge.get("source") or "")
-    target = str(edge.get("target") or "")
-    kind = str(edge.get("kind") or "")
-    range_ref = edge.get("range_ref")
-    return {
-        "edge_id": _edge_id(source, target, kind, str(range_ref or "")),
-        "direction": "formula_depends_on_precedent",
-        "formula_cell": _endpoint(source, period_of),
-        "precedent": _endpoint(target, period_of),
-        "source": source,
-        "target": target,
-        "relation_type": "formula_reference",
-        "reference_kind": _reference_kind(edge),
-        "anchors": _anchors(edge),
-        "formula": formula_by_node.get(source),
-        "resolution_status": _resolution_status(edge),
-        "kind": kind or None,
-        "dangling": bool(edge.get("dangling")),
-        "dangling_reason": edge.get("dangling_reason"),
-        "status": edge.get("status"),
-        "reason": edge.get("reason"),
-        "evidence": edge.get("evidence"),
-        "range_ref": range_ref,
-        "period_lag": edge.get("period_lag"),
-        "col_offset": edge.get("col_offset"),
-    }
-
-
-def _write_audit_sidecars(
-    dest_dir: Path,
-    cells: list[dict],
-    cell_edges: list[dict],
-    period_of: dict[str, str | None],
-) -> None:
-    formula_cells = []
+def _formula_links(cells: list[dict], formula_edges: list[dict]) -> list[FormulaLink]:
     formula_by_node: dict[str, str] = {}
     for cell in cells:
         raw = cell.get("formula_raw")
         if not raw:
             continue
-        node_id = f"{cell['sheet']}!{cell['addr']}"
-        formula_by_node[node_id] = str(raw)
-        ast = cell.get("ast_json")
-        if isinstance(ast, str) and ast:
-            try:
-                ast = json.loads(ast)
-            except json.JSONDecodeError:
-                pass
-        else:
-            ast = None
-        formula_cells.append(
-            {
-                "node_id": node_id,
-                "formula": raw,
-                "formula_template": cell.get("formula_template"),
-                "formula_ast": ast,
-            }
-        )
-    write_json(dest_dir / "formulas.json", {"cells": formula_cells})
-    write_json(
-        dest_dir / "graph-edges.json",
-        {
-            "direction": "formula_depends_on_precedent",
-            "edges": [
-                _audit_edge(edge, period_of, formula_by_node) for edge in cell_edges
-            ],
-        },
-    )
-    items: list[dict[str, object]] = []
-    seen: set[tuple[str, str]] = set()
-    by_class: Counter[str] = Counter()
-    by_status: Counter[str] = Counter()
-    sources: dict[tuple[str, str], list[dict[str, str]]] = {}
-    source_seen: dict[tuple[str, str], set[tuple[str, str]]] = {}
-    for edge in cell_edges:
-        klass = str(edge.get("dangling_reason") or "")
-        target = str(edge.get("target") or "")
-        status = str(edge.get("status") or "")
-        if not klass or not target or not status:
-            continue
-        key = (target, klass)
-        bucket = sources.setdefault(key, [])
-        seen_sources = source_seen.setdefault(key, set())
+        formula_by_node[f"{cell['sheet']}!{cell['addr']}"] = str(raw)
+    grouped: dict[str, list[str]] = {}
+    for edge in formula_edges:
         source = str(edge.get("source") or "")
-        range_ref = str(edge.get("range_ref") or "")
-        pair = (source, range_ref)
-        if source and pair not in seen_sources:
-            seen_sources.add(pair)
-            bucket.append({"node_id": source, "range": range_ref})
-        if key in seen:
+        if not source:
             continue
-        seen.add(key)
-        by_class[klass] += 1
-        by_status[status] += 1
-        included: bool | str = True if status == "empty" else "unknown"
-        items.append(
-            {
-                "node_id": target,
-                "period_id": period_of.get(target),
-                "status": status,
-                "reason": edge.get("reason"),
-                "evidence": edge.get("evidence"),
-                "included_in_formula_semantics": included,
-                "class": klass,
-                "sources": bucket,
-            }
-        )
-    write_json(
-        dest_dir / "graph-dangling.json",
-        {
-            "count": len(items),
-            "by_class": dict(by_class),
-            "by_status": dict(by_status),
-            "ids": items,
-        },
-    )
+        refs = grouped.setdefault(source, [])
+        target = edge.get("target")
+        if target and str(target) not in refs:
+            refs.append(str(target))
+    for node in formula_by_node:
+        grouped.setdefault(node, [])
+    return [
+        FormulaLink(cell=cell, formula=formula_by_node.get(cell), refs=refs)
+        for cell, refs in sorted(grouped.items())
+    ]
 
 
 def _enrich_edge(

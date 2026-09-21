@@ -2,7 +2,7 @@
 
 **finance-context-builder** — read-only сервис, который превращает Excel-модели cash-flow (`.xlsx` / `.xlsm`) в версионированный JSON и Markdown-контекст для людей и LLM.
 
-Формулы не пересчитываются: в артефакты попадают кэшированные значения Excel. Контент полный: в `context.json` есть **все** строки layout (`inventory`). Таксономия — аннотация `concept_id`, не воронка: неверный тег хуже, чем `unknown`. Unknown-строка остаётся в контексте с иерархией подписи, соседями, формулой и top-3 кандидатами.
+Формулы не пересчитываются: в артефакты попадают кэшированные значения Excel. Контент полный: каждая строка layout живёт один раз внутри своего блока. Таксономия — аннотация `concept_id`, не воронка: неверный тег хуже, чем `unknown`. Unknown-строка остаётся в блоке с иерархией подписи, соседями, формулой и top-3 кандидатами. JSON и Markdown — одни и те же факты.
 
 Запуск, Docker и API — в [README](../README.md). Технический снимок слоёв — в [architecture.md](architecture.md) (EN).
 
@@ -11,7 +11,7 @@
 | Блоки, оси периодов, лейблы строк | [layout.md](layout.md) |
 | Каскад маппинга, сигналы, пороги, glossary | [mapping.md](mapping.md) |
 | Таксономия: поля, семейства id, как добавлять смысл | [taxonomy.md](taxonomy.md) |
-| Cell-level граф формул, циклы, trace | [graph.md](graph.md) |
+| Граф формул, циклы, trace | [graph.md](graph.md) |
 | Разбор `unknown` / `unmapped.json` после прогона | [review.md](review.md) |
 
 ## Что на входе и на выходе
@@ -26,13 +26,9 @@
 | `ir/` | Шаблоны, AST, `edges.parquet` (как в формуле) и `cell_edges.parquet` (развёрнутые ячейки) |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `graph.json` | Сводка графа schema `1.4.0`: counts, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes`, пути к parquet и JSON (без формул и полного списка рёбер) |
-| `graph-edges.json` | Самодостаточный список cell→cell рёбер: `formula_cell` / `precedent`, `period_id`, A1 `formula`, `anchors`, `reference_kind`, `resolution_status` |
-| `graph-dangling.json` | Пустые и неразрешённые адреса без cap 32: `period_id`, `status`, `reason`, `evidence`, `sources` |
-| `formulas.json` | A1, template и AST только для ячеек с формулой |
-| `context.json` | Схема `1.8.0`: `timeline`, блоки с `values` (кэш + A1 `formula` + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph` (`iterate` + counts), `concept_id` как отчётный слот, `semantic_identity` / `reporting_roles` / `cash_semantics`, `context_role` / `secondary_concepts`, hints `unit`/`currency`/`scale`/`sign` |
-| `context.md` | Completeness, concept coverage и `mapping_quality` в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}` (включая выбранный сценарий); `## Excluded`; row navigator без значений |
-| `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
+| `graph.json` / `graph.md` | Схема `1.5.0`: counts cell-level parquet, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, A1-формула, входы; диапазон не развёрнут). AST и cell-edges остаются в `ir/` |
+| `context.json` / `context.md` | Схема `1.9.0`: паспорт, `timeline` (единственное место фаз и флагов), каждый блок и каждая строка (`disposition`, `concept_id`, одна формула, ряд значений по оси). Без `inventory` / `unmapped` / `excluded`. `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph`. Markdown повторяет те же блоки, строки и значения без обрезки |
+| `unmapped.json` | Abstained-строки из `blocks[].rows` (после `run.sh`, в корне прогона) |
 
 Между джобами: `$DATA_DIR/glossary.json` (выученные high-confidence пары) и `taxonomy_embeddings.npz` (кэш эмбеддингов концептов).
 
@@ -42,11 +38,11 @@
 
 Каскад маппинга резолвит `fact` / `flag` / `helper`. Если детектор не собрал ни timeline, ни params (проза / навигация) или не нашёл лейблы статей, fact-строк нет: статус может быть `succeeded` при пустом контексте — это layout, не таксономия. Подробности: [layout.md](layout.md).
 
-Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они в `inventory` без периодных рядов. Значения периодной оси — у `fact` / `flag` / `helper` timeline-блоков; у params — role-tagged ячейки (`value` / `unit` / `scenario` / `total` / `note`). Формулы и adjacency — в IR / [graph.md](graph.md), не в inventory. Даунстрим в отчёте видит лейбл, `label_path`, соседей ±2, отпечаток формулы, A1-текст на периодных ячейках, hints, кандидатов и кэш по периодам. AST и полный граф — в IR / [graph.md](graph.md).
+Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они строки своего блока (`disposition=header` у abstract). Значения по оси — массив на строке `fact` / `flag` / `helper`; у params — роли колонок и значения только в value-колонках. Формула строки одна. Cell-level adjacency и AST — в IR / [graph.md](graph.md). Даунстрим видит лейбл, `label_path`, соседей ±2, формулу, hints, кандидатов и кэш. Пустой `unmapped.json` не значит, что у каждой строки блока есть `concept_id`.
 
 Опциональны embeddings и chat (OpenAI-совместимый endpoint, по умолчанию LM Studio). Без них остаются structure + lexical + glossary, затем `unknown` с кандидатами.
 
-Две метрики в отчёте не смешивать: **content completeness** должна быть 100% (`len(inventory) ==` число layout-строк); **concept coverage** может быть ниже 100% честно (phasing 0.2/0.8 остаётся unknown).
+Две метрики в отчёте не смешивать: **content completeness** должна быть 100% (число строк блоков равно числу layout-строк принятых блоков); **concept coverage** может быть ниже 100% честно (phasing 0.2/0.8 остаётся unknown).
 
 ## Статусы джоба
 
@@ -58,7 +54,7 @@
 | `degraded` | Как `needs_input`, но LLM и embeddings не настроены |
 | `failed` | Ошибка пайплайна, usable context нет |
 
-`needs_input` — не падение: `context.json`, sidecar’ы графа и `context.md` всё равно отдаются.
+`needs_input` — не падение: `context.json`, `context.md`, `graph.json` и `graph.md` всё равно отдаются.
 
 ## Два рычага покрытия
 

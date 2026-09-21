@@ -176,11 +176,7 @@ class Pipeline:
         )
         _write_sorted_json(dest_dir / "context.json", doc.model_dump(mode="json"))
         set_stage("render", status="running")
-        markdown = render_markdown(
-            doc,
-            max_columns=self.settings.markdown_max_columns,
-            max_rows=self.settings.markdown_max_rows,
-        )
+        markdown = render_markdown(doc)
         (dest_dir / "context.md").parent.mkdir(parents=True, exist_ok=True)
         tmp = dest_dir / "context.md.tmp"
         tmp.write_text(markdown, encoding="utf-8")

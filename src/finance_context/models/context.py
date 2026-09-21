@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.8.0"
+SCHEMA_VERSION = "1.9.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -33,18 +33,6 @@ class MappingEvidence(BaseModel):
     evidence: str | None = None
     disposition: str = "mapped"
     exclusion_reason: str | None = None
-
-
-class PeriodValue(BaseModel):
-    period_key: str
-    header_text: str
-    role: str
-    cached_value: str | None = None
-    has_formula: bool = False
-    number_format: str | None = None
-    source: SourceRef
-    missing_cached_value: bool = False
-    formula: str | None = None
 
 
 class CandidateHit(BaseModel):
@@ -102,64 +90,38 @@ class RoleCell(BaseModel):
     cached_value: str | None = None
 
 
-class MetricSeries(BaseModel):
-    row_key: str
-    label: str
-    parent_label: str | None = None
-    concept_id: str | None = None
-    article_role: str
-    unit: str | None = None
-    mapping: MappingEvidence
-    values: list[PeriodValue] = Field(default_factory=list)
-    source: SourceRef
-    disposition: str = "mapped"
-    exclusion_reason: str | None = None
-    kind: str | None = None
-    indent: int = 0
-    hidden: bool = False
-    check_row: bool = False
-    label_path: list[str] = Field(default_factory=list)
-    neighbors: list[str] = Field(default_factory=list)
-    formula_fingerprint: str | None = None
-    formula_exceptions: list[str] = Field(default_factory=list)
-    numeric_summary: NumericSummary | None = None
-    candidates: list[CandidateHit] = Field(default_factory=list)
-    hints: RowHints = Field(default_factory=RowHints)
-    cells: list[RoleCell] = Field(default_factory=list)
-    context_role: str | None = None
-    secondary_concepts: list[str] = Field(default_factory=list)
-    semantic_identity: SemanticIdentity | None = None
-    reporting_roles: list[ReportingRole] = Field(default_factory=list)
-    cash_semantics: CashSemantics | None = None
+class BlockRow(BaseModel):
+    """One layout line. Lives only inside its block."""
 
-
-class InventoryRow(BaseModel):
     row_key: str
     sheet: str
     row: int
-    kind: str
     label: str
     parent_label: str | None = None
     label_path: list[str] = Field(default_factory=list)
+    kind: str
+    disposition: str | None = None
+    exclusion_reason: str | None = None
+    concept_id: str | None = None
+    article_role: str | None = None
+    unit: str | None = None
+    formula: str | None = None
+    formula_exceptions: list[str] = Field(default_factory=list)
     indent: int = 0
     hidden: bool = False
     check_row: bool = False
     neighbors: list[str] = Field(default_factory=list)
-    concept_id: str | None = None
-    disposition: str | None = None
-    exclusion_reason: str | None = None
-    unit: str | None = None
-    formula_fingerprint: str | None = None
-    formula_exceptions: list[str] = Field(default_factory=list)
     numeric_summary: NumericSummary | None = None
     candidates: list[CandidateHit] = Field(default_factory=list)
     hints: RowHints = Field(default_factory=RowHints)
     cells: list[RoleCell] = Field(default_factory=list)
+    mapping: MappingEvidence | None = None
     context_role: str | None = None
     secondary_concepts: list[str] = Field(default_factory=list)
     semantic_identity: SemanticIdentity | None = None
     reporting_roles: list[ReportingRole] = Field(default_factory=list)
     cash_semantics: CashSemantics | None = None
+    values: list[str | None] = Field(default_factory=list)
 
 
 class ModelPeriod(BaseModel):
@@ -184,7 +146,7 @@ class FinancialBlock(BaseModel):
     grain: str | None = None
     kind: str = "timeline"
     periods: list[dict[str, Any]] = Field(default_factory=list)
-    metrics: list[MetricSeries] = Field(default_factory=list)
+    rows: list[BlockRow] = Field(default_factory=list)
     relations: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -244,7 +206,7 @@ class MappingQuality(BaseModel):
 class MappingStats(BaseModel):
     """Layout coverage plus semantic quality of accepted concepts.
 
-    `unmapped` on the document is abstained series, not inventory without concept_id.
+    `unmapped_series` counts abstained fact lines inside blocks.
     `concept_coverage` is the share of annotatable rows with an accepted concept.
     `mapping_quality` scores label, semantic, unit, temporal, and formula checks.
     """
@@ -266,9 +228,6 @@ class ContextDocument(BaseModel):
     workbook: WorkbookRaw
     timeline: WorkbookTimeline | None = None
     blocks: list[FinancialBlock] = Field(default_factory=list)
-    unmapped: list[MetricSeries] = Field(default_factory=list)
-    excluded: list[MetricSeries] = Field(default_factory=list)
-    inventory: list[InventoryRow] = Field(default_factory=list)
     mapping_stats: MappingStats = Field(default_factory=MappingStats)
     graph: GraphPointer = Field(default_factory=GraphPointer)
     warnings: list[str] = Field(default_factory=list)

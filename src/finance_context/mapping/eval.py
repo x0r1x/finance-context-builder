@@ -180,12 +180,15 @@ class QualityRow:
 
 
 def quality_rows_from_context(inventory: list, blocks: list | None = None) -> list[QualityRow]:
-    """Mapped inventory rows, with scores and formulas taken from block series."""
+    """Mapped block rows. `inventory` is the same line list when blocks are omitted."""
     series_by_key: dict[str, Any] = {}
     block_of: dict[str, str] = {}
     for block in blocks or []:
         block_id = getattr(block, "block_id", "") or ""
-        for metric in getattr(block, "metrics", []) or []:
+        lines = list(getattr(block, "rows", None) or []) or list(
+            getattr(block, "metrics", None) or []
+        )
+        for metric in lines:
             key = getattr(metric, "row_key", None)
             if key:
                 series_by_key[key] = metric
@@ -209,12 +212,16 @@ def quality_rows_from_context(inventory: list, blocks: list | None = None) -> li
         if cash is None and series is not None:
             cash = getattr(series, "cash_semantics", None)
         values = list(getattr(series, "values", None) or getattr(row, "values", None) or [])
-        fingerprint = getattr(row, "formula_fingerprint", None)
+        fingerprint = getattr(row, "formula", None) or getattr(row, "formula_fingerprint", None)
         if not fingerprint and series is not None:
-            fingerprint = getattr(series, "formula_fingerprint", None)
+            fingerprint = getattr(series, "formula", None) or getattr(
+                series, "formula_fingerprint", None
+            )
         sheet = getattr(row, "sheet", None) or ""
         if not sheet and series is not None:
-            sheet = getattr(getattr(series, "source", None), "sheet", "") or ""
+            sheet = getattr(series, "sheet", None) or getattr(
+                getattr(series, "source", None), "sheet", ""
+            ) or ""
         label_path = getattr(row, "label_path", None) or getattr(series, "label_path", None) or []
         parent = getattr(row, "parent_label", None) or getattr(series, "parent_label", None)
         if mapping is not None:
@@ -496,13 +503,22 @@ def _is_rate_concept(concept_id: str, concept: Any) -> bool:
 
 
 def _formula_cells(row: QualityRow) -> list[Any]:
-    return [value for value in row.values if getattr(value, "has_formula", False)]
+    marked = [value for value in row.values if getattr(value, "has_formula", False)]
+    if marked:
+        return marked
+    if row.formula_fingerprint and row.values and all(
+        not hasattr(value, "has_formula") for value in row.values
+    ):
+        return [row.formula_fingerprint]
+    return []
 
 
 def _formula_ok(row: QualityRow) -> bool:
     cells = _formula_cells(row)
     if not row.formula_fingerprint or not cells:
         return False
+    if all(isinstance(value, str) for value in cells):
+        return True
     return all(getattr(value, "formula", None) for value in cells)
 
 

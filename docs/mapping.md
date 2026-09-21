@@ -2,23 +2,23 @@
 
 Маппинг — retrieve-and-align, не классификация на закрытом множестве. Таксономия — **словарь**, не воронка контента: строка не выбрасывается, если концепт не найден. Резолвер принимает `concept_id` только выше порога; иначе fact остаётся `unknown`, но в context остаются подпись, hints, соседи, формула и top-3 кандидатов.
 
-Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.8.0`.
+Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.9.0`.
 
 Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [граф](graph.md), [разбор unmapped](review.md), [архитектура](architecture.md).
 
 ## Что участвует
 
-Layout помечает тело блока видами строк. Каскад резолвит **`fact` / `flag` / `helper`**. `abstract` и `index` в `mapping.json` не попадают, но **все** layout-строки пишутся в `context.inventory`. Как собираются блоки и лейблы — [layout.md](layout.md). Если fact-строк нет, каскад не виноват: сначала ось **или** params-шейп и зона лейблов.
+Layout помечает тело блока видами строк. Каскад резолвит **`fact` / `flag` / `helper`**. `abstract` и `index` в `mapping.json` не попадают, но **все** layout-строки пишутся в `blocks[].rows` своего блока. Как собираются блоки и лейблы — [layout.md](layout.md). Если fact-строк нет, каскад не виноват: сначала ось **или** params-шейп и зона лейблов.
 
 | kind | Роль |
 | --- | --- |
-| `fact` | Кандидат на `concept_id`; периодные значения в timeline-блоках / unmapped, либо role-tagged ячейки в params |
-| `abstract` | Заголовок секции, родитель следующих fact; только inventory |
-| `index` | Счётчики вроде `Week #`; только inventory |
+| `fact` | Кандидат на `concept_id`; периодные значения в строке timeline-блока, либо role-tagged ячейки в params |
+| `abstract` | Заголовок секции, родитель следующих fact; `disposition=header` на строке блока |
+| `index` | Счётчики вроде `Week #`; строка своего блока |
 | `helper` | Check / tie-out / плейсхолдер Spare; excluded |
 | `flag` | 0/1 тайминг и сценарии; excluded, не financial unknown |
 
-Лейблы из `is_noise_label` (`Dashboard`, `Assumptions`, `* chart`, `* bridge`, …) **не создают** строк в `mapping.json`, но остаются в inventory (без периодного ряда).
+Лейблы из `is_noise_label` (`Dashboard`, `Assumptions`, `* chart`, `* bridge`, …) **не создают** строк в `mapping.json`, но остаются строкой блока (без периодного ряда).
 
 `needs_input` считается только по вопросам на fact-строках.
 
@@ -32,7 +32,7 @@ Layout помечает тело блока видами строк. Каска�
 4. Нерезолвнутые fact + включённый EmbedPort → dense retrieve по лейблам концептов, затем снова fuse/decide вместе с lexical/glossary/structure.
 5. Оставшиеся + ChatPort → rerank короткого списка. Может вернуть `unknown`. **Не имеет права изобрести id** вне таксономии.
 6. Финальный проход только `structure` (подтянуть то, что открылось после embed/chat).
-7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph-edges.json`, `GET .../graph/edges` и trace, не в `context.blocks[].relations`.
+7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph.json` `links` и trace, не в `context.blocks[].relations`.
 
 Повторная загрузка той же книги на HTTP пересобирает compile, layout, mapping и context; parse (`raw/`) переиспользуется. Сам `mapping.json` при повторном CLI-прогоне в тот же каталог **скипается**, если файл уже лежит на диске.
 
@@ -112,7 +112,7 @@ Prune отбрасывает:
 | `noise` | `is_noise_label` (если строка всё же попала в контекст) |
 | `technical_bridge` | в лейбле `from mf` / `circular` / `helper`, кроме `pre-revolver` |
 
-Excluded: `concept_id = null`, `source = rule`, вопросов нет, в `context.excluded`. В `unmapped.json` и в секцию Unmapped Markdown **не** попадают.
+Excluded: `concept_id = null`, `source = rule`, вопросов нет, `disposition=excluded` на той же строке блока. В `unmapped.json` **не** попадают.
 
 KPI и расчётные бизнес-строки (`article_role = calculation`) — обычные fact: их нужно мапить или честно abstain, не exclude.
 
@@ -124,7 +124,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 | `excluded` | null | нет |
 | `abstained` | null | вопрос; в MD Concept = `unknown`; candidates и hints сохраняются |
 
-В `inventory` у `abstract` стоит `disposition=header` (это не отказ маппинга и не `unmapped`).
+У `abstract` на строке блока стоит `disposition=header` (это не отказ маппинга и не abstain).
 
 При abstain в `exclusion_reason` пишется причина отказа резолвера (это не exclude):
 
@@ -136,13 +136,13 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 | `facet_mismatch` | Иначе (кандидаты не прошли decide) |
 | `calculation_conflict` | Наблюдённый SUM/diff противоречит объявленному `calculations` и keep-rule не сработал |
 
-## Hints и inventory
+## Hints и строки блока
 
-Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate / stock), `statement`, `unit` (`money` / `count` / `rate` / `years`), `currency` (`GBP` / `EUR` / `USD` / `RUB`; те же обработчики: символ, ISO, локальное сокращение — `£`/`gbp`/`pound`/`фунт`, `€`/`eur`/`euro`/`евро`, `$`/`usd`/`dollar`/`долл`, `₽`/`rub`/`руб`/`РУБ`), `scale` (`unit` / `k` / `m` / `bn`), `sign` (`inflow` / `outflow` / `stock`), плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`). `k£` в лейбле или колонке Units → `unit=money`, `currency=GBP`, `scale=k` (не `null`). `%` и percent-format → `rate`; голый `per year` без `%` тоже `rate`. Mapping `value_kind` для prune по-прежнему `count` на длительностях; в context длительность — `years`. Schema `1.8.0`, поля hints аддитивны. Смысл, роль и денежная семантика — отдельные поля, см. выше. Unknown сразу полезен даунстриму.
+Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate / stock), `statement`, `unit` (`money` / `count` / `rate` / `years`), `currency` (`GBP` / `EUR` / `USD` / `RUB`; те же обработчики: символ, ISO, локальное сокращение — `£`/`gbp`/`pound`/`фунт`, `€`/`eur`/`euro`/`евро`, `$`/`usd`/`dollar`/`долл`, `₽`/`rub`/`руб`/`РУБ`), `scale` (`unit` / `k` / `m` / `bn`), `sign` (`inflow` / `outflow` / `stock`), плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`). `k£` в лейбле или колонке Units → `unit=money`, `currency=GBP`, `scale=k` (не `null`). `%` и percent-format → `rate`; голый `per year` без `%` тоже `rate`. Mapping `value_kind` для prune по-прежнему `count` на длительностях; в context длительность — `years`. Schema `1.9.0`, поля hints аддитивны. Смысл, роль и денежная семантика — отдельные поля, см. выше. Unknown сразу полезен даунстриму.
 
-Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, `disposition=header`, не concept. Строка **Scenario Chosen** — `flag` / `context_role=scenario_selector`: каскад её не тегирует, но inventory обязан держать индекс (ячейка D).
+Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, `disposition=header`, не concept. Строка **Scenario Chosen** — `flag` / `context_role=scenario_selector`: каскад её не тегирует, но строка блока обязана держать индекс (ячейка D).
 
-`inventory` — лёгкие записи на **каждую** layout-строку: `kind`, `indent`, `hidden`, `label_path`, `neighbors`, `formula_fingerprint` / exceptions, `numeric_summary`, `cells` (роли `value` / `unit` / `scenario` / `total` / `note`). Формулы и adjacency в inventory не копируются — см. [graph.md](graph.md). Period values не дублируются на inventory. Инвариант: `len(inventory) ==` сумма layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
+Строка блока — запись на **каждую** layout-строку: `kind`, `disposition`, `indent`, `hidden`, `label_path`, `neighbors`, одна `formula` / exceptions, `numeric_summary`, `cells` (роли `value` / `unit` / `scenario` / `total` / `note`), `values` — кэш или `null` по оси блока. Cell-level adjacency и AST — в IR, см. [graph.md](graph.md). Инвариант: сумма `blocks[].rows` равна числу layout-строк **принятых** блоков. Отброшенные Cover / Shortcuts в знаменатель не входят. Нарушение — warning `Content completeness N/M`.
 
 Top-3 `candidates` пишутся и при abstain: если prune опустошил fused-список, в context остаются сырые proposals.
 
@@ -158,7 +158,7 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 
 Выбранный `concept_id` — **отчётный концепт** этой строки (его ждут расчёты и gold). Он не исчерпывает смысл. Один лейбл живёт на разных уровнях: P&L `Gross revenues` → `pnl.revenue`; CFS `Gross Revenues` → `cf.receipts`, участие в CFADS — роль `cfads_input`, не концепт `cf.cfads`. `Equity` на балансе → `bs.equity`; `Equity (k£)` в Sources → `cf.equity_issue` плюс роль `cf.sources`.
 
-На строке context (`1.8.0`) и в `MappedRow` три поля. Кандидаты top-3 остаются сырыми сигналами и **не** считаются взаимозаменяемыми концептами.
+На строке context (`1.9.0`) и в `MappedRow` три поля. Кандидаты top-3 остаются сырыми сигналами и **не** считаются взаимозаменяемыми концептами.
 
 | Поле | Что это |
 | --- | --- |
@@ -183,14 +183,14 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 
 `finance_context.mapping.eval`:
 
-- **content completeness** — `inventory` / layout rows; должна быть 1.0;
+- **content completeness** — строки блоков / layout rows; должна быть 1.0;
 - **concept coverage** — доля annotatable (mapped + abstained, без excluded) с принятым концептом. Это покрытие слота `concept_id`, не семантическая полнота; при нуле abstain значение равно 1.0;
 - **mapping quality** — проверки принятых строк, объект `mapping_stats.mapping_quality`:
   - `label_coverage` — непустой лейбл совпадает с `labels` / `aliases` / `exact_labels` концепта или evidence содержит `label matches`;
   - `semantic_coverage` — есть `semantic_identity` и `cash_semantics`; на CFS revenue/opex/tax/interest стоят денежные близнецы, а identity хранит экономический `pnl.*`, если лейбл его называет; `bs.*` — stock и время `stock|bop|eop`; capitalized interest — `noncash`; `cf.repayment` — outflow и stock `bs.debt` в том же блоке; начисление и выплата одного family не схлопываются в один `concept_id`;
   - `unit_coverage` — `hints.unit` совпадает с единицей концепта (`*_rate` и `facets.unit=rate` → rate, `pnl.volume` → count, денежные pnl/cf/bs → money, длительности → years);
   - `temporal_coverage` — opening → `bop`, closing → `eop`, balance/`bs.*` не `flow`, rate-концепт → `rate`;
-  - `formula_coverage` — среди строк с `has_formula` есть fingerprint и непустой A1 `formula` (нет таких строк → 1.0);
+  - `formula_coverage` — у строки с формулой есть fingerprint (`formula`); ряд значений — кэш, отдельный A1 на ячейку в context не копируется (нет таких строк → 1.0);
   - `confidence_threshold_passed` — нет провалов semantic-проверок, у каждой принятой строки `confidence=high` и `score >= 0.82`.
 - **selective risk** — ошибки среди **принятых** маппингов (abstain в риск не входит);
 - **abstain rate** и **risk–coverage** кривая — качество права отказаться.

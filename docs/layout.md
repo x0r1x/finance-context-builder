@@ -44,7 +44,7 @@ Formula-copy (одинаковый `formula_template` в соседних кол
 
 Лейбл строки — первая непустая ячейка span; `indent` — позиция в span плюс ведущие пробелы. У `LayoutRow` свой `label_col` (адрес в context), если статья не в `block.label_col`.
 
-Виды строк (`fact` / `abstract` / `index` / `helper` / `flag`) — как в [architecture.md](architecture.md). `index` только если по оси идёт `0|1, 2, 3, …` и лейбл счётчика (`week`, `#`, …) **или** в периодных ячейках нет формул. Ветка «все числа ≤ 12» снята: денежные 1..12 с формулами остаются `fact`. Плейсхолдеры `Spare` / `None` — `helper`. Сценарии (`Live Case`, `Mid case`, `Low case`, `* choice`, `Applied (real terms)`, `Covenant breach`) и ряды, где по оси есть и 0, и 1, — `flag`; каскад их excluded, значения остаются в `context.excluded`, сами строки — в inventory.
+Виды строк (`fact` / `abstract` / `index` / `helper` / `flag`) — как в [architecture.md](architecture.md). `index` только если по оси идёт `0|1, 2, 3, …` и лейбл счётчика (`week`, `#`, …) **или** в периодных ячейках нет формул. Ветка «все числа ≤ 12» снята: денежные 1..12 с формулами остаются `fact`. Плейсхолдеры `Spare` / `None` — `helper`. Сценарии (`Live Case`, `Mid case`, `Low case`, `* choice`, `Applied (real terms)`, `Covenant breach`) и ряды, где по оси есть и 0, и 1, — `flag`; каскад их excluded, значения остаются на той же строке блока (`disposition=excluded`).
 
 ## Формулы и ось
 
@@ -64,7 +64,7 @@ Compile помечает формулу `unparsed`, если токен не р�
 
 Шапка params может быть многострочной: имена сценариев и `Units` / `Values` / `Active` / `Notes` собираются по колонкам. Неизвестные текстовые имена над числовыми колонками → роль `scenario`. Колонка **active value** выбирается по числу кросс-листовых dependents в `ir/edges.parquet`; лексикон шапки — подсказка.
 
-Строка **Scenario Chosen** / selected scenario — не шапка колонок, а control (`kind=flag`). Индекс живого сценария (часто `D3`) остаётся в inventory и `excluded` с `context_role=scenario_selector`; колонка D — выбранное значение, F:… — матрица кейсов. Числа `1..n` в строке селектора не перезаписывают имена оси (`Base Case`). Лейбл селектора не голосует за колонку `value`, иначе `label_col` съезжает вправо.
+Строка **Scenario Chosen** / selected scenario — не шапка колонок, а control (`kind=flag`). Индекс живого сценария (часто `D3`) остаётся строкой блока с `disposition=excluded` и `context_role=scenario_selector`; колонка D — выбранное значение, F:… — матрица кейсов. Числа `1..n` в строке селектора не перезаписывают имена оси (`Base Case`). Лейбл селектора не голосует за колонку `value`, иначе `label_col` съезжает вправо.
 
 Капс-строка без значений → `abstract`. Таблица `Check` / `Result` → `helper` / `check_row`; exclusion сам снимет её с тегирования.
 
@@ -79,7 +79,7 @@ Compile помечает формулу `unparsed`, если токен не р�
 | 0 блоков | Нет календарной оси, нет `Year`+`1..n`, нет длинного `1..n` на formula-copy, и шейп не params (проза / nav) |
 | Много блоков по 2 периода, 0 fact | Ложные Start/End не отфильтровались; или лейблы правее `label_col` |
 | Блоки есть, fact = 0 | Зона лейблов / skip пустого `label_col` |
-| Нет `D3` / Scenario Chosen в inventory | Control-строка попала в header params (`params.py`) |
+| Нет `D3` / Scenario Chosen в строках блока | Control-строка попала в header params (`params.py`) |
 | `Unparsed formula` на шапке или SUM | `formulas/engine.py`, не таксономия |
 
 Публичный корпус: Packt (индекс лет + `Input Assumptions` как params) и RVI (календарь + секции в нескольких колонках; `Top Shortcuts` не даёт строк). Gold: `tests/fixtures/mapping/*_dispositions.yaml`. `three-statement.xlsx` в lock может быть недоступен — тест корпуса skip.

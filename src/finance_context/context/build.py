@@ -4,7 +4,7 @@ import re
 from collections import Counter
 
 from finance_context.context.measure import parse_measure
-from finance_context.context.timeline import annotate_block_periods, build_timeline
+from finance_context.context.timeline import build_timeline
 from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
 from finance_context.layout.params import is_scenario_selector_label
@@ -30,22 +30,19 @@ from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
+    BlockRow,
     CandidateHit,
     CashSemantics,
     ContextDocument,
     FinancialBlock,
     GraphPointer,
-    InventoryRow,
     MappingEvidence,
     MappingStats,
-    MetricSeries,
     NumericSummary,
-    PeriodValue,
     ReportingRole,
     RoleCell,
     RowHints,
     SemanticIdentity,
-    SourceRef,
     WorkbookRaw,
 )
 
@@ -108,9 +105,6 @@ def build_context(
                 warnings.append(f"Unparsed formula at {cell['sheet']}!{cell['addr']}")
 
     blocks: list[FinancialBlock] = []
-    unmapped: list[MetricSeries] = []
-    excluded: list[MetricSeries] = []
-    inventory: list[InventoryRow] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
             grain = infer_grain([h.period_key for h in block.axis.headers])
@@ -127,7 +121,7 @@ def build_context(
                 }
                 for header in value_headers
             ]
-            metrics: list[MetricSeries] = []
+            rows: list[BlockRow] = []
             parent_by_row = {r.row: r.label for r in block.rows}
             labeled = [r.label for r in block.rows if r.label]
             for index, layout_row in enumerate(block.rows):
@@ -207,87 +201,32 @@ def build_context(
                     secondary_concepts=secondary,
                 )
                 candidates = _candidates_for(mapped)
-                if layout_row.kind in _SERIES_KINDS and not (
-                    layout_row.kind == "fact" and is_noise_label(layout_row.label)
-                ):
-                    series = _series_for_row(
-                        sheet_name=sheet.name,
-                        block_id=block.block_id,
-                        label_col=layout_row.label_col or block.label_col,
-                        layout_row=layout_row,
-                        layout_row_parent=parent,
-                        mapped=mapped,
-                        headers=row_headers,
-                        by_addr=by_addr,
-                        date1904=bool(workbook_meta.get("date1904")),
-                        label_path=label_path,
-                        neighbors=neighbors,
-                        formula_fingerprint=fingerprint,
-                        formula_exceptions=exceptions,
-                        numeric_summary=summary,
-                        candidates=candidates,
-                        hints=hints,
-                        role_cells=role_cells,
-                        context_role=context_role,
-                        secondary_concepts=secondary,
-                        semantic_identity=identity,
-                        reporting_roles=reporting_roles,
-                        cash_semantics=cash,
-                    )
-                    series_unit = series_unit or series.unit
-                    if mapped is not None and mapped.disposition == "excluded":
-                        excluded.append(series)
-                    elif layout_row.kind == "flag":
-                        excluded.append(
-                            series.model_copy(
-                                update={
-                                    "disposition": "excluded",
-                                    "exclusion_reason": series.exclusion_reason or "flag",
-                                }
-                            )
-                        )
-                    elif mapped is None or mapped.concept_id is None:
-                        unmapped.append(series)
-                    else:
-                        metrics.append(series)
-                inventory.append(
-                    InventoryRow(
-                        row_key=row_key,
-                        sheet=sheet.name,
-                        row=layout_row.row,
-                        kind=layout_row.kind,
-                        label=layout_row.label,
-                        parent_label=mapped.parent_label if mapped else parent,
-                        label_path=label_path,
-                        indent=layout_row.indent,
-                        hidden=layout_row.hidden,
-                        check_row=layout_row.check_row,
-                        neighbors=neighbors,
-                        concept_id=mapped.concept_id if mapped else None,
-                        disposition=_inventory_disposition(mapped, layout_row),
-                        exclusion_reason=(
-                            mapped.exclusion_reason
-                            if mapped
-                            else (
-                                "noise"
-                                if is_noise_label(layout_row.label)
-                                else ("flag" if layout_row.kind == "flag" else None)
-                            )
-                        ),
-                        unit=series_unit,
-                        formula_fingerprint=fingerprint,
-                        formula_exceptions=exceptions,
-                        numeric_summary=summary,
-                        candidates=candidates,
-                        hints=hints,
-                        cells=role_cells,
-                        context_role=context_role,
-                        secondary_concepts=secondary,
-                        semantic_identity=identity,
-                        reporting_roles=reporting_roles,
-                        cash_semantics=cash,
-                    )
+                line = _row_for_layout(
+                    sheet_name=sheet.name,
+                    block_id=block.block_id,
+                    layout_row=layout_row,
+                    layout_row_parent=parent,
+                    mapped=mapped,
+                    headers=value_headers,
+                    value_headers=row_headers,
+                    by_addr=by_addr,
+                    date1904=bool(workbook_meta.get("date1904")),
+                    label_path=label_path,
+                    neighbors=neighbors,
+                    formula=fingerprint,
+                    formula_exceptions=exceptions,
+                    numeric_summary=summary,
+                    candidates=candidates,
+                    hints=hints,
+                    role_cells=role_cells,
+                    series_unit=series_unit,
+                    context_role=context_role,
+                    secondary_concepts=secondary,
+                    semantic_identity=identity,
+                    reporting_roles=reporting_roles,
+                    cash_semantics=cash,
                 )
+                rows.append(line)
             blocks.append(
                 FinancialBlock(
                     block_id=block.block_id,
@@ -296,23 +235,21 @@ def build_context(
                     grain=grain,
                     kind=getattr(block, "kind", "timeline"),
                     periods=periods,
-                    metrics=metrics,
+                    rows=rows,
                     relations=_relations_for_block(mapping.relations, block.block_id),
                 )
             )
 
+    document_rows = [row for block in blocks for row in block.rows]
     expected_rows = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
-    if not inventory_completeness(layout, inventory):
+    if len(document_rows) != expected_rows:
         warnings.append(
-            f"Content completeness {len(inventory)}/{expected_rows} layout rows"
+            f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
         )
     timeline, timeline_warnings = build_timeline(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
     warnings.extend(timeline_warnings)
-    if timeline is not None:
-        for block in blocks:
-            block.periods = annotate_block_periods(block.periods, timeline)
     if mapping.questions:
         warnings.append(f"{len(mapping.questions)} row(s) need mapping review")
     if missing_cached:
@@ -321,7 +258,7 @@ def build_context(
         warnings.append(f"{missing_cached} formula cell(s) missing cached values{extra}")
     if graph is not None and graph.dangling:
         warnings.append(
-            f"Graph: {graph.dangling} unresolved formula targets (see graph-dangling.json)"
+            f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
         )
 
     sheets = [
@@ -353,26 +290,28 @@ def build_context(
         warnings=warnings[:50],
         questions=[q.model_dump(mode="json") for q in mapping.questions],
     )
-    counts = inventory_coverage_counts(inventory)
+    counts = inventory_coverage_counts(document_rows)
+    unmapped_series = sum(
+        1
+        for row in document_rows
+        if row.kind in _SERIES_KINDS and row.disposition == "abstained"
+    )
     stats = context_report_metrics(
         layout_rows=expected_rows,
-        inventory_rows=len(inventory),
+        inventory_rows=len(document_rows),
         mapped=int(counts["mapped"]),
         abstained=int(counts["abstained"]),
         excluded=int(counts["excluded"]),
         abstract=int(counts["abstract"]),
-        unmapped_series=len(unmapped),
+        unmapped_series=unmapped_series,
     )
-    stats["mapping_quality"] = assess_mapping_quality(inventory, blocks)
+    stats["mapping_quality"] = assess_mapping_quality(document_rows, blocks)
     return ContextDocument(
         schema_version=SCHEMA_VERSION,
         meta=meta,
         workbook=workbook,
         timeline=timeline,
         blocks=blocks,
-        unmapped=unmapped,
-        excluded=excluded,
-        inventory=inventory,
         mapping_stats=MappingStats.model_validate(stats),
         graph=graph or GraphPointer(),
         warnings=warnings[:50],
@@ -391,52 +330,45 @@ def _inventory_disposition(mapped: MappedRow | None, layout_row: LayoutRow) -> s
     return None
 
 
-def _series_for_row(
+def _row_for_layout(
     *,
     sheet_name: str,
     block_id: str,
-    label_col: int,
     layout_row: LayoutRow,
     layout_row_parent: str | None,
     mapped: MappedRow | None,
     headers: list,
+    value_headers: list,
     by_addr: dict[tuple[str, int, int], dict],
     date1904: bool,
     label_path: list[str],
     neighbors: list[str],
-    formula_fingerprint: str | None,
+    formula: str | None,
     formula_exceptions: list[str],
     numeric_summary: NumericSummary | None,
     candidates: list[CandidateHit],
     hints: RowHints,
     role_cells: list[RoleCell],
+    series_unit: str | None,
     context_role: str | None = None,
     secondary_concepts: list[str] | None = None,
     semantic_identity: SemanticIdentity | None = None,
     reporting_roles: list[ReportingRole] | None = None,
     cash_semantics: CashSemantics | None = None,
-) -> MetricSeries:
+) -> BlockRow:
     row_num = layout_row.row
-    label_addr = format_addr(label_col, row_num)
-    source = SourceRef(sheet=sheet_name, addr=label_addr, row=row_num, col=label_col)
-    method = _METHOD.get(mapped.source, "unmapped") if mapped else "unmapped"
-    evidence = MappingEvidence(
-        method=method,  # type: ignore[arg-type]
-        score=mapped.score if mapped else None,
-        confidence=mapped.confidence if mapped else "low",
-        alternatives=list(mapped.alternatives) if mapped else [],
-        source=mapped.source if mapped else None,
-        evidence=mapped.evidence if mapped else None,
-        disposition=mapped.disposition if mapped else "abstained",
-        exclusion_reason=mapped.exclusion_reason if mapped else None,
-    )
-    values: list[PeriodValue] = []
+    keep_cols = {header.col for header in value_headers}
+    values: list[str | None] = []
+    formats: list[str] = []
     for header in headers:
+        if header.col not in keep_cols:
+            values.append(None)
+            continue
         cell = by_addr.get((sheet_name, row_num, header.col))
-        addr = format_addr(header.col, row_num)
-        formula = (cell or {}).get("formula_raw")
-        cached = (cell or {}).get("cached_value")
-        fmt = (cell or {}).get("number_format")
+        cached = None if cell is None else cell.get("cached_value")
+        fmt = None if cell is None else cell.get("number_format")
+        if fmt:
+            formats.append(str(fmt))
         displayed = display_cell_text(
             cached if cached is not None else None,
             fmt,
@@ -444,23 +376,11 @@ def _series_for_row(
         )
         if displayed is not None:
             cached = displayed
-        values.append(
-            PeriodValue(
-                period_key=header.period_key,
-                header_text=header.text,
-                role=header.role,
-                cached_value=cached,
-                has_formula=bool(formula),
-                number_format=(cell or {}).get("number_format"),
-                source=SourceRef(sheet=sheet_name, addr=addr, row=row_num, col=header.col),
-                missing_cached_value=bool(formula) and cached in (None, ""),
-                formula=str(formula) if formula else None,
-            )
-        )
+        text = None if cached in (None, "") else str(cached)
+        values.append(text)
     unit_from_cell = next(
         (item.cached_value for item in role_cells if item.role == "unit"), None
     )
-    formats = [item.number_format for item in values if item.number_format]
     concept_id = mapped.concept_id if mapped else None
     measure = parse_measure(
         unit_from_cell,
@@ -472,7 +392,7 @@ def _series_for_row(
         time_semantics=hints.time_semantics,
         direction=_concept_direction(concept_id),
     )
-    unit = measure.unit or hints.unit
+    unit = measure.unit or hints.unit or series_unit
     hints = hints.model_copy(
         update={
             "unit": unit,
@@ -481,25 +401,40 @@ def _series_for_row(
             "sign": hints.sign or measure.sign,
         }
     )
-    return MetricSeries(
+    disposition, exclusion_reason = _row_disposition(mapped, layout_row)
+    method = _METHOD.get(mapped.source, "unmapped") if mapped else "unmapped"
+    evidence = None
+    if mapped is not None or layout_row.kind in _SERIES_KINDS:
+        evidence = MappingEvidence(
+            method=method,  # type: ignore[arg-type]
+            score=mapped.score if mapped else None,
+            confidence=mapped.confidence if mapped else "low",
+            alternatives=list(mapped.alternatives) if mapped else [],
+            source=mapped.source if mapped else None,
+            evidence=mapped.evidence if mapped else None,
+            disposition=disposition or "abstained",
+            exclusion_reason=exclusion_reason,
+        )
+    return BlockRow(
         row_key=mapped.row_key if mapped else f"{sheet_name}|{row_num}|{block_id}",
+        sheet=sheet_name,
+        row=row_num,
         label=mapped.label if mapped else layout_row.label,
         parent_label=mapped.parent_label if mapped else layout_row_parent,
-        concept_id=mapped.concept_id if mapped else None,
-        article_role=mapped.article_role if mapped else "database_like",
+        concept_id=concept_id,
+        article_role=mapped.article_role if mapped else None,
         unit=unit,
         mapping=evidence,
         values=values,
-        source=source,
-        disposition=mapped.disposition if mapped else "abstained",
-        exclusion_reason=mapped.exclusion_reason if mapped else None,
+        disposition=disposition,
+        exclusion_reason=exclusion_reason,
         kind=layout_row.kind,
         indent=layout_row.indent,
         hidden=layout_row.hidden,
         check_row=layout_row.check_row,
         label_path=label_path,
         neighbors=neighbors,
-        formula_fingerprint=formula_fingerprint,
+        formula=formula,
         formula_exceptions=formula_exceptions,
         numeric_summary=numeric_summary,
         candidates=candidates,
@@ -510,6 +445,32 @@ def _series_for_row(
         semantic_identity=semantic_identity,
         reporting_roles=list(reporting_roles or []),
         cash_semantics=cash_semantics,
+    )
+
+
+def _row_disposition(
+    mapped: MappedRow | None, layout_row: LayoutRow
+) -> tuple[str | None, str | None]:
+    noise = layout_row.kind == "fact" and is_noise_label(layout_row.label)
+    if noise:
+        return "excluded", "noise"
+    if layout_row.kind in _SERIES_KINDS:
+        if mapped is not None and mapped.disposition == "excluded":
+            return "excluded", mapped.exclusion_reason
+        if layout_row.kind == "flag":
+            reason = mapped.exclusion_reason if mapped and mapped.exclusion_reason else "flag"
+            return "excluded", reason
+        if mapped is None or mapped.concept_id is None:
+            reason = mapped.exclusion_reason if mapped else None
+            disposition = mapped.disposition if mapped and mapped.disposition else "abstained"
+            if disposition == "excluded":
+                return "excluded", reason
+            return "abstained", reason
+        return mapped.disposition, mapped.exclusion_reason
+    return _inventory_disposition(mapped, layout_row), (
+        mapped.exclusion_reason
+        if mapped
+        else ("flag" if layout_row.kind == "flag" else None)
     )
 
 
@@ -725,11 +686,6 @@ def _row_formula_and_numbers(
             n=len(numbers),
         )
     return fingerprint, exceptions[:8], summary
-
-
-def inventory_completeness(layout: Layout, inventory: list[InventoryRow]) -> bool:
-    expected = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
-    return len(inventory) == expected
 
 
 def _role_cells(

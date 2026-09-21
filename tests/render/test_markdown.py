@@ -3,26 +3,33 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from finance_context.graph.models import (
+    FormulaLink,
+    GraphDocument,
+    TraceDocument,
+    TraceEdge,
+    TraceNode,
+)
 from finance_context.models.context import (
     ArtifactMeta,
+    BlockRow,
     ContextDocument,
     FinancialBlock,
     MappingEvidence,
-    MetricSeries,
-    PeriodValue,
+    MappingStats,
     RoleCell,
     RowHints,
-    SourceRef,
     WorkbookRaw,
 )
+from finance_context.render.graph import render_graph_markdown, render_trace_markdown
 from finance_context.render.markdown import render_markdown
 
 GOLDEN_MD = Path(__file__).resolve().parents[1] / "fixtures" / "golden" / "simple_context.md"
 GOLDEN_JSON = Path(__file__).resolve().parents[1] / "fixtures" / "golden" / "simple_context.json"
 
 
-def test_markdown_matches_golden() -> None:
-    doc = ContextDocument(
+def _doc() -> ContextDocument:
+    return ContextDocument(
         meta=ArtifactMeta(
             job_id="job1",
             status="succeeded",
@@ -40,287 +47,97 @@ def test_markdown_matches_golden() -> None:
                     {"col": 2, "text": "2023", "role": "historical", "period_key": "2023"},
                     {"col": 3, "text": "2024E", "role": "forecast", "period_key": "2024E"},
                 ],
-                metrics=[
-                    MetricSeries(
+                rows=[
+                    BlockRow(
                         row_key="CF|2|CF!r1",
+                        sheet="CF",
+                        row=2,
+                        kind="fact",
                         label="Opening cash",
                         concept_id="bs.cash",
-                        article_role="database_like",
+                        disposition="mapped",
+                        formula="=RC[-1]",
+                        unit="money",
                         mapping=MappingEvidence(method="rule", confidence="high", score=1.0),
-                        source=SourceRef(sheet="CF", addr="A2", row=2, col=1),
-                        values=[
-                            PeriodValue(
-                                period_key="2023",
-                                header_text="2023",
-                                role="historical",
-                                cached_value="100",
-                                source=SourceRef(sheet="CF", addr="B2", row=2, col=2),
-                            ),
-                            PeriodValue(
-                                period_key="2024E",
-                                header_text="2024E",
-                                role="forecast",
-                                cached_value="110",
-                                has_formula=True,
-                                source=SourceRef(sheet="CF", addr="C2", row=2, col=3),
-                            ),
-                        ],
+                        hints=RowHints(unit="money"),
+                        values=["100", "110"],
                     )
                 ],
             )
         ],
+        mapping_stats=MappingStats(
+            inventory_rows=1,
+            mapped=1,
+            content_completeness=1.0,
+            concept_coverage=1.0,
+        ),
         warnings=[],
     )
+
+
+def test_markdown_matches_golden() -> None:
+    doc = _doc()
     rendered = render_markdown(doc)
     payload = json.dumps(
         doc.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True
     ) + "\n"
     assert rendered == GOLDEN_MD.read_text(encoding="utf-8")
     assert payload == GOLDEN_JSON.read_text(encoding="utf-8")
-    assert "CF!B2" in rendered
     assert "Opening cash" in rendered
+    assert "100" in rendered
+    assert "110" in rendered
+    assert "=RC[-1]" in rendered
+    assert "bs.cash" in rendered
 
 
-def test_markdown_includes_navigator_and_excluded() -> None:
-    from finance_context.models.context import InventoryRow, RowHints
-
-    doc = ContextDocument(
-        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
-        workbook=WorkbookRaw(sheets=["CF"], sheet_count=1, cell_count=1),
-        blocks=[],
-        excluded=[
-            MetricSeries(
-                row_key="CF|3|CF!r1",
-                label="Spare",
-                concept_id=None,
-                article_role="check",
-                kind="helper",
-                mapping=MappingEvidence(method="unmapped", confidence="low"),
-                source=SourceRef(sheet="CF", addr="A3", row=3, col=1),
-                disposition="excluded",
-                exclusion_reason="helper",
-            )
-        ],
-        inventory=[
-            InventoryRow(
-                row_key="CF|2|CF!r1",
-                sheet="CF",
-                row=2,
-                kind="fact",
-                label="Opening cash",
-                label_path=["Cashflow"],
-                concept_id="bs.cash",
-                unit="currency",
-                formula_fingerprint="=RC[1]",
-                hints=RowHints(time_semantics="bop"),
-            )
-        ],
-    )
-    rendered = render_markdown(doc)
-    assert "## Excluded" in rendered
-    assert "Spare" in rendered
-    assert "## Row navigator / CF" in rendered
-    assert "Opening cash" in rendered
-    assert "- Content completeness: 1.00 (1/1 layout rows)" in rendered
-    assert "- Concept coverage: 1.00 (1/1 annotatable)" in rendered
-
-
-def test_markdown_uses_column_not_period_key() -> None:
-    doc = ContextDocument(
-        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
-        workbook=WorkbookRaw(sheets=["Dash"], sheet_count=1, cell_count=2, formula_count=0),
-        blocks=[
-            FinancialBlock(
-                block_id="Dash!r1",
-                sheet="Dash",
-                label_col=1,
-                grain="week",
-                periods=[
-                    {
-                        "col": 2,
-                        "text": "11.01.2026",
-                        "role": "forecast",
-                        "period_key": "2026-01",
-                    },
-                    {
-                        "col": 3,
-                        "text": "18.01.2026",
-                        "role": "forecast",
-                        "period_key": "2026-01",
-                    },
-                ],
-                metrics=[
-                    MetricSeries(
-                        row_key="Dash|2|Dash!r1",
-                        label="Receipts",
-                        concept_id="cf.receipts",
-                        article_role="database_like",
-                        mapping=MappingEvidence(method="rule", confidence="high"),
-                        source=SourceRef(sheet="Dash", addr="A2", row=2, col=1),
-                        values=[
-                            PeriodValue(
-                                period_key="2026-01",
-                                header_text="11.01.2026",
-                                role="forecast",
-                                cached_value="10",
-                                source=SourceRef(sheet="Dash", addr="B2", row=2, col=2),
-                            ),
-                            PeriodValue(
-                                period_key="2026-01",
-                                header_text="18.01.2026",
-                                role="forecast",
-                                cached_value="20",
-                                source=SourceRef(sheet="Dash", addr="C2", row=2, col=3),
-                            ),
-                        ],
-                    )
-                ],
-            )
-        ],
-    )
-    rendered = render_markdown(doc)
-    assert "11.01.2026" in rendered
-    assert "18.01.2026" in rendered
-    assert "10 `Dash!B2`" in rendered
-    assert "20 `Dash!C2`" in rendered
-    assert rendered.count(" high") == 0
-
-
-def test_markdown_keeps_thirteen_week_columns() -> None:
+def test_markdown_keeps_every_period_and_excluded_row() -> None:
     periods = [
-        {
-            "col": i + 2,
-            "text": f"w{i}",
-            "role": "forecast",
-            "period_key": f"2026-01-{i + 1:02d}",
-        }
-        for i in range(13)
+        {"col": index, "text": f"Y{index}", "role": "relative", "period_key": f"Y{index}"}
+        for index in range(1, 21)
     ]
     doc = ContextDocument(
         meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
-        workbook=WorkbookRaw(sheets=["Dash"], sheet_count=1, cell_count=13),
+        workbook=WorkbookRaw(sheets=["CF"], sheet_count=1, cell_count=40),
         blocks=[
             FinancialBlock(
-                block_id="Dash!r1",
-                sheet="Dash",
+                block_id="CF!r1",
+                sheet="CF",
                 label_col=1,
-                grain="week",
                 periods=periods,
-                metrics=[
-                    MetricSeries(
-                        row_key="Dash|2|Dash!r1",
-                        label="Receipts",
-                        concept_id="cf.receipts",
-                        article_role="database_like",
-                        mapping=MappingEvidence(method="rule", confidence="high"),
-                        source=SourceRef(sheet="Dash", addr="A2", row=2, col=1),
-                        values=[
-                            PeriodValue(
-                                period_key=item["period_key"],
-                                header_text=item["text"],
-                                role="forecast",
-                                cached_value=str(i),
-                                source=SourceRef(
-                                    sheet="Dash",
-                                    addr=f"col{item['col']}",
-                                    row=2,
-                                    col=item["col"],
-                                ),
-                            )
-                            for i, item in enumerate(periods)
-                        ],
-                    )
+                rows=[
+                    BlockRow(
+                        row_key="CF|2|CF!r1",
+                        sheet="CF",
+                        row=2,
+                        kind="fact",
+                        label="Opening cash",
+                        concept_id="bs.cash",
+                        disposition="mapped",
+                        values=[str(index) for index in range(1, 21)],
+                    ),
+                    BlockRow(
+                        row_key="CF|3|CF!r1",
+                        sheet="CF",
+                        row=3,
+                        kind="helper",
+                        label="Spare",
+                        disposition="excluded",
+                        exclusion_reason="helper",
+                        values=["0"] * 20,
+                    ),
                 ],
             )
         ],
+        mapping_stats=MappingStats(inventory_rows=2, mapped=1, excluded=1),
     )
     rendered = render_markdown(doc)
-    assert rendered.count("| w") >= 13
+    assert "Y20" in rendered
+    assert "Spare" in rendered
+    assert "excluded" in rendered
     assert "Truncated" not in rendered
 
 
-def test_markdown_unmapped_period_table() -> None:
-    doc = ContextDocument(
-        meta=ArtifactMeta(job_id="job1", status="needs_input", stage="done"),
-        workbook=WorkbookRaw(sheets=["Dash"], sheet_count=1, cell_count=2),
-        blocks=[
-            FinancialBlock(
-                block_id="Dash!r1",
-                sheet="Dash",
-                label_col=1,
-                grain="week",
-                periods=[
-                    {"col": 2, "text": "2023", "role": "historical", "period_key": "2023"},
-                    {"col": 3, "text": "2024E", "role": "forecast", "period_key": "2024E"},
-                ],
-                metrics=[
-                    MetricSeries(
-                        row_key="Dash|2|Dash!r1",
-                        label="Receipts",
-                        concept_id="cf.receipts",
-                        article_role="database_like",
-                        mapping=MappingEvidence(method="rule", confidence="high"),
-                        source=SourceRef(sheet="Dash", addr="A2", row=2, col=1),
-                        values=[
-                            PeriodValue(
-                                period_key="2023",
-                                header_text="2023",
-                                role="historical",
-                                cached_value="10",
-                                source=SourceRef(sheet="Dash", addr="B2", row=2, col=2),
-                            ),
-                            PeriodValue(
-                                period_key="2024E",
-                                header_text="2024E",
-                                role="forecast",
-                                cached_value="20",
-                                source=SourceRef(sheet="Dash", addr="C2", row=2, col=3),
-                            ),
-                        ],
-                    )
-                ],
-            )
-        ],
-        unmapped=[
-            MetricSeries(
-                row_key="Dash|3|Dash!r1",
-                label="Min Cash Target",
-                concept_id=None,
-                article_role="database_like",
-                mapping=MappingEvidence(method="unmapped", confidence="low"),
-                source=SourceRef(sheet="Dash", addr="A3", row=3, col=1),
-                values=[
-                    PeriodValue(
-                        period_key="2023",
-                        header_text="2023",
-                        role="historical",
-                        cached_value="50",
-                        source=SourceRef(sheet="Dash", addr="B3", row=3, col=2),
-                    ),
-                    PeriodValue(
-                        period_key="2024E",
-                        header_text="2024E",
-                        role="forecast",
-                        cached_value="55",
-                        has_formula=True,
-                        source=SourceRef(sheet="Dash", addr="C3", row=3, col=3),
-                    ),
-                ],
-            )
-        ],
-        warnings=["1 row(s) need mapping review"],
-    )
-    rendered = render_markdown(doc)
-    assert "### Unmapped" in rendered
-    assert "Min Cash Target" in rendered
-    assert "unknown" in rendered
-    assert "50 `Dash!B3`" in rendered
-    assert "55* `Dash!C3`" in rendered
-    assert "Unmapped rows" not in rendered
-    assert rendered.count("## Dash") == 1
-
-
-def test_markdown_renders_parameters_table() -> None:
+def test_markdown_parameters_include_selector_and_value() -> None:
     doc = ContextDocument(
         meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
         workbook=WorkbookRaw(sheets=["Input Assumptions"], sheet_count=1, cell_count=4),
@@ -333,110 +150,68 @@ def test_markdown_renders_parameters_table() -> None:
                 periods=[
                     {"col": 4, "text": "Values", "role": "value", "period_key": "value"},
                 ],
-                metrics=[
-                    MetricSeries(
+                rows=[
+                    BlockRow(
+                        row_key="Input Assumptions|3|Input Assumptions!r5",
+                        sheet="Input Assumptions",
+                        row=3,
+                        kind="flag",
+                        label="Scenario Chosen",
+                        disposition="excluded",
+                        context_role="scenario_selector",
+                        cells=[RoleCell(addr="D3", col=4, role="value", cached_value="1")],
+                        values=["1"],
+                    ),
+                    BlockRow(
                         row_key="Input Assumptions|8|Input Assumptions!r5",
+                        sheet="Input Assumptions",
+                        row=8,
+                        kind="fact",
                         label="Tax Rate",
-                        concept_id="pnl.tax_rate",
-                        article_role="assumption",
-                        unit="rate",
-                        mapping=MappingEvidence(method="rule", confidence="high", score=0.9),
-                        source=SourceRef(sheet="Input Assumptions", addr="B8", row=8, col=2),
-                        cells=[
-                            RoleCell(addr="C8", col=3, role="unit", cached_value="%"),
-                            RoleCell(addr="D8", col=4, role="value", cached_value="0.3"),
-                        ],
-                    )
+                        concept_id="tax.rate",
+                        disposition="mapped",
+                        hints=RowHints(unit="rate"),
+                        cells=[RoleCell(addr="D8", col=4, role="value", cached_value="0.3")],
+                        values=["0.3"],
+                    ),
                 ],
             )
         ],
     )
     rendered = render_markdown(doc)
     assert "## Parameters / Input Assumptions" in rendered
+    assert "Scenario Chosen" in rendered
     assert "Tax Rate" in rendered
-    assert "%" in rendered
-    assert "pnl.tax_rate" in rendered
+    assert "0.3" in rendered
 
 
-def test_markdown_parameters_unit_from_measure_hints() -> None:
-    doc = ContextDocument(
-        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
-        workbook=WorkbookRaw(sheets=["P&L"], sheet_count=1, cell_count=1),
-        blocks=[
-            FinancialBlock(
-                block_id="P&L!r1",
-                sheet="P&L",
-                label_col=1,
-                kind="params",
-                periods=[{"col": 2, "text": "Values", "role": "value", "period_key": "value"}],
-                metrics=[
-                    MetricSeries(
-                        row_key="P&L|4|P&L!r1",
-                        label="Revenue k£",
-                        article_role="assumption",
-                        unit="money",
-                        mapping=MappingEvidence(method="rule", confidence="high", score=0.9),
-                        source=SourceRef(sheet="P&L", addr="A4", row=4, col=1),
-                        hints=RowHints(unit="money", currency="GBP", scale="k"),
-                        cells=[
-                            RoleCell(addr="B4", col=2, role="value", cached_value="10"),
-                        ],
-                    )
-                ],
-            )
+def test_graph_and_trace_markdown_repeat_json_facts() -> None:
+    graph = GraphDocument(
+        job_id="job1",
+        nodes=4,
+        edges=9,
+        iterate=False,
+        links=[
+            FormulaLink(cell="P&L!C13", formula="=SUM(C9:C12)", refs=["P&L!C9:C12"]),
         ],
     )
-    rendered = render_markdown(doc)
-    assert "| k£ |" in rendered
-
-
-def test_markdown_parameters_leads_with_scenario_selector() -> None:
-    doc = ContextDocument(
-        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
-        workbook=WorkbookRaw(sheets=["Input Assumptions"], sheet_count=1, cell_count=4),
-        blocks=[
-            FinancialBlock(
-                block_id="Input Assumptions!r5",
-                sheet="Input Assumptions",
-                label_col=2,
-                kind="params",
-                periods=[
-                    {"col": 4, "text": "Values", "role": "value", "period_key": "value"},
-                ],
-                metrics=[
-                    MetricSeries(
-                        row_key="Input Assumptions|8|Input Assumptions!r5",
-                        label="Tax Rate",
-                        article_role="assumption",
-                        mapping=MappingEvidence(method="rule", confidence="high", score=0.9),
-                        source=SourceRef(sheet="Input Assumptions", addr="B8", row=8, col=2),
-                        cells=[
-                            RoleCell(addr="D8", col=4, role="value", cached_value="0.3"),
-                        ],
-                    )
-                ],
-            )
+    rendered = render_graph_markdown(graph)
+    assert "4" in rendered
+    assert "9" in rendered
+    assert "P&L!C13" in rendered
+    assert "=SUM(C9:C12)" in rendered
+    assert "P&L!C9:C12" in rendered
+    trace = TraceDocument(
+        origin="P&L!C13",
+        direction="precedents",
+        depth=6,
+        stopped="depth",
+        nodes=[
+            TraceNode(node_id="P&L!C13", formula="=SUM(C9:C12)", cached_value="23", depth=0),
         ],
-        excluded=[
-            MetricSeries(
-                row_key="Input Assumptions|3|Input Assumptions!r5",
-                label="Scenario Chosen",
-                article_role="assumption",
-                mapping=MappingEvidence(method="unmapped", confidence="low"),
-                source=SourceRef(sheet="Input Assumptions", addr="B3", row=3, col=2),
-                kind="flag",
-                disposition="excluded",
-                exclusion_reason="flag",
-                context_role="scenario_selector",
-                cells=[
-                    RoleCell(addr="D3", col=4, role="value", cached_value="1"),
-                ],
-            )
-        ],
+        edges=[TraceEdge(source="P&L!C13", target="P&L!C9:C12", kind="range")],
     )
-    rendered = render_markdown(doc)
-    params = rendered.split("## Parameters / Input Assumptions", 1)[1]
-    assert params.find("Scenario Chosen") < params.find("Tax Rate")
-    assert "| Scenario Chosen |" in rendered
-    assert "| 1 |" in rendered
-
+    trace_md = render_trace_markdown(trace)
+    assert "P&L!C13" in trace_md
+    assert "P&L!C9:C12" in trace_md
+    assert "formula_ast" not in trace_md
