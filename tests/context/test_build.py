@@ -240,7 +240,7 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert cash.label_path == ["Cashflow"]
     assert cash.formula_fingerprint == "=RC[1]"
     assert cash.candidates[0].concept_id == "bs.cash"
-    assert cash.hints.time_semantics in {"bop", "flow", "eop"}
+    assert cash.hints.time_semantics in {"bop", "flow", "eop", "stock"}
     assert not any("Content completeness" in warning for warning in doc.warnings)
     abstract = doc.inventory[0]
     assert abstract.concept_id is None

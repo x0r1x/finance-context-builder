@@ -279,7 +279,7 @@ def test_packt_leftovers_and_cash_not_balance() -> None:
     assert by_label["Cash Flow"] != "bs.cash"
     assert by_label["Total Cash in"] == "cf.receipts"
     assert by_label["Total Cash out"] == "cf.disbursements"
-    assert by_label["Arrangement fee"] == "debt.commitment_fee"
+    assert by_label["Arrangement fee"] == "debt.arrangement_fee"
     assert by_label["Capitalized interests"] == "pnl.interest"
     assert by_label["TRAFFIC - Passenger Car (PC)"] == "pnl.volume"
     assert by_label["Dividends earned"] == "cf.dividends"
@@ -816,3 +816,100 @@ def test_concession_and_operations_duration_are_not_the_same_concept() -> None:
     assert by_label["Operations Duration"] == "ops.operating_period"
     assert by_label["Construction Duration"] == "ops.construction_period"
     assert by_label["Concession Duration"] != by_label["Operations Duration"]
+
+
+def test_inflation_fees_and_cfs_opex_split() -> None:
+    taxonomy = load_taxonomy()
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="Input Assumptions",
+                blocks=[
+                    Block(
+                        block_id="IA!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="IA!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(col=2, text="1", role="relative", period_key="Y1"),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(row=2, label="Inflation per year", kind="fact"),
+                            LayoutRow(
+                                row=3,
+                                label="Inflation per year (costs) from beginning of concession",
+                                kind="fact",
+                            ),
+                            LayoutRow(row=4, label="Engagement fee", kind="fact"),
+                        ],
+                    )
+                ],
+            ),
+            SheetLayout(
+                name="CFS",
+                blocks=[
+                    Block(
+                        block_id="CFS!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="CFS!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(col=2, text="1", role="relative", period_key="Y1"),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(
+                                row=5,
+                                label="OPEX",
+                                kind="fact",
+                                section_path=["Cashflow Statement"],
+                            ),
+                            LayoutRow(
+                                row=6,
+                                label="Interest",
+                                kind="fact",
+                                section_path=["Cashflow Statement"],
+                            ),
+                        ],
+                    )
+                ],
+            ),
+        ]
+    )
+    cells = [
+        {
+            "sheet": "Input Assumptions",
+            "row": 4,
+            "col": 2,
+            "addr": "B4",
+            "cached_value": "0.01",
+            "number_format": "0%",
+        }
+    ]
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        cells=cells,
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_key = {(row.sheet, row.label): row.concept_id for row in doc.rows}
+    assert by_key[("Input Assumptions", "Inflation per year")] == "ops.inflation_revenue"
+    assert (
+        by_key[
+            (
+                "Input Assumptions",
+                "Inflation per year (costs) from beginning of concession",
+            )
+        ]
+        == "ops.inflation_cost"
+    )
+    assert by_key[("Input Assumptions", "Engagement fee")] == "debt.engagement_fee_rate"
+    assert by_key[("CFS", "OPEX")] == "cf.opex_paid"
+    assert by_key[("CFS", "Interest")] == "cf.interest_paid"
+

@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from finance_context.mapping.facets import prune_candidates
 from finance_context.mapping.knn import COSINE_GAP, COSINE_MIN, TOP_K
+from finance_context.mapping.rowroles import infer_row_roles
 from finance_context.mapping.models import (
     Candidate,
     Concept,
@@ -102,6 +103,7 @@ def to_mapped(
         disposition = "mapped" if concept_id else "abstained"
     if exclusion_reason is None and disposition == "abstained":
         exclusion_reason = _abstain_reason(ranked)
+    role, secondary = infer_row_roles(ctx, concept_id)
     return MappedRow(
         row_key=ctx.row_key,
         sheet=ctx.sheet,
@@ -118,6 +120,8 @@ def to_mapped(
         evidence=picked.evidence if picked is not None else None,
         disposition=disposition,
         exclusion_reason=exclusion_reason,
+        context_role=role,
+        secondary_concepts=secondary,
     )
 
 

@@ -167,6 +167,8 @@ class MappedRow(BaseModel):
     evidence: str | None = None
     disposition: Disposition = "mapped"
     exclusion_reason: ExclusionReason | None = None
+    context_role: str | None = None
+    secondary_concepts: list[str] = Field(default_factory=list)
 
 
 class MappingQuestion(BaseModel):

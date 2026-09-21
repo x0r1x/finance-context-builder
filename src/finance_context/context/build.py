@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 from finance_context.context.timeline import annotate_block_periods, build_timeline
@@ -8,8 +9,11 @@ from finance_context.layout.models import Layout, LayoutRow
 from finance_context.layout.params import unit_kind_from_text
 from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.eval import context_report_metrics, inventory_coverage_counts
-from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowRelation
+from finance_context.mapping.graph import cell_ref_row, row_adjacency, row_key_ref
+from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowContext, RowRelation
+from finance_context.mapping.rowroles import infer_row_roles
 from finance_context.mapping.rules import is_noise_label
+from finance_context.mapping.statement import statement_for_row
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
@@ -62,9 +66,16 @@ def build_context(
     status: str = "succeeded",
     stage: str = "done",
     graph: GraphPointer | None = None,
+    edges: list[dict] | None = None,
 ) -> ContextDocument:
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
     mapped_by_key = {row.row_key: row for row in mapping.rows}
+    _precedents, dependents = row_adjacency(edges or [])
+    concept_by_ref = {
+        row_key_ref(row.sheet, row.row): row.concept_id
+        for row in mapping.rows
+        if row.concept_id
+    }
     warnings: list[str] = []
     formula_count = 0
     missing_cached = 0
@@ -130,7 +141,35 @@ def build_context(
                     ),
                     None,
                 )
-                hints = _hints_for(mapped, layout_row, unit_text)
+                hints = _hints_for(
+                    mapped,
+                    layout_row,
+                    unit_text,
+                    sheet=sheet.name,
+                    parent=parent,
+                )
+                role_ctx = RowContext(
+                    row_key=row_key,
+                    sheet=sheet.name,
+                    row=layout_row.row,
+                    block_id=block.block_id,
+                    label=layout_row.label,
+                    parent_label=parent,
+                    section_path=list(layout_row.section_path),
+                    article_role=mapped.article_role if mapped else "database_like",
+                )
+                feeds_cfads = _row_feeds_cfads(
+                    sheet.name, layout_row.row, dependents, concept_by_ref
+                )
+                context_role, secondary = infer_row_roles(
+                    role_ctx,
+                    mapped.concept_id if mapped else None,
+                    feeds_cfads=feeds_cfads,
+                )
+                if mapped is not None:
+                    secondary = list(
+                        dict.fromkeys([*mapped.secondary_concepts, *secondary])
+                    )
                 series_unit = unit_kind_from_text(unit_text)
                 candidates = _candidates_for(mapped)
                 if layout_row.kind in _SERIES_KINDS and not (
@@ -154,6 +193,8 @@ def build_context(
                         candidates=candidates,
                         hints=hints,
                         role_cells=role_cells,
+                        context_role=context_role,
+                        secondary_concepts=secondary,
                     )
                     series_unit = series_unit or series.unit
                     if mapped is not None and mapped.disposition == "excluded":
@@ -189,6 +230,8 @@ def build_context(
                         candidates=candidates,
                         hints=hints,
                         cells=role_cells,
+                        context_role=context_role,
+                        secondary_concepts=secondary,
                     )
                 )
             blocks.append(
@@ -305,6 +348,8 @@ def _series_for_row(
     candidates: list[CandidateHit],
     hints: RowHints,
     role_cells: list[RoleCell],
+    context_role: str | None = None,
+    secondary_concepts: list[str] | None = None,
 ) -> MetricSeries:
     row_num = layout_row.row
     label_addr = format_addr(label_col, row_num)
@@ -376,6 +421,8 @@ def _series_for_row(
         candidates=candidates,
         hints=hints,
         cells=role_cells,
+        context_role=context_role,
+        secondary_concepts=list(secondary_concepts or []),
     )
 
 
@@ -424,55 +471,93 @@ def _candidates_for(mapped: MappedRow | None) -> list[CandidateHit]:
 
 
 def _hints_for(
-    mapped: MappedRow | None, layout_row: LayoutRow, unit_text: str | None = None
+    mapped: MappedRow | None,
+    layout_row: LayoutRow,
+    unit_text: str | None = None,
+    *,
+    sheet: str = "",
+    parent: str | None = None,
 ) -> RowHints:
     concept_id = mapped.concept_id if mapped else None
-    statement = concept_id.split(".", 1)[0] if concept_id else None
-    label = (layout_row.label or "").casefold()
-    tokens = set(label.replace("/", " ").replace("-", " ").split())
+    blob, tokens = _hint_blob_and_tokens(layout_row.label or "")
     nature = None
     time_semantics = None
     unit = unit_kind_from_text(unit_text)
+    statement = statement_for_row(
+        concept_id=concept_id,
+        sheet=sheet,
+        section_path=list(layout_row.section_path),
+        parent=parent,
+        label=layout_row.label,
+    )
     if tokens & {"opening", "closing", "balance", "beg", "ending"}:
         nature = "balance"
-    if "opening" in tokens or "b/f" in label or "brought forward" in label:
+    if "opening" in tokens or "b/f" in blob or "brought forward" in blob:
         time_semantics = "bop"
         nature = "balance"
-    elif "closing" in tokens or "c/f" in label or "carried forward" in label:
+    elif "closing" in tokens or "c/f" in blob or "carried forward" in blob:
         time_semantics = "eop"
         nature = "balance"
     elif unit == "rate" or any(token in tokens for token in ("rate", "ratio", "%")):
         time_semantics = "rate"
     elif layout_row.kind == "fact":
         time_semantics = "flow"
-    if statement in {"bs"}:
+    if statement == "bs" or (concept_id and concept_id.startswith("bs.")):
         nature = nature or "balance"
     elif statement in {"pnl", "cf"}:
         nature = nature or "flow"
+    if time_semantics == "flow" and nature == "balance":
+        time_semantics = "stock"
     return RowHints(
         nature=nature,
         time_semantics=time_semantics,
         statement=statement,
         unit=unit,
-        segment=_segment_hint(label, tokens),
-        escalation=_escalation_hint(label, tokens),
+        segment=_segment_hint(blob, tokens),
+        escalation=_escalation_hint(blob, tokens),
     )
 
 
-def _segment_hint(label: str, tokens: set[str]) -> str | None:
+def _hint_blob_and_tokens(label: str) -> tuple[str, set[str]]:
+    spaced = re.sub(r"[()\[\]{}/,&\-]+", " ", label or "")
+    blob = re.sub(r"\s+", " ", spaced).strip().casefold()
+    return blob, set(blob.split())
+
+
+def _segment_hint(blob: str, tokens: set[str]) -> str | None:
+    vehicle = bool(tokens & {"traffic", "toll", "vehicle", "vehicule", "car", "passenger"})
     if "pc" in tokens or "passenger" in tokens:
         return "pc"
-    if "hv" in tokens or "heavy" in tokens:
+    if "hv" in tokens:
+        return "hv"
+    if "heavy maintenance" in blob:
+        return None
+    if "heavy" in tokens and vehicle:
         return "hv"
     return None
 
 
-def _escalation_hint(label: str, tokens: set[str]) -> str | None:
+def _escalation_hint(blob: str, tokens: set[str]) -> str | None:
     if "inflation" not in tokens and "escalation" not in tokens:
         return None
-    if "cost" in tokens or "costs" in tokens:
+    if tokens & {"cost", "costs"}:
         return "cost"
     return "revenue"
+
+
+def _row_feeds_cfads(
+    sheet: str,
+    row: int,
+    dependents: dict[tuple[str, int], list[str]],
+    concept_by_ref: dict[str, str | None],
+) -> bool:
+    for ref in dependents.get((sheet, row), []):
+        if concept_by_ref.get(ref) == "cf.cfads":
+            return True
+        parsed = cell_ref_row(ref)
+        if parsed and concept_by_ref.get(row_key_ref(*parsed)) == "cf.cfads":
+            return True
+    return False
 
 
 def _row_formula_and_numbers(

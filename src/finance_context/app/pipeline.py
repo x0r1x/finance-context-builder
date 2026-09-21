@@ -122,6 +122,8 @@ class Pipeline:
         )
         layout = Layout.model_validate_json((dest_dir / "layout.json").read_text(encoding="utf-8"))
         cells = read_parquet(dest_dir / "ir" / "cells.parquet")
+        edges_path = dest_dir / "ir" / "edges.parquet"
+        edges = read_parquet(edges_path) if edges_path.is_file() else []
         workbook_meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status(mapping, embed=self.embed, chat=self.chat)
         set_stage("graph", status="running")
@@ -165,6 +167,7 @@ class Pipeline:
                 status=status,
                 stage="done",
                 graph=graph,
+                edges=edges,
             ),
         )
         _write_sorted_json(dest_dir / "context.json", doc.model_dump(mode="json"))

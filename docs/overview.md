@@ -27,7 +27,7 @@
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
 | `graph.json` | Сводка графа: counts, циклы, пути к parquet (без формул и значений) |
-| `context.json` | Схема `1.4.0`: `timeline`, блоки с `values` (кэш + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats`, pointer `graph` |
+| `context.json` | Схема `1.5.0`: `timeline`, блоки с `values` (кэш + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats`, pointer `graph`, `context_role` / `secondary_concepts` |
 | `context.md` | Две метрики в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}`; `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 

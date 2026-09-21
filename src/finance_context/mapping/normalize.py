@@ -12,6 +12,8 @@ _QUALIFIERS = {
     "cash",
     "proxy",
     "constant",
+    "cost",
+    "costs",
 }
 _METRIC_ACRONYMS = {
     "capex",

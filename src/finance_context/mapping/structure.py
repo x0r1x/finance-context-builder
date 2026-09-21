@@ -23,6 +23,7 @@ from finance_context.mapping.normalize import normalize_label
 from finance_context.mapping.patterns import pattern_matches
 from finance_context.mapping.roles import article_role
 from finance_context.mapping.rowfacets import infer_row_facets
+from finance_context.mapping.statement import remap_alias_concept
 
 _ENGINE = FormulaEngine(locale_hint="en")
 
@@ -421,14 +422,19 @@ class StructureSignal:
                 )
                 concept_id = book.concepts.get(key)
                 if concept_id:
-                    out.append(
-                        Candidate(
-                            concept_id=concept_id,
-                            score=0.96,
-                            signal=self.name,
-                            evidence=f"alias of {key}",
+                    remapped, extra, score = remap_alias_concept(concept_id, ctx)
+                    if remapped:
+                        evidence = f"alias of {key}"
+                        if extra:
+                            evidence = f"{evidence}; {extra}"
+                        out.append(
+                            Candidate(
+                                concept_id=remapped,
+                                score=score,
+                                signal=self.name,
+                                evidence=evidence,
+                            )
                         )
-                    )
         if pattern.kind == "aggregate" and pattern.aggregate_rows:
             members: list[str] = []
             child_ids: list[str] = []

@@ -7,7 +7,7 @@ expectations:
   - {label: Minimum Debt Service Coverage Ratio (DSCR), concept_id: cov.dscr}
   - {label: Total uses of funds, concept_id: cf.uses}
   - {label: Total sources of funds, concept_id: cf.sources}
-  - {label: Total revenue, parent: Cashflow Statement, concept_id: pnl.revenue}
+  - {label: Total revenue, parent: Cashflow Statement, concept_id: cf.receipts}
   - {label: Cashflow available for debt service (CFADS), concept_id: cf.cfads}
   - {label: Debt principal, parent: Cashflow Statement, concept_id: cf.repayment}
   - {label: Operating Income or Loss (EBITDA), concept_id: pnl.ebitda}
@@ -25,7 +25,7 @@ expectations:
   - {label: Operating lifetime, forbidden_concept_id: ops.lifetime}
   - {label: Share premium, parent: Cashflow Statement, concept_id: bs.share_premium}
   - {label: Share premium, parent: Uses of funds, concept_id: bs.share_premium}
-  - {label: Variable land lease, parent: Cashflow Statement, concept_id: pnl.opex}
+  - {label: Variable land lease, parent: Cashflow Statement, concept_id: cf.opex_paid}
   - {label: Variable land lease, parent: Cashflow Statement, forbidden_concept_id: ops.lease_rate}
   - {label: PPA duration, forbidden_concept_id: pnl.revenue}
   - {label: Net generation before availability, forbidden_concept_id: ops.availability}

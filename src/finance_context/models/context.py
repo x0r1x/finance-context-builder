@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.4.0"
+SCHEMA_VERSION = "1.5.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -101,6 +101,8 @@ class MetricSeries(BaseModel):
     candidates: list[CandidateHit] = Field(default_factory=list)
     hints: RowHints = Field(default_factory=RowHints)
     cells: list[RoleCell] = Field(default_factory=list)
+    context_role: str | None = None
+    secondary_concepts: list[str] = Field(default_factory=list)
 
 
 class InventoryRow(BaseModel):
@@ -125,6 +127,8 @@ class InventoryRow(BaseModel):
     candidates: list[CandidateHit] = Field(default_factory=list)
     hints: RowHints = Field(default_factory=RowHints)
     cells: list[RoleCell] = Field(default_factory=list)
+    context_role: str | None = None
+    secondary_concepts: list[str] = Field(default_factory=list)
 
 
 class ModelPeriod(BaseModel):
