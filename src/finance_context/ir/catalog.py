@@ -97,48 +97,6 @@ class IrCatalog:
                 ],
             )
 
-    def upsert_series_outliers(self, rows: list[dict[str, Any]]) -> None:
-        self._con.execute("DROP VIEW IF EXISTS series_outliers")
-        self._con.execute("DROP TABLE IF EXISTS series_outlier_rows")
-        self._con.execute(
-            """
-            CREATE TABLE series_outlier_rows (
-                sheet VARCHAR,
-                block_id VARCHAR,
-                row INTEGER,
-                col INTEGER,
-                addr VARCHAR,
-                cell_ref VARCHAR,
-                kind VARCHAR,
-                edge_period BOOLEAN,
-                majority_template VARCHAR,
-                cell_template VARCHAR
-            )
-            """
-        )
-        if rows:
-            self._con.executemany(
-                "INSERT INTO series_outlier_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (
-                        r["sheet"],
-                        r["block_id"],
-                        r["row"],
-                        r["col"],
-                        r["addr"],
-                        r["cell_ref"],
-                        r["kind"],
-                        r["edge_period"],
-                        r.get("majority_template"),
-                        r.get("cell_template"),
-                    )
-                    for r in rows
-                ],
-            )
-        self._con.execute(
-            "CREATE VIEW series_outliers AS SELECT * FROM series_outlier_rows"
-        )
-
     def close(self) -> None:
         self._con.close()
 

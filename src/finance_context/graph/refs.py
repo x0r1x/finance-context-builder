@@ -16,7 +16,3 @@ def parse_node_id(ref: str | None) -> tuple[str, int, int] | None:
     if not sheet:
         return None
     return sheet, col, row
-
-
-def node_id(sheet: str, addr: str) -> str:
-    return f"{sheet}!{addr}"

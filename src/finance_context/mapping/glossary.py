@@ -49,16 +49,6 @@ def save_glossary(path: Path, glossary: dict[tuple[str, str], str]) -> None:
     write_json(path, {"entries": entries})
 
 
-def merge_glossary(
-    base: dict[tuple[str, str], str],
-    extra: dict[tuple[str, str], str],
-) -> dict[tuple[str, str], str]:
-    merged = dict(base)
-    for key, value in extra.items():
-        merged.setdefault(key, value)
-    return merged
-
-
 def reconcile_glossary(
     glossary: dict[tuple[str, str], str],
     taxonomy: list,

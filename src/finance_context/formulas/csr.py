@@ -160,25 +160,6 @@ def expand_cell_edges(
     return rows
 
 
-def classify_dangling_reason(
-    target: str,
-    *,
-    kind: str,
-    known: set[str],
-    sheets: set[str],
-    unresolved: bool,
-    presence: dict[str, str] | None = None,
-) -> str | None:
-    return classify_member(
-        target,
-        kind=kind,
-        known=known,
-        sheets=sheets,
-        unresolved=unresolved,
-        presence=presence,
-    ).dangling_reason
-
-
 def classify_member(
     target: str,
     *,

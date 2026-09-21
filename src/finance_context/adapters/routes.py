@@ -75,36 +75,6 @@ class RewriteTransport(httpx.BaseTransport):
             close()
 
 
-class AsyncRewriteTransport(httpx.AsyncBaseTransport):
-    def __init__(
-        self,
-        inner: httpx.AsyncBaseTransport,
-        *,
-        base_url: str,
-        sdk_suffix: str,
-        dest_path: str,
-    ) -> None:
-        self._inner = inner
-        self._base_url = base_url
-        self._sdk_suffix = sdk_suffix
-        self._dest_path = dest_path
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return await self._inner.handle_async_request(
-            rewrite_request(
-                request,
-                base_url=self._base_url,
-                sdk_suffix=self._sdk_suffix,
-                dest_path=self._dest_path,
-            )
-        )
-
-    async def aclose(self) -> None:
-        close = getattr(self._inner, "aclose", None)
-        if close is not None:
-            await close()
-
-
 def wrap_sync_transport(
     inner: httpx.BaseTransport | None,
     *,
@@ -122,28 +92,5 @@ def wrap_sync_transport(
     if dest == sdk_suffix:
         return transport
     return RewriteTransport(
-        transport, base_url=base_url, sdk_suffix=sdk_suffix, dest_path=dest
-    )
-
-
-def wrap_async_transport(
-    inner: httpx.AsyncBaseTransport | httpx.BaseTransport | None,
-    *,
-    base_url: str,
-    ca_file: Path | None,
-    sdk_suffix: str,
-    dest_path: str,
-) -> httpx.AsyncBaseTransport:
-    transport: httpx.AsyncBaseTransport
-    if inner is None:
-        transport = httpx.AsyncHTTPTransport(verify=httpx_verify(ca_file))
-    else:
-        transport = inner  # type: ignore[assignment]
-    if not sdk_suffix:
-        return transport
-    dest = openai_path(dest_path, sdk_suffix)
-    if dest == sdk_suffix:
-        return transport
-    return AsyncRewriteTransport(
         transport, base_url=base_url, sdk_suffix=sdk_suffix, dest_path=dest
     )
