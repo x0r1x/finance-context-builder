@@ -60,14 +60,3 @@ def rank_concepts(
     scored = [(cid, cosine(query, vec)) for cid, vec in index.items()]
     scored.sort(key=lambda item: item[1], reverse=True)
     return scored
-
-
-def confident_match(ranked: list[tuple[str, float]]) -> str | None:
-    if not ranked:
-        return None
-    top_id, top_score = ranked[0]
-    if top_score < COSINE_MIN:
-        return None
-    if len(ranked) > 1 and top_score - ranked[1][1] < COSINE_GAP:
-        return None
-    return top_id

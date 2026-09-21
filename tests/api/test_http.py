@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -8,7 +9,9 @@ from fastapi.testclient import TestClient
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx, write_zip
 
 from finance_context.api.app import create_app
+from finance_context.app.pipeline import Pipeline
 from finance_context.settings import Settings
+from finance_context.store.fs import write_json
 
 
 def _app(tmp_path: Path) -> TestClient:
@@ -196,3 +199,145 @@ def test_repeated_upload_rebuilds_compile_layout_mapping_and_reuses_parse(tmp_pa
         assert "rows" in json.loads(mapping_path.read_text(encoding="utf-8"))
         assert (job_dir / "context.json").is_file()
         assert (job_dir / "context.md").is_file()
+
+
+def _upload(client: TestClient, source: Path):
+    return client.post(
+        "/v1/context-jobs",
+        files={
+            "file": (
+                "model.xlsx",
+                source.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+
+def test_get_job_keeps_fresher_disk_stage(tmp_path: Path, monkeypatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run(
+        self,
+        dest_dir,
+        *,
+        job_id,
+        source_filename=None,
+        content_sha256=None,
+        progress=None,
+    ):
+        write_json(
+            dest_dir / "meta.json",
+            {
+                "job_id": job_id,
+                "status": "running",
+                "stage": "mapping",
+                "warnings": [],
+                "questions": [],
+            },
+        )
+        started.set()
+        release.wait(5)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(Pipeline, "run", fake_run)
+    source = _xlsx(tmp_path / "model.xlsx")
+    try:
+        with _app(tmp_path) as client:
+            created = _upload(client, source)
+            assert created.status_code == 202
+            job_id = created.json()["job_id"]
+            assert started.wait(5)
+            body = client.get(f"/v1/context-jobs/{job_id}").json()
+            assert body["status"] == "running"
+            assert body["stage"] == "mapping"
+    finally:
+        release.set()
+
+
+def test_get_job_follows_pipeline_progress(tmp_path: Path, monkeypatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run(
+        self,
+        dest_dir,
+        *,
+        job_id,
+        source_filename=None,
+        content_sha256=None,
+        progress=None,
+    ):
+        write_json(
+            dest_dir / "meta.json",
+            {
+                "job_id": job_id,
+                "status": "running",
+                "stage": "parse",
+                "warnings": [],
+                "questions": [],
+            },
+        )
+        assert progress is not None
+        progress.progress("compile")
+        started.set()
+        release.wait(5)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(Pipeline, "run", fake_run)
+    source = _xlsx(tmp_path / "model.xlsx")
+    try:
+        with _app(tmp_path) as client:
+            created = _upload(client, source)
+            assert created.status_code == 202
+            job_id = created.json()["job_id"]
+            assert started.wait(5)
+            body = client.get(f"/v1/context-jobs/{job_id}").json()
+            assert body["status"] == "running"
+            assert body["stage"] == "compile"
+    finally:
+        release.set()
+
+
+def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
+    release = threading.Event()
+
+    def fake_run(
+        self,
+        dest_dir,
+        *,
+        job_id,
+        source_filename=None,
+        content_sha256=None,
+        progress=None,
+    ):
+        if not release.is_set():
+            release.wait(5)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(Pipeline, "run", fake_run)
+    source = _xlsx(tmp_path / "model.xlsx")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        max_upload_bytes=1024 * 1024,
+        llm_base_url=None,
+        embedding_base_url=None,
+        embedding_model=None,
+        job_timeout_sec=0.2,
+    )
+    try:
+        with TestClient(create_app(settings)) as client:
+            created = _upload(client, source)
+            assert created.status_code == 202
+            job_id = created.json()["job_id"]
+            body = _wait_for_terminal(client, job_id)
+            assert body["status"] == "failed"
+            assert body["stage"] == "failed"
+            assert body["error"] == "TimeoutError"
+            release.set()
+            repeated = _upload(client, source)
+            assert repeated.status_code == 202
+            assert repeated.json()["status"] in {"queued", "running"}
+    finally:
+        release.set()

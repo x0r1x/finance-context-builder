@@ -5,7 +5,6 @@ import re
 from collections import Counter
 from typing import Any, Protocol
 
-from finance_context.excel.a1 import parse_addr
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.models import Block, Layout, LayoutRow
 from finance_context.layout.periods import infer_grain
@@ -754,10 +753,6 @@ def _semantic_count(label: str | None) -> bool:
     if n in {"development and construction", "straight line depreciation"}:
         return True
     return "capacity" in n or "mw" in tokens
-
-
-def parse_cell_addr(addr: str) -> tuple[int, int]:
-    return parse_addr(addr)
 
 
 def section_tokens(ctx: RowContext) -> set[str]:

@@ -77,7 +77,7 @@ New matching ideas are new `Signal` implementations (`propose(ctx, book) -> list
 | Signal | Role |
 | --- | --- |
 | `glossary` | Learned `(normalized_label, parent) → concept_id` from `data/glossary.json`. |
-| `structure` | Formula graph: passthrough alias across sheets, `SUM` of child rows when **every** member is mapped (shared id or `broader`), inflows minus outflows, roll-forward, proration vs true ratio. Also ±2 neighbor labels and row-level dependents from `ir/edges.parquet` (a line that feeds mapped `pnl.opex` / `cf.uses` gets a category prior). |
+| `structure` | Formula graph: passthrough alias across sheets, `SUM` of child rows when **every** member is mapped (shared id or `broader`), inflows minus outflows, roll-forward, proration vs true ratio. Also ±2 neighbor labels and row-level dependents from `ir/cell_edges.parquet`, falling back to `ir/edges.parquet` (a line that feeds mapped `pnl.opex` / `cf.uses` gets a category prior). |
 | `lexical` | Taxonomy labels and stable phrases. |
 | `embed` | Dense retrieve over concept labels/definitions; accept only with cosine gap. |
 | `chat` | Rerank a short pruned list. May return `unknown`. Never invents an id. |

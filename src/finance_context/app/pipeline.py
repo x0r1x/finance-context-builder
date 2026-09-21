@@ -82,6 +82,7 @@ class Pipeline:
         content_sha256 = content_sha256 or owner.get("content_sha256")
 
         def set_stage(stage: str, status: str = "running") -> None:
+            _raise_if_cancelled(progress)
             _write_meta(
                 dest_dir,
                 job_id=job_id,
@@ -181,6 +182,7 @@ class Pipeline:
         tmp = dest_dir / "context.md.tmp"
         tmp.write_text(markdown, encoding="utf-8")
         tmp.replace(dest_dir / "context.md")
+        _raise_if_cancelled(progress)
         _write_meta(
             dest_dir,
             job_id=job_id,
@@ -192,6 +194,14 @@ class Pipeline:
             questions=[q.model_dump(mode="json") for q in mapping.questions],
         )
         return doc
+
+
+def _raise_if_cancelled(progress: object | None) -> None:
+    if progress is None:
+        return
+    fn = getattr(progress, "cancelled", None)
+    if callable(fn) and fn():
+        raise ContextError("job_timeout", "job timed out")
 
 
 def _final_status(mapping: MappingDocument, *, embed: object, chat: object) -> str:

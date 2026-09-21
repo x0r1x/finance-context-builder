@@ -21,6 +21,17 @@ from finance_context.store.fs import atomic_write_bytes, write_json
 router = APIRouter()
 _LOGGER = logging.getLogger("finance_context.api")
 _ALLOWED = {".xlsx", ".xlsm"}
+_STAGE_RANK = {
+    "queued": 0,
+    "parse": 1,
+    "compile": 2,
+    "layout": 3,
+    "mapping": 4,
+    "graph": 5,
+    "build": 6,
+    "render": 7,
+    "done": 8,
+}
 
 
 def _ctx(request: Request) -> AppContext:
@@ -125,9 +136,19 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
         artifacts_ready = (dest / "context.json").exists() and (dest / "context.md").exists() and (
             dest / "graph.json"
         ).exists() and (dest / "graph.md").exists()
-        if live is not None and live.status in {"queued", "running"} and not artifacts_ready:
+        if (
+            artifacts_ready
+            and meta.get("status") in {"queued", "running", None}
+            and live is not None
+            and live.status not in {"queued", "running"}
+        ):
             meta["status"] = live.status
             meta["stage"] = live.stage
+            meta["error"] = live.error
+        elif live is not None and live.status in {"queued", "running"} and not artifacts_ready:
+            meta["status"] = live.status
+            meta["stage"] = _fresher_stage(meta.get("stage"), live.stage)
+            meta["error"] = live.error
         return JSONResponse(_job_body(job_id, meta))
     if live is not None:
         return JSONResponse(
@@ -245,14 +266,36 @@ def _validate_upload(filename: str, data: bytes, max_bytes: int) -> None:
         zf.close()
 
 
-def start_worker(bus: MemoryJobBus, run_job) -> asyncio.Task:
+def _fresher_stage(disk: object, live: object) -> str:
+    disk_stage = str(disk or "")
+    live_stage = str(live or "")
+    if _STAGE_RANK.get(live_stage, -1) > _STAGE_RANK.get(disk_stage, -1):
+        return live_stage
+    return disk_stage or live_stage
+
+
+def start_worker(
+    bus: MemoryJobBus,
+    run_job,
+    *,
+    timeout_sec: float | None = None,
+    on_timeout=None,
+) -> asyncio.Task:
     async def loop() -> None:
         while True:
             job_id = await bus.claim()
             if job_id is None:
                 continue
+            generation = bus.current_generation(job_id)
             try:
-                await asyncio.to_thread(run_job, job_id)
+                runner = asyncio.to_thread(run_job, job_id, generation)
+                if timeout_sec is None or timeout_sec <= 0:
+                    await runner
+                else:
+                    await asyncio.wait_for(runner, timeout_sec)
+            except TimeoutError:
+                if on_timeout is not None:
+                    on_timeout(job_id, generation)
             except Exception:
                 log_event(
                     _LOGGER,

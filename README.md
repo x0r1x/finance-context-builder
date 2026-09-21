@@ -78,7 +78,7 @@ Submit a workbook. `POST` returns **202** and starts mapping. Repeated submissio
 | `succeeded` | Mapped without open questions |
 | `needs_input` | Context is ready; some fact rows were left `unknown` (review questions) |
 | `degraded` | Same as `needs_input`, but LLM/embeddings were not configured |
-| `failed` | Pipeline error; no usable context |
+| `failed` | Pipeline error, or the worker exceeded `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`); no usable context. Submit the workbook again. |
 
 `needs_input` is not a crash. `context.json`, `context.md`, `graph.json`, and `graph.md` are still served.
 
@@ -106,7 +106,21 @@ Endpoints:
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
 - `GET /healthz`, `GET /readyz`
 
-Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `DATA_DIR`. See `.env.example`.
+HTTP `error` codes:
+
+| code | HTTP |
+| --- | --- |
+| `unsupported_media_type` | 400 |
+| `empty_file` | 400 |
+| `file_too_large` | 413 |
+| `encrypted_workbook` | 422 |
+| `zip_rejected` | 422 |
+| `not_found` | 404 |
+| `report_not_ready` | 409 |
+
+`report_not_ready` is an artifact or trace fetched before the job has written that file.
+
+Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `DATA_DIR`, `JOB_TIMEOUT_SEC` (default 3600). See `.env.example`.
 
 Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/taxonomy.md](docs/taxonomy.md) and [docs/mapping.md](docs/mapping.md). Check/helper/flag rows are excluded from review questions; they stay in the block with `disposition=excluded`. Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
 
@@ -121,12 +135,21 @@ Leave Compose running. API: `http://127.0.0.1:8080`. Job artifacts and `glossary
 
 Loopback LLM URLs in `.env` (`http://127.0.0.1:1234/v1`) are rewritten to `host.docker.internal` inside the container so LM Studio on the host stays reachable. Keep the model server listening on all interfaces or on the host gateway, not only inside another isolated network.
 
-CLI one-off without Compose:
+API container without Compose. The image command is `finance-context serve`:
 
 ```bash
 docker build -t finance-context-builder .
 docker run --rm -v "$PWD/data:/app/data" --env-file .env -p 8080:8080 \
   --add-host=host.docker.internal:host-gateway finance-context-builder
+```
+
+One-shot CLI build, overriding that command:
+
+```bash
+docker run --rm -v "$PWD/data:/app/data" --env-file .env \
+  --add-host=host.docker.internal:host-gateway \
+  finance-context-builder \
+  finance-context build /app/data/model.xlsx -o /app/data/out
 ```
 
 ## Tests

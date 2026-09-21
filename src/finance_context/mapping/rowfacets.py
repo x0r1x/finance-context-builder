@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from finance_context.mapping.models import FacetGuess, InferredFacets, RowContext, ValueKind
+from finance_context.mapping.models import FacetGuess, InferredFacets, RowContext
 from finance_context.mapping.normalize import normalize_label, section_class
 
 _OPENING = ("opening", "beg", "bf", "brought")
@@ -27,13 +27,6 @@ def infer_row_facets(ctx: RowContext, *, pattern_kind: str | None = None) -> Inf
         statement=_statement(n),
         time_semantics=_time_semantics(n, tokens, pattern_kind, unit),
     )
-
-
-def inferred_value_kind(ctx: RowContext) -> ValueKind:
-    unit = ctx.inferred_facets.unit.value
-    if unit in {"money", "rate", "ratio", "count"}:
-        return unit  # type: ignore[return-value]
-    return ctx.value_kind
 
 
 def _series(ctx: RowContext) -> FacetGuess:

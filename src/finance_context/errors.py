@@ -1,4 +1,4 @@
-"""Typed failures that map to HTTP `error` codes in api.md."""
+"""Typed failures that map to HTTP `error` codes listed in the README."""
 
 
 class ContextError(Exception):

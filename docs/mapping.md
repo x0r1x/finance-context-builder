@@ -26,7 +26,7 @@ Layout помечает тело блока видами строк. Каска�
 
 Порядок в `map_layout`:
 
-1. По layout, IR cells и `ir/edges.parquet` строится `BookView`: паттерны формул (`analyze_structure`), row-adjacency, контекст строки (`RowContext`: лейбл, родитель, секция, лист, зерно, `value_kind`, шаблоны формул, `prev_labels` / `next_labels` ±2, `time_semantics`).
+1. По layout, IR cells и рёбрам строится `BookView`: сначала `ir/cell_edges.parquet`, если его нет — `ir/edges.parquet`. Дальше паттерны формул (`analyze_structure`), row-adjacency, контекст строки (`RowContext`: лейбл, родитель, секция, лист, зерно, `value_kind`, шаблоны формул, `prev_labels` / `next_labels` ±2, `time_semantics`).
 2. **Исключение.** Если `exclusion_reason(ctx)` не пустой — строка не резолвится, disposition = `excluded`, вопроса нет.
 3. До **четырёх** проходов сигналов `glossary + lexical + structure`. Нужно, чтобы alias/SUM подтянули концепт, когда соседняя строка замапилась на предыдущей итерации (structure fixpoint).
 4. Нерезолвнутые fact + включённый EmbedPort → dense retrieve по лейблам концептов, затем снова fuse/decide вместе с lexical/glossary/structure.
@@ -34,7 +34,7 @@ Layout помечает тело блока видами строк. Каска�
 6. Финальный проход только `structure` (подтянуть то, что открылось после embed/chat).
 7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph.json` `links` и trace, не в `context.blocks[].relations`.
 
-Повторная загрузка той же книги на HTTP пересобирает compile, layout, mapping и context; parse (`raw/`) переиспользуется. Сам `mapping.json` при повторном CLI-прогоне в тот же каталог **скипается**, если файл уже лежит на диске.
+Повторная загрузка той же книги на HTTP пересобирает compile, layout, mapping и context; parse (`raw/`) переиспользуется. CLI в тот же каталог не запускает пайплайн, если на диске уже есть и `context.json`, и `context.md`. Если одного из них нет, стадии всё равно скипаются по своим артефактам (`raw/workbook.json`, пара `ir/cells.parquet` + `ir/cell_edges.parquet`, `layout.json`, `mapping.json`, `graph.json`). Удаление только `context.json` не пересобирает mapping.
 
 ## Сигналы
 
@@ -107,6 +107,7 @@ Prune отбрасывает:
 
 | Код | Условие |
 | --- | --- |
+| `flag` | `kind == flag` (0/1 тайминг, сценарий, selector) |
 | `check` | `article_role == check` |
 | `helper` | `kind == helper` |
 | `noise` | `is_noise_label` (если строка всё же попала в контекст) |
@@ -178,6 +179,8 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 | embed | `high` при score ≥ 0.85, иначе `medium` |
 | chat | `medium` |
 | question (abstain) | `low` |
+
+В `mapping.json` решение лежит в `source` (`glossary`, `rule`, `lexical`, `structure`, `embed`, `chat`, `question`). В строке `context.json` то же решение — `mapping.source`, а `mapping.method` схлопывает его: `glossary` / `rule` / `lexical` → `rule`, `chat` → `llm`, `question` → `unmapped`. `structure` и `embed` не меняются.
 
 ## Качество
 
