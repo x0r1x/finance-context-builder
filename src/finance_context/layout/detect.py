@@ -796,7 +796,7 @@ def _label_span(
             if col <= col_floor or col >= left_edge or col in period_cols:
                 continue
             text = _text(cell, date1904)
-            if not text or _is_number(text) or classify_header(text) is not None:
+            if not text or _is_number(text) or _is_column_header_text(text):
                 continue
             leftmost[col] += 1
             break
@@ -833,6 +833,10 @@ def _data_rows(
         if _is_counter_row(by_row[row_n], date1904):
             continue
         label, depth, label_cell = _row_span_label(by_row[row_n], label_span, date1904)
+        if label is None or label_cell is None:
+            label, depth, label_cell = _left_of_axis_label(
+                by_row[row_n], period_cols, date1904
+            )
         if label is None or label_cell is None:
             continue
         indent = depth + _indent(label)
@@ -892,10 +896,37 @@ def _row_span_label(
         if cell is None or cell.get("hidden"):
             continue
         text = _text(cell, date1904)
-        if not text or _is_number(text) or classify_header(text) is not None:
+        if not text or _is_number(text) or _is_column_header_text(text):
             continue
         return text, depth, cell
     return None, 0, None
+
+
+def _left_of_axis_label(
+    row_cells: list[dict],
+    period_cols: set[int],
+    date1904: bool,
+) -> tuple[str | None, int, dict | None]:
+    """First text left of the period axis when the label span is empty."""
+    if not period_cols:
+        return None, 0, None
+    left_edge = min(period_cols)
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        if cell.get("hidden"):
+            continue
+        if int(cell["col"]) >= left_edge:
+            break
+        text = _text(cell, date1904)
+        if not text or _is_number(text) or _is_column_header_text(text):
+            continue
+        return text, 0, cell
+    return None, 0, None
+
+
+def _is_column_header_text(text: str) -> bool:
+    """Year, scenario, and role headers are not row names. Total/Sum/Итого is."""
+    hit = classify_header(text)
+    return hit is not None and hit.period_key != "total"
 
 
 def _row_kind(

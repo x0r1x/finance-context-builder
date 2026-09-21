@@ -33,7 +33,7 @@ GRAPH_FORBIDDEN = frozenset(
 )
 GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "links", "artifacts")
 ARTIFACT_REQUIRED = ("cells", "edges", "cell_edges", "index")
-GRAPH_SCHEMA_PREFIX = "1.5"
+GRAPH_SCHEMA_PREFIX = "1.6"
 LINK_FIELDS = ("cell", "formula", "refs")
 
 
@@ -164,6 +164,33 @@ def check_pointer_matches(context: dict[str, Any], graph: dict[str, Any]) -> lis
     return errors
 
 
+def _in_markdown(text: str, markdown: str) -> bool:
+    if text in markdown:
+        return True
+    return text.replace("|", "\\|") in markdown
+
+
+def check_link_identity(context: dict[str, Any], graph: dict[str, Any]) -> list[str]:
+    keys: set[str] = set()
+    for block in context.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for row in block.get("rows") or []:
+            if isinstance(row, dict) and row.get("row_key"):
+                keys.add(str(row["row_key"]))
+    errors: list[str] = []
+    for link in graph.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        row_key = link.get("row_key")
+        if row_key and str(row_key) not in keys:
+            errors.append(
+                f"graph link {link.get('cell')} row_key {row_key} missing from context"
+            )
+            break
+    return errors
+
+
 def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
     errors: list[str] = []
     for block in context.get("blocks") or []:
@@ -178,6 +205,10 @@ def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
             label = str(row.get("label") or "")
             if label and label not in markdown:
                 errors.append(f"context.md missing row {label}")
+                break
+            row_key = row.get("row_key")
+            if row_key and not _in_markdown(str(row_key), markdown):
+                errors.append(f"context.md missing row_key {row_key}")
                 break
             concept = row.get("concept_id")
             if concept and str(concept) not in markdown:
@@ -205,6 +236,14 @@ def check_graph_markdown(graph: dict[str, Any], markdown: str) -> list[str]:
         formula = link.get("formula")
         if formula and str(formula) not in markdown:
             errors.append(f"graph.md missing formula {formula}")
+            break
+        row_key = link.get("row_key")
+        if row_key and not _in_markdown(str(row_key), markdown):
+            errors.append(f"graph.md missing row_key {row_key}")
+            break
+        period_id = link.get("period_id")
+        if period_id and str(period_id) not in markdown:
+            errors.append(f"graph.md missing period {period_id}")
             break
     return errors
 
@@ -310,6 +349,7 @@ def main() -> int:
         errors.extend(check_context(context))
         errors.extend(check_graph(graph))
         errors.extend(check_pointer_matches(context, graph))
+        errors.extend(check_link_identity(context, graph))
         if args.context_md is not None:
             try:
                 markdown = args.context_md.read_text(encoding="utf-8")

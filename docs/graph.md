@@ -1,6 +1,6 @@
 # Граф формул
 
-Публичный граф — два файла с одними и теми же фактами: `graph.json` и `graph.md` (schema `1.5.0`). Cell-level рёбра и AST остаются в `ir/*.parquet`. Модель — `context.json` / `context.md`. Обход одной ячейки — `GET .../graph/trace` и `GET .../graph/trace.md`, не каталог всех ячеек.
+Публичный граф — два файла с одними и теми же фактами: `graph.json` и `graph.md` (schema `1.6.0`). Cell-level рёбра и AST остаются в `ir/*.parquet`. Модель — `context.json` / `context.md`. Обход одной ячейки — `GET .../graph/trace` и `GET .../graph/trace.md`, не каталог всех ячеек.
 
 Код: `src/finance_context/graph/` (`stage.py`, `cycles.py`, `trace.py`), рендер — `src/finance_context/render/graph.py`, развёртка диапазонов — `formulas/csr.py`. Пайплайн: `parse → compile → layout → mapping → graph → build → render`.
 
@@ -15,12 +15,12 @@
 | Формула, AST, кэш ячейки | `ir/cells.parquet` |
 | Ссылки как в формуле (диапазон — одна цель, named ranges) | `ir/edges.parquet` |
 | Cell→cell после expand: `dangling` / `dangling_reason` / `status` / `reason` / `evidence` / `range_ref` / `truncated` / `col_offset` / `period_lag` | `ir/cell_edges.parquet` |
-| `row_key`, `concept_id`, `period_id`, `node_type` (включая `empty` для проверенных пустых ячеек) | `ir/graph_index.parquet` |
-| Counts (`nodes` / `edges` — размеры cell-level parquet), `iterate`, циклы, `circularity_hints`, `dangling_classes` и `links[]` | `graph.json` и то же в `graph.md` (schema `1.5.0`) |
+| `row_key`, `concept_id`, `period_id`, `node_type` (включая `empty` для проверенных пустых ячеек) | `ir/graph_index.parquet`; у формулы ещё `links[].row_key` и `links[].period_id` |
+| Counts (`nodes` / `edges` — размеры cell-level parquet), `iterate`, циклы, `circularity_hints`, `dangling_classes` и `links[]` | `graph.json` и то же в `graph.md` (schema `1.6.0`) |
 | Каждый `<c>` листа: `populated` или `styled_blank` | `raw/cell_presence.parquet` |
 | Строка отчёта: лейбл, mapping, одна формула строки, ряд кэша по оси блока | `context.json` / `context.md` (schema `1.9.0`) |
 
-`links[]` — одна запись на ячейку с формулой: `cell`, A1-текст один раз, `refs`. `SUM(J9:J12)` остаётся одним диапазоном, не десятками `range_member`. Пустые члены диапазона в `links` не входят. `nodes` и `edges` — не `len(links)`.
+`links[]` — одна запись на ячейку с формулой: `cell`, A1-текст один раз, `refs`, `row_key` строки контекста и `period_id` колонки оси. Оба ключа `null`, если ячейка вне layout. `SUM(J9:J12)` остаётся одним диапазоном, не десятками `range_member`. Пустые члены диапазона в `links` не входят. `nodes` и `edges` — не `len(links)`. `context.md` печатает тот же `row_key` и заголовок периода с буквой колонки (`Y23 (AA)`), поэтому строка, ячейка и trace сходятся без parquet.
 
 `context.json` хранит pointer `graph` (счётчики и пути). В нём нет `precedents_rows`, `dependents_rows`, `precedent_cells`, `formula_ast` и второго каталога строк (`inventory` / `unmapped` / `excluded`). Формула строки — один fingerprint, значения — массив кэша или `null` по оси блока.
 
@@ -56,7 +56,7 @@ SCC на cell-edges `kind ∈ {ref, cross_sheet, range}` (без unresolved/dang
 
 ## Трассировка
 
-CLI пишет `context.json`, `context.md`, `graph.json` и `graph.md`. HTTP и `scripts/run.sh` (при живом `serve`) качают те же документы в `out/<timestamp>/json/` и `out/<timestamp>/md/`. `scripts/check-graph.py` требует schema `1.5`, ключ `links` и parquet-пути в `artifacts`, запрещает AST и развёрнутый `range_member` в публичном графе, запрещает второй каталог строк и per-cell `source` в context, и сверяет, что Markdown содержит те же блоки, строки и links.
+CLI пишет `context.json`, `context.md`, `graph.json` и `graph.md`. HTTP и `scripts/run.sh` (при живом `serve`) качают те же документы в `out/<timestamp>/json/` и `out/<timestamp>/md/`. `scripts/check-graph.py` требует schema `1.6`, ключ `links` и parquet-пути в `artifacts`, запрещает AST и развёрнутый `range_member` в публичном графе, запрещает второй каталог строк и per-cell `source` в context, и сверяет, что Markdown содержит те же блоки, строки, `row_key`, `period_id` и links. Ненулевой `row_key` ссылки должен быть строкой контекста.
 
 Запись link:
 
@@ -64,7 +64,9 @@ CLI пишет `context.json`, `context.md`, `graph.json` и `graph.md`. HTTP и
 {
   "cell": "P&L!C13",
   "formula": "=SUM(C9:C12)",
-  "refs": ["P&L!C9:C12"]
+  "refs": ["P&L!C9:C12"],
+  "row_key": "P&L|13|P&L!r1",
+  "period_id": "2024"
 }
 ```
 

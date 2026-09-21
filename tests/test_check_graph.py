@@ -24,13 +24,19 @@ def _write(path: Path, payload: dict) -> Path:
 
 def _ok_graph(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.5.0",
+        "schema_version": "1.6.0",
         "job_id": "job-1",
         "nodes": 8,
         "edges": 20,
         "iterate": False,
         "links": [
-            {"cell": "P&L!C13", "formula": "=SUM(C9:C12)", "refs": ["P&L!C9:C12"]},
+            {
+                "cell": "P&L!C13",
+                "formula": "=SUM(C9:C12)",
+                "refs": ["P&L!C9:C12"],
+                "row_key": "P&L|13|P&L!r2",
+                "period_id": "2024",
+            },
         ],
         "artifacts": {
             "cells": "ir/cells.parquet",
@@ -120,7 +126,7 @@ def test_rejects_old_graph_schema_and_sidecar_artifacts(tmp_path: Path) -> None:
     )
     result = _run(str(context), str(graph))
     assert result.returncode == 1
-    assert "1.5" in result.stderr
+    assert "1.6" in result.stderr
     assert "edges_json" in result.stderr
 
 
@@ -130,11 +136,22 @@ def test_markdown_must_repeat_blocks_and_links(tmp_path: Path) -> None:
     context_md = tmp_path / "context.md"
     graph_md = tmp_path / "graph.md"
     context_md.write_text(
-        "# Financial context\n\nEBITDA\npnl.ebitda\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n",
+        "\n".join(
+            [
+                "# Financial context",
+                "",
+                "EBITDA",
+                "P&L\\|13\\|P&L!r2",
+                "pnl.ebitda",
+                "P&L!r2",
+                "=SUM(RC[-4]:RC[-1])",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
     graph_md.write_text(
-        "# Formula graph\n\nNodes: 8\nEdges: 20\nP&L!C13\n=SUM(C9:C12)\n",
+        "# Formula graph\n\nNodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\n=SUM(C9:C12)\n",
         encoding="utf-8",
     )
     result = _run(
@@ -146,6 +163,27 @@ def test_markdown_must_repeat_blocks_and_links(tmp_path: Path) -> None:
         str(graph_md),
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_link_row_key_must_exist_in_context(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    graph = _write(
+        tmp_path / "graph.json",
+        _ok_graph(
+            links=[
+                {
+                    "cell": "P&L!C13",
+                    "formula": "=SUM(C9:C12)",
+                    "refs": ["P&L!C9:C12"],
+                    "row_key": "P&L|99|P&L!r2",
+                    "period_id": "2024",
+                }
+            ]
+        ),
+    )
+    result = _run(str(context), str(graph))
+    assert result.returncode == 1
+    assert "row_key" in result.stderr
 
 
 def test_trace_rejects_ast(tmp_path: Path) -> None:

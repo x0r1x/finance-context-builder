@@ -26,8 +26,8 @@
 | `ir/` | Шаблоны, AST, `edges.parquet` (как в формуле) и `cell_edges.parquet` (развёрнутые ячейки) |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `graph.json` / `graph.md` | Схема `1.5.0`: counts cell-level parquet, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, A1-формула, входы; диапазон не развёрнут). AST и cell-edges остаются в `ir/` |
-| `context.json` / `context.md` | Схема `1.9.0`: паспорт, `timeline` (единственное место фаз и флагов), каждый блок и каждая строка (`disposition`, `concept_id`, одна формула, ряд значений по оси). Без `inventory` / `unmapped` / `excluded`. `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph`. Markdown повторяет те же блоки, строки и значения без обрезки |
+| `graph.json` / `graph.md` | Схема `1.6.0`: counts cell-level parquet, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, A1-формула, `row_key`, `period_id`, входы; диапазон не развёрнут). AST и cell-edges остаются в `ir/` |
+| `context.json` / `context.md` | Схема `1.9.0`: паспорт, `timeline` (единственное место фаз и флагов), каждый блок и каждая строка (`row_key`, `disposition`, `concept_id`, одна формула, ряд значений по оси). Заголовок периода в Markdown — `period_key` и буква колонки (`Y23 (AA)`). Под блоком список `relations` теми же `row_key`. Без `inventory` / `unmapped` / `excluded`. `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph` |
 | `unmapped.json` | Abstained-строки из `blocks[].rows` (после `run.sh`, в корне прогона) |
 
 Между джобами: `$DATA_DIR/glossary.json` (выученные high-confidence пары) и `taxonomy_embeddings.npz` (кэш эмбеддингов концептов).

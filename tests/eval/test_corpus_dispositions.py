@@ -268,7 +268,20 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         ]
         assert revenues
         assert all(row.concept_id == "cf.receipts" for row in revenues)
-        assert ctx_doc.mapping_stats.concept_coverage == 1.0
+        totals = [
+            row
+            for row in context_rows
+            if row.sheet == "Balance Sheet" and row.label == "Total"
+        ]
+        assert len(totals) == 2
+        assert all(row.disposition == "abstained" and row.concept_id is None for row in totals)
+        check = next(
+            row for row in context_rows if row.sheet == "Balance Sheet" and row.label == "CHECK"
+        )
+        assert check.kind == "helper"
+        assert check.disposition == "excluded"
+        assert check.formula
+        assert ctx_doc.mapping_stats.concept_coverage == 89 / 91
         assert quality.semantic_coverage < 1.0
         assert quality.confidence_threshold_passed is False
     if not expectations:

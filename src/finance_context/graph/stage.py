@@ -91,7 +91,7 @@ def build_formula_graph(
     hints = circularity_hints(mapping, layout, index_rows, cycles)
     iterate = _workbook_iterate(dest_dir)
     doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
-    doc.links = _formula_links(cells, edges)
+    doc.links = _formula_links(cells, edges, row_meta, period_by_cell)
     write_json(dest_dir / "graph.json", doc.model_dump(mode="json", by_alias=True))
     from finance_context.render.graph import render_graph_markdown
 
@@ -313,13 +313,23 @@ def _opt_bool(value: object) -> bool | None:
     return bool(value)
 
 
-def _formula_links(cells: list[dict], formula_edges: list[dict]) -> list[FormulaLink]:
+def _formula_links(
+    cells: list[dict],
+    formula_edges: list[dict],
+    row_meta: dict[tuple[str, int], tuple[str, str | None]],
+    period_by_cell: dict[tuple[str, int], str],
+) -> list[FormulaLink]:
     formula_by_node: dict[str, str] = {}
+    identity: dict[str, tuple[str | None, str | None]] = {}
     for cell in cells:
         raw = cell.get("formula_raw")
         if not raw:
             continue
-        formula_by_node[f"{cell['sheet']}!{cell['addr']}"] = str(raw)
+        node = f"{cell['sheet']}!{cell['addr']}"
+        formula_by_node[node] = str(raw)
+        meta = row_meta.get((str(cell["sheet"]), int(cell["row"])))
+        period = period_by_cell.get((str(cell["sheet"]), int(cell["col"])))
+        identity[node] = (meta[0] if meta else None, period)
     grouped: dict[str, list[str]] = {}
     for edge in formula_edges:
         source = str(edge.get("source") or "")
@@ -331,10 +341,19 @@ def _formula_links(cells: list[dict], formula_edges: list[dict]) -> list[Formula
             refs.append(str(target))
     for node in formula_by_node:
         grouped.setdefault(node, [])
-    return [
-        FormulaLink(cell=cell, formula=formula_by_node.get(cell), refs=refs)
-        for cell, refs in sorted(grouped.items())
-    ]
+    links: list[FormulaLink] = []
+    for cell, refs in sorted(grouped.items()):
+        row_key, period_id = identity.get(cell, (None, None))
+        links.append(
+            FormulaLink(
+                cell=cell,
+                formula=formula_by_node.get(cell),
+                refs=refs,
+                row_key=row_key,
+                period_id=period_id,
+            )
+        )
+    return links
 
 
 def _enrich_edge(

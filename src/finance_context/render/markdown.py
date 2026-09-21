@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from finance_context.context.measure import Measure
+from finance_context.excel.a1 import index_to_col
 from finance_context.models.context import (
     BlockRow,
     ContextDocument,
@@ -113,12 +114,14 @@ def _block_section(block: FinancialBlock) -> list[str]:
     if not block.rows:
         return lines
     headers = [_period_label(item) for item in block.periods]
-    cols = ["Label", "Kind", "Disposition", "Concept", "Unit", "Formula", *headers]
+    cols = ["Label", "Row", "Kind", "Disposition", "Concept", "Unit", "Formula", *headers]
     lines.append("| " + " | ".join(_cell(col) for col in cols) + " |")
     lines.append("| " + " | ".join("---" for _ in cols) + " |")
     for row in block.rows:
         lines.append(_row_line(row, len(block.periods)))
     lines.append("")
+    if block.relations:
+        lines.extend(_relations_section(block.relations))
     return lines
 
 
@@ -144,6 +147,7 @@ def _row_line(row: BlockRow, period_count: int) -> str:
         values.extend([None] * (period_count - len(values)))
     cells = [
         _cell(row.label),
+        _cell(row.row_key),
         _cell(row.kind),
         _cell(row.disposition or ""),
         _cell(concept),
@@ -154,10 +158,55 @@ def _row_line(row: BlockRow, period_count: int) -> str:
     return "| " + " | ".join(cells) + " |"
 
 
+def _relations_section(relations: list[dict]) -> list[str]:
+    lines = [
+        "Relations:",
+        "",
+        "| Kind | Source | Target | Members |",
+        "| --- | --- | --- | --- |",
+    ]
+    for rel in relations:
+        members = rel.get("member_row_keys") or []
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _cell(rel.get("kind") or ""),
+                    _cell(rel.get("source_row_key") or ""),
+                    _cell(rel.get("target_row_key") or ""),
+                    _cell(", ".join(str(key) for key in members)),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    return lines
+
+
 def _period_label(header: dict) -> str:
     text = str(header.get("text") or "").strip()
     key = str(header.get("period_key") or "").strip()
-    return text or key
+    name = key if _prefers_period_key(text, key) else (text or key)
+    letter = _column_letter(header.get("col"))
+    if name and letter:
+        return f"{name} ({letter})"
+    return name or letter
+
+
+def _prefers_period_key(text: str, key: str) -> bool:
+    if not key:
+        return False
+    if not text or text == key:
+        return True
+    if key[0] in "YQMP" and key[1:].isdigit():
+        return True
+    return key[:4].isdigit()
+
+
+def _column_letter(col: object) -> str:
+    if isinstance(col, int) and col > 0:
+        return index_to_col(col)
+    return ""
 
 
 def _raw(value: str | None) -> str:
