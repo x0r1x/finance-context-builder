@@ -19,6 +19,7 @@ expectations:
   - {label: Net Present Value (NPV), concept_id: val.npv}
   - {label: Cashflow available for equity (FCFE), concept_id: cf.fcf}
   - {label: Operating cashflow, concept_id: cf.cfo}
+  - {label: Total operating costs, parent: Cashflow Statement, concept_id: cf.opex_paid}
   - {label: Total operating costs, concept_id: pnl.opex}
   - {label: DSCR minimum, concept_id: cov.dscr_limit}
   - {label: Operating lifetime, concept_id: ops.operating_period}

@@ -2,7 +2,7 @@
 
 Маппинг — retrieve-and-align, не классификация на закрытом множестве. Таксономия — **словарь**, не воронка контента: строка не выбрасывается, если концепт не найден. Резолвер принимает `concept_id` только выше порога; иначе fact остаётся `unknown`, но в context остаются подпись, hints, соседи, формула и top-3 кандидатов.
 
-Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.6.0`.
+Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.7.0`.
 
 Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [граф](graph.md), [разбор unmapped](review.md), [архитектура](architecture.md).
 
@@ -42,7 +42,7 @@ Layout помечает тело блока видами строк. Каска�
 
 | Сигнал | `source` в строке | Роль |
 | --- | --- | --- |
-| `glossary` | `glossary` | Выученная пара `(normalize(label), normalize(parent)) → concept_id` |
+| `glossary` | `glossary` | Выученная пара `(normalize(label), normalize(parent)) → concept_id`. Тот же `skip_concept`, что у lexical: на CFS `Gross Revenues` не остаётся `pnl.revenue`, `Equity` в Sources не остаётся `bs.equity`. `reconcile_glossary` не затирает живую пару отчётов (`pnl.revenue` ↔ `cf.receipts`, `bs.equity` ↔ `cf.equity_issue`) |
 | `lexical` | `rule` | Фразы из `labels` / `aliases`, секция, `skip_concept`; `anti_labels` — жёсткий guard, не основной скоринг |
 | `structure` | `structure` | Граф формул, соседи, priors по dependents |
 | `embed` | `embed` | Косинус к эмбеддингам лейблов концептов |
@@ -138,7 +138,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 
 ## Hints и inventory
 
-Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate / stock), `statement`, `unit` (`money` / `count` / `rate` / `years`), `currency` (`GBP` / `EUR` / `USD` / `RUB`; те же обработчики: символ, ISO, локальное сокращение — `£`/`gbp`/`pound`/`фунт`, `€`/`eur`/`euro`/`евро`, `$`/`usd`/`dollar`/`долл`, `₽`/`rub`/`руб`/`РУБ`), `scale` (`unit` / `k` / `m` / `bn`), `sign` (`inflow` / `outflow` / `stock`), плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`). `k£` в лейбле или колонке Units → `unit=money`, `currency=GBP`, `scale=k` (не `null`). `%` и percent-format → `rate`; голый `per year` без `%` тоже `rate`. Mapping `value_kind` для prune по-прежнему `count` на длительностях; в context длительность — `years`. Schema `1.6.0`, поля hints аддитивны. Unknown сразу полезен даунстриму.
+Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate / stock), `statement`, `unit` (`money` / `count` / `rate` / `years`), `currency` (`GBP` / `EUR` / `USD` / `RUB`; те же обработчики: символ, ISO, локальное сокращение — `£`/`gbp`/`pound`/`фунт`, `€`/`eur`/`euro`/`евро`, `$`/`usd`/`dollar`/`долл`, `₽`/`rub`/`руб`/`РУБ`), `scale` (`unit` / `k` / `m` / `bn`), `sign` (`inflow` / `outflow` / `stock`), плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`). `k£` в лейбле или колонке Units → `unit=money`, `currency=GBP`, `scale=k` (не `null`). `%` и percent-format → `rate`; голый `per year` без `%` тоже `rate`. Mapping `value_kind` для prune по-прежнему `count` на длительностях; в context длительность — `years`. Schema `1.7.0`, поля hints аддитивны. Смысл, роль и денежная семантика — отдельные поля, см. выше. Unknown сразу полезен даунстриму.
 
 Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, `disposition=header`, не concept. Строка **Scenario Chosen** — `flag` / `context_role=scenario_selector`: каскад её не тегирует, но inventory обязан держать индекс (ячейка D).
 
@@ -153,6 +153,22 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 Дополнительно кладётся ключ с классом секции (`section_class`), чтобы тот же лейбл в похожей секции другой книги подхватился.
 
 Это кэш уверенных совпадений, не место для костылей одной модели. Новое значение — концепт в yaml.
+
+## Смысл и роль
+
+Выбранный `concept_id` — **отчётный концепт** этой строки (его ждут расчёты и gold). Он не исчерпывает смысл. Один лейбл живёт на разных уровнях: P&L `Gross revenues` → `pnl.revenue`; CFS `Gross Revenues` → `cf.receipts`, участие в CFADS — роль `cfads_input`, не концепт `cf.cfads`. `Equity` на балансе → `bs.equity`; `Equity (k£)` в Sources → `cf.equity_issue` плюс роль `cf.sources`.
+
+На строке context (`1.7.0`) и в `MappedRow` три поля. Кандидаты top-3 остаются сырыми сигналами и **не** считаются взаимозаменяемыми концептами.
+
+| Поле | Что это |
+| --- | --- |
+| `semantic_identity` | `family` + экономический `concept_id` + `confidence`. Для денежной проекции, чей лейбл называет начисление (`Gross Revenues` на CFS), identity — `pnl.revenue`, а выбранный `concept_id` — `cf.receipts`. Более узкий ребёнок побеждает родителя (`ops.inflation_revenue`, не `ops.inflation`). Эмиссия в Sources — `cf.equity_issue`, не остаток `bs.equity` |
+| `reporting_roles` | Где используется **эта** строка. Выбранный концепт с `selected: true`, плюс `context_role` (`uses`, `sources`, `cfads_input`, `assumption`, …) и layout-концепты `cf.uses` / `cf.sources`. `cf.cfads` сюда не копируется |
+| `cash_semantics` | `recognition`: `accrual` / `cash` / `noncash` / `rate` / `stock`. `cash_movement`: `inflow` / `outflow` / `none`. `Capitalized Interest` остаётся `pnl.interest` (gold), но recognition `noncash`: капитализация — не расход P&L |
+
+`secondary_concepts` по-прежнему несёт `cf.uses` / `cf.sources` для любой строки секции, не только для capex. Участие в CFADS — только `context_role=cfads_input`.
+
+Секционный rollup `cf.capex` не вешается на fee / arrangement: это не capex, даже если строка лежит в Uses.
 
 ## Уверенность
 

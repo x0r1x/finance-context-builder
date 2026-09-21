@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.6.0"
+SCHEMA_VERSION = "1.7.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -51,6 +51,27 @@ class CandidateHit(BaseModel):
     concept_id: str
     score: float
     evidence: str | None = None
+
+
+class SemanticIdentity(BaseModel):
+    """Economic meaning of the line. Not the statement slot and not a rival candidate."""
+
+    family: str
+    concept_id: str
+    confidence: float
+
+
+class ReportingRole(BaseModel):
+    """Where this row is used: selected statement concept, or a layout/calculation role."""
+
+    role: str
+    confidence: float
+    selected: bool = False
+
+
+class CashSemantics(BaseModel):
+    recognition: Literal["accrual", "cash", "noncash", "rate", "stock"]
+    cash_movement: Literal["inflow", "outflow", "none"]
 
 
 class NumericSummary(BaseModel):
@@ -107,6 +128,9 @@ class MetricSeries(BaseModel):
     cells: list[RoleCell] = Field(default_factory=list)
     context_role: str | None = None
     secondary_concepts: list[str] = Field(default_factory=list)
+    semantic_identity: SemanticIdentity | None = None
+    reporting_roles: list[ReportingRole] = Field(default_factory=list)
+    cash_semantics: CashSemantics | None = None
 
 
 class InventoryRow(BaseModel):
@@ -133,6 +157,9 @@ class InventoryRow(BaseModel):
     cells: list[RoleCell] = Field(default_factory=list)
     context_role: str | None = None
     secondary_concepts: list[str] = Field(default_factory=list)
+    semantic_identity: SemanticIdentity | None = None
+    reporting_roles: list[ReportingRole] = Field(default_factory=list)
+    cash_semantics: CashSemantics | None = None
 
 
 class ModelPeriod(BaseModel):

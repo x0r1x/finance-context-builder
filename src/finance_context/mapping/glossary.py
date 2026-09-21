@@ -3,10 +3,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from finance_context.mapping.models import Candidate, RowContext
+from finance_context.mapping.lexical import skipped_concept_ids
+from finance_context.mapping.models import Candidate, LexicalPattern, RowContext
 from finance_context.mapping.normalize import normalize_label, section_class
 from finance_context.mapping.structure import BookView
 from finance_context.store.fs import write_json
+
+# Same label, two live concepts: accrual/stock identity versus the statement projection.
+_STATEMENT_PAIRS = {
+    ("pnl.revenue", "cf.receipts"),
+    ("pnl.opex", "cf.opex_paid"),
+    ("pnl.tax", "cf.tax_paid"),
+    ("pnl.interest", "cf.interest_paid"),
+    ("bs.equity", "cf.equity_issue"),
+}
 
 
 def load_glossary(path: Path | None) -> dict[tuple[str, str], str]:
@@ -75,7 +85,13 @@ def reconcile_glossary(
         label, _parent = key
         owners = phrase_to_ids.get(label, set())
         if len(owners) == 1:
-            out[key] = next(iter(owners))
+            owner = next(iter(owners))
+            if concept_id == owner or concept_id not in known_ids:
+                out[key] = owner
+            elif _statement_pair(owner, concept_id):
+                out[key] = concept_id
+            else:
+                out[key] = owner
             continue
         if concept_id in owners:
             out[key] = concept_id
@@ -116,10 +132,19 @@ def learn_from_rows(
     return learned
 
 
+def _statement_pair(left: str, right: str) -> bool:
+    return (left, right) in _STATEMENT_PAIRS or (right, left) in _STATEMENT_PAIRS
+
+
 class GlossarySignal:
     name = "glossary"
 
-    def __init__(self, glossary: dict[tuple[str, str], str]) -> None:
+    def __init__(
+        self,
+        glossary: dict[tuple[str, str], str],
+        patterns: list[LexicalPattern] | None = None,
+    ) -> None:
+        self.patterns = list(patterns or [])
         self.glossary = {
             (normalize_label(label), normalize_label(parent)): concept_id
             for (label, parent), concept_id in glossary.items()
@@ -134,6 +159,8 @@ class GlossarySignal:
             klass = section_class(ctx.parent_label, ctx.section_path, ctx.sheet)
             concept_id = self.glossary.get((normalize_label(ctx.label), klass))
         if not concept_id or concept_id not in book.taxonomy:
+            return []
+        if concept_id in skipped_concept_ids(ctx, self.patterns):
             return []
         return [
             Candidate(

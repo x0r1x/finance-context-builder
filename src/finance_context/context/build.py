@@ -11,14 +11,22 @@ from finance_context.layout.params import is_scenario_selector_label
 from finance_context.layout.periods import display_cell_text, infer_grain
 from finance_context.mapping.eval import context_report_metrics, inventory_coverage_counts
 from finance_context.mapping.graph import cell_ref_row, row_adjacency, row_key_ref
-from finance_context.mapping.models import MappedRow, MappingDocument, MapSource, RowContext, RowRelation
+from finance_context.mapping.models import (
+    MappedRow,
+    MappingDocument,
+    MapSource,
+    RowContext,
+    RowRelation,
+)
 from finance_context.mapping.rowroles import infer_row_roles
 from finance_context.mapping.rules import is_noise_label
+from finance_context.mapping.semantics import classify_semantics
 from finance_context.mapping.statement import statement_for_row
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
     CandidateHit,
+    CashSemantics,
     ContextDocument,
     FinancialBlock,
     GraphPointer,
@@ -28,8 +36,10 @@ from finance_context.models.context import (
     MetricSeries,
     NumericSummary,
     PeriodValue,
+    ReportingRole,
     RoleCell,
     RowHints,
+    SemanticIdentity,
     SourceRef,
     WorkbookRaw,
 )
@@ -183,6 +193,14 @@ def build_context(
                     secondary = list(
                         dict.fromkeys([*mapped.secondary_concepts, *secondary])
                     )
+                identity, reporting_roles, cash = classify_semantics(
+                    label=layout_row.label,
+                    concept_id=mapped.concept_id if mapped else None,
+                    score=mapped.score if mapped else None,
+                    alternatives=list(mapped.alternatives) if mapped else [],
+                    context_role=context_role,
+                    secondary_concepts=secondary,
+                )
                 candidates = _candidates_for(mapped)
                 if layout_row.kind in _SERIES_KINDS and not (
                     layout_row.kind == "fact" and is_noise_label(layout_row.label)
@@ -207,6 +225,9 @@ def build_context(
                         role_cells=role_cells,
                         context_role=context_role,
                         secondary_concepts=secondary,
+                        semantic_identity=identity,
+                        reporting_roles=reporting_roles,
+                        cash_semantics=cash,
                     )
                     series_unit = series_unit or series.unit
                     if mapped is not None and mapped.disposition == "excluded":
@@ -257,6 +278,9 @@ def build_context(
                         cells=role_cells,
                         context_role=context_role,
                         secondary_concepts=secondary,
+                        semantic_identity=identity,
+                        reporting_roles=reporting_roles,
+                        cash_semantics=cash,
                     )
                 )
             blocks.append(
@@ -382,6 +406,9 @@ def _series_for_row(
     role_cells: list[RoleCell],
     context_role: str | None = None,
     secondary_concepts: list[str] | None = None,
+    semantic_identity: SemanticIdentity | None = None,
+    reporting_roles: list[ReportingRole] | None = None,
+    cash_semantics: CashSemantics | None = None,
 ) -> MetricSeries:
     row_num = layout_row.row
     label_addr = format_addr(label_col, row_num)
@@ -472,6 +499,9 @@ def _series_for_row(
         cells=role_cells,
         context_role=context_role,
         secondary_concepts=list(secondary_concepts or []),
+        semantic_identity=semantic_identity,
+        reporting_roles=list(reporting_roles or []),
+        cash_semantics=cash_semantics,
     )
 
 
