@@ -74,6 +74,35 @@ def test_styled_blank_and_populated_mismatch() -> None:
     assert by_target["P&L!B2"].dangling is True
 
 
+def test_absolute_and_range_anchors_are_kept() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=$C$9+Construction!E19", sheet="Amortization", addr="E8")
+    known = {"Amortization!E8", "Amortization!C9", "Construction!E19"}
+    rows = expand_cell_edges(
+        parsed.edges, known, known_sheets={"Amortization", "Construction"}
+    )
+    by_target = {row.target: row for row in rows}
+    absolute = by_target["Amortization!C9"]
+    assert absolute.abs_col is True
+    assert absolute.abs_row is True
+    relative = by_target["Construction!E19"]
+    assert relative.kind == "cross_sheet"
+    assert relative.abs_col is False
+    assert relative.abs_row is False
+
+    ranged = engine.parse("=SUM($B$9:B12)", sheet="P&L", addr="B13")
+    members = expand_cell_edges(
+        ranged.edges,
+        {"P&L!B13", "P&L!B9", "P&L!B10", "P&L!B11", "P&L!B12"},
+        known_sheets={"P&L"},
+    )
+    assert members
+    assert all(row.abs_col is True and row.abs_row is True for row in members)
+    assert all(row.abs_col_end is False and row.abs_row_end is False for row in members)
+
+
 def test_ppmt_and_if_refs_expand_to_cell_edges() -> None:
     from finance_context.formulas.engine import FormulaEngine
 
