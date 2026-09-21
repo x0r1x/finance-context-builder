@@ -2,7 +2,7 @@
 
 Маппинг — retrieve-and-align, не классификация на закрытом множестве. Таксономия — **словарь**, не воронка контента: строка не выбрасывается, если концепт не найден. Резолвер принимает `concept_id` только выше порога; иначе fact остаётся `unknown`, но в context остаются подпись, hints, соседи, формула и top-3 кандидатов.
 
-Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.4.0`.
+Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.5.0`.
 
 Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [граф](graph.md), [разбор unmapped](review.md), [архитектура](architecture.md).
 
@@ -53,7 +53,7 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Перед с�
 Lexical дополнительно знает устойчивые конструкции из блока `patterns:` в yaml. Это **не** то же самое, что structure-агрегат:
 
 - **Parent rollup** (дети наследуют секцию): `section_contains` `capex`/`uses` → `cf.capex`; `opex`/`operating`/`costs` → `pnl.opex`; `revenue` → `pnl.revenue`; D&A-секция → `pnl.da`. Кандидат с score 0.9. Не-денежные дети (срок жизни, MW, CPI, share premium, balance b/f) отсекаются `unless.label_contains` в тех же паттернах — иначе assumptions становятся opex/revenue. Pattern-хит **не** фильтруется `anti_labels` концепта до prune; стоп для rollup — `unless`.
-- **Skip-pattern** запрещает концепт в секции: `bs.ap` в debt; `pnl.tax` на листе/пути `cfs` или `cash flow`, чтобы `Income Tax` в ОДДС не оставался P&L-налогом; `bs.equity` для `injected` / sources / construction; `cf.disbursements` для CFADS / available-for-debt. Глобально ставить `statement=cf` по имени листа нельзя: выручка на Cashflow Statement в PF-моделях остаётся `pnl.revenue`.
+- **Skip-pattern** запрещает концепт в секции: `bs.ap` в debt; `pnl.tax` / `pnl.opex` / `pnl.revenue` / `pnl.interest` на `cfs` / `cash flow`, чтобы ОДДС не оставался P&L; `bs.equity` для `injected` / sources / construction; `cf.disbursements` для CFADS / available-for-debt. Не ставить `statement=cf` на **весь** лист: `Cash in hand` остаётся `bs.cash`. Выручка/OPEX/налог/процент на CFS → `cf.receipts` / `cf.opex_paid` / `cf.tax_paid` / `cf.interest_paid` (pattern + alias crosswalk).
 - `section_contains` с пробелом (`cash flow`) требует **все** токены фразы в `section_tokens` (лейбл ∪ родитель ∪ путь ∪ лист). Одно слово `cashflow` после нормализации не существует — это два токена.
 - Точная строка `cash flow` (без available/operating/net) → `cf.net`.
 - Если у концепта заданы `section_hints`, фраза принимается только при попадании хинта в лейбл / родителя / путь секции / лист (например `Arrangement fee` на Ratios: в hints есть `ratios` / `irr`).
@@ -68,7 +68,7 @@ Lexical дополнительно знает устойчивые констр�
 
 | kind | Когда | Что предлагает |
 | --- | --- | --- |
-| `alias` | Ячейка = одна ячейка другой строки/листа | Тот же `concept_id`, что у источника (score ~0.96). Пример: `Dashboard!C17 = Weekly_Forecast!C39` |
+| `alias` | Ячейка = одна ячейка другой строки/листа | Тот же `concept_id`, что у источника (score ~0.96), **кроме** CFS: P&L→`cf.*` crosswalk (0.94) и кроме `bs.*` на Sources/Uses. Пример: `Dashboard!C17 = Weekly_Forecast!C39` |
 | `aggregate` | `SUM` соседних fact-строк | Общий концепт детей или их `broader`, **только если замаплены все члены диапазона**. Один смапленный ребёнок (Insurance внутри EBITDA) концепт родителю не копирует. Итог не становится `cf.net` только потому что «Total». SUM разнонаправленных equity-линий под IRR → `cf.equity_cashflow`, не `cf.receipts`. Пример: `Total Inflows = SUM(collections)` → `cf.receipts` |
 | `diff` | Разность двух строк | Родитель из `calculations` с противоположными весами |
 | `roll` | Roll-forward остатка | Тот же балансный концепт, что у связанной строки |

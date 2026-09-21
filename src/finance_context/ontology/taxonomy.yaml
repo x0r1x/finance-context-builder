@@ -86,6 +86,23 @@ patterns:
       label_contains: [tax]
       unless:
         label_contains: [rate, deferred, accrued, taxable, pre-tax, before tax]
+  - skip_concept: pnl.opex
+    when:
+      section_contains: [cfs, cash flow, cashflow]
+      unless:
+        label_contains: [ebitda, ebit, revenue, cfads, tax, interest, capex]
+  - skip_concept: pnl.revenue
+    when:
+      section_contains: [cfs, cash flow, cashflow]
+      label_contains: [revenue, revenues]
+      unless:
+        label_contains: [cfads]
+  - skip_concept: pnl.interest
+    when:
+      section_contains: [cfs, cash flow, cashflow]
+      label_contains: [interest]
+      unless:
+        label_contains: [rate, capitalized]
   - concept: cf.capex
     score: 0.9
     evidence: parent capex or uses section
@@ -144,6 +161,55 @@ patterns:
       label_contains: [income tax, tax]
       unless:
         label_contains: [rate, deferred, accrued, taxable, pre-tax, before tax]
+  - concept: cf.receipts
+    score: 0.93
+    evidence: cash receipts on cashflow statement
+    when:
+      section_contains: [cfs, cash flow, cashflow]
+      label_contains: [gross revenue, revenue, revenues]
+      unless:
+        label_contains: [cfads, tax, opex, cost]
+  - concept: cf.opex_paid
+    score: 0.93
+    evidence: cash opex on cashflow statement
+    when:
+      section_contains: [cfs, cash flow, cashflow]
+      any:
+        - {label_contains: [opex]}
+        - {label_contains: [operating]}
+        - {label_contains: [maintenance]}
+        - {label_contains: [lease]}
+        - {label_contains: [spv]}
+      unless:
+        label_contains: [ebitda, ebit, revenue, cfads, tax, interest, capex]
+  - concept: cf.interest_paid
+    score: 0.93
+    evidence: cash interest on cashflow statement
+    when:
+      section_contains: [cfs, cash flow, cashflow]
+      label_contains: [interest]
+      unless:
+        label_contains: [rate, capitalized]
+  - concept: ops.inflation_cost
+    score: 0.95
+    evidence: cost inflation assumption
+    when:
+      label_contains: [inflation]
+      any:
+        - {label_contains: [cost]}
+        - {label_contains: [costs]}
+  - skip_concept: ops.inflation_revenue
+    when:
+      label_contains: [inflation]
+      any:
+        - {label_contains: [cost]}
+        - {label_contains: [costs]}
+  - skip_concept: ops.inflation
+    when:
+      label_contains: [inflation]
+      any:
+        - {label_contains: [cost]}
+        - {label_contains: [costs]}
   - concept: cf.equity_issue
     score: 0.94
     evidence: construction or sources equity injection
@@ -208,7 +274,7 @@ concepts:
   - id: pnl.opex
     labels: [OPEX, Operating expenses, Операционные расходы, Total operating costs, Maintenance and SPV costs]
     aliases: [Maintenance & SPV costs]
-    statements: [pnl, cf]
+    statements: [pnl]
   - id: pnl.ebitda
     labels: [EBITDA, Operating income]
   - id: pnl.ebit
@@ -428,6 +494,18 @@ concepts:
   - id: cf.tax_paid
     labels: [Cash tax paid, Tax paid, Taxes paid, Tax payment]
     broader: cf.disbursements
+  - id: cf.opex_paid
+    labels: [OPEX paid, Cash operating costs, Operating expenses paid]
+    aliases: [OPEX, Variable land lease]
+    broader: cf.disbursements
+    facets: {direction: outflow}
+    section_hints: [cfs, cash flow, cashflow, cashflow statement]
+  - id: cf.interest_paid
+    labels: [Interest paid, Cash interest]
+    aliases: [Interest]
+    broader: cf.disbursements
+    facets: {direction: outflow}
+    section_hints: [cfs, cash flow, cashflow, cashflow statement]
   - id: bs.inventory_purchases
     labels: [Inventory purchases, Purchases accrued, Purchases]
     statements: [bs, cf]
@@ -440,8 +518,16 @@ concepts:
     facets: {statement: cf, nature: flow, direction: outflow}
     section_hints: [term loan, amortisation, debt]
   - id: debt.commitment_fee
-    labels: [Commitment fee, Undrawn commitment fee, Arrangement fee, Engagement fee]
+    labels: [Commitment fee, Undrawn commitment fee]
     aliases: [Up-front fee, Debt up-front fee]
+    facets: {statement: cf, nature: flow, direction: outflow}
+    section_hints: [revolver, undrawn, construction, uses, debt, ratios, irr, project irr, funding]
+  - id: debt.arrangement_fee
+    labels: [Arrangement fee]
+    facets: {statement: cf, nature: flow, direction: outflow}
+    section_hints: [revolver, undrawn, construction, uses, debt, ratios, irr, project irr, funding]
+  - id: debt.engagement_fee
+    labels: [Engagement fee]
     facets: {statement: cf, nature: flow, direction: outflow}
     section_hints: [revolver, undrawn, construction, uses, debt, ratios, irr, project irr, funding]
   - id: debt.revolver_limit
@@ -516,6 +602,16 @@ concepts:
   - id: ops.inflation
     labels: [Inflation, Inflation index, PPA escalation]
     facets: {unit: rate}
+  - id: ops.inflation_revenue
+    labels: [Inflation per year]
+    broader: ops.inflation
+    anti_labels: [cost, costs]
+    facets: {unit: rate}
+  - id: ops.inflation_cost
+    labels: [Inflation per year costs]
+    aliases: [Inflation per year from beginning of concession]
+    broader: ops.inflation
+    facets: {unit: rate}
   - id: ops.volume_growth
     labels: [Traffic Evolution, Volume growth, Traffic growth]
     aliases: [Traffic Evolution per year]
@@ -532,8 +628,14 @@ concepts:
     labels: [Loan amount, Facility size, Facility amount]
     facets: {nature: balance}
   - id: debt.upfront_fee_rate
-    labels: [Up-front fee rate, Upfront fee rate, Arrangement fee, Engagement fee]
+    labels: [Up-front fee rate, Upfront fee rate]
     aliases: [Up-front fee, Debt up-front fee]
+    facets: {unit: rate}
+  - id: debt.arrangement_fee_rate
+    labels: [Arrangement fee]
+    facets: {unit: rate}
+  - id: debt.engagement_fee_rate
+    labels: [Engagement fee]
     facets: {unit: rate}
   - id: cf.debt_service
     labels: [Total debt service, Debt service total]

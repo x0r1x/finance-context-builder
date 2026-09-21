@@ -19,6 +19,9 @@ expectations:
   - {label: CAPEX (incl. SPV costs), concept_id: cf.capex}
   - {label: Construction Cost (k£), concept_id: cf.capex}
   - {label: Gross revenues, parent: P&L, concept_id: pnl.revenue}
+  - {label: Gross Revenues, parent: Cashflow Statement, concept_id: cf.receipts}
+  - {label: OPEX (Maintenance & SPV Costs), parent: Cashflow Statement, concept_id: cf.opex_paid}
+  - {label: Interest, parent: Cashflow Statement, concept_id: cf.interest_paid}
   - {label: Drawdowns, parent: Debt Repayment Schedule, concept_id: cf.drawdown}
   - {label: Amortization, parent: P&L, concept_id: pnl.da}
   - {label: Net Profit, parent: P&L, concept_id: pnl.net_income}
@@ -27,7 +30,9 @@ expectations:
   - {label: Dividends earned, concept_id: cf.dividends}
   - {label: TRAFFIC - Passenger Car (PC), concept_id: pnl.volume}
   - {label: TRAFFIC - Heavy Vehicle (HV), concept_id: pnl.volume}
-  - {label: Arrangement fee, parent: Project IRR, concept_id: debt.commitment_fee}
+  - {label: Inflation per year, concept_id: ops.inflation_revenue}
+  - {label: Inflation per year (costs) from beginning of concession, concept_id: ops.inflation_cost}
+  - {label: Arrangement fee, parent: Project IRR, concept_id: debt.arrangement_fee}
   - {label: Toll Rate - Heavy Vehicule (HV), concept_id: pnl.price}
   - {label: Capitalized Interests, parent: Project IRR, concept_id: pnl.interest}
   - {label: Cash Flow, parent: Project IRR, concept_id: cf.net}
