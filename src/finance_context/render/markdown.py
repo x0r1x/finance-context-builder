@@ -95,6 +95,7 @@ def _coverage_lines(doc: ContextDocument) -> list[str]:
                 f"- Concept coverage: {coverage:.2f} "
                 f"({mapped}/{annotatable} annotatable)"
             ),
+            *_quality_lines(doc),
         ]
     series = [
         *[metric for block in doc.blocks for metric in block.metrics],
@@ -107,6 +108,20 @@ def _coverage_lines(doc: ContextDocument) -> list[str]:
     return [
         f"- Content completeness: {completeness:.2f} ({n}/{n} layout rows)",
         f"- Concept coverage: {coverage:.2f} ({mapped}/{n} annotatable)",
+        *_quality_lines(doc),
+    ]
+
+
+def _quality_lines(doc: ContextDocument) -> list[str]:
+    quality = doc.mapping_stats.mapping_quality
+    passed = "true" if quality.confidence_threshold_passed else "false"
+    return [
+        f"- Label coverage: {quality.label_coverage:.2f}",
+        f"- Semantic coverage: {quality.semantic_coverage:.2f}",
+        f"- Unit coverage: {quality.unit_coverage:.2f}",
+        f"- Temporal coverage: {quality.temporal_coverage:.2f}",
+        f"- Formula coverage: {quality.formula_coverage:.2f}",
+        f"- Confidence threshold passed: {passed}",
     ]
 
 

@@ -30,8 +30,8 @@
 | `graph-edges.json` | Самодостаточный список cell→cell рёбер: `formula_cell` / `precedent`, `period_id`, A1 `formula`, `anchors`, `reference_kind`, `resolution_status` |
 | `graph-dangling.json` | Пустые и неразрешённые адреса без cap 32: `period_id`, `status`, `reason`, `evidence`, `sources` |
 | `formulas.json` | A1, template и AST только для ячеек с формулой |
-| `context.json` | Схема `1.7.0`: `timeline`, блоки с `values` (кэш + A1 `formula` + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats`, pointer `graph` (`iterate` + counts), `concept_id` как отчётный слот, `semantic_identity` / `reporting_roles` / `cash_semantics`, `context_role` / `secondary_concepts`, hints `unit`/`currency`/`scale`/`sign` |
-| `context.md` | Две метрики в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}` (включая выбранный сценарий); `## Excluded`; row navigator без значений |
+| `context.json` | Схема `1.8.0`: `timeline`, блоки с `values` (кэш + A1 `formula` + адрес), `unmapped`, `excluded`, полный `inventory`, `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph` (`iterate` + counts), `concept_id` как отчётный слот, `semantic_identity` / `reporting_roles` / `cash_semantics`, `context_role` / `secondary_concepts`, hints `unit`/`currency`/`scale`/`sign` |
+| `context.md` | Completeness, concept coverage и `mapping_quality` в шапке; `## Timeline`; таблицы периодов; `## Parameters / {sheet}` (включая выбранный сценарий); `## Excluded`; row navigator без значений |
 | `unmapped.json` | Компактный список abstained-строк (после `run.sh`) |
 
 Между джобами: `$DATA_DIR/glossary.json` (выученные high-confidence пары) и `taxonomy_embeddings.npz` (кэш эмбеддингов концептов).

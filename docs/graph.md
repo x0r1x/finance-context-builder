@@ -19,7 +19,7 @@ Cell-level граф — отдельный IR-артефакт, не секци�
 | Counts, `iterate`, циклы (`class` / `breakers`), `circularity_hints`, `dangling_classes`, пути к parquet и JSON | `graph.json` (schema `1.4.0`) |
 | Полный список пустых и неразрешённых адресов без cap 32: `period_id`, `status`, `reason`, `evidence`, `sources` | `graph-dangling.json` |
 | Каждый `<c>` листа: `populated` или `styled_blank` | `raw/cell_presence.parquet` |
-| Строка отчёта (лейбл, mapping, числа и A1-формула по периодам) | `context.json` (schema `1.7.0`) |
+| Строка отчёта (лейбл, mapping, числа и A1-формула по периодам) | `context.json` (schema `1.8.0`) |
 
 `context.json` хранит pointer `graph` (счётчики и пути) и **A1-текст** формулы на каждом `values[]` с `has_formula`. В нём нет `precedents_rows`, `dependents_rows`, `precedent_cells` и `formula_ast`.
 

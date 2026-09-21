@@ -135,6 +135,14 @@
     "excluded": 0,
     "inventory_rows": 0,
     "mapped": 0,
+    "mapping_quality": {
+      "confidence_threshold_passed": false,
+      "formula_coverage": 0.0,
+      "label_coverage": 0.0,
+      "semantic_coverage": 0.0,
+      "temporal_coverage": 0.0,
+      "unit_coverage": 0.0
+    },
     "unmapped_series": 0
   },
   "meta": {
@@ -142,13 +150,13 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.7.0",
+    "schema_version": "1.8.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.7.0",
+  "schema_version": "1.8.0",
   "timeline": null,
   "unmapped": [],
   "warnings": [],

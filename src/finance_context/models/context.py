@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.7.0"
+SCHEMA_VERSION = "1.8.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -230,8 +230,24 @@ class GraphPointer(BaseModel):
     empty_range_members: int = 0
 
 
+class MappingQuality(BaseModel):
+    """Checks on accepted concepts. Independent of `concept_coverage`."""
+
+    label_coverage: float = 0.0
+    semantic_coverage: float = 0.0
+    unit_coverage: float = 0.0
+    temporal_coverage: float = 0.0
+    formula_coverage: float = 0.0
+    confidence_threshold_passed: bool = False
+
+
 class MappingStats(BaseModel):
-    """Coverage of layout rows. `unmapped` on the document is abstained series, not inventory without concept_id."""
+    """Layout coverage plus semantic quality of accepted concepts.
+
+    `unmapped` on the document is abstained series, not inventory without concept_id.
+    `concept_coverage` is the share of annotatable rows with an accepted concept.
+    `mapping_quality` scores label, semantic, unit, temporal, and formula checks.
+    """
 
     inventory_rows: int = 0
     mapped: int = 0
@@ -241,6 +257,7 @@ class MappingStats(BaseModel):
     unmapped_series: int = 0
     content_completeness: float = 1.0
     concept_coverage: float = 0.0
+    mapping_quality: MappingQuality = Field(default_factory=MappingQuality)
 
 
 class ContextDocument(BaseModel):

@@ -9,7 +9,11 @@ from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
 from finance_context.layout.params import is_scenario_selector_label
 from finance_context.layout.periods import display_cell_text, infer_grain
-from finance_context.mapping.eval import context_report_metrics, inventory_coverage_counts
+from finance_context.mapping.eval import (
+    assess_mapping_quality,
+    context_report_metrics,
+    inventory_coverage_counts,
+)
 from finance_context.mapping.graph import cell_ref_row, row_adjacency, row_key_ref
 from finance_context.mapping.models import (
     MappedRow,
@@ -22,6 +26,7 @@ from finance_context.mapping.rowroles import infer_row_roles
 from finance_context.mapping.rules import is_noise_label
 from finance_context.mapping.semantics import classify_semantics
 from finance_context.mapping.statement import statement_for_row
+from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
@@ -358,6 +363,7 @@ def build_context(
         abstract=int(counts["abstract"]),
         unmapped_series=len(unmapped),
     )
+    stats["mapping_quality"] = assess_mapping_quality(inventory, blocks)
     return ContextDocument(
         schema_version=SCHEMA_VERSION,
         meta=meta,
@@ -455,14 +461,16 @@ def _series_for_row(
         (item.cached_value for item in role_cells if item.role == "unit"), None
     )
     formats = [item.number_format for item in values if item.number_format]
+    concept_id = mapped.concept_id if mapped else None
     measure = parse_measure(
         unit_from_cell,
         layout_row.label,
         formats,
-        concept_id=mapped.concept_id if mapped else None,
+        concept_id=concept_id,
         statement=hints.statement,
         nature=hints.nature,
         time_semantics=hints.time_semantics,
+        direction=_concept_direction(concept_id),
     )
     unit = measure.unit or hints.unit
     hints = hints.model_copy(
@@ -599,6 +607,7 @@ def _hints_for(
         statement=statement,
         nature=nature,
         time_semantics=time_semantics,
+        direction=_concept_direction(concept_id),
     )
     if measure.unit == "rate" and time_semantics in {None, "flow"}:
         time_semantics = "rate"
@@ -613,6 +622,15 @@ def _hints_for(
         segment=_segment_hint(blob, tokens),
         escalation=_escalation_hint(blob, tokens),
     )
+
+
+def _concept_direction(concept_id: str | None) -> str | None:
+    if not concept_id:
+        return None
+    for concept in load_taxonomy():
+        if concept.id == concept_id:
+            return concept.facets.direction
+    return None
 
 
 def _hint_blob_and_tokens(label: str) -> tuple[str, set[str]]:

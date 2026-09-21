@@ -2,7 +2,7 @@
 
 Маппинг — retrieve-and-align, не классификация на закрытом множестве. Таксономия — **словарь**, не воронка контента: строка не выбрасывается, если концепт не найден. Резолвер принимает `concept_id` только выше порога; иначе fact остаётся `unknown`, но в context остаются подпись, hints, соседи, формула и top-3 кандидатов.
 
-Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.7.0`.
+Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.8.0`.
 
 Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [граф](graph.md), [разбор unmapped](review.md), [архитектура](architecture.md).
 
@@ -138,7 +138,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 
 ## Hints и inventory
 
-Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate / stock), `statement`, `unit` (`money` / `count` / `rate` / `years`), `currency` (`GBP` / `EUR` / `USD` / `RUB`; те же обработчики: символ, ISO, локальное сокращение — `£`/`gbp`/`pound`/`фунт`, `€`/`eur`/`euro`/`евро`, `$`/`usd`/`dollar`/`долл`, `₽`/`rub`/`руб`/`РУБ`), `scale` (`unit` / `k` / `m` / `bn`), `sign` (`inflow` / `outflow` / `stock`), плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`). `k£` в лейбле или колонке Units → `unit=money`, `currency=GBP`, `scale=k` (не `null`). `%` и percent-format → `rate`; голый `per year` без `%` тоже `rate`. Mapping `value_kind` для prune по-прежнему `count` на длительностях; в context длительность — `years`. Schema `1.7.0`, поля hints аддитивны. Смысл, роль и денежная семантика — отдельные поля, см. выше. Unknown сразу полезен даунстриму.
+Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate / stock), `statement`, `unit` (`money` / `count` / `rate` / `years`), `currency` (`GBP` / `EUR` / `USD` / `RUB`; те же обработчики: символ, ISO, локальное сокращение — `£`/`gbp`/`pound`/`фунт`, `€`/`eur`/`euro`/`евро`, `$`/`usd`/`dollar`/`долл`, `₽`/`rub`/`руб`/`РУБ`), `scale` (`unit` / `k` / `m` / `bn`), `sign` (`inflow` / `outflow` / `stock`), плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`). `k£` в лейбле или колонке Units → `unit=money`, `currency=GBP`, `scale=k` (не `null`). `%` и percent-format → `rate`; голый `per year` без `%` тоже `rate`. Mapping `value_kind` для prune по-прежнему `count` на длительностях; в context длительность — `years`. Schema `1.8.0`, поля hints аддитивны. Смысл, роль и денежная семантика — отдельные поля, см. выше. Unknown сразу полезен даунстриму.
 
 Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, `disposition=header`, не concept. Строка **Scenario Chosen** — `flag` / `context_role=scenario_selector`: каскад её не тегирует, но inventory обязан держать индекс (ячейка D).
 
@@ -158,7 +158,7 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 
 Выбранный `concept_id` — **отчётный концепт** этой строки (его ждут расчёты и gold). Он не исчерпывает смысл. Один лейбл живёт на разных уровнях: P&L `Gross revenues` → `pnl.revenue`; CFS `Gross Revenues` → `cf.receipts`, участие в CFADS — роль `cfads_input`, не концепт `cf.cfads`. `Equity` на балансе → `bs.equity`; `Equity (k£)` в Sources → `cf.equity_issue` плюс роль `cf.sources`.
 
-На строке context (`1.7.0`) и в `MappedRow` три поля. Кандидаты top-3 остаются сырыми сигналами и **не** считаются взаимозаменяемыми концептами.
+На строке context (`1.8.0`) и в `MappedRow` три поля. Кандидаты top-3 остаются сырыми сигналами и **не** считаются взаимозаменяемыми концептами.
 
 | Поле | Что это |
 | --- | --- |
@@ -184,11 +184,18 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 `finance_context.mapping.eval`:
 
 - **content completeness** — `inventory` / layout rows; должна быть 1.0;
-- **concept coverage** — доля annotatable (mapped + abstained, без excluded) с принятым концептом; может быть < 100%;
+- **concept coverage** — доля annotatable (mapped + abstained, без excluded) с принятым концептом. Это покрытие слота `concept_id`, не семантическая полнота; при нуле abstain значение равно 1.0;
+- **mapping quality** — проверки принятых строк, объект `mapping_stats.mapping_quality`:
+  - `label_coverage` — непустой лейбл совпадает с `labels` / `aliases` / `exact_labels` концепта или evidence содержит `label matches`;
+  - `semantic_coverage` — есть `semantic_identity` и `cash_semantics`; на CFS revenue/opex/tax/interest стоят денежные близнецы, а identity хранит экономический `pnl.*`, если лейбл его называет; `bs.*` — stock и время `stock|bop|eop`; capitalized interest — `noncash`; `cf.repayment` — outflow и stock `bs.debt` в том же блоке; начисление и выплата одного family не схлопываются в один `concept_id`;
+  - `unit_coverage` — `hints.unit` совпадает с единицей концепта (`*_rate` и `facets.unit=rate` → rate, `pnl.volume` → count, денежные pnl/cf/bs → money, длительности → years);
+  - `temporal_coverage` — opening → `bop`, closing → `eop`, balance/`bs.*` не `flow`, rate-концепт → `rate`;
+  - `formula_coverage` — среди строк с `has_formula` есть fingerprint и непустой A1 `formula` (нет таких строк → 1.0);
+  - `confidence_threshold_passed` — нет провалов semantic-проверок, у каждой принятой строки `confidence=high` и `score >= 0.82`.
 - **selective risk** — ошибки среди **принятых** маппингов (abstain в риск не входит);
 - **abstain rate** и **risk–coverage** кривая — качество права отказаться.
 
-В шапке `context.md` печатаются completeness и coverage отдельно.
+В шапке `context.md` печатаются completeness, concept coverage и шесть полей quality отдельно.
 
 Золотые ожидания для `resources/cashflow.xlsx`: `tests/fixtures/mapping/cashflow_dispositions.yaml`. Публичный корпус (MIT / CC-BY-NC-SA, не в git): `uv run python scripts/fetch-corpus.py` → `resources/corpus/` (Packt, RVI; three-statement в lock может 404). Gold: `packt_project_finance_dispositions.yaml`, `rvi_project_finance_dispositions.yaml`. Помимо «должно быть» gold знает **негативы** `forbidden_concept_id` (`Equity Injected` ≠ `bs.equity`, CFS `Variable land lease` ≠ `ops.lease_rate`, generation ≠ `ops.availability`). Тесты корпуса скипятся, если книги не скачаны или `expectations` пусты.
 

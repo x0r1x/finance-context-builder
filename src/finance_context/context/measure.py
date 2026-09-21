@@ -40,16 +40,16 @@ _INFLOW_IDS = (
     "cf.receipts",
     "cf.receipts.other",
 )
-_OUTFLOW_FRAGMENTS = (
+_OUTFLOW_ID_TOKENS = {
     "opex",
     "capex",
     "uses",
     "tax",
     "interest",
     "fee",
-    "debt.service",
     "maintenance",
-)
+}
+_REPAYMENT_TOKENS = {"repayment", "principal"}
 _INFLOW_TOKENS = {"revenue", "receipts", "receipt", "inflow", "inflows", "income"}
 _OUTFLOW_TOKENS = {
     "opex",
@@ -101,6 +101,7 @@ def parse_measure(
     statement: str | None = None,
     nature: str | None = None,
     time_semantics: str | None = None,
+    direction: str | None = None,
 ) -> Measure:
     measure = Measure()
     measure = _fill(measure, _parse_text(unit_text or ""))
@@ -120,6 +121,7 @@ def parse_measure(
         nature=nature,
         time_semantics=time_semantics,
         label=label or "",
+        direction=direction,
     )
     return Measure(
         unit=measure.unit,
@@ -194,6 +196,11 @@ def _unit_from(text: str, currency: str | None) -> str | None:
     return None
 
 
+def _concept_id_tokens(concept_id: str) -> set[str]:
+    protected = concept_id.replace("pre_tax", "pretax").replace("pre-tax", "pretax")
+    return set(re.split(r"[._]", protected)) - {""}
+
+
 def _infer_sign(
     *,
     concept_id: str | None,
@@ -201,6 +208,7 @@ def _infer_sign(
     nature: str | None,
     time_semantics: str | None,
     label: str,
+    direction: str | None = None,
 ) -> str | None:
     if (
         nature == "balance"
@@ -209,12 +217,18 @@ def _infer_sign(
         or time_semantics in {"stock", "bop", "eop"}
     ):
         return "stock"
+    if direction in {"inflow", "outflow"}:
+        return direction
     cid = concept_id or ""
     if cid in _INFLOW_IDS or cid.startswith("cf.receipts"):
         return "inflow"
-    if any(fragment in cid for fragment in _OUTFLOW_FRAGMENTS):
+    if cid == "cf.repayment" or cid.startswith("cf.repayment."):
+        return "outflow"
+    if "debt.service" in cid or _concept_id_tokens(cid) & _OUTFLOW_ID_TOKENS:
         return "outflow"
     tokens = set(re.sub(r"[^a-z0-9]+", " ", label.casefold()).split())
+    if tokens & _REPAYMENT_TOKENS:
+        return "outflow"
     if tokens & _INFLOW_TOKENS and not tokens & _OUTFLOW_TOKENS:
         return "inflow"
     if tokens & _OUTFLOW_TOKENS:
