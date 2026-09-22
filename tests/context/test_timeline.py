@@ -196,7 +196,7 @@ def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
     ]
     block = next(item for item in payload["blocks"] if item["sheet"] == "Output")
     assert block["axis_ids"] == [axis["id"] for axis in payload["axes"]]
-    series = {item["axis_id"]: item["points"] for item in block["rows"][0]["series"]}
+    series = {item["axis_id"]: item["values"] for item in block["rows"][0]["series"]}
     assert sorted(len(values) for values in series.values()) == [3, 4]
     sample = month["periods"][0]
     assert sample["group_key"] == "2020"

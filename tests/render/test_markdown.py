@@ -19,7 +19,6 @@ from finance_context.models.context import (
     MappingStats,
     RoleCell,
     RowHints,
-    SeriesPoint,
     WorkbookRaw,
 )
 from finance_context.render.graph import render_graph_markdown, render_trace_markdown
@@ -70,20 +69,9 @@ def _doc() -> ContextDocument:
                         period_position="beginning",
                         aggregation="first",
                         scale_factor=1000,
-                        points=[
-                            SeriesPoint(
-                                period_key="2023",
-                                value="100",
-                                value_status="cached",
-                                normalized_value="100000",
-                            ),
-                            SeriesPoint(
-                                period_key="2024E",
-                                value="110",
-                                value_status="cached",
-                                normalized_value="110000",
-                            ),
-                        ],
+                        values=["100", "110"],
+                        value_statuses=["cached", "cached"],
+                        normalized_values=["100000", "110000"],
                     )
                 ],
             )
@@ -101,9 +89,9 @@ def _doc() -> ContextDocument:
 def test_markdown_matches_golden() -> None:
     doc = _doc()
     rendered = render_markdown(doc)
-    payload = (
-        json.dumps(doc.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    )
+    payload = json.dumps(
+        doc.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True
+    ) + "\n"
     assert rendered == GOLDEN_MD.read_text(encoding="utf-8")
     assert payload == GOLDEN_JSON.read_text(encoding="utf-8")
     assert "Opening cash" in rendered
@@ -136,14 +124,7 @@ def test_markdown_keeps_every_period_and_excluded_row() -> None:
                         label="Opening cash",
                         concept_id="bs.cash",
                         disposition="mapped",
-                        points=[
-                            SeriesPoint(
-                                period_key=f"Y{index}",
-                                value=str(index),
-                                value_status="cached",
-                            )
-                            for index in range(1, 21)
-                        ],
+                        values=[str(index) for index in range(1, 21)],
                     ),
                     BlockRow(
                         row_key="CF|3|CF!r1",
@@ -153,14 +134,7 @@ def test_markdown_keeps_every_period_and_excluded_row() -> None:
                         label="Spare",
                         disposition="excluded",
                         exclusion_reason="helper",
-                        points=[
-                            SeriesPoint(
-                                period_key=f"Y{index}",
-                                value="0",
-                                value_status="zero_explicit",
-                            )
-                            for index in range(1, 21)
-                        ],
+                        values=["0"] * 20,
                     ),
                 ],
             )
@@ -197,7 +171,7 @@ def test_markdown_parameters_include_selector_and_value() -> None:
                         disposition="excluded",
                         context_role="scenario_selector",
                         cells=[RoleCell(addr="D3", col=4, role="value", cached_value="1")],
-                        points=[SeriesPoint(period_key="value", value="1", value_status="cached")],
+                        values=["1"],
                     ),
                     BlockRow(
                         row_key="Input Assumptions|8|Input Assumptions!r5",
@@ -209,9 +183,7 @@ def test_markdown_parameters_include_selector_and_value() -> None:
                         disposition="mapped",
                         hints=RowHints(unit="rate"),
                         cells=[RoleCell(addr="D8", col=4, role="value", cached_value="0.3")],
-                        points=[
-                            SeriesPoint(period_key="value", value="0.3", value_status="cached")
-                        ],
+                        values=["0.3"],
                     ),
                 ],
             )

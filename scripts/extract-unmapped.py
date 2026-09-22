@@ -42,16 +42,7 @@ def _is_unmapped(row: dict[str, Any]) -> bool:
 
 
 def _compact(row: dict[str, Any]) -> dict[str, Any]:
-    out = {key: value for key, value in row.items() if key not in {"values", "points"}}
-    series = out.get("series")
-    if isinstance(series, list):
-        cleaned: list[Any] = []
-        for item in series:
-            if isinstance(item, dict):
-                cleaned.append({key: value for key, value in item.items() if key != "points"})
-            else:
-                cleaned.append(item)
-        out["series"] = cleaned
+    out = {key: value for key, value in row.items() if key != "values"}
     source = out.get("source")
     if isinstance(source, dict) and source.get("sheet") and source.get("addr"):
         out.setdefault("ref", f"{source['sheet']}!{source['addr']}")

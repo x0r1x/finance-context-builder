@@ -52,7 +52,7 @@ def _ok_graph(**overrides: object) -> dict:
 
 def _ok_context(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.12.0",
+        "schema_version": "1.11.0",
         "graph": {"artifact": "graph.json", "nodes": 8, "edges": 20, "iterate": False},
         "blocks": [
             {
@@ -63,20 +63,9 @@ def _ok_context(**overrides: object) -> dict:
                         "label": "EBITDA",
                         "concept_id": "pnl.ebitda",
                         "formula": "=SUM(RC[-4]:RC[-1])",
-                        "points": [
-                            {
-                                "period_key": "2023",
-                                "value": "13",
-                                "value_status": "cached",
-                                "normalized_value": "13",
-                            },
-                            {
-                                "period_key": "2024",
-                                "value": "23",
-                                "value_status": "cached",
-                                "normalized_value": "23",
-                            },
-                        ],
+                        "values": ["13", "23"],
+                        "value_statuses": ["cached", "cached"],
+                        "normalized_values": ["13", "23"],
                         "scale_factor": 1,
                         "period_position": None,
                         "aggregation": None,
@@ -117,7 +106,7 @@ def test_accepts_slim_period_without_empty_phase_fields(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_accepts_points_and_prints_formula_cell(tmp_path: Path) -> None:
+def test_accepts_flat_values_and_prints_formula_cell(tmp_path: Path) -> None:
     context = _write(tmp_path / "context.json", _ok_context())
     graph = _write(tmp_path / "graph.json", _ok_graph())
     result = _run(str(context), str(graph), "--print-origin")
@@ -190,8 +179,6 @@ def test_markdown_must_repeat_blocks_and_links(tmp_path: Path) -> None:
                 "pnl.ebitda",
                 "P&L!r2",
                 "=SUM(RC[-4]:RC[-1])",
-                "2023",
-                "2024",
                 "",
             ]
         ),
@@ -260,20 +247,9 @@ def test_rejects_merged_cell_contract(tmp_path: Path) -> None:
 def test_markdown_must_show_status_scale_and_normalized_value(tmp_path: Path) -> None:
     payload = _ok_context()
     row = payload["blocks"][0]["rows"][0]
-    row["points"] = [
-        {
-            "period_key": "2023",
-            "value": None,
-            "value_status": "empty",
-            "normalized_value": None,
-        },
-        {
-            "period_key": "2024",
-            "value": "1.5",
-            "value_status": "cached",
-            "normalized_value": "1500",
-        },
-    ]
+    row["values"] = [None, "1.5"]
+    row["value_statuses"] = ["empty", "cached"]
+    row["normalized_values"] = [None, "1500"]
     row["scale_factor"] = 1000
     row["period_position"] = "during_period"
     row["aggregation"] = "sum"

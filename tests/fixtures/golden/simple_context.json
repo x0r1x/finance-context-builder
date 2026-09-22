@@ -63,23 +63,13 @@
             "source": null
           },
           "neighbors": [],
+          "normalized_values": [
+            "100000",
+            "110000"
+          ],
           "numeric_summary": null,
           "parent_label": null,
           "period_position": "beginning",
-          "points": [
-            {
-              "normalized_value": "100000",
-              "period_key": "2023",
-              "value": "100",
-              "value_status": "cached"
-            },
-            {
-              "normalized_value": "110000",
-              "period_key": "2024E",
-              "value": "110",
-              "value_status": "cached"
-            }
-          ],
           "reporting_roles": [],
           "row": 2,
           "row_key": "CF|2|CF!r1",
@@ -88,7 +78,15 @@
           "semantic_identity": null,
           "series": [],
           "sheet": "CF",
-          "unit": "money"
+          "unit": "money",
+          "value_statuses": [
+            "cached",
+            "cached"
+          ],
+          "values": [
+            "100",
+            "110"
+          ]
         }
       ],
       "sheet": "CF"
@@ -130,13 +128,13 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.12.0",
+    "schema_version": "1.11.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.12.0",
+  "schema_version": "1.11.0",
   "warnings": [],
   "workbook": {
     "cell_count": 4,

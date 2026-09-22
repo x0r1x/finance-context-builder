@@ -75,8 +75,7 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
     assert selector.context_role == "scenario_selector"
     assert selector.disposition == "excluded"
     assert any(cell.addr == "D3" and str(cell.cached_value) == "1" for cell in selector.cells)
-    selector_points = selector.series[0].points if selector.series else selector.points
-    assert "1" in [point.value for point in selector_points]
+    assert "1" in selector.values
     rendered = render_markdown(doc)
     assert "## Parameters / Input Assumptions" in rendered
     assert "| Scenario Chosen |" in rendered

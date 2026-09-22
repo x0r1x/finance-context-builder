@@ -1,6 +1,6 @@
 # Financial context
 
-- Schema: `1.12.0`
+- Schema: `1.11.0`
 - Job: `job1`
 - Status: `succeeded`
 - Source: `simple.xlsx`
@@ -20,15 +20,6 @@
 
 Block: `CF!r1`. Kind: `timeline`. grain=year Periods: 2. Rows: 1.
 
-#### Opening cash
-
-- Row: `CF|2|CF!r1`
-- Kind: fact · Disposition: mapped · Concept: bs.cash (high)
-- Unit: k£ ×1000
-- Time: bop/beginning/first
-- Formula: `=RC[-1]`
-
-| Period | Value |
-| --- | --- |
-| 2023 (B) | 100 (100000) |
-| 2024E (C) | 110 (110000) |
+| Label | Row | Kind | Disposition | Concept | Unit | Time | Formula | 2023 (B) | 2024E (C) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Opening cash | CF\|2\|CF!r1 | fact | mapped | bs.cash (high) | k£ ×1000 | bop/beginning/first | =RC[-1] | 100 (100000) | 110 (110000) |

@@ -97,12 +97,10 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.concept_id == "bs.cash"
     assert metric.sheet == "CF"
     assert metric.row == 2
-    points = metric.series[0].points
-    assert [point.value for point in points] == ["320000", "320000"]
-    assert [point.value_status for point in points] == ["cached", "cached"]
+    assert metric.values == ["320000", "320000"]
+    assert metric.value_statuses == ["cached", "cached"]
     assert metric.scale_factor == 1
-    assert [point.normalized_value for point in points] == ["320000", "320000"]
-    assert metric.points == []
+    assert metric.normalized_values == ["320000", "320000"]
     assert metric.period_position == "beginning"
     assert metric.aggregation == "first"
     assert metric.formula == "=RC[-1]"
@@ -198,7 +196,7 @@ def test_build_decodes_excel_date_serials() -> None:
         layout=_layout(),
         mapping=mapping,
     )
-    assert doc.blocks[0].rows[0].series[0].points[0].value == "31.12.2023"
+    assert doc.blocks[0].rows[0].values[0] == "31.12.2023"
 
 
 def test_build_keeps_inventory_for_every_layout_row() -> None:
@@ -303,7 +301,7 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert doc.mapping_stats.abstract == 1
     assert doc.mapping_stats.unmapped_series == 0
     assert doc.mapping_stats.concept_coverage == 1.0
-    assert doc.schema_version == "1.12.0"
+    assert doc.schema_version == "1.11.0"
     quality = doc.mapping_stats.mapping_quality
     assert quality.label_coverage == 1.0
     assert quality.semantic_coverage == 1.0
@@ -436,4 +434,4 @@ def test_build_exports_role_cells_not_graph_samples() -> None:
     series = doc.blocks[0].rows[0]
     assert any(cell.role == "value" and cell.addr == "C26" for cell in series.cells)
     assert len(series.candidates) == 3
-    assert [point.value for point in series.series[0].points] == ["50"]
+    assert series.values == ["50"]

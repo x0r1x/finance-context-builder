@@ -70,10 +70,9 @@ def test_build_marks_scale_and_blank_cells() -> None:
     assert row.hints.scale == "k"
     assert row.hints.currency == "GBP"
     assert row.scale_factor == 1000
-    points = row.series[0].points
-    assert [point.value for point in points] == ["2.5", None]
-    assert [point.normalized_value for point in points] == ["2500", None]
-    assert [point.value_status for point in points] == ["cached", "empty"]
+    assert row.values == ["2.5", None]
+    assert row.normalized_values == ["2500", None]
+    assert row.value_statuses == ["cached", "empty"]
     assert row.period_position == "during_period"
     assert row.aggregation == "sum"
     rendered = render_markdown(doc)
@@ -131,19 +130,10 @@ def test_empty_operation_line_outside_phase_is_not_applicable() -> None:
     )
     rows = {row.label: row for block in doc.blocks for row in block.rows}
     traffic = rows["PC traffic"]
-    traffic_points = traffic.series[0].points
-    assert [point.value_status for point in traffic_points] == [
-        "not_applicable",
-        "not_applicable",
-        "cached",
-    ]
-    assert traffic_points[2].value == "5"
+    assert traffic.value_statuses == ["not_applicable", "not_applicable", "cached"]
+    assert traffic.values[2] == "5"
     revenue = rows["Toll revenue"]
-    assert [point.value_status for point in revenue.series[0].points] == [
-        "zero_explicit",
-        "zero_explicit",
-        "cached",
-    ]
+    assert revenue.value_statuses == ["zero_explicit", "zero_explicit", "cached"]
     rendered = render_markdown(doc)
     assert "n/a" in rendered
     assert "| 0 |" in rendered or rendered.count(" 0 ") >= 1
