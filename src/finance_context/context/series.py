@@ -1,7 +1,8 @@
 """Series semantics on a layout row.
 
-`values` stays a flat list of cached strings. Status, scale, and time
-profile sit beside that list. They are not a second cell catalog.
+Each series stores `points` in axis order. A point carries `period_key`,
+the cached string, its status, and the normalized amount. Scale and the
+time profile sit on the row. This is not a second cell catalog.
 """
 
 from __future__ import annotations
