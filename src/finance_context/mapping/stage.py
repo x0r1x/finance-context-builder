@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from finance_context.layout.models import Layout
-from finance_context.mapping.cascade import map_layout
+from finance_context.mapping.cascade import ConceptIndex, map_layout
 from finance_context.mapping.glossary import (
     learn_from_rows,
     load_glossary,
@@ -34,6 +34,8 @@ def mapping_workbook(
     slot_timeout_sec: float = 120.0,
     embedding_model: str = "",
     glossary_path: Path | None = None,
+    concept_index: ConceptIndex | None = None,
+    llm_concurrency: int = 4,
 ) -> MappingDocument:
     path = dest_dir / "mapping.json"
     if path.exists():
@@ -69,6 +71,8 @@ def mapping_workbook(
         slot_timeout_sec=slot_timeout_sec,
         cache_path=cache_path,
         embedding_model=embedding_model,
+        concept_index=concept_index,
+        llm_concurrency=llm_concurrency,
         edges=edges,
     )
     if glossary_path is not None:

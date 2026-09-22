@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from finance_context.errors import PortError
 from finance_context.excel.a1 import format_addr
@@ -23,8 +24,8 @@ from finance_context.mapping.models import (
     RowContext,
 )
 from finance_context.mapping.resolver import (
-    SOURCE_BY_SIGNAL,
     ACCEPT_MIN,
+    SOURCE_BY_SIGNAL,
     Resolver,
     collect_proposals,
     to_mapped,
@@ -44,6 +45,10 @@ from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 _LOGGER = logging.getLogger(__name__)
 
 
+class ConceptIndex(Protocol):
+    def result(self) -> dict[str, list[float]]: ...
+
+
 def map_layout(
     layout: Layout,
     *,
@@ -56,6 +61,8 @@ def map_layout(
     slot_timeout_sec: float = 0.0,
     cache_path: Path | None = None,
     embedding_model: str = "",
+    concept_index: ConceptIndex | None = None,
+    llm_concurrency: int = 4,
     patterns: list[LexicalPattern] | None = None,
     calculations: list[Calculation] | None = None,
     edges: list[dict] | None = None,
@@ -111,13 +118,24 @@ def map_layout(
             embedding_model,
             resolver,
             signals,
+            concept_index,
         )
 
     need_chat = [
         ctx for ctx in pending if ctx.row_key not in book.concepts and not exclusion_reason(ctx)
     ]
     if need_chat and chat is not None:
-        _chat_pass(need_chat, book, taxonomy, chat, slots, slot_timeout_sec, resolver, index)
+        _chat_pass(
+            need_chat,
+            book,
+            taxonomy,
+            chat,
+            slots,
+            slot_timeout_sec,
+            resolver,
+            index,
+            llm_concurrency=llm_concurrency,
+        )
     for ctx in pending:
         if ctx.row_key not in book.concepts and not exclusion_reason(ctx):
             _resolve_row(ctx, book, [StructureSignal()], resolver)
@@ -234,6 +252,7 @@ def _embed_pass(
     embedding_model: str,
     resolver: Resolver,
     signals: list,
+    concept_index: ConceptIndex | None = None,
 ) -> dict[str, list[float]]:
     index: dict[str, list[float]] = {}
     if not _acquire(slots, "embed", slot_timeout_sec):
@@ -247,12 +266,15 @@ def _embed_pass(
         )
         return index
     try:
-        index = load_concept_vectors(
-            embed,
-            taxonomy,
-            cache_path=cache_path,
-            model=embedding_model,
-        )
+        if concept_index is not None:
+            index = concept_index.result()
+        else:
+            index = load_concept_vectors(
+                embed,
+                taxonomy,
+                cache_path=cache_path,
+                model=embedding_model,
+            )
         if not index or not _charge(slots, "embed"):
             return index
         queries = embed.embed([row.ctx.query_text or row.ctx.label for row in need_knn])
@@ -269,7 +291,9 @@ def _embed_pass(
             ]
             proposals = collect_proposals(row.ctx, book, signals) + embed_cands
             ranked = resolver.fuse(row.ctx, proposals)
-            row.extras["proposals"] = sorted(proposals, key=lambda item: item.score, reverse=True)[:5]
+            row.extras["proposals"] = sorted(
+                proposals, key=lambda item: item.score, reverse=True
+            )[:5]
             row.extras["ranked"] = ranked or list(row.extras["proposals"])
             concept_id, picked = resolver.decide(row.ctx, ranked)
             if concept_id and picked:
@@ -302,6 +326,7 @@ def _chat_pass(
     slot_timeout_sec: float,
     resolver: Resolver,
     index: dict[str, list[float]],
+    llm_concurrency: int = 4,
 ) -> None:
     if not _acquire(slots, "llm", slot_timeout_sec):
         log_event(
@@ -314,40 +339,86 @@ def _chat_pass(
         )
         return
     try:
+        charged: list[_Pending] = []
         for row in need_chat:
             if not _charge(slots, "llm"):
                 break
-            options = prune_candidates(
-                list(row.extras.get("ranked") or []),
-                row.ctx,
-                book.taxonomy,
-            )
-            picked_id = _ask_chat(chat, row.ctx, taxonomy, options)
-            if picked_id and picked_id in book.taxonomy:
-                cand = Candidate(
-                    concept_id=picked_id,
-                    score=0.88,
-                    signal="chat",
-                    evidence="llm rerank",
-                )
-                ranked = resolver.fuse(row.ctx, [*(row.extras.get("ranked") or []), cand])
-                concept_id, picked = resolver.decide(row.ctx, ranked)
-                row.extras["ranked"] = ranked
-                if concept_id and picked:
-                    book.concepts[row.row_key] = concept_id
-                    row.extras["picked"] = picked
-                    row.extras["source"] = "chat"
-    except PortError:
-        log_event(
-            _LOGGER,
-            logging.WARNING,
-            "port_fallback",
-            "chat fallback",
-            port="chat",
-            reason="port_error",
-        )
+            charged.append(row)
+        if not charged:
+            return
+        workers = min(max(int(llm_concurrency), 1), len(charged))
+        done: list[tuple[int, _Pending, str | None]] = []
+        failed = False
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            in_flight: dict[Any, tuple[int, _Pending]] = {}
+            next_i = 0
+
+            def submit_more() -> None:
+                nonlocal next_i
+                while next_i < len(charged) and len(in_flight) < workers and not failed:
+                    row = charged[next_i]
+                    options = prune_candidates(
+                        list(row.extras.get("ranked") or []),
+                        row.ctx,
+                        book.taxonomy,
+                    )
+                    future = pool.submit(_ask_chat, chat, row.ctx, taxonomy, options)
+                    in_flight[future] = (next_i, row)
+                    next_i += 1
+
+            submit_more()
+            while in_flight:
+                finished, _ = wait(set(in_flight), return_when=FIRST_COMPLETED)
+                for future in finished:
+                    index_n, row = in_flight.pop(future)
+                    try:
+                        picked_id = future.result()
+                    except PortError:
+                        if not failed:
+                            log_event(
+                                _LOGGER,
+                                logging.WARNING,
+                                "port_fallback",
+                                "chat fallback",
+                                port="chat",
+                                reason="port_error",
+                            )
+                        failed = True
+                        continue
+                    done.append((index_n, row, picked_id))
+                if failed:
+                    for future in list(in_flight):
+                        if future.cancel():
+                            del in_flight[future]
+                else:
+                    submit_more()
+        for _index_n, row, picked_id in sorted(done, key=lambda item: item[0]):
+            _apply_chat_pick(row, picked_id, book, resolver)
     finally:
         _release(slots, "llm")
+
+
+def _apply_chat_pick(
+    row: _Pending,
+    picked_id: str | None,
+    book: BookView,
+    resolver: Resolver,
+) -> None:
+    if not picked_id or picked_id not in book.taxonomy:
+        return
+    cand = Candidate(
+        concept_id=picked_id,
+        score=0.88,
+        signal="chat",
+        evidence="llm rerank",
+    )
+    ranked = resolver.fuse(row.ctx, [*(row.extras.get("ranked") or []), cand])
+    concept_id, picked = resolver.decide(row.ctx, ranked)
+    row.extras["ranked"] = ranked
+    if concept_id and picked:
+        book.concepts[row.row_key] = concept_id
+        row.extras["picked"] = picked
+        row.extras["source"] = "chat"
 
 
 def _templates_by_row(cells: list[dict]) -> dict[tuple[str, int], list[str | None]]:

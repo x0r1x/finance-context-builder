@@ -15,6 +15,8 @@ from finance_context.layout.models import Layout
 from finance_context.layout.stage import layout_workbook
 from finance_context.mapping.models import MappingDocument
 from finance_context.mapping.stage import mapping_workbook
+from finance_context.mapping.taxonomy import load_taxonomy
+from finance_context.mapping.vectors import TaxonomyPrefetch
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
 from finance_context.observability import job_id_var, log_event, stage_var
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
@@ -77,6 +79,31 @@ class Pipeline:
         source = dest_dir / "source.xlsx"
         if not source.is_file():
             raise ContextError("empty_file", "source.xlsx missing")
+        prefetch = _start_taxonomy_prefetch(self)
+        try:
+            return self._run_loaded(
+                dest_dir,
+                job_id=job_id,
+                source_filename=source_filename,
+                content_sha256=content_sha256,
+                progress=progress,
+                prefetch=prefetch,
+            )
+        finally:
+            if prefetch is not None:
+                prefetch.join()
+
+    def _run_loaded(
+        self,
+        dest_dir: Path,
+        *,
+        job_id: str,
+        source_filename: str | None,
+        content_sha256: str | None,
+        progress: object | None,
+        prefetch: TaxonomyPrefetch | None,
+    ) -> ContextDocument:
+        source = dest_dir / "source.xlsx"
         owner = _load_owner(dest_dir)
         source_filename = source_filename or owner.get("source_filename")
         content_sha256 = content_sha256 or owner.get("content_sha256")
@@ -119,6 +146,8 @@ class Pipeline:
                 slot_timeout_sec=self.settings.llm_slot_wait_sec,
                 embedding_model=self.settings.embedding_model or "",
                 glossary_path=self.settings.data_dir / "glossary.json",
+                concept_index=prefetch,
+                llm_concurrency=self.settings.llm_concurrency,
             ),
         )
         layout = Layout.model_validate_json((dest_dir / "layout.json").read_text(encoding="utf-8"))
@@ -194,6 +223,17 @@ class Pipeline:
             questions=[q.model_dump(mode="json") for q in mapping.questions],
         )
         return doc
+
+
+def _start_taxonomy_prefetch(pipeline: Pipeline) -> TaxonomyPrefetch | None:
+    if pipeline.embed is None:
+        return None
+    return TaxonomyPrefetch(
+        pipeline.embed,
+        load_taxonomy(),
+        cache_path=pipeline.settings.data_dir / "taxonomy_embeddings.npz",
+        model=pipeline.settings.embedding_model or "",
+    )
 
 
 def _raise_if_cancelled(progress: object | None) -> None:

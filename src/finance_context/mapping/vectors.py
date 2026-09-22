@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import io
 import json
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,53 @@ def cache_key(taxonomy: list[Concept], *, model: str, dim: int) -> str:
     )
     digest = hashlib.sha256(payload.encode()).hexdigest()
     return f"{digest}:{model}:{dim}"
+
+
+class TaxonomyPrefetch:
+    """Embed taxonomy labels while earlier pipeline stages run."""
+
+    def __init__(
+        self,
+        embed: EmbedPort,
+        taxonomy: list[Concept],
+        *,
+        cache_path: Path | None,
+        model: str,
+    ) -> None:
+        self._index: dict[str, list[float]] | None = None
+        self._error: Exception | None = None
+        self._thread = threading.Thread(
+            target=self._load,
+            args=(embed, taxonomy, cache_path, model),
+            name="taxonomy-embed",
+        )
+        self._thread.start()
+
+    def _load(
+        self,
+        embed: EmbedPort,
+        taxonomy: list[Concept],
+        cache_path: Path | None,
+        model: str,
+    ) -> None:
+        try:
+            self._index = load_concept_vectors(
+                embed,
+                taxonomy,
+                cache_path=cache_path,
+                model=model,
+            )
+        except Exception as exc:
+            self._error = exc
+
+    def result(self) -> dict[str, list[float]]:
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        return self._index or {}
+
+    def join(self) -> None:
+        self._thread.join()
 
 
 def load_concept_vectors(

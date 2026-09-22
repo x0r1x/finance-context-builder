@@ -149,3 +149,68 @@ def test_duration_mismatch_warns_without_overriding_flags() -> None:
     assert any("Construction Duration" in item for item in warnings)
     assert any("Concession Duration" in item for item in warnings)
     assert not any("Operations Duration" in item for item in warnings)
+
+
+def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
+    cells = [
+        _c("Output", "N1", "2020"),
+        _c("Output", "O1", "2020"),
+        _c("Output", "P1", "2020"),
+        _c("Output", "Q1", "2021"),
+        _c("Output", "A3", "Operational Results"),
+        _c("Output", "B6", "Item"),
+        _c("Output", "C6", "2020"),
+        _c("Output", "D6", "2021"),
+        _c("Output", "E6", "2022"),
+        _c("Output", "N6", "янв.20"),
+        _c("Output", "O6", "фев.20"),
+        _c("Output", "P6", "мар.20"),
+        _c("Output", "Q6", "янв.21"),
+        _c("Output", "B7", "DC Capacity"),
+        _c("Output", "C7", "10"),
+        _c("Output", "D7", "11"),
+        _c("Output", "E7", "12"),
+        _c("Output", "N7", "1"),
+        _c("Output", "O7", "2"),
+        _c("Output", "P7", "3"),
+        _c("Output", "Q7", "4"),
+    ]
+    layout = detect_layout(cells)
+    doc = build_context(
+        job_id="banner",
+        workbook_meta={"sheets": [{"name": "Output"}]},
+        cells=cells,
+        layout=layout,
+        mapping=MappingDocument(),
+    )
+    payload = doc.model_dump(mode="json")
+    assert "timeline" not in payload
+    grains = {axis["grain"] for axis in payload["axes"]}
+    assert grains == {"year", "month"}
+    month = next(axis for axis in payload["axes"] if axis["grain"] == "month")
+    assert [period["group_key"] for period in month["periods"]] == [
+        "2020",
+        "2020",
+        "2020",
+        "2021",
+    ]
+    block = next(item for item in payload["blocks"] if item["sheet"] == "Output")
+    assert block["axis_ids"] == [axis["id"] for axis in payload["axes"]]
+    series = {item["axis_id"]: item["values"] for item in block["rows"][0]["series"]}
+    assert sorted(len(values) for values in series.values()) == [3, 4]
+    sample = month["periods"][0]
+    assert sample["group_key"] == "2020"
+    assert "phase" not in sample
+    assert "flags" not in sample
+    assert "calendar_year" not in sample
+    year = next(axis for axis in payload["axes"] if axis["grain"] == "year")
+    assert "phase" not in year["periods"][0]
+    assert "calendar_year" not in year["periods"][0]
+    rendered = render_markdown(doc)
+    assert "## Axes" in rendered
+    assert "| Period | Group | Phase | Phase year | Calendar | Flags |" not in rendered
+    assert "Phase" not in rendered
+    assert "Calendar" not in rendered
+    assert "2020-01 .. 2020-03" in rendered
+    assert "Axes:" in rendered
+    assert rendered.count("### `") >= 2

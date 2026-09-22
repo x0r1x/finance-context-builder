@@ -83,22 +83,107 @@ def _axes_section(axes: list[ContextAxis]) -> list[str]:
                     f"Periods: {len(axis.periods)}."
                 ),
                 "",
-                "| Period | Group | Phase | Phase year | Calendar | Flags |",
-                "| --- | --- | --- | --- | --- | --- |",
             ]
         )
-        for item in axis.periods:
-            flags = ", ".join(name for name, on in item.flags.items() if on)
-            lines.append(
-                "| "
-                f"{_cell(item.period_key)} | "
-                f"{_cell(item.group_key or '')} | "
-                f"{_cell(item.phase or '')} | "
-                f"{item.phase_year if item.phase_year is not None else ''} | "
-                f"{_cell(item.calendar_year or '')} | "
-                f"{_cell(flags)} |"
-            )
+        if _month_runs(axis) is not None:
+            lines.extend(_month_summary(axis))
+        else:
+            lines.extend(_period_table(axis))
         lines.append("")
+    return lines
+
+
+def _redundant_calendar(period) -> bool:
+    calendar = period.calendar_year
+    if not calendar:
+        return True
+    key = period.period_key
+    return calendar == key or calendar == key[:4]
+
+
+def _visible_columns(axis: ContextAxis) -> list[str]:
+    periods = axis.periods
+    columns = ["Period"]
+    if any(period.group_key for period in periods):
+        columns.append("Group")
+    if any(period.phase for period in periods):
+        columns.append("Phase")
+    if any(period.phase_year is not None for period in periods):
+        columns.append("Phase year")
+    if any(period.calendar_year and not _redundant_calendar(period) for period in periods):
+        columns.append("Calendar")
+    if any(period.flags for period in periods):
+        columns.append("Flags")
+    return columns
+
+
+def _period_table(axis: ContextAxis) -> list[str]:
+    columns = _visible_columns(axis)
+    lines = [
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join("---" for _ in columns) + " |",
+    ]
+    for period in axis.periods:
+        cells = [_period_cell(column, period) for column in columns]
+        lines.append("| " + " | ".join(cells) + " |")
+    return lines
+
+
+def _period_cell(column: str, period) -> str:
+    if column == "Period":
+        return _cell(period.period_key)
+    if column == "Group":
+        return _cell(period.group_key or "")
+    if column == "Phase":
+        return _cell(period.phase or "")
+    if column == "Phase year":
+        return "" if period.phase_year is None else str(period.phase_year)
+    if column == "Calendar":
+        if _redundant_calendar(period):
+            return ""
+        return _cell(period.calendar_year or "")
+    flags = ", ".join(name for name, on in period.flags.items() if on)
+    return _cell(flags)
+
+
+def _month_key(period_key: str) -> tuple[int, int] | None:
+    if len(period_key) == 7 and period_key[4] == "-" and period_key[:4].isdigit():
+        month = period_key[5:7]
+        if month.isdigit():
+            return int(period_key[:4]), int(month)
+    return None
+
+
+def _month_runs(axis: ContextAxis) -> list[tuple[str, list[str]]] | None:
+    """Year lines for a month axis with no phases and a stable group inside each year."""
+    if any(period.phase or period.flags for period in axis.periods):
+        return None
+    parsed: list[tuple[str, str]] = []
+    for period in axis.periods:
+        if _month_key(period.period_key) is None:
+            return None
+        parsed.append((period.group_key or period.period_key[:4], period.period_key))
+    runs: list[tuple[str, list[str]]] = []
+    groups_in_year: dict[str, set[str | None]] = {}
+    for period in axis.periods:
+        year = period.period_key[:4]
+        groups_in_year.setdefault(year, set()).add(period.group_key)
+    if any(len(groups) > 1 for groups in groups_in_year.values()):
+        return None
+    for group, key in parsed:
+        if runs and runs[-1][0] == group:
+            runs[-1][1].append(key)
+        else:
+            runs.append((group, [key]))
+    return runs
+
+
+def _month_summary(axis: ContextAxis) -> list[str]:
+    runs = _month_runs(axis) or []
+    lines = ["| Group | Periods |", "| --- | --- |"]
+    for group, keys in runs:
+        span = keys[0] if keys[0] == keys[-1] else f"{keys[0]} .. {keys[-1]}"
+        lines.append(f"| {_cell(group)} | {_cell(span)} |")
     return lines
 
 

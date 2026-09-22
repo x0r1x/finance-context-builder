@@ -10,12 +10,13 @@ from pydantic import BaseModel
 from finance_context.adapters.routes import CHAT_SUFFIX, openai_path, wrap_sync_transport
 from finance_context.adapters.tls import log_host
 from finance_context.errors import PortError
-from finance_context.observability import log_event
+from finance_context.observability import debug_port_io, log_event
 
 _LOGGER = logging.getLogger(__name__)
 
 
 _PLACEHOLDER_KEY = "not-needed"
+_DEFAULT_CONCURRENCY = 4
 
 
 class OpenAIChat:
@@ -27,6 +28,7 @@ class OpenAIChat:
         model: str,
         ca_file: Path | None = None,
         chat_path: str = CHAT_SUFFIX,
+        concurrency: int = _DEFAULT_CONCURRENCY,
     ) -> None:
         from openai import OpenAI
 
@@ -50,7 +52,11 @@ class OpenAIChat:
                 exc_type=type(exc).__name__,
             )
             raise PortError(str(exc), port="chat") from exc
-        http = httpx.Client(transport=transport)
+        workers = concurrency if concurrency > 0 else _DEFAULT_CONCURRENCY
+        http = httpx.Client(
+            transport=transport,
+            limits=httpx.Limits(max_connections=workers, max_keepalive_connections=workers),
+        )
         self._client = OpenAI(
             base_url=base_url, api_key=api_key or _PLACEHOLDER_KEY, http_client=http
         )
@@ -85,6 +91,13 @@ class OpenAIChat:
                 result = schema.model_validate_json(content)
         except Exception as exc:
             status_code = getattr(exc, "status_code", None)
+            debug_port_io(
+                _LOGGER,
+                "chat io",
+                port="chat",
+                model=self.model,
+                request=messages,
+            )
             log_event(
                 _LOGGER,
                 logging.ERROR,
@@ -105,5 +118,13 @@ class OpenAIChat:
             port="chat",
             model=self.model,
             latency_ms=int((time.monotonic() - t0) * 1000),
+        )
+        debug_port_io(
+            _LOGGER,
+            "chat io",
+            port="chat",
+            model=self.model,
+            request=messages,
+            response=result.model_dump(mode="json"),
         )
         return result

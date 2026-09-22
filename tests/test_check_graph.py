@@ -78,6 +78,34 @@ def _ok_context(**overrides: object) -> dict:
     return body
 
 
+def test_accepts_slim_period_without_empty_phase_fields(tmp_path: Path) -> None:
+    context = _write(
+        tmp_path / "context.json",
+        _ok_context(
+            axes=[
+                {
+                    "id": "P&L!r1",
+                    "sheet": "P&L",
+                    "grain": "year",
+                    "header_row": 1,
+                    "periods": [
+                        {
+                            "col": 2,
+                            "text": "2024",
+                            "role": "historical",
+                            "period_key": "2024",
+                            "index": 1,
+                        }
+                    ],
+                }
+            ]
+        ),
+    )
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    result = _run(str(context), str(graph))
+    assert result.returncode == 0, result.stderr
+
+
 def test_accepts_flat_values_and_prints_formula_cell(tmp_path: Path) -> None:
     context = _write(tmp_path / "context.json", _ok_context())
     graph = _write(tmp_path / "graph.json", _ok_graph())

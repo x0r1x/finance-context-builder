@@ -140,6 +140,7 @@ def _blocks_for_sheet(
                 kind="timeline",
             )
         )
+    blocks, axes = _share_repeated_axes(blocks, axes, by_row, date1904)
     if not blocks:
         extra = detect_params_block(sheet, by_row, date1904, edges)
         if extra is not None:
@@ -197,6 +198,105 @@ def _period_count(axis: TimeAxis) -> int:
 
 def _axis_cols(axis: TimeAxis) -> set[int]:
     return {period.col for period in axis.periods}
+
+
+def _axis_signature(axis: TimeAxis) -> tuple:
+    return (
+        axis.grain,
+        tuple(
+            (period.col, period.period_key, period.role, period.group_key)
+            for period in axis.periods
+        ),
+    )
+
+
+def _flag_bit(cell: dict | None, date1904: bool) -> bool:
+    if cell is None:
+        return False
+    text = _text(cell, date1904)
+    blob = (text or str(cell.get("cached_value") or "")).strip().replace(",", ".")
+    if blob.lower() in {"1", "1.0", "true", "yes"}:
+        return True
+    try:
+        return abs(float(blob) - 1.0) < 1e-9
+    except ValueError:
+        return False
+
+
+def _flag_fingerprint(
+    block: Block | None,
+    axis: TimeAxis,
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> tuple:
+    if block is None:
+        return ()
+    rows = [row for row in block.rows if row.kind == "flag"]
+    if not rows:
+        return ()
+    items: list[tuple[str, tuple[bool, ...]]] = []
+    for row in rows:
+        bits = tuple(
+            _flag_bit(_cell_at(by_row.get(row.row, []), period.col), date1904)
+            for period in axis.periods
+        )
+        items.append((row.label, bits))
+    return tuple(items)
+
+
+def _flags_compatible(left: tuple, right: tuple) -> bool:
+    if not left or not right:
+        return True
+    return left == right
+
+
+def _share_repeated_axes(
+    blocks: list[Block],
+    axes: list[TimeAxis],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> tuple[list[Block], list[TimeAxis]]:
+    """Later section headers that repeat an axis reference the first one."""
+    owner: dict[str, Block] = {}
+    for block in blocks:
+        for axis_id in block.axis_ids:
+            owner.setdefault(axis_id, block)
+    buckets: dict[tuple, list[tuple[TimeAxis, tuple]]] = {}
+    alias: dict[str, str] = {}
+    kept: list[TimeAxis] = []
+    for axis in axes:
+        signature = _axis_signature(axis)
+        fingerprint = _flag_fingerprint(owner.get(axis.id), axis, by_row, date1904)
+        match: TimeAxis | None = None
+        for previous, previous_flags in buckets.get(signature, []):
+            if _flags_compatible(previous_flags, fingerprint):
+                match = previous
+                if not previous_flags and fingerprint:
+                    buckets[signature] = [
+                        (item, fingerprint if item.id == previous.id else flags)
+                        for item, flags in buckets[signature]
+                    ]
+                break
+        if match is not None:
+            alias[axis.id] = match.id
+            continue
+        buckets.setdefault(signature, []).append((axis, fingerprint))
+        kept.append(axis)
+    if not alias:
+        return blocks, axes
+    by_id = {axis.id: axis for axis in kept}
+    for block in blocks:
+        seen: list[str] = []
+        for axis_id in block.axis_ids:
+            mapped = alias.get(axis_id, axis_id)
+            if mapped not in seen:
+                seen.append(mapped)
+        block.axis_ids = seen
+        if len(seen) == 1 and seen[0] in by_id:
+            block.axis = project_axis(by_id[seen[0]])
+        elif len(seen) != 1:
+            block.axis = None
+    return blocks, kept
 
 
 def _table_groups(
