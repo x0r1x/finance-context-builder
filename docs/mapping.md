@@ -34,7 +34,7 @@ Layout помечает тело блока видами строк. Каска�
 6. Финальный проход только `structure` (подтянуть то, что открылось после embed/chat).
 7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph.json` `links` и trace, не в `context.blocks[].relations`.
 
-Повторная загрузка той же книги на HTTP пересобирает compile, layout, mapping и context; parse (`raw/`) переиспользуется. CLI в тот же каталог не запускает пайплайн, если на диске уже есть и `context.json`, и `context.md`. Если одного из них нет, стадии всё равно скипаются по своим артефактам (`raw/workbook.json`, пара `ir/cells.parquet` + `ir/cell_edges.parquet`, `layout.json`, `mapping.json`, `graph.json`). Удаление только `context.json` не пересобирает mapping.
+Повторная загрузка той же книги на HTTP пересобирает layout, mapping и context; parse (`raw/`) и formula IR (`ir/cells.parquet`, `ir/edges.parquet`, `ir/cell_edges.parquet`) переиспользуются. CLI в тот же каталог не запускает пайплайн, если на диске уже есть и `context.json`, и `context.md`. Если одного из них нет, стадии всё равно скипаются по своим артефактам (`raw/workbook.json`, пара `ir/cells.parquet` + `ir/cell_edges.parquet`, `layout.json`, `mapping.json`, `graph.json`). Удаление только `context.json` не пересобирает mapping.
 
 ## Сигналы
 

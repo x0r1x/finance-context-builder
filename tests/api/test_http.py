@@ -153,7 +153,7 @@ def test_upload_and_download(tmp_path: Path) -> None:
         assert json_doc.json()["schema_version"] == "1.11.0"
 
 
-def test_repeated_upload_rebuilds_compile_layout_mapping_and_reuses_parse(tmp_path: Path) -> None:
+def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
     source = _xlsx(tmp_path / "model.xlsx")
     files = {
         "file": (
@@ -178,8 +178,10 @@ def test_repeated_upload_rebuilds_compile_layout_mapping_and_reuses_parse(tmp_pa
         mapping_path = job_dir / "mapping.json"
         mapping_path.write_text("not valid json", encoding="utf-8")
         (job_dir / "layout.json").write_text("{}", encoding="utf-8")
-        ir_cells = job_dir / "ir" / "cells.parquet"
-        ir_cells.write_bytes(b"stale")
+        ir_bytes = {
+            name: (job_dir / "ir" / name).read_bytes()
+            for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet")
+        }
 
         repeated = client.post("/v1/context-jobs", files=files)
         assert repeated.status_code == 202
@@ -192,8 +194,8 @@ def test_repeated_upload_rebuilds_compile_layout_mapping_and_reuses_parse(tmp_pa
         assert sentinel.read_text(encoding="utf-8") == "keep"
         assert (job_dir / "source.xlsx").is_file()
         assert (job_dir / "raw" / "workbook.json").is_file()
-        assert ir_cells.is_file()
-        assert ir_cells.read_bytes() != b"stale"
+        for name, payload in ir_bytes.items():
+            assert (job_dir / "ir" / name).read_bytes() == payload
         layout = json.loads((job_dir / "layout.json").read_text(encoding="utf-8"))
         assert "sheets" in layout
         assert "rows" in json.loads(mapping_path.read_text(encoding="utf-8"))

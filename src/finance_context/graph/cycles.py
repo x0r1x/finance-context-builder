@@ -29,31 +29,39 @@ def classify_cycles(edges: list[dict]) -> list[CycleRecord]:
     data = np.ones(len(usable), dtype=np.uint8)
     matrix = sparse.csr_matrix((data, (rows, cols)), shape=(len(nodes), len(nodes)), dtype=np.uint8)
     _n_comp, labels = connected_components(matrix, directed=True, connection="strong")
-    groups: dict[int, list[str]] = defaultdict(list)
-    for name, label in zip(nodes, labels, strict=True):
-        groups[int(label)].append(name)
-
-    by_pair: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for edge in usable:
-        by_pair[(str(edge["source"]), str(edge["target"]))].append(edge)
+    order: list[int] = []
+    members: dict[int, list[str]] = {}
+    for name, label_raw in zip(nodes, labels, strict=True):
+        label = int(label_raw)
+        bucket = members.get(label)
+        if bucket is None:
+            members[label] = [name]
+            order.append(label)
+        else:
+            bucket.append(name)
+    sizes = np.bincount(labels)
+    intra_by: dict[int, list[dict]] = defaultdict(list)
+    same = labels[rows] == labels[cols]
+    for pos in np.flatnonzero(same):
+        slot = int(pos)
+        label = int(labels[rows[slot]])
+        edge = usable[slot]
+        if sizes[label] < 2 and edge.get("source") != edge.get("target"):
+            continue
+        intra_by[label].append(edge)
 
     cycles: list[CycleRecord] = []
     seq = 1
-    for members in groups.values():
-        member_set = set(members)
-        intra = [
-            edge
-            for src, tgt in by_pair
-            if src in member_set and tgt in member_set
-            for edge in by_pair[(src, tgt)]
-        ]
-        self_loop = any(e["source"] == e["target"] for e in intra)
-        if len(members) < 2 and not self_loop:
+    for label in order:
+        group = members[label]
+        intra = intra_by.get(label, [])
+        self_loop = any(edge.get("source") == edge.get("target") for edge in intra)
+        if len(group) < 2 and not self_loop:
             continue
-        cls = _classify(members, intra)
+        cls = _classify(group, intra)
         cycles.append(
             CycleRecord.model_validate(
-                {"id": f"c{seq}", "members": sorted(members), "class": cls}
+                {"id": f"c{seq}", "members": sorted(group), "class": cls}
             )
         )
         seq += 1

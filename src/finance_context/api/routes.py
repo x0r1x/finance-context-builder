@@ -89,7 +89,7 @@ async def post_job(
         _LOGGER,
         logging.INFO,
         "job_remap",
-        "compile, layout, and mapping artifacts invalidated",
+        "layout and mapping artifacts invalidated",
         job_id=job_id,
     )
     await ctx.bus.enqueue(job_id)
@@ -119,8 +119,11 @@ def _clear_downstream_artifacts(dest: Path) -> None:
     ):
         (dest / name).unlink(missing_ok=True)
     ir = dest / "ir"
-    for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet", "graph_index.parquet"):
-        (ir / name).unlink(missing_ok=True)
+    # Formula IR depends only on the workbook bytes. A remap of the same source keeps it.
+    if not (dest / "source.xlsx").is_file():
+        for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet"):
+            (ir / name).unlink(missing_ok=True)
+    (ir / "graph_index.parquet").unlink(missing_ok=True)
 
 
 @router.get("/v1/context-jobs/{job_id}")
