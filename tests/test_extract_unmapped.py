@@ -95,58 +95,6 @@ def test_extracts_existing_unmapped_rows_from_context(tmp_path: Path) -> None:
     }
 
 
-def test_drops_timeline_points_from_context_rows(tmp_path: Path) -> None:
-    context_path = tmp_path / "context.json"
-    context_path.write_text(
-        json.dumps(
-            {
-                "blocks": [
-                    {
-                        "rows": [
-                            {
-                                "label": "Mystery",
-                                "concept_id": None,
-                                "disposition": "abstained",
-                                "values": ["1"],
-                                "points": [
-                                    {
-                                        "period_key": "2024",
-                                        "value": "1",
-                                        "value_status": "cached",
-                                        "normalized_value": "1",
-                                    }
-                                ],
-                                "series": [
-                                    {
-                                        "axis_id": "P&L!r1",
-                                        "points": [
-                                            {
-                                                "period_key": "2024",
-                                                "value": "9",
-                                                "value_status": "cached",
-                                                "normalized_value": "9",
-                                            }
-                                        ],
-                                        "formula": "=1",
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    result = _run(context_path)
-    assert result.returncode == 0
-    output = json.loads((tmp_path / "unmapped.json").read_text(encoding="utf-8"))
-    row = output["rows"][0]
-    assert "values" not in row
-    assert "points" not in row
-    assert row["series"] == [{"axis_id": "P&L!r1", "formula": "=1"}]
-
-
 def test_skips_excluded_rows_in_context_unmapped(tmp_path: Path) -> None:
     context_path = tmp_path / "context.json"
     context_path.write_text(

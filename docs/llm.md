@@ -1,6 +1,6 @@
 # Срез метрики для отвечающей LLM
 
-Канон джобы — `context.json` / `context.md` (schema `1.12.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция промпта, не артефакт и не замена ряда `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
+Канон джобы — `context.json` / `context.md` (schema `1.11.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция промпта, не артефакт и не замена ряда `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
 
 Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [граф](graph.md).
 
@@ -9,7 +9,7 @@
 | Кто | Что видит | Чего не видит |
 | --- | --- | --- |
 | Маппинг (`ChatPort`) | Лейбл, `label_path`, соседи ±2, заголовки периодов | Числа, кэш, единицы в виде суммы |
-| Ответ по уже построенной модели | Одно наблюдение: строка × период, поля ниже уже склеены | Просьбу самой склеить ось, `axes` и ячейку: `period_key` уже лежит на точке |
+| Ответ по уже построенной модели | Одно наблюдение: строка × период, поля ниже уже склеены | Сырой `values[]` и просьбу самой склеить ось, `axes` и ячейку |
 
 Маппинг-чат не получает этот срез. Неверный `concept_id` хуже, чем `unknown`.
 
@@ -69,9 +69,9 @@
 | `row_key`, `label`, `concept_id`, `disposition` | `blocks[].rows` | Как есть. `concept_id` может быть `null` при `disposition=abstained` |
 | `dimensions` | `hints.segment` | Только если segment задан. Иначе ключ отсутствует |
 | `period_id` | `axes[].periods[]` той оси, к которой относится серия строки | Ключ оси (`Y5`, календарный год, дата). Grain берётся у этой оси |
-| `value` | `series[].points[]` с тем же `axis_id` и `period_key`, иначе `row.points[]` | Строка кэша Excel или `null`. Не float: формулы не пересчитываются |
-| `value_status` | `points[].value_status` | `cached`, `empty`, `zero_explicit` или `not_applicable`. Пустую ячейку не подменяют нулём |
-| `normalized_value` | `points[].normalized_value` | Строка в базовых единицах или `null`, если число не разобрать. Не замена `value` |
+| `value` | `row.series[]` с тем же `axis_id`, иначе `row.values[i]` | Строка кэша Excel или `null`. Не float: формулы не пересчитываются |
+| `value_status` | `row.value_statuses[i]` | `cached`, `empty`, `zero_explicit` или `not_applicable`. Пустую ячейку не подменяют нулём |
+| `normalized_value` | `row.normalized_values[i]` | Строка в базовых единицах или `null`, если число не разобрать. Не замена `value` |
 | `scale_factor` | `row.scale_factor` | Целый множитель `1` / `1000` / `1000000` / `1000000000` или `null` |
 | `period_position`, `aggregation` | поля строки | Например `during_period` и `sum`. Рядом с `hints.time_semantics` |
 | `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` — токен `unit` / `k` / `m` / `bn`. Множитель — отдельный `scale_factor`. Без `kind` ставка выглядит как деньги |
@@ -85,7 +85,7 @@
 
 ## Чего в срезе нет
 
-- Замены `context.json` каталогом наблюдений. Полнота остаётся рядом: одна строка, один fingerprint, `points[]` по оси.
+- Замены `context.json` каталогом наблюдений. Полнота остаётся рядом: одна строка, один fingerprint, `values[]` по оси.
 - `validation_context`. `phase` / `phase_year` — часы таймлайна, не результат проверки.
 - Подмены `value` множителем или JSON-числом. Кэш остаётся строкой; множитель и базовая величина — отдельные поля.
 - AST. Он остаётся в `ir/cells.parquet` и попадает в разговор только отдельным запросом, не в обычный промпт.

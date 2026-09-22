@@ -8,7 +8,6 @@ from finance_context.models.context import (
     ContextDocument,
     FinancialBlock,
     RowSeries,
-    SeriesPoint,
 )
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
@@ -102,44 +101,44 @@ def _redundant_calendar(period) -> bool:
     return calendar == key or calendar == key[:4]
 
 
-def _visible_columns(axis: ContextAxis) -> list[str]:
+def _visible_attributes(axis: ContextAxis) -> list[str]:
     periods = axis.periods
-    columns = ["Period"]
+    attributes: list[str] = []
     if any(period.group_key for period in periods):
-        columns.append("Group")
+        attributes.append("Group")
     if any(period.phase for period in periods):
-        columns.append("Phase")
+        attributes.append("Phase")
     if any(period.phase_year is not None for period in periods):
-        columns.append("Phase year")
+        attributes.append("Phase year")
     if any(period.calendar_year and not _redundant_calendar(period) for period in periods):
-        columns.append("Calendar")
+        attributes.append("Calendar")
     if any(period.flags for period in periods):
-        columns.append("Flags")
-    return columns
+        attributes.append("Flags")
+    return attributes
+
+
+def _axis_row(cells: list[str]) -> str:
+    return "| " + " | ".join(cells) + " |"
 
 
 def _period_table(axis: ContextAxis) -> list[str]:
-    columns = _visible_columns(axis)
-    lines = [
-        "| " + " | ".join(columns) + " |",
-        "| " + " | ".join("---" for _ in columns) + " |",
-    ]
-    for period in axis.periods:
-        cells = [_period_cell(column, period) for column in columns]
-        lines.append("| " + " | ".join(cells) + " |")
+    """One column per period; attributes such as phase are rows under the period keys."""
+    header = [_cell(axis.id), *[_cell(period.period_key) for period in axis.periods]]
+    lines = [_axis_row(header), _axis_row(["---"] * len(header))]
+    for attribute in _visible_attributes(axis):
+        cells = [attribute, *[_period_cell(attribute, period) for period in axis.periods]]
+        lines.append(_axis_row(cells))
     return lines
 
 
-def _period_cell(column: str, period) -> str:
-    if column == "Period":
-        return _cell(period.period_key)
-    if column == "Group":
+def _period_cell(attribute: str, period) -> str:
+    if attribute == "Group":
         return _cell(period.group_key or "")
-    if column == "Phase":
+    if attribute == "Phase":
         return _cell(period.phase or "")
-    if column == "Phase year":
+    if attribute == "Phase year":
         return "" if period.phase_year is None else str(period.phase_year)
-    if column == "Calendar":
+    if attribute == "Calendar":
         if _redundant_calendar(period):
             return ""
         return _cell(period.calendar_year or "")
@@ -181,11 +180,13 @@ def _month_runs(axis: ContextAxis) -> list[tuple[str, list[str]]] | None:
 
 def _month_summary(axis: ContextAxis) -> list[str]:
     runs = _month_runs(axis) or []
-    lines = ["| Group | Periods |", "| --- | --- |"]
-    for group, keys in runs:
-        span = keys[0] if keys[0] == keys[-1] else f"{keys[0]} .. {keys[-1]}"
-        lines.append(f"| {_cell(group)} | {_cell(span)} |")
-    return lines
+    header = [_cell(axis.id), *[_cell(group) for group, _keys in runs]]
+    spans = [keys[0] if keys[0] == keys[-1] else f"{keys[0]} .. {keys[-1]}" for _g, keys in runs]
+    return [
+        _axis_row(header),
+        _axis_row(["---"] * len(header)),
+        _axis_row(["Periods", *[_cell(span) for span in spans]]),
+    ]
 
 
 def _block_section(block: FinancialBlock, axes_by_id: dict[str, ContextAxis]) -> list[str]:
@@ -210,91 +211,23 @@ def _block_section(block: FinancialBlock, axes_by_id: dict[str, ContextAxis]) ->
     lines = [title, "", summary, ""]
     if not block.rows:
         return lines
-    if block.kind == "params":
-        lines.extend(_value_table(block.rows, block.periods, None))
-    elif referenced:
+    if referenced:
         for axis in referenced:
             if len(referenced) > 1:
                 lines.extend([f"### `{axis.id}`", ""])
-            headers = [_header_dict(period) for period in axis.periods]
-            lines.extend(_timeline_rows(block.rows, headers, axis.id))
+            headers = [
+                {
+                    "text": period.text,
+                    "period_key": period.period_key,
+                    "col": period.col,
+                }
+                for period in axis.periods
+            ]
+            lines.extend(_value_table(block.rows, headers, axis.id))
     else:
-        lines.extend(_timeline_rows(block.rows, block.periods, None))
+        lines.extend(_value_table(block.rows, block.periods, None))
     if block.relations:
         lines.extend(_relations_section(block.relations))
-    return lines
-
-
-def _header_dict(period) -> dict:
-    return {
-        "text": period.text,
-        "period_key": period.period_key,
-        "col": period.col,
-        "phase": period.phase,
-    }
-
-
-def _timeline_rows(rows: list[BlockRow], periods: list[dict], axis_id: str | None) -> list[str]:
-    show_phase = any(item.get("phase") for item in periods)
-    lines: list[str] = []
-    for row in rows:
-        series = _series_for(row, axis_id)
-        points = _points_for(row, series, axis_id)
-        formula = series.formula if series is not None and series.formula else row.formula
-        lines.extend(_series_heading(row, formula))
-        lines.extend(_period_value_table(periods, points, show_phase))
-    return lines
-
-
-def _series_heading(row: BlockRow, formula: str | None) -> list[str]:
-    concept = row.concept_id or ""
-    confidence = row.mapping.confidence if row.mapping and row.mapping.confidence else ""
-    if concept and confidence:
-        concept = f"{concept} ({confidence})"
-    identity = [f"Kind: {_cell(row.kind)}"]
-    if row.disposition:
-        identity.append(f"Disposition: {_cell(row.disposition)}")
-    if concept:
-        identity.append(f"Concept: {_cell(concept)}")
-    lines = [
-        f"#### {_cell(row.label)}",
-        "",
-        f"- Row: `{row.row_key}`",
-        "- " + " · ".join(identity),
-    ]
-    unit = _unit_label(row)
-    if unit:
-        lines.append(f"- Unit: {_cell(unit)}")
-    time_label = _time_label(row)
-    if time_label:
-        lines.append(f"- Time: {_cell(time_label)}")
-    if formula:
-        lines.append(f"- Formula: `{_cell(formula)}`")
-    lines.append("")
-    return lines
-
-
-def _period_value_table(
-    periods: list[dict], points: list[SeriesPoint], show_phase: bool
-) -> list[str]:
-    columns = ["Period", "Value"] if not show_phase else ["Period", "Phase", "Value"]
-    lines = [
-        "| " + " | ".join(columns) + " |",
-        "| " + " | ".join("---" for _ in columns) + " |",
-    ]
-    for index, header in enumerate(periods):
-        point = points[index] if index < len(points) else None
-        value = (
-            "empty"
-            if point is None
-            else _series_cell(point.value, point.value_status, point.normalized_value)
-        )
-        cells = [_cell(_period_label(header))]
-        if show_phase:
-            cells.append(_cell(header.get("phase") or ""))
-        cells.append(_cell(value))
-        lines.append("| " + " | ".join(cells) + " |")
-    lines.append("")
     return lines
 
 
@@ -307,33 +240,32 @@ def _value_table(rows: list[BlockRow], periods: list[dict], axis_id: str | None)
     ]
     for row in rows:
         series = _series_for(row, axis_id)
-        lines.append(_row_line(row, periods, series, axis_id))
+        lines.append(_row_line(row, len(periods), series))
     lines.append("")
     return lines
 
 
 def _series_for(row: BlockRow, axis_id: str | None) -> RowSeries | None:
     if axis_id is None:
-        return row.series[0] if row.series else None
+        return None
     return next((item for item in row.series if item.axis_id == axis_id), None)
 
 
-def _points_for(row: BlockRow, series: RowSeries | None, axis_id: str | None) -> list[SeriesPoint]:
-    if series is not None and (axis_id is not None or not row.points):
-        return list(series.points)
-    return list(row.points)
-
-
-def _row_line(
-    row: BlockRow, periods: list[dict], series: RowSeries | None, axis_id: str | None
-) -> str:
+def _row_line(row: BlockRow, period_count: int, series: RowSeries | None = None) -> str:
     unit = _unit_label(row)
     concept = row.concept_id or ""
     confidence = row.mapping.confidence if row.mapping and row.mapping.confidence else ""
     if concept and confidence:
         concept = f"{concept} ({confidence})"
-    points = _points_for(row, series, axis_id)
+    source_values = series.values if series is not None else row.values
+    source_statuses = series.value_statuses if series is not None else row.value_statuses
+    source_normalized = series.normalized_values if series is not None else row.normalized_values
     formula = series.formula if series is not None and series.formula else row.formula
+    values = list(source_values)
+    statuses = list(source_statuses)
+    normalized = list(source_normalized)
+    if len(values) < period_count:
+        values.extend([None] * (period_count - len(values)))
     cells = [
         _cell(row.label),
         _cell(row.row_key),
@@ -343,15 +275,11 @@ def _row_line(
         _cell(unit),
         _cell(_time_label(row)),
         _cell(formula or ""),
+        *[
+            _cell(_series_cell(value, _at(statuses, index), _at(normalized, index)))
+            for index, value in enumerate(values[:period_count])
+        ],
     ]
-    for index, _header in enumerate(periods):
-        point = points[index] if index < len(points) else None
-        if point is None:
-            cells.append("empty")
-        else:
-            cells.append(
-                _cell(_series_cell(point.value, point.value_status, point.normalized_value))
-            )
     return "| " + " | ".join(cells) + " |"
 
 
@@ -392,6 +320,12 @@ def _series_cell(value: str | None, status: str | None, normalized: str | None) 
     if normalized and text and normalized != text:
         return f"{text} ({normalized})"
     return text
+
+
+def _at(items: list[str | None], index: int) -> str | None:
+    if index >= len(items):
+        return None
+    return items[index]
 
 
 def _relations_section(relations: list[dict]) -> list[str]:

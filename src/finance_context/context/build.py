@@ -43,6 +43,7 @@ from finance_context.models.context import (
     CashSemantics,
     ContextAxis,
     ContextDocument,
+    ContextPeriod,
     FinancialBlock,
     GraphPointer,
     MappingEvidence,
@@ -53,7 +54,6 @@ from finance_context.models.context import (
     RowHints,
     RowSeries,
     SemanticIdentity,
-    SeriesPoint,
     WorkbookRaw,
 )
 from finance_context.vocab import ValueStatus
@@ -101,7 +101,9 @@ def build_context(
     mapped_by_key = {row.row_key: row for row in mapping.rows}
     _precedents, dependents = row_adjacency(edges or [])
     concept_by_ref = {
-        row_key_ref(row.sheet, row.row): row.concept_id for row in mapping.rows if row.concept_id
+        row_key_ref(row.sheet, row.row): row.concept_id
+        for row in mapping.rows
+        if row.concept_id
     }
     warnings: list[str] = []
     formula_count = 0
@@ -198,7 +200,9 @@ def build_context(
                     feeds_cfads=feeds_cfads,
                 )
                 if mapped is not None:
-                    secondary = list(dict.fromkeys([*mapped.secondary_concepts, *secondary]))
+                    secondary = list(
+                        dict.fromkeys([*mapped.secondary_concepts, *secondary])
+                    )
                 identity, reporting_roles, cash = classify_semantics(
                     label=layout_row.label,
                     concept_id=mapped.concept_id if mapped else None,
@@ -238,7 +242,9 @@ def build_context(
                             formula=fingerprint,
                             formula_exceptions=exceptions,
                             numeric_summary=summary,
-                            points=_points(headers, values, statuses, normalized),
+                            values=values,
+                            value_statuses=statuses,
+                            normalized_values=normalized,
                         )
                     )
                 first = series[0] if series else None
@@ -248,6 +254,10 @@ def build_context(
                     layout_row=layout_row,
                     layout_row_parent=parent,
                     mapped=mapped,
+                    headers=[],
+                    value_headers=[],
+                    by_addr=by_addr,
+                    date1904=bool(workbook_meta.get("date1904")),
                     label_path=label_path,
                     neighbors=neighbors,
                     formula=first.formula if first else None,
@@ -282,7 +292,9 @@ def build_context(
     document_rows = [row for block in blocks for row in block.rows]
     expected_rows = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
     if len(document_rows) != expected_rows:
-        warnings.append(f"Content completeness {len(document_rows)}/{expected_rows} layout rows")
+        warnings.append(
+            f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
+        )
     warnings.extend(timeline_warnings)
     if mapping.questions:
         warnings.append(f"{len(mapping.questions)} row(s) need mapping review")
@@ -291,7 +303,9 @@ def build_context(
         extra = f" (e.g. {sample})" if sample else ""
         warnings.append(f"{missing_cached} formula cell(s) missing cached values{extra}")
     if graph is not None and graph.dangling:
-        warnings.append(f"Graph: {graph.dangling} unresolved formula targets (see graph.json)")
+        warnings.append(
+            f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
+        )
 
     sheets = [
         s["name"] if isinstance(s, dict) else getattr(s, "name", str(s))
@@ -324,7 +338,9 @@ def build_context(
     )
     counts = inventory_coverage_counts(document_rows)
     unmapped_series = sum(
-        1 for row in document_rows if row.kind in _SERIES_KINDS and row.disposition == "abstained"
+        1
+        for row in document_rows
+        if row.kind in _SERIES_KINDS and row.disposition == "abstained"
     )
     stats = context_report_metrics(
         layout_rows=expected_rows,
@@ -378,20 +394,23 @@ def _block_views(
         annotated = axes_by_id.get(axis.id)
         headers: list[AxisHeader] = []
         phases: dict[str, str | None] = {}
-        if annotated is not None:
-            source = annotated.periods
-        else:
-            source = [period for period in axis.periods if period.role in _SERIES_ROLES]
+        source: list[ContextPeriod] | list = (
+            annotated.periods if annotated is not None else axis.periods
+        )
         for period in source:
+            role = period.role
+            if role not in _SERIES_ROLES:
+                continue
             headers.append(
                 AxisHeader(
                     col=period.col,
                     text=period.text,
-                    role=period.role,
+                    role=role,
                     period_key=period.period_key,
                 )
             )
-            phases[period.period_key] = getattr(period, "phase", None)
+            phase = getattr(period, "phase", None)
+            phases[period.period_key] = phase
         views.append((axis.id, headers, phases))
     return views
 
@@ -439,23 +458,6 @@ def _series_numbers(
     return values, statuses, normalized
 
 
-def _points(
-    headers: list,
-    values: list[str | None],
-    statuses: list[ValueStatus],
-    normalized: list[str | None],
-) -> list[SeriesPoint]:
-    return [
-        SeriesPoint(
-            period_key=str(header.period_key),
-            value=value,
-            value_status=status,
-            normalized_value=norm,
-        )
-        for header, value, status, norm in zip(headers, values, statuses, normalized, strict=True)
-    ]
-
-
 def _row_for_layout(
     *,
     sheet_name: str,
@@ -463,6 +465,10 @@ def _row_for_layout(
     layout_row: LayoutRow,
     layout_row_parent: str | None,
     mapped: MappedRow | None,
+    headers: list,
+    value_headers: list,
+    by_addr: dict[tuple[str, int, int], dict],
+    date1904: bool,
     label_path: list[str],
     neighbors: list[str],
     formula: str | None,
@@ -472,6 +478,7 @@ def _row_for_layout(
     hints: RowHints,
     role_cells: list[RoleCell],
     series_unit: str | None,
+    period_phases: dict[str, str | None] | None = None,
     context_role: str | None = None,
     secondary_concepts: list[str] | None = None,
     semantic_identity: SemanticIdentity | None = None,
@@ -480,12 +487,45 @@ def _row_for_layout(
     series: list[RowSeries] | None = None,
 ) -> BlockRow:
     row_num = layout_row.row
+    keep_cols = {header.col for header in value_headers}
     concept_id = mapped.concept_id if mapped else None
-    unit_from_cell = next((item.cached_value for item in role_cells if item.role == "unit"), None)
+    gate = phase_gate(mapped.label if mapped else layout_row.label, concept_id)
+    phases = period_phases or {}
+    values: list[str | None] = []
+    statuses: list[ValueStatus] = []
+    formats: list[str] = []
+    for header in headers:
+        if header.col not in keep_cols:
+            values.append(None)
+            statuses.append("not_applicable")
+            continue
+        cell = by_addr.get((sheet_name, row_num, header.col))
+        cached = None if cell is None else cell.get("cached_value")
+        fmt = None if cell is None else cell.get("number_format")
+        if fmt:
+            formats.append(str(fmt))
+        displayed = display_cell_text(
+            cached if cached is not None else None,
+            fmt,
+            date1904=date1904,
+        )
+        if displayed is not None:
+            cached = displayed
+        text = None if cached in (None, "") else str(cached)
+        values.append(text)
+        phase = phases.get(str(header.period_key))
+        outside_phase = bool(gate and phase and gate != phase and text is None)
+        structural = layout_row.kind not in _SERIES_KINDS and text is None
+        statuses.append(
+            value_status(text, applicable=not outside_phase and not structural)
+        )
+    unit_from_cell = next(
+        (item.cached_value for item in role_cells if item.role == "unit"), None
+    )
     measure = parse_measure(
         unit_from_cell,
         layout_row.label,
-        [],
+        formats,
         concept_id=concept_id,
         statement=hints.statement,
         nature=hints.nature,
@@ -504,7 +544,17 @@ def _row_for_layout(
     factor = scale_factor_for(hints.scale)
     position, aggregation = temporal_profile(hints.time_semantics)
     if series:
-        series = [_renormalize(item, factor) for item in series]
+        series = [
+            item.model_copy(
+                update={
+                    "normalized_values": [normalize_value(value, factor) for value in item.values]
+                }
+            )
+            for item in series
+        ]
+        values = list(series[0].values)
+        statuses = list(series[0].value_statuses)
+    normalized = [normalize_value(value, factor) for value in values]
     disposition, exclusion_reason = _row_disposition(mapped, layout_row)
     method = _METHOD.get(mapped.source, "unmapped") if mapped else "unmapped"
     evidence = None
@@ -532,6 +582,9 @@ def _row_for_layout(
         period_position=position,
         aggregation=aggregation,
         scale_factor=factor,
+        values=values,
+        value_statuses=statuses,
+        normalized_values=normalized,
         series=list(series or []),
         disposition=disposition,
         exclusion_reason=exclusion_reason,
@@ -555,17 +608,6 @@ def _row_for_layout(
     )
 
 
-def _renormalize(item: RowSeries, factor: int | None) -> RowSeries:
-    return item.model_copy(
-        update={
-            "points": [
-                point.model_copy(update={"normalized_value": normalize_value(point.value, factor)})
-                for point in item.points
-            ]
-        }
-    )
-
-
 def _row_disposition(
     mapped: MappedRow | None, layout_row: LayoutRow
 ) -> tuple[str | None, str | None]:
@@ -586,7 +628,9 @@ def _row_disposition(
             return "abstained", reason
         return mapped.disposition, mapped.exclusion_reason
     return _inventory_disposition(mapped, layout_row), (
-        mapped.exclusion_reason if mapped else ("flag" if layout_row.kind == "flag" else None)
+        mapped.exclusion_reason
+        if mapped
+        else ("flag" if layout_row.kind == "flag" else None)
     )
 
 
@@ -668,7 +712,9 @@ def _hints_for(
         nature = nature or "balance"
     elif statement in {"pnl", "cf"}:
         nature = nature or "flow"
-    if time_semantics is None and (any(token in tokens for token in ("rate", "ratio", "%"))):
+    if time_semantics is None and (
+        any(token in tokens for token in ("rate", "ratio", "%"))
+    ):
         time_semantics = "rate"
     elif layout_row.kind == "fact" and time_semantics is None:
         time_semantics = "flow"

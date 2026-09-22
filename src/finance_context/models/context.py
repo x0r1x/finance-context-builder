@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_serializer
 
 from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
 
-SCHEMA_VERSION = "1.12.0"
+SCHEMA_VERSION = "1.11.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -92,23 +92,16 @@ class RoleCell(BaseModel):
     cached_value: str | None = None
 
 
-class SeriesPoint(BaseModel):
-    """One cached cell. `points` follow the axis periods in order."""
-
-    period_key: str
-    value: str | None = None
-    value_status: ValueStatus = "empty"
-    normalized_value: str | None = None
-
-
 class RowSeries(BaseModel):
-    """Values of one row on one axis. `points` follow that axis's periods."""
+    """Values of one row on one axis. Aligned to that axis's periods."""
 
     axis_id: str
     formula: str | None = None
     formula_exceptions: list[str] = Field(default_factory=list)
     numeric_summary: NumericSummary | None = None
-    points: list[SeriesPoint] = Field(default_factory=list)
+    values: list[str | None] = Field(default_factory=list)
+    value_statuses: list[ValueStatus] = Field(default_factory=list)
+    normalized_values: list[str | None] = Field(default_factory=list)
 
 
 class BlockRow(BaseModel):
@@ -145,7 +138,9 @@ class BlockRow(BaseModel):
     period_position: PeriodPosition | None = None
     aggregation: SeriesAggregation | None = None
     scale_factor: int | None = None
-    points: list[SeriesPoint] = Field(default_factory=list)
+    values: list[str | None] = Field(default_factory=list)
+    value_statuses: list[ValueStatus] = Field(default_factory=list)
+    normalized_values: list[str | None] = Field(default_factory=list)
     series: list[RowSeries] = Field(default_factory=list)
 
 

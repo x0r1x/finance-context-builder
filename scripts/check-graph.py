@@ -34,14 +34,15 @@ GRAPH_FORBIDDEN = frozenset(
 GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "links", "artifacts")
 ARTIFACT_REQUIRED = ("cells", "edges", "cell_edges", "index")
 GRAPH_SCHEMA_PREFIX = "1.7"
-CONTEXT_SCHEMA_PREFIX = "1.12"
+CONTEXT_SCHEMA_PREFIX = "1.11"
 LINK_FIELDS = ("cell", "formula", "refs", "formula_class")
 ROW_SERIES_FIELDS = (
+    "value_statuses",
+    "normalized_values",
     "scale_factor",
     "period_position",
     "aggregation",
 )
-POINT_FIELDS = ("period_key", "value", "value_status", "normalized_value")
 VALUE_STATUSES = frozenset({"cached", "empty", "zero_explicit", "not_applicable"})
 FORMULA_CLASSES = frozenset(
     {
@@ -88,10 +89,14 @@ def check_context(context: dict[str, Any]) -> list[str]:
         )
     catalog = [key for key in ("inventory", "unmapped", "excluded") if key in context]
     if catalog:
-        errors.append("context.json must not keep a second row catalog: " + ", ".join(catalog))
+        errors.append(
+            "context.json must not keep a second row catalog: " + ", ".join(catalog)
+        )
     forbidden = _walk_keys(context) & CONTEXT_FORBIDDEN
     if forbidden:
-        errors.append("context.json must not embed formula AST: " + ", ".join(sorted(forbidden)))
+        errors.append(
+            "context.json must not embed formula AST: " + ", ".join(sorted(forbidden))
+        )
     pointer = context.get("graph")
     if not isinstance(pointer, dict):
         errors.append("context.json missing graph pointer")
@@ -119,91 +124,32 @@ def check_context(context: dict[str, Any]) -> list[str]:
             if "source" in row:
                 errors.append("context.json row must not repeat a per-cell source")
                 break
-            errors.extend(_check_row_series(row, block, _axes_by_id(context)))
+            errors.extend(_check_row_series(row))
             if errors:
                 break
     return errors
 
 
-def _axes_by_id(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    found: dict[str, dict[str, Any]] = {}
-    for axis in context.get("axes") or []:
-        if isinstance(axis, dict) and axis.get("id"):
-            found[str(axis["id"])] = axis
-    return found
-
-
-def _period_keys(periods: object) -> list[str] | None:
-    if not isinstance(periods, list) or not periods:
-        return None
-    keys: list[str] = []
-    for period in periods:
-        if not isinstance(period, dict) or not period.get("period_key"):
-            return None
-        keys.append(str(period["period_key"]))
-    return keys
-
-
-def _check_row_series(
-    row: dict[str, Any], block: dict[str, Any], axes_by_id: dict[str, dict[str, Any]]
-) -> list[str]:
-    if _has_flat_values(row):
+def _check_row_series(row: dict[str, Any]) -> list[str]:
+    values = row.get("values")
+    if not isinstance(values, list):
+        return ["context.json row values must be a list"]
+    if any(isinstance(item, dict) for item in values):
         return ["context.json values must be a flat list aligned to the block axis"]
     missing = [key for key in ROW_SERIES_FIELDS if key not in row]
     if missing:
         return ["context.json row missing " + ", ".join(missing)]
+    statuses = row.get("value_statuses")
+    normalized = row.get("normalized_values")
+    if not isinstance(statuses, list) or len(statuses) != len(values):
+        return ["context.json value_statuses must align with values"]
+    if any(item not in VALUE_STATUSES for item in statuses):
+        return ["context.json value_statuses has an unknown status"]
+    if not isinstance(normalized, list) or len(normalized) != len(values):
+        return ["context.json normalized_values must align with values"]
     factor = row.get("scale_factor")
     if factor is not None and not isinstance(factor, int):
         return ["context.json scale_factor must be an int or null"]
-    series = row.get("series") or []
-    if not isinstance(series, list):
-        return ["context.json series must be a list"]
-    if series:
-        if row.get("points"):
-            return ["context.json row must not duplicate series points"]
-        errors: list[str] = []
-        for item in series:
-            if not isinstance(item, dict):
-                return ["context.json series must be objects"]
-            if _has_flat_values(item):
-                return ["context.json values must be a flat list aligned to the block axis"]
-            axis = axes_by_id.get(str(item.get("axis_id") or ""))
-            expected = _period_keys(axis.get("periods") if axis else None)
-            if expected is None:
-                expected = _period_keys(block.get("periods"))
-            errors.extend(_check_points(item.get("points"), expected))
-            if errors:
-                return errors
-        return []
-    points = row.get("points") if "points" in row else []
-    return _check_points(points, _period_keys(block.get("periods")))
-
-
-def _has_flat_values(node: dict[str, Any]) -> bool:
-    values = node.get("values")
-    return "values" in node and isinstance(values, list)
-
-
-def _check_points(points: object, expected_keys: list[str] | None) -> list[str]:
-    if not isinstance(points, list):
-        return ["context.json points must be a list"]
-    for point in points:
-        if not isinstance(point, dict):
-            return ["context.json points must be objects"]
-        missing = [key for key in POINT_FIELDS if key not in point]
-        if missing:
-            return ["context.json point missing " + ", ".join(missing)]
-        if point.get("value_status") not in VALUE_STATUSES:
-            return ["context.json value_status has an unknown status"]
-        if point.get("value") is not None and not isinstance(point.get("value"), str):
-            return ["context.json point value must be a string or null"]
-        normalized = point.get("normalized_value")
-        if normalized is not None and not isinstance(normalized, str):
-            return ["context.json point normalized_value must be a string or null"]
-    if expected_keys is not None:
-        keys = [str(point.get("period_key")) for point in points if isinstance(point, dict)]
-        if keys != expected_keys:
-            return ["context.json points must follow the axis period keys"]
     return []
 
 
@@ -214,7 +160,9 @@ def check_graph(graph: dict[str, Any]) -> list[str]:
         errors.append("graph.json missing " + ", ".join(missing))
     schema = str(graph.get("schema_version") or "")
     if schema and not schema.startswith(GRAPH_SCHEMA_PREFIX):
-        errors.append(f"graph.json schema_version must be {GRAPH_SCHEMA_PREFIX}.x, got {schema!r}")
+        errors.append(
+            f"graph.json schema_version must be {GRAPH_SCHEMA_PREFIX}.x, got {schema!r}"
+        )
     for key in ("nodes", "edges"):
         if key in graph and not isinstance(graph[key], int):
             errors.append(f"graph.json {key} must be an int count, not a list")
@@ -267,7 +215,9 @@ def check_pointer_matches(context: dict[str, Any], graph: dict[str, Any]) -> lis
     errors: list[str] = []
     for key in ("nodes", "edges", "iterate"):
         if key in pointer and key in graph and pointer[key] != graph[key]:
-            errors.append(f"context.graph.{key}={pointer[key]} != graph.json {key}={graph[key]}")
+            errors.append(
+                f"context.graph.{key}={pointer[key]} != graph.json {key}={graph[key]}"
+            )
     return errors
 
 
@@ -291,13 +241,25 @@ def check_link_identity(context: dict[str, Any], graph: dict[str, Any]) -> list[
             continue
         row_key = link.get("row_key")
         if row_key and str(row_key) not in keys:
-            errors.append(f"graph link {link.get('cell')} row_key {row_key} missing from context")
+            errors.append(
+                f"graph link {link.get('cell')} row_key {row_key} missing from context"
+            )
             break
     return errors
 
 
+def _check_axes_markdown(context: dict[str, Any], markdown: str) -> list[str]:
+    for axis in context.get("axes") or []:
+        if not isinstance(axis, dict) or not axis.get("id"):
+            continue
+        axis_id = str(axis["id"]).replace("|", "\\|")
+        if f"\n| {axis_id} |" not in markdown:
+            return [f"context.md axis {axis['id']} must head a table with periods as columns"]
+    return []
+
+
 def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
-    errors: list[str] = []
+    errors: list[str] = _check_axes_markdown(context, markdown)
     for block in context.get("blocks") or []:
         if not isinstance(block, dict):
             continue
@@ -329,29 +291,11 @@ def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
     return errors
 
 
-def _iter_points(row: dict[str, Any]) -> list[dict[str, Any]]:
-    found: list[dict[str, Any]] = []
-    series = row.get("series") or []
-    if isinstance(series, list) and series:
-        for item in series:
-            if not isinstance(item, dict):
-                continue
-            for point in item.get("points") or []:
-                if isinstance(point, dict):
-                    found.append(point)
-        return found
-    for point in row.get("points") or []:
-        if isinstance(point, dict):
-            found.append(point)
-    return found
-
-
 def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:
-    points = _iter_points(row)
-    statuses = [point.get("value_status") for point in points]
-    if "empty" in statuses and "empty" not in markdown:
+    statuses = row.get("value_statuses") or []
+    if isinstance(statuses, list) and "empty" in statuses and "empty" not in markdown:
         return ["context.md missing empty value status"]
-    if "not_applicable" in statuses and "n/a" not in markdown:
+    if isinstance(statuses, list) and "not_applicable" in statuses and "n/a" not in markdown:
         return ["context.md missing n/a value status"]
     position = row.get("period_position")
     aggregation = row.get("aggregation")
@@ -360,15 +304,12 @@ def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:
     factor = row.get("scale_factor")
     if isinstance(factor, int) and factor not in (0, 1) and f"×{factor}" not in markdown:
         return [f"context.md missing scale factor ×{factor}"]
-    for point in points:
-        value = point.get("value")
-        norm = point.get("normalized_value")
-        if value and norm and str(norm) != str(value) and str(norm) not in markdown:
-            return [f"context.md missing normalized value {norm}"]
-    for point in points:
-        key = str(point.get("period_key") or "")
-        if key and key not in markdown:
-            return [f"context.md missing period {key}"]
+    values = row.get("values") or []
+    normalized = row.get("normalized_values") or []
+    if isinstance(values, list) and isinstance(normalized, list):
+        for value, norm in zip(values, normalized, strict=False):
+            if value and norm and str(norm) != str(value) and str(norm) not in markdown:
+                return [f"context.md missing normalized value {norm}"]
     return []
 
 

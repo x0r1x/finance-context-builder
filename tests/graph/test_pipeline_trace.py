@@ -119,10 +119,8 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
         if row.get("label") == "EBITDA"
     )
     assert ebitda_row["formula"]
-    assert "values" not in ebitda_row
-    points = ebitda_row["series"][0]["points"]
-    assert points
-    assert all(isinstance(point["value"], str) for point in points if point["value"] is not None)
+    assert isinstance(ebitda_row["values"], list)
+    assert all(not isinstance(value, dict) for value in ebitda_row["values"])
 
     edges = read_parquet(dest / "ir" / "cell_edges.parquet")
     ebitda = [e for e in edges if e["source"] == "P&L!C13"]
