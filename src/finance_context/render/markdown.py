@@ -4,9 +4,10 @@ from finance_context.context.measure import Measure
 from finance_context.excel.a1 import index_to_col
 from finance_context.models.context import (
     BlockRow,
+    ContextAxis,
     ContextDocument,
     FinancialBlock,
-    WorkbookTimeline,
+    RowSeries,
 )
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
@@ -27,15 +28,16 @@ def render_markdown(doc: ContextDocument) -> str:
         *_coverage_lines(doc),
         "",
     ]
-    if doc.timeline and doc.timeline.periods:
-        lines.extend(_timeline_section(doc.timeline))
+    if doc.axes:
+        lines.extend(_axes_section(doc.axes))
     if doc.warnings:
         lines.extend(["## Warnings", ""])
         for warning in doc.warnings:
             lines.append(f"- {_cell(warning)}")
         lines.append("")
+    axes_by_id = {axis.id: axis for axis in doc.axes}
     for block in doc.blocks:
-        lines.extend(_block_section(block))
+        lines.extend(_block_section(block, axes_by_id))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -68,72 +70,113 @@ def _quality_lines(doc: ContextDocument) -> list[str]:
     ]
 
 
-def _timeline_section(timeline: WorkbookTimeline) -> list[str]:
-    lines = [
-        "## Timeline",
-        "",
-        (
-            f"Grain: `{timeline.grain or 'n/a'}`. "
-            f"Source: `{timeline.source_block_id or 'n/a'}`. "
-            f"Periods: {len(timeline.periods)}."
-        ),
-        "",
-        "| Period | Phase | Phase year | Calendar | Flags |",
-        "| --- | --- | --- | --- | --- |",
-    ]
-    for item in timeline.periods:
-        flags = ", ".join(name for name, on in item.flags.items() if on)
-        lines.append(
-            "| "
-            f"{_cell(item.period_id)} | "
-            f"{_cell(item.phase or '')} | "
-            f"{item.phase_year if item.phase_year is not None else ''} | "
-            f"{_cell(item.calendar_year or '')} | "
-            f"{_cell(flags)} |"
+def _axes_section(axes: list[ContextAxis]) -> list[str]:
+    lines = ["## Axes", ""]
+    for axis in axes:
+        lines.extend(
+            [
+                f"### `{axis.id}`",
+                "",
+                (
+                    f"Grain: `{axis.grain or 'n/a'}`. "
+                    f"Sheet: `{axis.sheet}`. "
+                    f"Periods: {len(axis.periods)}."
+                ),
+                "",
+                "| Period | Group | Phase | Phase year | Calendar | Flags |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
         )
-    lines.append("")
+        for item in axis.periods:
+            flags = ", ".join(name for name, on in item.flags.items() if on)
+            lines.append(
+                "| "
+                f"{_cell(item.period_key)} | "
+                f"{_cell(item.group_key or '')} | "
+                f"{_cell(item.phase or '')} | "
+                f"{item.phase_year if item.phase_year is not None else ''} | "
+                f"{_cell(item.calendar_year or '')} | "
+                f"{_cell(flags)} |"
+            )
+        lines.append("")
     return lines
 
 
-def _block_section(block: FinancialBlock) -> list[str]:
+def _block_section(block: FinancialBlock, axes_by_id: dict[str, ContextAxis]) -> list[str]:
+    referenced = [axes_by_id[axis_id] for axis_id in block.axis_ids if axis_id in axes_by_id]
     grain = f" grain={block.grain}" if block.grain else ""
     title = (
         f"## Parameters / {block.sheet}"
         if block.kind == "params"
         else f"## {block.sheet} / `{block.block_id}`"
     )
-    lines = [
-        title,
-        "",
-        (
+    if referenced:
+        names = ", ".join(f"`{axis.id}`" for axis in referenced)
+        summary = (
+            f"Block: `{block.block_id}`. Kind: `{block.kind}`. "
+            f"Axes: {names}. Rows: {len(block.rows)}."
+        )
+    else:
+        summary = (
             f"Block: `{block.block_id}`. Kind: `{block.kind}`.{grain} "
             f"Periods: {len(block.periods)}. Rows: {len(block.rows)}."
-        ),
-        "",
-    ]
+        )
+    lines = [title, "", summary, ""]
     if not block.rows:
         return lines
-    headers = [_period_label(item) for item in block.periods]
-    cols = ["Label", "Row", "Kind", "Disposition", "Concept", "Unit", "Time", "Formula", *headers]
-    lines.append("| " + " | ".join(_cell(col) for col in cols) + " |")
-    lines.append("| " + " | ".join("---" for _ in cols) + " |")
-    for row in block.rows:
-        lines.append(_row_line(row, len(block.periods)))
-    lines.append("")
+    if referenced:
+        for axis in referenced:
+            if len(referenced) > 1:
+                lines.extend([f"### `{axis.id}`", ""])
+            headers = [
+                {
+                    "text": period.text,
+                    "period_key": period.period_key,
+                    "col": period.col,
+                }
+                for period in axis.periods
+            ]
+            lines.extend(_value_table(block.rows, headers, axis.id))
+    else:
+        lines.extend(_value_table(block.rows, block.periods, None))
     if block.relations:
         lines.extend(_relations_section(block.relations))
     return lines
 
 
-def _row_line(row: BlockRow, period_count: int) -> str:
+def _value_table(rows: list[BlockRow], periods: list[dict], axis_id: str | None) -> list[str]:
+    headers = [_period_label(item) for item in periods]
+    cols = ["Label", "Row", "Kind", "Disposition", "Concept", "Unit", "Time", "Formula", *headers]
+    lines = [
+        "| " + " | ".join(_cell(col) for col in cols) + " |",
+        "| " + " | ".join("---" for _ in cols) + " |",
+    ]
+    for row in rows:
+        series = _series_for(row, axis_id)
+        lines.append(_row_line(row, len(periods), series))
+    lines.append("")
+    return lines
+
+
+def _series_for(row: BlockRow, axis_id: str | None) -> RowSeries | None:
+    if axis_id is None:
+        return None
+    return next((item for item in row.series if item.axis_id == axis_id), None)
+
+
+def _row_line(row: BlockRow, period_count: int, series: RowSeries | None = None) -> str:
     unit = _unit_label(row)
     concept = row.concept_id or ""
     confidence = row.mapping.confidence if row.mapping and row.mapping.confidence else ""
     if concept and confidence:
         concept = f"{concept} ({confidence})"
-    values = list(row.values)
-    statuses = list(row.value_statuses)
-    normalized = list(row.normalized_values)
+    source_values = series.values if series is not None else row.values
+    source_statuses = series.value_statuses if series is not None else row.value_statuses
+    source_normalized = series.normalized_values if series is not None else row.normalized_values
+    formula = series.formula if series is not None and series.formula else row.formula
+    values = list(source_values)
+    statuses = list(source_statuses)
+    normalized = list(source_normalized)
     if len(values) < period_count:
         values.extend([None] * (period_count - len(values)))
     cells = [
@@ -144,7 +187,7 @@ def _row_line(row: BlockRow, period_count: int) -> str:
         _cell(concept),
         _cell(unit),
         _cell(_time_label(row)),
-        _cell(row.formula or ""),
+        _cell(formula or ""),
         *[
             _cell(_series_cell(value, _at(statuses, index), _at(normalized, index)))
             for index, value in enumerate(values[:period_count])

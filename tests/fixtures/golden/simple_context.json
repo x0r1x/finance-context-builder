@@ -1,6 +1,8 @@
 {
+  "axes": [],
   "blocks": [
     {
+      "axis_ids": [],
       "block_id": "CF!r1",
       "grain": "year",
       "kind": "timeline",
@@ -74,6 +76,7 @@
           "scale_factor": 1000,
           "secondary_concepts": [],
           "semantic_identity": null,
+          "series": [],
           "sheet": "CF",
           "unit": "money",
           "value_statuses": [
@@ -125,14 +128,13 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.10.0",
+    "schema_version": "1.11.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.10.0",
-  "timeline": null,
+  "schema_version": "1.11.0",
   "warnings": [],
   "workbook": {
     "cell_count": 4,

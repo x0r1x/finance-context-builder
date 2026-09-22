@@ -911,19 +911,53 @@ def test_side_by_side_year_and_month_tables() -> None:
         cells.append(_c("Output", f"{col}7", "10"))
     layout = detect_layout(cells)
     sheet = layout.sheets[0]
-    assert len(sheet.blocks) == 2
-    year_block = next(
-        block
-        for block in sheet.blocks
-        if all(h.period_key.isdigit() for h in block.axis.headers)
+    assert len(sheet.blocks) == 1
+    assert len(sheet.axes) == 2
+    year_axis = next(axis for axis in sheet.axes if axis.grain == "year")
+    month_axis = next(axis for axis in sheet.axes if axis.grain == "month")
+    block = sheet.blocks[0]
+    assert block.axis_ids == [year_axis.id, month_axis.id]
+    assert [period.period_key for period in year_axis.periods] == [str(y) for _, y in years]
+    assert max(period.col for period in year_axis.periods) < min(
+        period.col for period in month_axis.periods
     )
-    month_block = next(block for block in sheet.blocks if block is not year_block)
-    assert [h.period_key for h in year_block.axis.headers] == [str(y) for _, y in years]
-    assert max(h.col for h in year_block.axis.headers) < min(
-        h.col for h in month_block.axis.headers
-    )
-    assert year_block.rows[0].label == "DC Capacity"
-    assert month_block.rows[0].label == "DC Capacity"
+    assert [row.label for row in block.rows] == ["DC Capacity"]
+
+
+def test_repeated_year_banner_is_group_key_not_an_axis() -> None:
+    cells = [
+        _c("Output", "N1", "2020"),
+        _c("Output", "O1", "2020"),
+        _c("Output", "P1", "2020"),
+        _c("Output", "Q1", "2021"),
+        _c("Output", "A3", "Operational Results"),
+        _c("Output", "B6", "Item"),
+        _c("Output", "C6", "2020"),
+        _c("Output", "D6", "2021"),
+        _c("Output", "E6", "2022"),
+        _c("Output", "N6", "янв.20"),
+        _c("Output", "O6", "фев.20"),
+        _c("Output", "P6", "мар.20"),
+        _c("Output", "Q6", "янв.21"),
+        _c("Output", "B7", "DC Capacity"),
+        _c("Output", "C7", "10"),
+        _c("Output", "D7", "11"),
+        _c("Output", "E7", "12"),
+        _c("Output", "N7", "1"),
+        _c("Output", "O7", "2"),
+        _c("Output", "P7", "3"),
+        _c("Output", "Q7", "4"),
+    ]
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    assert len(sheet.blocks) == 1
+    grains = {axis.grain for axis in sheet.axes}
+    assert grains == {"year", "month"}
+    month = next(axis for axis in sheet.axes if axis.grain == "month")
+    assert [period.group_key for period in month.periods] == ["2020", "2020", "2020", "2021"]
+    assert all(len(axis.periods) == len({p.period_key for p in axis.periods}) for axis in sheet.axes)
+    assert sheet.blocks[0].axis_ids == [axis.id for axis in sheet.axes]
+    assert [row.label for row in sheet.blocks[0].rows] == ["DC Capacity"]
 
 
 def test_short_start_end_left_of_timeline_is_dropped() -> None:

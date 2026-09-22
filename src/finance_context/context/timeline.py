@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from finance_context.layout.models import Block, Layout, LayoutRow
-from finance_context.layout.periods import display_cell_text, infer_grain, is_calendar_key
+from finance_context.layout.models import Layout, LayoutRow, TimeAxis
+from finance_context.layout.periods import display_cell_text, is_calendar_key
+from finance_context.layout.resolve import axes_for
 from finance_context.mapping.normalize import normalize_label
-from finance_context.models.context import ModelPeriod, TimelinePhase, WorkbookTimeline
+from finance_context.models.context import ContextAxis, ContextPeriod, TimelinePhase
 
 _SERIES_ROLES = {
     "historical",
@@ -14,34 +15,82 @@ _SERIES_ROLES = {
 _BEGIN_END = ("beginning", "end of", "start date", "end date")
 
 
-def build_timeline(
+def build_axes(
     layout: Layout,
     cells: list[dict],
     *,
     date1904: bool = False,
-) -> tuple[WorkbookTimeline | None, list[str]]:
+) -> tuple[list[ContextAxis], list[str]]:
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
-    master, grain, flags = _master_axis(layout)
+    axes: list[ContextAxis] = []
+    phased: list[ContextAxis] = []
+    for sheet in layout.sheets:
+        for axis in _sheet_axes(sheet):
+            flags = _flag_rows(sheet, axis)
+            built = _annotate_axis(sheet.name, axis, flags, by_addr, date1904)
+            if built is None:
+                continue
+            axes.append(built)
+            if any(item.phase for item in built.periods):
+                phased.append(built)
     warnings: list[str] = []
-    if master is None:
-        return None, warnings
-    sheet = _sheet_name(layout, master)
-    headers = [
-        header
-        for header in master.axis.headers
-        if header.role in _SERIES_ROLES and header.period_key not in {"actual", "plan", "total", "stub"}
+    if phased:
+        master = max(phased, key=lambda item: sum(1 for period in item.periods if period.phase))
+        warnings.extend(_duration_warnings(layout, master.periods, by_addr, date1904))
+    return axes, warnings
+
+
+def _sheet_axes(sheet) -> list[TimeAxis]:
+    if sheet.axes:
+        return list(sheet.axes)
+    found: list[TimeAxis] = []
+    seen: set[str] = set()
+    for block in sheet.blocks:
+        for axis in axes_for(sheet, block):
+            if axis.id in seen:
+                continue
+            seen.add(axis.id)
+            found.append(axis)
+    return found
+
+
+def _flag_rows(sheet, axis: TimeAxis) -> list[LayoutRow]:
+    rows: list[LayoutRow] = []
+    for block in sheet.blocks:
+        if getattr(block, "kind", "timeline") != "timeline":
+            continue
+        ids = set(block.axis_ids)
+        if axis.id not in ids and not (block.axis is not None and block.axis.id == axis.id):
+            continue
+        rows.extend(row for row in block.rows if row.kind == "flag")
+    return rows
+
+
+def _annotate_axis(
+    sheet_name: str,
+    axis: TimeAxis,
+    flags: list[LayoutRow],
+    by_addr: dict[tuple[str, int, int], dict],
+    date1904: bool,
+) -> ContextAxis | None:
+    periods_in = [
+        period
+        for period in axis.periods
+        if period.role in _SERIES_ROLES
+        and period.period_key not in {"actual", "plan", "total", "stub"}
     ]
-    if not headers:
-        return None, warnings
-    periods: list[ModelPeriod] = []
+    if not periods_in:
+        return None
+    periods: list[ContextPeriod] = []
     last_phase: TimelinePhase | None = None
     run = 0
-    for index, header in enumerate(headers, start=1):
+    grain = axis.grain
+    for index, header in enumerate(periods_in, start=1):
         flag_map: dict[str, bool] = {}
         construction = False
         operation = False
         for row in flags:
-            on = _flag_on(by_addr, sheet, row.row, header.col, date1904)
+            on = _flag_on(by_addr, sheet_name, row.row, header.col, date1904)
             key = normalize_label(row.label)
             flag_map[key] = on
             kind = _phase_kind(row.label)
@@ -70,8 +119,12 @@ def build_timeline(
         else:
             calendar = None
         periods.append(
-            ModelPeriod(
-                period_id=header.period_key,
+            ContextPeriod(
+                col=header.col,
+                text=header.text,
+                role=header.role,
+                period_key=header.period_key,
+                group_key=header.group_key,
                 index=index,
                 phase=phase,
                 phase_year=run if phase else None,
@@ -79,67 +132,13 @@ def build_timeline(
                 flags=flag_map,
             )
         )
-    warnings.extend(_duration_warnings(layout, periods, by_addr, date1904))
-    return (
-        WorkbookTimeline(
-            grain=grain,
-            source_block_id=master.block_id,
-            periods=periods,
-        ),
-        warnings,
+    return ContextAxis(
+        id=axis.id,
+        sheet=sheet_name,
+        grain=grain,
+        header_row=axis.header_row,
+        periods=periods,
     )
-
-
-def annotate_block_periods(
-    periods: list[dict],
-    timeline: WorkbookTimeline | None,
-) -> list[dict]:
-    if timeline is None:
-        return periods
-    by_id = {item.period_id: item for item in timeline.periods}
-    out: list[dict] = []
-    for item in periods:
-        key = str(item.get("period_key") or "")
-        hit = by_id.get(key)
-        extra = dict(item)
-        if hit is not None:
-            extra["phase"] = hit.phase
-            extra["phase_year"] = hit.phase_year
-        out.append(extra)
-    return out
-
-
-def _master_axis(layout: Layout) -> tuple[Block | None, str | None, list[LayoutRow]]:
-    scored: list[tuple[int, int, Block, str | None, list[LayoutRow]]] = []
-    for sheet in layout.sheets:
-        for block in sheet.blocks:
-            if getattr(block, "kind", "timeline") != "timeline":
-                continue
-            grain = infer_grain([h.period_key for h in block.axis.headers])
-            flag_rows = [row for row in block.rows if row.kind == "flag"]
-            n_periods = sum(
-                1
-                for header in block.axis.headers
-                if header.role in _SERIES_ROLES
-            )
-            if grain and str(grain).startswith("model_") and flag_rows:
-                scored.append((len(flag_rows), n_periods, block, grain, flag_rows))
-            elif grain and not str(grain).startswith("model_"):
-                scored.append((len(flag_rows), n_periods, block, grain, flag_rows))
-    if not scored:
-        return None, None, []
-    flagged = [item for item in scored if item[0] > 0 and item[3] and str(item[3]).startswith("model_")]
-    pool = flagged or scored
-    pool.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    _n_flags, _n_per, block, grain, flags = pool[0]
-    return block, grain, flags
-
-
-def _sheet_name(layout: Layout, block: Block) -> str:
-    for sheet in layout.sheets:
-        if block in sheet.blocks or any(item.block_id == block.block_id for item in sheet.blocks):
-            return sheet.name
-    return ""
 
 
 def _phase_kind(label: str) -> TimelinePhase | None:
@@ -183,7 +182,7 @@ def _flag_on(
 
 def _duration_warnings(
     layout: Layout,
-    periods: list[ModelPeriod],
+    periods: list[ContextPeriod],
     by_addr: dict[tuple[str, int, int], dict],
     date1904: bool,
 ) -> list[str]:
@@ -192,7 +191,7 @@ def _duration_warnings(
     out: list[str] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            if getattr(block, "kind", "timeline") != "params":
+            if getattr(block, "kind", "timeline") != "params" or block.axis is None:
                 continue
             value_cols = [h.col for h in block.axis.headers if h.role == "value"] or [
                 h.col for h in block.axis.headers if h.role in {"value", "scenario"}
@@ -207,13 +206,25 @@ def _duration_warnings(
                 assumed = _numeric_cell(by_addr, sheet.name, row.row, col, date1904)
                 if assumed is None:
                     continue
-                if "construction" in n and "duration" in n and construction_n and assumed != construction_n:
+                if (
+                    "construction" in n
+                    and "duration" in n
+                    and construction_n
+                    and assumed != construction_n
+                ):
                     out.append(
-                        f"Construction Duration {assumed:g} does not match construction timeline length {construction_n}"
+                        "Construction Duration "
+                        f"{assumed:g} does not match construction timeline length {construction_n}"
                     )
-                if "operation" in n and "duration" in n and operation_n and assumed != operation_n:
+                if (
+                    "operation" in n
+                    and "duration" in n
+                    and operation_n
+                    and assumed != operation_n
+                ):
                     out.append(
-                        f"Operations Duration {assumed:g} does not match operation timeline length {operation_n}"
+                        "Operations Duration "
+                        f"{assumed:g} does not match operation timeline length {operation_n}"
                     )
                 if (
                     "concession" in n
@@ -223,7 +234,9 @@ def _duration_warnings(
                     and assumed != construction_n + operation_n
                 ):
                     out.append(
-                        f"Concession Duration {assumed:g} does not match construction+operation timeline length {construction_n + operation_n}"
+                        "Concession Duration "
+                        f"{assumed:g} does not match construction+operation "
+                        f"timeline length {construction_n + operation_n}"
                     )
     return out
 

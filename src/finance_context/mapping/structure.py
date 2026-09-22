@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.models import Block, Layout, LayoutRow
-from finance_context.layout.periods import infer_grain
+from finance_context.layout.resolve import axes_for, period_headers
 from finance_context.mapping.graph import row_adjacency
 from finance_context.mapping.models import (
     Calculation,
@@ -99,10 +99,11 @@ def analyze_structure(book: BookView) -> dict[str, RowPattern]:
     relations: list[RowRelation] = []
     for sheet in book.layout.sheets:
         for block in sheet.blocks:
-            period_cols = [h.col for h in block.axis.headers]
+            headers = period_headers(sheet, block)
+            period_cols = [header.col for header in headers]
             if getattr(block, "kind", "timeline") == "params":
                 period_cols = [
-                    h.col for h in block.axis.headers if h.role in {"value", "scenario"}
+                    header.col for header in headers if header.role in {"value", "scenario"}
                 ]
             for layout_row in block.rows:
                 key = book.row_key(sheet.name, layout_row.row, block.block_id)
@@ -126,12 +127,20 @@ def build_row_context(
 ) -> RowContext:
     key = book.row_key(sheet, layout_row.row, block.block_id)
     pattern = book.patterns.get(key) or RowPattern()
-    grain = infer_grain([h.period_key for h in block.axis.headers])
+    block_axes = axes_for(
+        next(item for item in book.layout.sheets if item.name == sheet),
+        block,
+    )
     if getattr(block, "kind", "timeline") == "params":
         grain = None
         headers: list[str] = []
+    elif not block_axes:
+        grain = None
+        headers = []
     else:
-        headers = [h.text for h in block.axis.headers[:12]]
+        primary = max(block_axes, key=lambda axis: len(axis.periods))
+        grain = primary.grain
+        headers = [period.text for period in primary.periods[:12]]
     value_kind = _value_kind(book, sheet, layout_row.row, block, pattern)
     unit_kind = _unit_from_row_cells(book, sheet, layout_row)
     if unit_kind:
@@ -196,7 +205,10 @@ def _value_kind(
         return "ratio"
     percents = 0
     numbers = 0
-    for header in block.axis.headers:
+    for header in period_headers(
+        next(item for item in book.layout.sheets if item.name == sheet),
+        block,
+    ):
         cell = book.cells.get((sheet, row, header.col))
         if cell is None:
             continue
@@ -657,7 +669,10 @@ def _lease_rate_input(
         return True
     numbers = 0
     percents = 0
-    for header in block.axis.headers:
+    for header in period_headers(
+        next(item for item in book.layout.sheets if item.name == sheet),
+        block,
+    ):
         cell = book.cells.get((sheet, row, header.col))
         if cell is None:
             continue

@@ -6,12 +6,13 @@ from collections import defaultdict
 from finance_context.excel.a1 import format_addr
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.models import (
-    Axis,
     AxisHeader,
+    AxisPeriod,
     Block,
     Layout,
     LayoutRow,
     SheetLayout,
+    TimeAxis,
 )
 from finance_context.layout.params import attach_stub_cells, detect_params_block
 from finance_context.layout.periods import (
@@ -36,6 +37,7 @@ from finance_context.layout.periods import (
     is_start_period_label,
     normalize_header,
 )
+from finance_context.layout.resolve import project_axis
 
 _CHECK = re.compile(
     r"check|проверк|контроль|tie[- ]?out|plug\b|сход[ия]|должен",
@@ -80,12 +82,10 @@ def detect_layout(
     by_sheet: dict[str, list[dict]] = {}
     for cell in cells:
         by_sheet.setdefault(cell["sheet"], []).append(cell)
-    sheets = [
-        SheetLayout(
-            name=name, blocks=_blocks_for_sheet(name, sheet_cells, date1904, edges)
-        )
-        for name, sheet_cells in by_sheet.items()
-    ]
+    sheets = []
+    for name, sheet_cells in by_sheet.items():
+        blocks, axes = _blocks_for_sheet(name, sheet_cells, date1904, edges)
+        sheets.append(SheetLayout(name=name, blocks=blocks, axes=axes))
     return Layout(sheets=sheets)
 
 
@@ -94,45 +94,48 @@ def _blocks_for_sheet(
     cells: list[dict],
     date1904: bool,
     edges: list[dict] | None = None,
-) -> list[Block]:
+) -> tuple[list[Block], list[TimeAxis]]:
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
         by_row[int(cell["row"])].append(cell)
     row_ids = sorted(by_row)
     candidates = _axis_candidates(sheet, by_row, date1904)
+    groups = _table_groups(candidates)
     blocks: list[Block] = []
-    for band_rows, axis in candidates:
+    axes: list[TimeAxis] = []
+    for index, group in enumerate(groups):
+        band_rows = group[0][0]
+        group_axes = [axis for _, axis in group]
+        axes.extend(group_axes)
         start = min(band_rows)
-        later = [min(other[0]) for other in candidates if min(other[0]) > start]
-        end = min(later) if later else max(row_ids) + 1
+        later = [
+            min(other[0][0])
+            for other_index, other in enumerate(groups)
+            if other_index != index and min(other[0][0]) > start
+        ]
+        end = min(later) if later else (max(row_ids) + 1 if row_ids else start + 1)
         body_rows = [r for r in row_ids if start <= r < end]
-        period_cols = {header.col for header in axis.headers}
-        col_floor = 0
-        pmin = min(period_cols) if period_cols else 0
-        for other_band, other_axis in candidates:
-            if other_axis is axis:
-                continue
-            if min(other_band) != start:
-                continue
-            other_cols = _axis_cols(other_axis)
-            if other_cols and max(other_cols) < pmin:
-                col_floor = max(col_floor, max(other_cols))
+        period_cols = {period.col for axis in group_axes for period in axis.periods}
         label_col, span = _label_span(
             by_row,
             body_rows,
             set(band_rows),
             period_cols,
             date1904,
-            col_floor=col_floor,
         )
         data_rows = _data_rows(
             by_row, body_rows, set(band_rows), span, date1904, period_cols
         )
+        if len(group_axes) == 1:
+            block_id = group_axes[0].id
+        else:
+            block_id = f"{sheet}!r{group_axes[0].header_row}"
         blocks.append(
             Block(
-                block_id=axis.id,
+                block_id=block_id,
                 label_col=label_col,
-                axis=axis,
+                axis=project_axis(group_axes[0]) if len(group_axes) == 1 else None,
+                axis_ids=[axis.id for axis in group_axes],
                 rows=data_rows,
                 kind="timeline",
             )
@@ -141,16 +144,16 @@ def _blocks_for_sheet(
         extra = detect_params_block(sheet, by_row, date1904, edges)
         if extra is not None:
             blocks.append(extra)
-    return blocks
+    return blocks, axes
 
 
 def _axis_candidates(
     sheet: str,
     by_row: dict[int, list[dict]],
     date1904: bool,
-) -> list[tuple[list[int], Axis]]:
+) -> list[tuple[list[int], TimeAxis]]:
     formula_cols = _formula_timeline_cols(by_row)
-    candidates: list[tuple[list[int], Axis]] = []
+    candidates: list[tuple[list[int], TimeAxis]] = []
     for band_rows in _header_bands(by_row, date1904):
         for axis in _axes_from_band(sheet, band_rows, by_row, date1904):
             if _period_count(axis) >= 2:
@@ -181,19 +184,81 @@ def _axis_candidates(
         axis = _axis_from_relative(sheet, row_n, unlabeled, by_row[row_n], date1904)
         candidates.append(([row_n], axis))
         taken.add(row_n)
-    return _keep_dominant(candidates)
+    return _keep_dominant(_fold_year_banners(candidates))
 
 
-def _period_count(axis: Axis) -> int:
+def _period_count(axis: TimeAxis) -> int:
     return sum(
         1
-        for header in axis.headers
-        if header.role in _PERIOD_ROLES and header.period_key not in _STRUCTURAL_KEYS
+        for period in axis.periods
+        if period.role in _PERIOD_ROLES and period.period_key not in _STRUCTURAL_KEYS
     )
 
 
-def _axis_cols(axis: Axis) -> set[int]:
-    return {header.col for header in axis.headers}
+def _axis_cols(axis: TimeAxis) -> set[int]:
+    return {period.col for period in axis.periods}
+
+
+def _table_groups(
+    candidates: list[tuple[list[int], TimeAxis]],
+) -> list[list[tuple[list[int], TimeAxis]]]:
+    groups: list[list[tuple[list[int], TimeAxis]]] = []
+    index: dict[tuple[int, tuple[int, ...]], int] = {}
+    for band_rows, axis in candidates:
+        key = (axis.header_row, tuple(band_rows))
+        slot = index.get(key)
+        if slot is None:
+            index[key] = len(groups)
+            groups.append([(band_rows, axis)])
+        else:
+            groups[slot].append((band_rows, axis))
+    groups.sort(key=lambda group: (min(group[0][0]), min(_axis_cols(group[0][1]) or {0})))
+    return groups
+
+
+def _repeated_year_axis(axis: TimeAxis) -> bool:
+    keys = [
+        period.period_key
+        for period in axis.periods
+        if period.role in _PERIOD_ROLES and period.period_key not in _STRUCTURAL_KEYS
+    ]
+    if len(keys) < 2 or len(set(keys)) == len(keys):
+        return False
+    return all(len(key) == 4 and key.isdigit() for key in keys)
+
+
+def _fold_year_banners(
+    candidates: list[tuple[list[int], TimeAxis]],
+) -> list[tuple[list[int], TimeAxis]]:
+    """A repeated year row over a finer axis is that axis's group_key, not a timeline."""
+    banners = [(band, axis) for band, axis in candidates if _repeated_year_axis(axis)]
+    if not banners:
+        return candidates
+    kept = [(band, axis) for band, axis in candidates if not _repeated_year_axis(axis)]
+    folded: list[tuple[list[int], TimeAxis]] = []
+    consumed: set[int] = set()
+    for band, axis in kept:
+        updated = axis
+        cols = _axis_cols(axis)
+        for banner_index, (_banner_band, banner) in enumerate(banners):
+            banner_cols = _axis_cols(banner)
+            if not _same_timeline(cols, banner_cols):
+                continue
+            by_col = {period.col: period.period_key for period in banner.periods}
+            periods = [
+                period.model_copy(update={"group_key": by_col[period.col]})
+                if period.col in by_col and period.group_key is None
+                else period
+                for period in updated.periods
+            ]
+            updated = updated.model_copy(update={"periods": periods})
+            consumed.add(banner_index)
+        folded.append((band, updated))
+    for banner_index, item in enumerate(banners):
+        if banner_index not in consumed:
+            folded.append(item)
+    folded.sort(key=lambda item: (min(item[0]), min(_axis_cols(item[1]) or {0})))
+    return folded
 
 
 def _same_timeline(left: set[int], right: set[int]) -> bool:
@@ -216,15 +281,15 @@ def _comparable_width(left: int, right: int) -> bool:
 
 
 def _keep_dominant(
-    candidates: list[tuple[list[int], Axis]],
-) -> list[tuple[list[int], Axis]]:
+    candidates: list[tuple[list[int], TimeAxis]],
+) -> list[tuple[list[int], TimeAxis]]:
     if not candidates:
         return []
     primary = max(candidates, key=lambda item: _period_count(item[1]))
     pcols = _axis_cols(primary[1])
     pmin = min(pcols) if pcols else 0
     pwidth = _period_count(primary[1])
-    kept: list[tuple[list[int], Axis]] = []
+    kept: list[tuple[list[int], TimeAxis]] = []
     for item in candidates:
         if item is primary:
             kept.append(item)
@@ -352,10 +417,10 @@ def _axis_from_relative(
     run: list[tuple[int, int]],
     row_cells: list[dict],
     date1904: bool,
-) -> Axis:
+) -> TimeAxis:
     prefix = _relative_prefix(_row_label(row_cells, date1904))
-    headers = [
-        AxisHeader(
+    periods = [
+        AxisPeriod(
             col=col,
             text=str(value),
             role="relative",
@@ -363,7 +428,13 @@ def _axis_from_relative(
         )
         for col, value in run
     ]
-    return Axis(id=f"{sheet}!r{row_n}", row=row_n, headers=headers)
+    keys = [period.period_key for period in periods]
+    return TimeAxis(
+        id=f"{sheet}!r{row_n}",
+        grain=infer_grain(keys),
+        header_row=row_n,
+        periods=periods,
+    )
 
 
 def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[int]]:
@@ -455,7 +526,7 @@ def _axes_from_band(
     band_rows: list[int],
     by_row: dict[int, list[dict]],
     date1904: bool,
-) -> list[Axis]:
+) -> list[TimeAxis]:
     header_row = max(band_rows)
     cols = sorted(
         {
@@ -496,7 +567,7 @@ def _axes_from_band(
             AxisHeader(col=col, text=text, role=role, period_key=hit.period_key)
         )
     runs = _split_header_runs(composed)
-    axes: list[Axis] = []
+    axes: list[TimeAxis] = []
     multi = len(runs) > 1
     for run in runs:
         grain = infer_grain([header.period_key for header in run])
@@ -511,7 +582,22 @@ def _axes_from_band(
         axis_id = f"{sheet}!r{header_row}"
         if multi:
             axis_id = f"{axis_id}c{headers[0].col}"
-        axes.append(Axis(id=axis_id, row=header_row, headers=headers))
+        axes.append(
+            TimeAxis(
+                id=axis_id,
+                grain=grain,
+                header_row=header_row,
+                periods=[
+                    AxisPeriod(
+                        col=header.col,
+                        text=header.text,
+                        role=header.role,
+                        period_key=header.period_key,
+                    )
+                    for header in headers
+                ],
+            )
+        )
     return axes
 
 

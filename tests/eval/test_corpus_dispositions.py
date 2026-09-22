@@ -68,9 +68,10 @@ def _match_expectation(row, expectations: list[dict]) -> dict | None:
 
 
 def _period_count(block) -> int:
+    headers = block.axis.headers if block.axis is not None else []
     return sum(
         1
-        for header in block.axis.headers
+        for header in headers
         if header.role in {"historical", "forecast", "stub", "relative"}
         and header.period_key not in {"actual", "plan", "total", "stub"}
     )
@@ -225,15 +226,17 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
             None,
         )
         assert total is not None
-        assert ctx_doc.timeline is not None
-        by_id = {item.period_id: item for item in ctx_doc.timeline.periods}
+        phased = next(
+            axis
+            for axis in ctx_doc.axes
+            if any(item.phase == "construction" for item in axis.periods)
+        )
+        by_id = {item.period_key: item for item in phased.periods}
         assert by_id["Y1"].phase == "construction" and by_id["Y1"].phase_year == 1
         assert by_id["Y4"].phase == "construction" and by_id["Y4"].phase_year == 4
         assert by_id["Y5"].phase == "operation" and by_id["Y5"].phase_year == 1
         construction = next(block for block in ctx_doc.blocks if block.sheet == "Construction")
-        y5 = next(item for item in construction.periods if item["period_key"] == "Y5")
-        assert y5["period_key"] == "Y5"
-        assert "phase" not in y5
+        assert construction.periods == []
         flag_mapped = [row for row in doc.rows if row.exclusion_reason == "flag"]
         assert flag_mapped
         assert all(row.concept_id is None for row in flag_mapped)

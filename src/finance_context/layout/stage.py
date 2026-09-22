@@ -40,7 +40,22 @@ def register_layout(layout: Layout, catalog: IrCatalog) -> None:
 def _axis_rows(layout: Layout) -> list[dict]:
     out: list[dict] = []
     for sheet in layout.sheets:
+        for axis in sheet.axes:
+            for period in axis.periods:
+                out.append(
+                    {
+                        "sheet": sheet.name,
+                        "block_id": axis.id,
+                        "col": period.col,
+                        "role": period.role,
+                        "header_text": period.text,
+                        "period_key": period.period_key,
+                        "group_key": period.group_key,
+                    }
+                )
         for block in sheet.blocks:
+            if getattr(block, "kind", "timeline") != "params" or block.axis is None:
+                continue
             for header in block.axis.headers:
                 out.append(
                     {
@@ -50,6 +65,7 @@ def _axis_rows(layout: Layout) -> list[dict]:
                         "role": header.role,
                         "header_text": header.text,
                         "period_key": header.period_key,
+                        "group_key": None,
                     }
                 )
     return out
