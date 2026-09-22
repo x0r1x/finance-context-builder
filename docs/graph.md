@@ -4,7 +4,7 @@
 
 Код: `src/finance_context/graph/` (`stage.py`, `cycles.py`, `trace.py`), рендер — `src/finance_context/render/graph.py`, развёртка диапазонов — `formulas/csr.py`. Пайплайн: `parse → compile → layout → mapping → graph → build → render`.
 
-Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [маппинг](mapping.md).
+Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [маппинг](mapping.md), [срез для LLM](llm.md).
 
 ## Владение данными
 
@@ -22,7 +22,7 @@
 
 `links[]` — одна запись на ячейку с формулой: `cell`, A1-текст один раз, `refs`, `row_key` строки контекста и `period_id` колонки оси. Оба ключа `null`, если ячейка вне layout. `SUM(J9:J12)` остаётся одним диапазоном, не десятками `range_member`. Пустые члены диапазона в `links` не входят. `nodes` и `edges` — не `len(links)`. `context.md` печатает тот же `row_key` и заголовок периода с буквой колонки (`Y23 (AA)`), поэтому строка, ячейка и trace сходятся без parquet.
 
-`context.json` хранит pointer `graph` (счётчики и пути). В нём нет `precedents_rows`, `dependents_rows`, `precedent_cells`, `formula_ast` и второго каталога строк (`inventory` / `unmapped` / `excluded`). Формула строки — один fingerprint, значения — массив кэша или `null` по оси блока.
+`context.json` хранит pointer `graph` (счётчики и пути). В нём нет `precedents_rows`, `dependents_rows`, `precedent_cells`, `formula_ast` и второго каталога строк (`inventory` / `unmapped` / `excluded`). Формула строки — один fingerprint, значения — массив кэша или `null` по оси блока. Прецеденты среза для отвечающей LLM берутся из `links` / trace (`row_key`, `concept_id`, `period_id`); AST в срез не копируется.
 
 Отдельных `graph-edges.json`, `graph-dangling.json` и `formulas.json` нет. Полнота cell-графа не живёт в `context.blocks[].relations` (там только mapping alias/aggregate/difference/roll_forward).
 
