@@ -6,6 +6,24 @@ from finance_context.layout.models import Axis, AxisHeader, Block, Layout, Layou
 from finance_context.mapping.models import MappedRow, MappingDocument
 
 
+def test_self_loop_is_kept_and_a_chain_is_not() -> None:
+    edges = [
+        {
+            "source": "S!A1",
+            "target": "S!A1",
+            "kind": "ref",
+            "col_offset": 0,
+            "period_lag": "same",
+        },
+        {"source": "S!A2", "target": "S!A3", "kind": "ref", "col_offset": 1, "period_lag": "1"},
+        {"source": "S!A3", "target": "S!A4", "kind": "ref", "col_offset": 1, "period_lag": "1"},
+    ]
+    cycles = classify_cycles(edges)
+    assert len(cycles) == 1
+    assert cycles[0].members == ["S!A1"]
+    assert cycles[0].class_ == "unexpected"
+
+
 def test_unexpected_two_cell_cycle() -> None:
     edges = [
         {
@@ -116,7 +134,11 @@ def test_circular_label_hint_when_no_scc() -> None:
                         axis=Axis(
                             id="a",
                             row=1,
-                            headers=[AxisHeader(col=2, text="2023", role="forecast", period_key="2023")],
+                            headers=[
+                                AxisHeader(
+                                    col=2, text="2023", role="forecast", period_key="2023"
+                                )
+                            ],
                         ),
                         rows=[
                             LayoutRow(row=12, label="Uses of funds for circularity breakdown"),
