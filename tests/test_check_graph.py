@@ -52,7 +52,7 @@ def _ok_graph(**overrides: object) -> dict:
 
 def _ok_context(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.11.0",
+        "schema_version": "1.13.0",
         "graph": {"artifact": "graph.json", "nodes": 8, "edges": 20, "iterate": False},
         "blocks": [
             {
@@ -247,6 +247,129 @@ def test_markdown_axis_must_head_a_period_column_table(tmp_path: Path) -> None:
     )
     result = _run(*args)
     assert result.returncode == 0, result.stderr
+
+
+def _dated_axis(*periods: tuple[int, str, str, str]) -> dict:
+    return {
+        "id": "PF!r7",
+        "sheet": "PF",
+        "grain": "year",
+        "header_row": 7,
+        "periods": [
+            {"col": col, "period_key": key, "start_date": start, "end_date": end}
+            for col, key, start, end in periods
+        ],
+    }
+
+
+def test_axis_periods_must_be_contiguous_dates(tmp_path: Path) -> None:
+    axis = _dated_axis(
+        (13, "2024", "2024-01-01", "2024-12-31"),
+        (14, "2026", "2026-01-01", "2026-12-31"),
+    )
+    context = _write(tmp_path / "context.json", _ok_context(axes=[axis]))
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    result = _run(str(context), str(graph))
+    assert result.returncode == 1
+    assert "gap before 2026" in result.stderr
+
+
+def test_axis_must_not_publish_a_total_column(tmp_path: Path) -> None:
+    axis = _dated_axis(
+        (12, "2023", "2023-01-01", "2023-12-31"),
+        (13, "2024", "2024-01-01", "2024-12-31"),
+    )
+    payload = _ok_context(axes=[axis])
+    payload["blocks"][0]["axis_ids"] = ["PF!r7"]
+    payload["blocks"][0]["rows"][0]["cells"] = [
+        {"addr": "L13", "col": 12, "role": "total", "cached_value": "36"}
+    ]
+    context = _write(tmp_path / "context.json", payload)
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    result = _run(str(context), str(graph))
+    assert result.returncode == 1
+    assert "total column" in result.stderr
+
+
+def test_markdown_repeats_period_dates_and_role_cells(tmp_path: Path) -> None:
+    axis = _dated_axis(
+        (13, "2024", "2024-01-01", "2024-12-31"),
+        (14, "2025", "2025-01-01", "2025-12-31"),
+    )
+    payload = _ok_context(axes=[axis])
+    payload["blocks"][0]["rows"][0]["cells"] = [
+        {"addr": "E13", "col": 5, "role": "unit", "cached_value": "EUR'000"},
+        {"addr": "L13", "col": 12, "role": "total", "cached_value": "36"},
+    ]
+    context = _write(tmp_path / "context.json", payload)
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    graph_md = tmp_path / "graph.md"
+    graph_md.write_text(
+        "Nodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\naggregation\n=SUM(C9:C12)\n",
+        encoding="utf-8",
+    )
+    context_md = tmp_path / "context.md"
+    body = "EBITDA\nP&L\\|13\\|P&L!r2\npnl.ebitda\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n"
+    args = (str(context), str(graph), "--context-md", str(context_md), "--graph-md", str(graph_md))
+
+    context_md.write_text(
+        "\n| PF!r7 | 2024 | 2025 |\n| --- | --- | --- |\n" + body, encoding="utf-8"
+    )
+    result = _run(*args)
+    assert result.returncode == 1
+    assert "missing Start row" in result.stderr
+
+    axes_md = (
+        "\n| PF!r7 | 2024 | 2025 |\n| --- | --- | --- |\n"
+        "| Start | 2024-01-01 | 2025-01-01 |\n| End | 2024-12-31 | 2025-12-31 |\n"
+    )
+    context_md.write_text(axes_md + body, encoding="utf-8")
+    result = _run(*args)
+    assert result.returncode == 1
+    assert "missing total cell L13" in result.stderr
+
+    context_md.write_text(axes_md + body + "L total: 36\n", encoding="utf-8")
+    result = _run(*args)
+    assert result.returncode == 0, result.stderr
+
+
+def test_normalized_value_that_only_reformats_the_cache_is_not_required(tmp_path: Path) -> None:
+    payload = _ok_context()
+    row = payload["blocks"][0]["rows"][0]
+    row["values"] = ["13.100000000000001", "23"]
+    row["normalized_values"] = ["13.1", "23"]
+    context = _write(tmp_path / "context.json", payload)
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    context_md = tmp_path / "context.md"
+    context_md.write_text(
+        "EBITDA\nP&L\\|13\\|P&L!r2\npnl.ebitda\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n", encoding="utf-8"
+    )
+    graph_md = tmp_path / "graph.md"
+    graph_md.write_text(
+        "Nodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\naggregation\n=SUM(C9:C12)\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        str(context), str(graph), "--context-md", str(context_md), "--graph-md", str(graph_md)
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_axes_summary_counts_phases(tmp_path: Path) -> None:
+    axis = _dated_axis(
+        (13, "2024", "2024-01-01", "2024-12-31"),
+        (14, "2025", "2025-01-01", "2025-12-31"),
+    )
+    axis["periods"][0]["phase"] = "construction"
+    axis["periods"][1]["phase"] = "operation"
+    context = _write(tmp_path / "context.json", _ok_context(axes=[axis]))
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    result = _run(str(context), str(graph), "--axes-summary")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == (
+        "axes=1 blocks=1 params_blocks=0; axis=PF!r7 periods=2 span=2024..2025 "
+        "construction=1 operation=1"
+    )
 
 
 def test_link_row_key_must_exist_in_context(tmp_path: Path) -> None:

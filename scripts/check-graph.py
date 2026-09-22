@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,7 @@ GRAPH_FORBIDDEN = frozenset(
 GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "links", "artifacts")
 ARTIFACT_REQUIRED = ("cells", "edges", "cell_edges", "index")
 GRAPH_SCHEMA_PREFIX = "1.7"
-CONTEXT_SCHEMA_PREFIX = "1.11"
+CONTEXT_SCHEMA_PREFIX = "1.13"
 LINK_FIELDS = ("cell", "formula", "refs", "formula_class")
 ROW_SERIES_FIELDS = (
     "value_statuses",
@@ -127,7 +128,58 @@ def check_context(context: dict[str, Any]) -> list[str]:
             errors.extend(_check_row_series(row))
             if errors:
                 break
+    errors.extend(check_axes(context))
     return errors
+
+
+def check_axes(context: dict[str, Any]) -> list[str]:
+    """Axis periods are unique, ordered, contiguous in time, and never a total column."""
+    errors: list[str] = []
+    axes = [axis for axis in context.get("axes") or [] if isinstance(axis, dict)]
+    totals: dict[str, set[int]] = {}
+    for block in context.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        cols = {
+            int(cell["col"])
+            for row in block.get("rows") or []
+            if isinstance(row, dict)
+            for cell in row.get("cells") or []
+            if isinstance(cell, dict) and cell.get("role") == "total" and "col" in cell
+        }
+        for axis_id in block.get("axis_ids") or []:
+            totals.setdefault(str(axis_id), set()).update(cols)
+    for axis in axes:
+        axis_id = str(axis.get("id") or "")
+        periods = [p for p in axis.get("periods") or [] if isinstance(p, dict)]
+        keys = [str(p.get("period_key")) for p in periods]
+        if len(set(keys)) != len(keys):
+            errors.append(f"context.json axis {axis_id} repeats a period key")
+        overlap = {int(p["col"]) for p in periods if "col" in p} & totals.get(axis_id, set())
+        if overlap:
+            errors.append(f"context.json axis {axis_id} publishes a total column as a period")
+        previous_end: date | None = None
+        for period in periods:
+            start = _iso(period.get("start_date"))
+            end = _iso(period.get("end_date"))
+            key = period.get("period_key")
+            if start and end and start > end:
+                errors.append(f"context.json axis {axis_id} period {key} ends before it starts")
+                break
+            if start and previous_end and start != previous_end + timedelta(days=1):
+                errors.append(f"context.json axis {axis_id} has a gap before {key}")
+                break
+            previous_end = end
+    return errors
+
+
+def _iso(value: object) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _check_row_series(row: dict[str, Any]) -> list[str]:
@@ -255,6 +307,10 @@ def _check_axes_markdown(context: dict[str, Any], markdown: str) -> list[str]:
         axis_id = str(axis["id"]).replace("|", "\\|")
         if f"\n| {axis_id} |" not in markdown:
             return [f"context.md axis {axis['id']} must head a table with periods as columns"]
+        periods = [p for p in axis.get("periods") or [] if isinstance(p, dict)]
+        for attribute, key in (("Start", "start_date"), ("End", "end_date")):
+            if any(p.get(key) for p in periods) and f"\n| {attribute} |" not in markdown:
+                return [f"context.md axis {axis['id']} missing {attribute} row"]
     return []
 
 
@@ -308,9 +364,25 @@ def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:
     normalized = row.get("normalized_values") or []
     if isinstance(values, list) and isinstance(normalized, list):
         for value, norm in zip(values, normalized, strict=False):
-            if value and norm and str(norm) != str(value) and str(norm) not in markdown:
+            if value and norm and _scaled(str(value), str(norm)) and str(norm) not in markdown:
                 return [f"context.md missing normalized value {norm}"]
+    for cell in row.get("cells") or []:
+        if not isinstance(cell, dict) or cell.get("role") == "unit":
+            continue
+        value = cell.get("cached_value")
+        if value not in (None, "") and not _in_markdown(str(value), markdown):
+            return [f"context.md missing {cell.get('role')} cell {cell.get('addr')}"]
     return []
+
+
+def _scaled(value: str, normalized: str) -> bool:
+    """True when the base-unit amount is a different number, not only a different spelling."""
+    try:
+        left = float(value.replace(",", ""))
+        right = float(normalized.replace(",", ""))
+    except ValueError:
+        return value != normalized
+    return abs(left - right) > 1e-9 * max(1.0, abs(left), abs(right))
 
 
 def check_graph_markdown(graph: dict[str, Any], markdown: str) -> list[str]:
@@ -392,6 +464,26 @@ def check_trace(trace: dict[str, Any], origin: str) -> list[str]:
     return errors
 
 
+def axes_summary(context: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for axis in context.get("axes") or []:
+        if not isinstance(axis, dict):
+            continue
+        periods = [p for p in axis.get("periods") or [] if isinstance(p, dict)]
+        keys = [str(p.get("period_key")) for p in periods]
+        span = f"{keys[0]}..{keys[-1]}" if keys else "-"
+        construction = sum(1 for p in periods if p.get("phase") == "construction")
+        operation = sum(1 for p in periods if p.get("phase") == "operation")
+        parts.append(
+            f"axis={axis.get('id')} periods={len(periods)} span={span} "
+            f"construction={construction} operation={operation}"
+        )
+    blocks = [block for block in context.get("blocks") or [] if isinstance(block, dict)]
+    params = sum(1 for block in blocks if block.get("kind") == "params")
+    head = f"axes={len(parts)} blocks={len(blocks)} params_blocks={params}"
+    return "; ".join([head, *parts])
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Check that context and graph JSON match their Markdown twins."
@@ -404,6 +496,11 @@ def _parser() -> argparse.ArgumentParser:
         "--print-origin",
         action="store_true",
         help="print a smoke-trace origin (formula cell, else concept_id / row_key)",
+    )
+    parser.add_argument(
+        "--axes-summary",
+        action="store_true",
+        help="print one line per axis: periods and construction/operation counts",
     )
     parser.add_argument("--trace", type=Path, help="path to trace.json")
     parser.add_argument("--trace-md", type=Path, help="path to trace.md")
@@ -460,6 +557,9 @@ def main() -> int:
                 parser.error(str(exc))
         if args.print_origin and not errors:
             print(pick_origin(context, graph))
+            return 0
+        if args.axes_summary and not errors:
+            print(axes_summary(context))
             return 0
 
     if errors:

@@ -129,9 +129,14 @@ def _annotate_axis(
                 phase=phase,
                 phase_year=run if phase else None,
                 calendar_year=calendar,
+                start_date=getattr(header, "start_date", None),
+                end_date=getattr(header, "end_date", None),
                 flags=flag_map,
             )
         )
+    live = {name for period in periods for name, on in period.flags.items() if on}
+    for period in periods:
+        period.flags = {name: on for name, on in period.flags.items() if name in live}
     return ContextAxis(
         id=axis.id,
         sheet=sheet_name,

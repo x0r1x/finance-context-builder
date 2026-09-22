@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from finance_context.excel.a1 import format_addr
+from finance_context.excel.a1 import format_addr, index_to_col
+from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.models import (
     AxisHeader,
@@ -14,7 +15,12 @@ from finance_context.layout.models import (
     SheetLayout,
     TimeAxis,
 )
-from finance_context.layout.params import attach_stub_cells, detect_params_block
+from finance_context.layout.params import (
+    attach_stub_cells,
+    carve_params_regions,
+    detect_params_block,
+    is_unit_text,
+)
 from finance_context.layout.periods import (
     LAYER_BOUNDS,
     LAYER_DATE,
@@ -102,6 +108,7 @@ def _blocks_for_sheet(
     candidates = _axis_candidates(sheet, by_row, date1904)
     groups = _table_groups(candidates)
     blocks: list[Block] = []
+    params_blocks: list[Block] = []
     axes: list[TimeAxis] = []
     for index, group in enumerate(groups):
         band_rows = group[0][0]
@@ -124,8 +131,18 @@ def _blocks_for_sheet(
             date1904,
         )
         data_rows = _data_rows(
-            by_row, body_rows, set(band_rows), span, date1904, period_cols
+            by_row,
+            body_rows,
+            set(band_rows),
+            span,
+            date1904,
+            period_cols,
+            seed=_band_title(by_row, group_axes[0].header_row, span, period_cols, date1904),
         )
+        data_rows, carved = carve_params_regions(
+            sheet, data_rows, by_row, date1904, period_cols, label_col
+        )
+        params_blocks.extend(carved)
         if len(group_axes) == 1:
             block_id = group_axes[0].id
         else:
@@ -141,6 +158,11 @@ def _blocks_for_sheet(
             )
         )
     blocks, axes = _share_repeated_axes(blocks, axes, by_row, date1904)
+    if params_blocks:
+        blocks = sorted(
+            [*blocks, *params_blocks],
+            key=lambda block: min((row.row for row in block.rows), default=0),
+        )
     if not blocks:
         extra = detect_params_block(sheet, by_row, date1904, edges)
         if extra is not None:
@@ -265,6 +287,10 @@ def _share_repeated_axes(
     alias: dict[str, str] = {}
     kept: list[TimeAxis] = []
     for axis in axes:
+        derived = next((other for other in kept if _derived_axis(axis, other, by_row)), None)
+        if derived is not None:
+            alias[axis.id] = derived.id
+            continue
         signature = _axis_signature(axis)
         fingerprint = _flag_fingerprint(owner.get(axis.id), axis, by_row, date1904)
         match: TimeAxis | None = None
@@ -297,6 +323,32 @@ def _share_repeated_axes(
         elif len(seen) != 1:
             block.axis = None
     return blocks, kept
+
+
+_CELL_REF = re.compile(r"(?<![A-Za-z_])\$?([A-Z]{1,3})\$?(\d+)(?![\d(])")
+
+
+def _derived_axis(axis: TimeAxis, other: TimeAxis, by_row: dict[int, list[dict]]) -> bool:
+    """Header cells that compute from another axis's ruler (`=YEAR(M7)`) are that axis."""
+    if axis.header_row <= other.header_row:
+        return False
+    keys = {period.col: period.period_key for period in other.periods}
+    periods = [period for period in axis.periods if period.col in keys]
+    if len(periods) < 2 or len(periods) < 0.8 * len(axis.periods):
+        return False
+    if any(keys[period.col] != period.period_key for period in periods):
+        return False
+    derived = 0
+    for period in periods:
+        cell = _cell_at(by_row.get(axis.header_row, []), period.col)
+        formula = str((cell or {}).get("formula_raw") or "")
+        letter = index_to_col(period.col)
+        if any(
+            col == letter and int(row) == other.header_row
+            for col, row in _CELL_REF.findall(formula.upper())
+        ):
+            derived += 1
+    return derived >= 0.8 * len(periods)
 
 
 def _table_groups(
@@ -574,6 +626,8 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
                 continue
             if _is_data_row(cells, date1904):
                 break
+            if _is_flag_bits_row(cells, _band_calendar_cols(band, by_row, date1904), date1904):
+                break
             new_layers = _row_layers(cells, date1904)
             if not new_layers:
                 break
@@ -603,6 +657,44 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
         bands.append(band)
         i = j if j > i else i + 1
     return bands
+
+
+def _is_flag_bits_row(
+    row_cells: list[dict], calendar_cols: set[int], date1904: bool
+) -> bool:
+    """A 0/1 row under the date ruler is a timing flag, not another header line."""
+    bits = 0
+    for cell in row_cells:
+        if int(cell["col"]) not in calendar_cols:
+            continue
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        if not _is_number(text):
+            return False
+        if float(text.replace(" ", "").replace(",", ".")) not in {0.0, 1.0}:
+            return False
+        bits += 1
+    return bits >= 2
+
+
+_DMY = re.compile(r"^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$")
+_YMD = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+
+
+def _cell_iso_date(cell: dict | None, date1904: bool) -> str | None:
+    if cell is None:
+        return None
+    if is_date_format(cell.get("number_format")):
+        parsed = serial_to_date(cell.get("cached_value") or "", date1904=date1904)
+        return parsed.isoformat() if parsed is not None else None
+    text = str(cell.get("cached_value") or "").strip()
+    match = _DMY.match(text)
+    if match:
+        day, month, year = (int(part) for part in match.groups())
+        return f"{year:04d}-{month:02d}-{day:02d}" if 1 <= month <= 12 and 1 <= day <= 31 else None
+    match = _YMD.match(text)
+    return "-".join(match.groups()) if match else None
 
 
 def _band_calendar_cols(
@@ -644,9 +736,29 @@ def _axes_from_band(
         is_month_label(_row_label(by_row[row_n], date1904)) for row_n in band_rows
     )
     role_runs = _role_runs(band_rows, by_row, cols, date1904, prefer_end=prefer_end)
+    labels = {row_n: _row_label(by_row[row_n], date1904) for row_n in band_rows}
+    start_rows = [row_n for row_n in band_rows if is_start_period_label(labels[row_n])]
+    end_rows = [row_n for row_n in band_rows if is_end_period_label(labels[row_n])]
+    bounds: dict[int, tuple[str | None, str | None]] = {}
     composed: list[AxisHeader] = []
     year_hint: str | None = None
     for col in cols:
+        if prefer_end and start_rows:
+            starts = [_cell_at(by_row[row_n], col) for row_n in start_rows]
+            if not any(_text(cell, date1904) for cell in starts if cell is not None):
+                continue
+            start = next(
+                (iso for cell in starts if (iso := _cell_iso_date(cell, date1904))), None
+            )
+            end = next(
+                (
+                    iso
+                    for row_n in end_rows
+                    if (iso := _cell_iso_date(_cell_at(by_row[row_n], col), date1904))
+                ),
+                None,
+            )
+            bounds[col] = (start, end)
         atoms = _column_atoms(
             col,
             band_rows,
@@ -693,6 +805,8 @@ def _axes_from_band(
                         text=header.text,
                         role=header.role,
                         period_key=header.period_key,
+                        start_date=bounds.get(header.col, (None, None))[0],
+                        end_date=bounds.get(header.col, (None, None))[1],
                     )
                     for header in headers
                 ],
@@ -1008,9 +1122,10 @@ def _data_rows(
     label_span: list[int],
     date1904: bool,
     period_cols: set[int],
+    seed: LayoutRow | None = None,
 ) -> list[LayoutRow]:
     out: list[LayoutRow] = []
-    section_stack: list[LayoutRow] = []
+    section_stack: list[LayoutRow] = [seed] if seed is not None else []
     for row_n in band_rows:
         if row_n in header_rows:
             continue
@@ -1034,6 +1149,18 @@ def _data_rows(
             label=label,
             check_row=check_row,
         )
+        probe = attach_stub_cells(
+            LayoutRow(row=row_n, label=label),
+            by_row[row_n],
+            label_span=label_span,
+            period_cols=period_cols,
+            date1904=date1904,
+        )
+        if kind == "abstract" and _has_scalar_value(probe, by_row[row_n], date1904):
+            in_check = any(_CHECK.search(item.label) for item in section_stack) or any(
+                prev.check_row for prev in _ancestors(out, indent)
+            )
+            kind = "helper" if in_check else "fact"
         if kind == "abstract":
             while section_stack and section_stack[-1].indent >= indent:
                 section_stack.pop()
@@ -1065,11 +1192,64 @@ def _data_rows(
             label_span=label_span,
             period_cols=period_cols,
             date1904=date1904,
+            by_row=by_row,
+            floor_row=band_rows[0] if band_rows else None,
         )
         out.append(item)
-        if kind == "abstract":
+        if kind == "abstract" and not is_unit_text(label):
             section_stack.append(item)
     return out
+
+
+def _ancestors(rows: list[LayoutRow], indent: int) -> list[LayoutRow]:
+    """Nearest preceding row at each shallower indent: the row's outline parents."""
+    found: list[LayoutRow] = []
+    level = indent
+    for prev in reversed(rows):
+        if prev.indent < level:
+            found.append(prev)
+            level = prev.indent
+            if level == 0:
+                break
+    return found
+
+
+def _band_title(
+    by_row: dict[int, list[dict]],
+    header_row: int,
+    label_span: list[int],
+    period_cols: set[int],
+    date1904: bool,
+) -> LayoutRow | None:
+    """A section title that carries computed year headers (`=YEAR(M7)`) opens the section."""
+    cells = by_row.get(header_row, [])
+    if not any(int(cell["col"]) in period_cols and cell.get("formula_raw") for cell in cells):
+        return None
+    label, depth, cell = _row_span_label(cells, label_span, date1904)
+    if label is None or cell is None:
+        return None
+    if is_start_period_label(label) or is_end_period_label(label):
+        return None
+    if _RELATIVE_LABEL.match(normalize_header(label) or ""):
+        return None
+    return LayoutRow(
+        row=header_row,
+        label=label.strip(),
+        kind="abstract",
+        indent=depth + _indent(label),
+        label_col=int(cell["col"]),
+    )
+
+
+def _has_scalar_value(probe: LayoutRow, row_cells: list[dict], date1904: bool) -> bool:
+    """A number left of the ruler (`G563 = XIRR(...)`) is a point fact, not a section title."""
+    for item in probe.cells:
+        if item.role != "value":
+            continue
+        text = _text(_cell_at(row_cells, item.col) or {}, date1904)
+        if text and _is_number(text):
+            return True
+    return False
 
 
 def _row_span_label(
@@ -1129,6 +1309,7 @@ def _row_kind(
         return "index"
     has_formula = False
     has_number = False
+    has_text = False
     binary_vals: set[int] = set()
     binary_ok = True
     binary_n = 0
@@ -1138,6 +1319,8 @@ def _row_kind(
         if cell.get("formula_raw"):
             has_formula = True
         text = _text(cell, date1904)
+        if text and not _is_number(text):
+            has_text = True
         if text and _is_number(text):
             has_number = True
             if binary_ok:
@@ -1151,11 +1334,10 @@ def _row_kind(
                     else:
                         binary_vals.add(int(value))
                         binary_n += 1
+    flag_label = bool(_SCENARIO_LABEL.search(label) or _FLAG_BODY.search(label))
     if not has_formula and not has_number:
-        if _SCENARIO_LABEL.search(label) or _FLAG_BODY.search(label):
-            return "flag"
-        return "abstract"
-    if _SCENARIO_LABEL.search(label) or _FLAG_BODY.search(label):
+        return "flag" if flag_label and has_text else "abstract"
+    if flag_label and (binary_ok or not has_number):
         return "flag"
     if binary_ok and binary_n >= 2 and binary_vals == {0, 1}:
         return "flag"

@@ -12,6 +12,8 @@
 
 Календарная шапка — строка с ≥2 ячейками, которые `classify_header` считает датой / годом / кварталом / месяцем (`2024`, `2024E`, `Q1 2025`, `01.01.2026`).
 
+Полоса дат FAST (`Start of period` / `End of period`) — одна ось листа. Ключ периода берётся из end date (год для annual), `header_row` — строка end date (`PF Model!r7`, не строка флагов). Колонка, где есть только end date и нет start (`Model_start` в L), получает роль `stub` и в периоды не входит. Строки 0/1 сразу под линейкой (`Construction` / `Operations`, формула `IF(AND(start>=G, end<=H),1,0)`) в header band не входят: они flag-строки блока, и фазы вешаются на эту ось. Шапка-формула, которая в той же колонке ссылается на строку дат (`=YEAR(M7)`), — alias той же оси. Сравнение fingerprint флагов для такого alias не делается.
+
 Относительная шапка (project finance) — лейбл `Year` / `Period` / `Month` / `Quarter` (и русские год/период/мес/кв) и справа непрерывный ряд целых `0|1, 2, 3, …` длиной ≥ 3. Ключи периодов: `Y1` / `Q1` / `M1` / `P1`. Роль колонки — `relative`. Grain: `model_year` / `model_quarter` / `model_month` / `model_period`. `apply_grain` календарные ключи не трогает.
 
 После `build_context` 0/1-флаги вешаются на ту ось, в чьих строках они лежат (`context.axes`): `phase` construction/operation, `phase_year` внутри run, overlays (repayment, availability) только в `flags`. Календарная книга без таких флагов получает `calendar_year` и `phase=null`. Флаги по-прежнему excluded из маппинга.
@@ -44,7 +46,7 @@ Formula-copy (одинаковый `formula_template` в соседних кол
 
 Лейбл строки — первая непустая ячейка span; `indent` — позиция в span плюс ведущие пробелы. У `LayoutRow` свой `label_col` (адрес в context), если статья не в `block.label_col`. Слово `Total` / `Sum` / `Итого` / `Всего` в колонке подписи — имя строки, не шапка колонки. Если в span лейбла нет, берётся первый текст левее периодных колонок (`CHECK`).
 
-Виды строк (`fact` / `abstract` / `index` / `helper` / `flag`) — как в [architecture.md](architecture.md). `index` только если по оси идёт `0|1, 2, 3, …` и лейбл счётчика (`week`, `#`, …) **или** в периодных ячейках нет формул. Ветка «все числа ≤ 12» снята: денежные 1..12 с формулами остаются `fact`. Плейсхолдеры `Spare` / `None` — `helper`. Сценарии (`Live Case`, `Mid case`, `Low case`, `* choice`, `Applied (real terms)`, `Covenant breach`) и ряды, где по оси есть и 0, и 1, — `flag`; каскад их excluded, значения остаются на той же строке блока (`disposition=excluded`).
+Виды строк (`fact` / `abstract` / `index` / `helper` / `flag`) — как в [architecture.md](architecture.md). `index` только если по оси идёт `0|1, 2, 3, …` и лейбл счётчика (`week`, `#`, …) **или** в периодных ячейках нет формул. Ветка «все числа ≤ 12» снята: денежные 1..12 с формулами остаются `fact`. Плейсхолдеры `Spare` / `None` — `helper`. Kind `flag` — только бинарный ряд (≥90% значений в `{0, 1}`) или токен `flag` в лейбле. `Mid case` / `Low case` / `Applied (real terms)` с ценами остаются `fact`. `Case Number` — заголовок сценариев, не строка данных. Селектор (`Live Case`, `* choice`) — `flag` с `context_role=scenario_selector`. Скаляр слева от линейки (IRR, NPV, `Months per year`) с числовой role-ячейкой и без значений по периодам — `fact`, не `abstract`. Строка под outline `Check` остаётся `helper`.
 
 ## Формулы и ось
 
@@ -68,9 +70,18 @@ Compile помечает формулу `unparsed`, если токен не р�
 
 Капс-строка без значений → `abstract`. Таблица `Check` / `Result` → `helper` / `check_row`; exclusion сам снимет её с тегирования.
 
+На листе **с** осью `carve_params_regions` вырезает строки, у которых нет значений правее сценарного span:
+
+| Регион | Результат |
+| --- | --- |
+| Заголовок `Case Number` / `Scenario` и подряд `1..n` (n ≥ 3 и не шире 60% периодных колонок) | `params`: колонка с подписью вроде `Live Case` — `value`, колонки `1..n` — `scenario` (`Case 1` …). Селектор (`Live_case`, `OFFSET`) — `context_role=scenario_selector` |
+| Checks и constants (Reference / Result / скаляр в E/G/H), если ≥ 3 fact/helper | отдельный `params`-блок |
+
+Эти строки не остаются в timeline-блоке. Сценарные колонки в ось не входят.
+
 ## Непериодные ячейки на таймлайне
 
-Колонки между зоной лейбла и `min(period_col)` получают роли на `LayoutRow.cells`: `SUM` по своей строке → `total`; текст единиц (`k£`, `%`, `years`) → `unit`; остальное число/формула → `value`. Это скаляры вроде `Construction!C22`, не отдельный дамп всех ячеек листа.
+Колонки между зоной лейбла и `min(period_col)` получают роли на `LayoutRow.cells`: `SUM` по периодным колонкам → `total`; текст единиц (`k£`, `EUR'000`, `EUR/MWh`, `%`, `x`, `years`) → `unit`; колонка только с end date без start → `stub`; остальное число/формула → `value`. У role-ячейки есть `header` — ближайшая подпись в той же колонке внутри секции (`Start`, `End`, `Live Case`, `Min`, `Avg`). `total` и `stub` в периоды оси не входят; у link в графе для такой ячейки `period_id=null`. Это скаляры вроде `Construction!C22`, не отдельный дамп всех ячеек листа.
 
 ## Что проверять, если маппинг пустой
 

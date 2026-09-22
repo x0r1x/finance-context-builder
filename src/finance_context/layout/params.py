@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 
-from finance_context.excel.a1 import parse_addr
+from finance_context.excel.a1 import index_to_col, parse_addr
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text
 
@@ -31,6 +31,15 @@ _UNIT_TEXT = re.compile(
     r"text|date|1/2/3|k£)$",
     re.IGNORECASE,
 )
+_UNIT_TOKEN = re.compile(
+    r"^(?:(?:k|m|mn|bn)\s*)?(?:eur|usd|gbp|rub|chf|[£$€₽])\s*"
+    r"(?:'?000|k|m|mn|bn|thousands?|millions?)?"
+    r"(?:\s*/\s*(?:mwh|mw|mwp|kwh|kw|year|yr|month|unit|veh))?(?:\s*p\.?\s*a\.?)?$"
+    r"|^%(?:\s*p\.?\s*a\.?)?$|^x$|^#$"
+    r"|^(?:mwh|mw|mwp|kwh|kw|gwh)(?:\s*/\s*(?:mw|mwp|kw|year|yr))?$",
+    re.IGNORECASE,
+)
+_SCENARIO_HEADER = re.compile(r"\b(case|scenario)s?\b", re.IGNORECASE)
 _PROSE_MIN = 80
 _MIN_VALUE_ROWS = 3
 _CHECK = re.compile(r"check|проверк|контроль|tie[- ]?out", re.IGNORECASE)
@@ -81,6 +90,8 @@ def attach_stub_cells(
     label_span: list[int],
     period_cols: set[int],
     date1904: bool,
+    by_row: dict[int, list[dict]] | None = None,
+    floor_row: int | None = None,
 ) -> LayoutRow:
     if not period_cols:
         return row
@@ -94,10 +105,255 @@ def attach_stub_cells(
         role = _stub_role(cell, row.row, period_cols, date1904)
         if role is None:
             continue
-        tagged.append(RowCell(col=col, role=role))  # type: ignore[arg-type]
+        header = None
+        if role == "value" and by_row is not None and floor_row is not None:
+            header = column_header_text(
+                by_row, col, row.row, floor_row, date1904, label_col=row.label_col
+            )
+        tagged.append(RowCell(col=col, role=role, header=header))  # type: ignore[arg-type]
     if tagged:
         row.cells = tagged
     return row
+
+
+def is_unit_text(text: str | None) -> bool:
+    blob = (text or "").strip()
+    if not blob:
+        return False
+    return bool(_UNIT_TEXT.fullmatch(blob) or _UNIT_TOKEN.fullmatch(blob))
+
+
+def column_header_text(
+    by_row: dict[int, list[dict]],
+    col: int,
+    row: int,
+    floor_row: int,
+    date1904: bool,
+    label_col: int | None = None,
+) -> str | None:
+    """Nearest short caption above `row` in the same column, not a number, unit, or date.
+
+    The search stops at a section title left of `label_col`: a caption above it
+    belongs to another table.
+    """
+    for row_n in range(row - 1, floor_row - 1, -1):
+        cells = by_row.get(row_n, [])
+        cell = _cell_at(cells, col)
+        text = _text(cell, date1904)
+        caption = _caption(cell, text)
+        if caption is not None:
+            return caption
+        if label_col is not None and _opens_section(cells, label_col, date1904):
+            return None
+    return None
+
+
+def _caption(cell: dict | None, text: str | None) -> str | None:
+    if not text:
+        return None
+    stripped = text.strip()
+    if _is_number(stripped) or is_unit_text(stripped) or len(stripped) > 24:
+        return None
+    if cell is not None and cell.get("formula_raw"):
+        return None
+    if re.fullmatch(r"\d{1,2}\.\d{1,2}\.\d{2,4}", stripped):
+        return None
+    return stripped
+
+
+def _opens_section(cells: list[dict], label_col: int, date1904: bool) -> bool:
+    for cell in sorted(cells, key=lambda item: int(item["col"])):
+        text = _text(cell, date1904)
+        if text and not _is_number(text):
+            return int(cell["col"]) < label_col
+    return False
+
+
+def carve_params_regions(
+    sheet: str,
+    rows: list[LayoutRow],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    period_cols: set[int],
+    label_col: int,
+) -> tuple[list[LayoutRow], list[Block]]:
+    """Split scenario and constant tables out of a timeline block.
+
+    A row run with no value right of a `Case Number 1..n` header is a scenario table,
+    not years. Rows above it with values only left of the ruler are a constants table.
+    """
+    header = _scenario_header(rows, by_row, date1904, period_cols)
+    if header is None:
+        return rows, []
+    header_row, span = header
+    span_max = max(span)
+    static = [
+        not _has_value_right_of(by_row[row.row], period_cols, span_max, date1904) for row in rows
+    ]
+    index = next(i for i, row in enumerate(rows) if row.row == header_row.row)
+    start = index
+    while start > 0 and static[start - 1]:
+        start -= 1
+    end = index
+    while end + 1 < len(rows) and static[end + 1]:
+        end += 1
+    while end > index and rows[end].kind == "abstract":
+        end -= 1
+    region = rows[start : end + 1]
+    split = _scenario_section_start(region, header_row)
+    constants = region[:split]
+    scenarios = region[split:]
+    blocks: list[Block] = []
+    block = _constants_block(sheet, constants, by_row, date1904, label_col)
+    if block is not None:
+        blocks.append(block)
+    else:
+        scenarios = [*constants, *scenarios]
+    blocks.append(
+        _scenario_block(sheet, scenarios, header_row, span, by_row, date1904, label_col)
+    )
+    carved = {row.row for block in blocks for row in block.rows} | {header_row.row}
+    return [row for row in rows if row.row not in carved], blocks
+
+
+def _scenario_header(
+    rows: list[LayoutRow],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    period_cols: set[int],
+) -> tuple[LayoutRow, list[int]] | None:
+    for row in rows:
+        if not _SCENARIO_HEADER.search(row.label):
+            continue
+        run: list[int] = []
+        for cell in sorted(by_row[row.row], key=lambda item: int(item["col"])):
+            col = int(cell["col"])
+            text = _text(cell, date1904)
+            if col not in period_cols or not text or not _is_number(text):
+                continue
+            value = float(text.replace(",", "."))
+            if value == len(run) + 1 and (not run or col == run[-1] + 1):
+                run.append(col)
+            else:
+                break
+        if len(run) >= 3 and len(run) <= 0.6 * len(period_cols):
+            return row, run
+    return None
+
+
+def _has_value_right_of(
+    row_cells: list[dict], period_cols: set[int], span_max: int, date1904: bool
+) -> bool:
+    return any(
+        int(cell["col"]) in period_cols
+        and int(cell["col"]) > span_max
+        and (_text(cell, date1904) or cell.get("formula_raw"))
+        for cell in row_cells
+    )
+
+
+def _scenario_section_start(region: list[LayoutRow], header_row: LayoutRow) -> int:
+    """Index of the outermost section header that opens the scenario table."""
+    position = next(i for i, row in enumerate(region) if row.row == header_row.row)
+    sections = [
+        (i, row) for i, row in enumerate(region[:position]) if row.kind == "abstract"
+    ]
+    if not sections:
+        return 0
+    outer = min(row.label_col or 0 for _i, row in sections)
+    candidates = [i for i, row in sections if (row.label_col or 0) == outer]
+    return candidates[-1]
+
+
+def _value_cols(rows: list[LayoutRow]) -> list[int]:
+    return sorted({cell.col for row in rows for cell in row.cells if cell.role == "value"})
+
+
+def _restate_static_kind(row: LayoutRow) -> LayoutRow:
+    has_value = any(cell.role in {"value", "total"} for cell in row.cells)
+    if row.kind == "abstract" and has_value:
+        in_check = row.check_row or any(_CHECK.search(label) for label in row.section_path)
+        row.kind = "helper" if in_check else "fact"
+    return row
+
+
+def _constants_block(
+    sheet: str,
+    rows: list[LayoutRow],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    label_col: int,
+) -> Block | None:
+    rows = [_restate_static_kind(row) for row in rows]
+    if sum(1 for row in rows if row.kind in {"fact", "helper"}) < _MIN_VALUE_ROWS:
+        return None
+    first = rows[0].row
+    headers = [
+        AxisHeader(
+            col=col,
+            text=_header_name(by_row, col, rows, date1904) or f"Value {index_to_col(col)}",
+            role="value",
+            period_key=f"value-{index_to_col(col).lower()}",
+        )
+        for col in _value_cols(rows)
+    ]
+    return Block(
+        block_id=f"{sheet}!r{first}",
+        label_col=label_col,
+        axis=Axis(id=f"{sheet}!r{first}", row=first, headers=headers),
+        rows=rows,
+        kind="params",
+    )
+
+
+def _header_name(
+    by_row: dict[int, list[dict]], col: int, rows: list[LayoutRow], date1904: bool
+) -> str | None:
+    first = rows[0].row
+    for row in rows:
+        if any(cell.col == col for cell in row.cells):
+            return column_header_text(
+                by_row, col, row.row, first, date1904, label_col=row.label_col
+            )
+    return None
+
+
+def _scenario_block(
+    sheet: str,
+    rows: list[LayoutRow],
+    header_row: LayoutRow,
+    span: list[int],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    label_col: int,
+) -> Block:
+    body = [_restate_static_kind(row) for row in rows if row.row != header_row.row]
+    prefix = re.sub(r"\s*(number|no\.?|#|№)\s*$", "", header_row.label, flags=re.I).strip()
+    headers: list[AxisHeader] = []
+    for cell in sorted(by_row[header_row.row], key=lambda item: int(item["col"])):
+        col = int(cell["col"])
+        text = _text(cell, date1904)
+        if col <= max(label_col, header_row.label_col or 0) or col >= min(span):
+            continue
+        if text and not _is_number(text) and not is_unit_text(text):
+            headers.append(
+                AxisHeader(col=col, text=text.strip(), role="value", period_key="value")
+            )
+    for number, col in enumerate(span, start=1):
+        name = f"{prefix or 'Case'} {number}"
+        headers.append(AxisHeader(col=col, text=name, role="scenario", period_key=_slug(name)))
+    captions = {header.col: header.text for header in headers if header.role == "value"}
+    for row in body:
+        for item in row.cells:
+            if item.header is None and item.col in captions:
+                item.header = captions[item.col]
+    return Block(
+        block_id=f"{sheet}!r{header_row.row}",
+        label_col=label_col,
+        axis=Axis(id=f"{sheet}!r{header_row.row}", row=header_row.row, headers=headers),
+        rows=body,
+        kind="params",
+    )
 
 
 def is_scenario_selector_label(text: str | None) -> bool:
@@ -359,7 +615,7 @@ def _row_cells(
                 continue
             if text and len(text) >= _PROSE_MIN:
                 role = "note"
-            elif text and _UNIT_TEXT.fullmatch(text.strip()):
+            elif text and is_unit_text(text):
                 role = "unit"
             elif formula or (text and (_is_number(text) or len(text) <= 24)):
                 role = "value"
@@ -419,7 +675,7 @@ def _stub_role(
     template = str(cell.get("formula_template") or "")
     if _is_same_row_total(formula, template, row, period_cols):
         return "total"
-    if text and _UNIT_TEXT.fullmatch(text.strip()):
+    if text and is_unit_text(text):
         return "unit"
     if text and len(text) <= 8 and not _is_number(text) and not formula:
         if any(ch in text for ch in "%£$€₽/"):

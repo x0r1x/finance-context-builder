@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_serializer
 
 from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
 
-SCHEMA_VERSION = "1.11.0"
+SCHEMA_VERSION = "1.13.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -78,6 +78,7 @@ class RowHints(BaseModel):
     time_semantics: str | None = None
     statement: str | None = None
     unit: str | None = None
+    unit_per: str | None = None
     currency: str | None = None
     scale: str | None = None
     sign: str | None = None
@@ -86,10 +87,13 @@ class RowHints(BaseModel):
 
 
 class RoleCell(BaseModel):
+    """A cell left of the ruler. `header` is the caption above it (Start, End, Live Case)."""
+
     addr: str
     col: int
     role: str
     cached_value: str | None = None
+    header: str | None = None
 
 
 class RowSeries(BaseModel):
@@ -163,11 +167,16 @@ class ContextPeriod(BaseModel):
     phase: TimelinePhase | None = None
     phase_year: int | None = None
     calendar_year: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     flags: dict[str, bool] = Field(default_factory=dict)
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
+        for key in ("start_date", "end_date"):
+            if data.get(key) is None:
+                data.pop(key, None)
         if data.get("phase") is None:
             data.pop("phase", None)
             data.pop("phase_year", None)

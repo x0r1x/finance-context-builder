@@ -120,6 +120,16 @@ def _assert_layout_geometry(filename: str, layout: Layout) -> None:
             assert any(needle in label for label in labels), (
                 f"{filename}: no fact label containing {needle!r}"
             )
+        model = next(sheet for sheet in layout.sheets if sheet.name == "PF Model")
+        assert [axis.id for axis in model.axes] == ["PF Model!r7"]
+        keys = [period.period_key for period in model.axes[0].periods]
+        assert keys[0] == "2024" and keys[-1] == "2062" and len(keys) == 39
+        timelines = [block for block in model.blocks if block.kind == "timeline"]
+        assert all(block.axis_ids == ["PF Model!r7"] for block in timelines)
+        scenario = next(block for block in model.blocks if block.block_id == "PF Model!r49")
+        assert scenario.kind == "params"
+        cases = [header.text for header in scenario.axis.headers if header.role == "scenario"]
+        assert cases == [f"Case {n}" for n in range(1, 11)]
 
 
 @pytest.mark.parametrize(("filename", "gold_path"), CASES)
@@ -284,9 +294,19 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert check.kind == "helper"
         assert check.disposition == "excluded"
         assert check.formula
-        assert ctx_doc.mapping_stats.concept_coverage == 89 / 91
+        assert ctx_doc.mapping_stats.concept_coverage == 94 / 96
         assert quality.semantic_coverage < 1.0
         assert quality.confidence_threshold_passed is False
+    if filename == "rvi-project-finance.xlsx":
+        axis = ctx_doc.axes[0]
+        phases = [period.phase for period in axis.periods]
+        assert phases.count("construction") == 2
+        assert phases.count("operation") == 30
+        assert axis.periods[0].start_date == "2024-01-01"
+        assert axis.periods[-1].end_date == "2062-12-31"
+        flags = {name for period in axis.periods for name in period.flags}
+        assert not flags & {"live case", "case number", "mid case", "low case"}
+        assert ctx_doc.mapping_stats.mapping_quality.unit_coverage >= 0.8
     if not expectations:
         pytest.skip("gold expectations not filled yet")
     errors = []

@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from finance_context.context.measure import parse_measure
+from finance_context.context.measure import Measure, parse_measure
 from finance_context.context.series import (
-    normalize_value,
+    format_number,
+    normalize_series,
     phase_gate,
     scale_factor_for,
     temporal_profile,
@@ -120,6 +121,8 @@ def build_context(
                 unparsed += 1
                 warnings.append(f"Unparsed formula at {cell['sheet']}!{cell['addr']}")
 
+    roll_time = _roll_forward_time(mapping.relations)
+    out_of_phase: set[str] = set()
     blocks: list[FinancialBlock] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
@@ -171,6 +174,7 @@ def build_context(
                     headers=hint_headers,
                     by_addr=by_addr,
                 )
+                static = _is_static_row(kind, sheet.name, layout_row, hint_headers, by_addr)
                 hints = _hints_for(
                     mapped,
                     layout_row,
@@ -178,7 +182,14 @@ def build_context(
                     sheet=sheet.name,
                     parent=parent,
                     number_formats=formats,
+                    static=static,
                 )
+                rolled = roll_time.get(row_key)
+                if rolled is not None and not static:
+                    update = {"time_semantics": rolled}
+                    if rolled == "flow":
+                        update["nature"] = "flow"
+                    hints = hints.model_copy(update=update)
                 series_unit = hints.unit
                 role_ctx = RowContext(
                     row_key=row_key,
@@ -273,7 +284,14 @@ def build_context(
                     reporting_roles=reporting_roles,
                     cash_semantics=cash,
                     series=series,
+                    static=static,
                 )
+                for (_axis_id, headers, _phases), item in zip(views, series, strict=False):
+                    for header, state in zip(headers, item.value_statuses, strict=False):
+                        if state == "not_applicable":
+                            out_of_phase.add(
+                                f"{sheet.name}!{format_addr(header.col, layout_row.row)}"
+                            )
                 rows.append(line)
             blocks.append(
                 FinancialBlock(
@@ -298,10 +316,11 @@ def build_context(
     warnings.extend(timeline_warnings)
     if mapping.questions:
         warnings.append(f"{len(mapping.questions)} row(s) need mapping review")
-    if missing_cached:
-        sample = ", ".join(missing_addrs[:3])
+    in_phase_missing = [addr for addr in missing_addrs if addr not in out_of_phase]
+    if in_phase_missing:
+        sample = ", ".join(in_phase_missing[:3])
         extra = f" (e.g. {sample})" if sample else ""
-        warnings.append(f"{missing_cached} formula cell(s) missing cached values{extra}")
+        warnings.append(f"{len(in_phase_missing)} formula cell(s) missing cached values{extra}")
     if graph is not None and graph.dangling:
         warnings.append(
             f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
@@ -454,8 +473,7 @@ def _series_numbers(
         outside_phase = bool(gate and phase and gate != phase and text is None)
         structural = layout_row.kind not in _SERIES_KINDS and text is None
         statuses.append(value_status(text, applicable=not outside_phase and not structural))
-    normalized = [normalize_value(value, factor) for value in values]
-    return values, statuses, normalized
+    return values, statuses, normalize_series(values, factor)
 
 
 def _row_for_layout(
@@ -485,6 +503,7 @@ def _row_for_layout(
     reporting_roles: list[ReportingRole] | None = None,
     cash_semantics: CashSemantics | None = None,
     series: list[RowSeries] | None = None,
+    static: bool = False,
 ) -> BlockRow:
     row_num = layout_row.row
     keep_cols = {header.col for header in value_headers}
@@ -532,6 +551,8 @@ def _row_for_layout(
         time_semantics=hints.time_semantics,
         direction=_concept_direction(concept_id),
     )
+    if hints.unit == "rate":
+        measure = Measure(unit="rate", sign=measure.sign)
     unit = measure.unit or hints.unit or series_unit
     hints = hints.model_copy(
         update={
@@ -539,22 +560,25 @@ def _row_for_layout(
             "currency": hints.currency or measure.currency,
             "scale": hints.scale or measure.scale,
             "sign": hints.sign or measure.sign,
+            "unit_per": hints.unit_per or measure.per,
         }
     )
     factor = scale_factor_for(hints.scale)
     position, aggregation = temporal_profile(hints.time_semantics)
+    if static:
+        position, aggregation = "instant", "none"
     if series:
         series = [
             item.model_copy(
                 update={
-                    "normalized_values": [normalize_value(value, factor) for value in item.values]
+                    "normalized_values": normalize_series(list(item.values), factor)
                 }
             )
             for item in series
         ]
         values = list(series[0].values)
         statuses = list(series[0].value_statuses)
-    normalized = [normalize_value(value, factor) for value in values]
+    normalized = normalize_series(values, factor)
     disposition, exclusion_reason = _row_disposition(mapped, layout_row)
     method = _METHOD.get(mapped.source, "unmapped") if mapped else "unmapped"
     evidence = None
@@ -634,6 +658,39 @@ def _row_disposition(
     )
 
 
+def _roll_forward_time(relations: list[RowRelation]) -> dict[str, str]:
+    """b/f is the opening, c/f the closing; the lines between them and their aliases move."""
+    found: dict[str, str] = {}
+    for rel in relations:
+        if rel.kind != "roll_forward" or not rel.source_row_key or not rel.target_row_key:
+            continue
+        opening = _split_row_key(rel.source_row_key)
+        closing = _split_row_key(rel.target_row_key)
+        if opening is None or closing is None:
+            continue
+        if opening[0] != closing[0] or opening[2] != closing[2]:
+            continue
+        sheet, first, block_id = opening
+        last = closing[1]
+        found[rel.source_row_key] = "bop"
+        found[rel.target_row_key] = "eop"
+        for row in range(first + 1, last):
+            found.setdefault(f"{sheet}|{row}|{block_id}", "flow")
+    for rel in relations:
+        if rel.kind != "alias" or not rel.source_row_key or not rel.target_row_key:
+            continue
+        if found.get(rel.source_row_key) == "flow":
+            found.setdefault(rel.target_row_key, "flow")
+    return found
+
+
+def _split_row_key(row_key: str) -> tuple[str, int, str] | None:
+    parts = row_key.split("|")
+    if len(parts) != 3 or not parts[1].isdigit():
+        return None
+    return parts[0], int(parts[1]), parts[2]
+
+
 def _relations_for_block(relations: list[RowRelation], block_id: str) -> list[dict]:
     out: list[dict] = []
     for rel in relations:
@@ -688,6 +745,7 @@ def _hints_for(
     sheet: str = "",
     parent: str | None = None,
     number_formats: list[str] | None = None,
+    static: bool = False,
 ) -> RowHints:
     concept_id = mapped.concept_id if mapped else None
     blob, tokens = _hint_blob_and_tokens(layout_row.label or "")
@@ -720,6 +778,10 @@ def _hints_for(
         time_semantics = "flow"
     if time_semantics == "flow" and nature == "balance":
         time_semantics = "stock"
+    if time_semantics == "flow" and _concept_period_type(concept_id) == "instant":
+        time_semantics = "instant" if static else "stock"
+    elif static and time_semantics in {None, "flow", "stock"}:
+        time_semantics = "instant"
     measure = parse_measure(
         unit_text,
         layout_row.label,
@@ -730,13 +792,16 @@ def _hints_for(
         time_semantics=time_semantics,
         direction=_concept_direction(concept_id),
     )
-    if measure.unit == "rate" and time_semantics in {None, "flow"}:
+    if measure.unit == "money" and _percent_formatted(number_formats or []):
+        measure = Measure(unit="rate", sign=measure.sign)
+    if measure.unit == "rate" and time_semantics in {None, "flow", "instant"}:
         time_semantics = "rate"
     return RowHints(
         nature=nature,
         time_semantics=time_semantics,
         statement=statement,
         unit=measure.unit,
+        unit_per=measure.per,
         currency=measure.currency,
         scale=measure.scale,
         sign=measure.sign,
@@ -848,8 +913,8 @@ def _row_formula_and_numbers(
         summary = NumericSummary(
             first=raw_first,
             last=raw_last,
-            minimum=str(min(numbers)) if numbers else None,
-            maximum=str(max(numbers)) if numbers else None,
+            minimum=format_number(min(numbers)) if numbers else None,
+            maximum=format_number(max(numbers)) if numbers else None,
             constant=len(set(numbers)) <= 1 if numbers else False,
             n=len(numbers),
         )
@@ -876,6 +941,42 @@ def _role_cells(
                 col=item.col,
                 role=item.role,
                 cached_value=displayed if displayed is not None else cached,
+                header=item.header,
             )
         )
     return out
+
+
+def _is_static_row(
+    kind: str,
+    sheet: str,
+    layout_row: LayoutRow,
+    headers: list,
+    by_addr: dict[tuple[str, int, int], dict],
+) -> bool:
+    """A params line or a scalar left of the ruler is a point value, not a period series."""
+    if layout_row.kind not in {"fact", "helper", "flag"}:
+        return False
+    if kind == "params":
+        return True
+    if not any(item.role == "value" for item in layout_row.cells):
+        return False
+    return not any(
+        (by_addr.get((sheet, layout_row.row, header.col)) or {}).get("cached_value")
+        not in (None, "")
+        for header in headers
+    )
+
+
+def _percent_formatted(formats: list[str]) -> bool:
+    percents = sum(1 for fmt in formats if "%" in fmt)
+    return percents > 0 and percents * 2 >= len(formats)
+
+
+def _concept_period_type(concept_id: str | None) -> str | None:
+    if not concept_id:
+        return None
+    for concept in load_taxonomy():
+        if concept.id == concept_id:
+            return concept.facets.period_type
+    return None

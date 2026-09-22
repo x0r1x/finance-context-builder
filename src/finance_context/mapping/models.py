@@ -32,6 +32,7 @@ BasisKind = Literal["cash", "accrual", "noncash"]
 DirectionKind = Literal["inflow", "outflow"]
 PositionKind = Literal["opening", "closing"]
 SeriesKind = Literal["constant", "series"]
+PeriodType = Literal["instant", "duration"]
 Disposition = Literal["mapped", "excluded", "abstained"]
 ExclusionReason = Literal[
     "check",
@@ -57,6 +58,7 @@ class Facets(BaseModel):
     position: PositionKind | None = None
     series: SeriesKind | None = None
     unit: ValueKind | None = None
+    period_type: PeriodType | None = None
 
 
 class FacetGuess(BaseModel):

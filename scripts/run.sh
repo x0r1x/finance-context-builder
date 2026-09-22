@@ -35,6 +35,12 @@ python3 "$SCRIPTS/extract-unmapped.py" \
   "$RUN_DIR/json/context.json" \
   --output "$RUN_DIR/unmapped.json"
 log_summary "unmapped=$RUN_DIR/unmapped.json"
+if axes="$(python3 "$SCRIPTS/check-graph.py" "$RUN_DIR/json/context.json" \
+  "$RUN_DIR/json/graph.json" --axes-summary)"; then
+  log_summary "$axes"
+else
+  echo "warning: check-graph.py rejected json/context.json or json/graph.json" >&2
+fi
 log_summary "context_json=$RUN_DIR/json/context.json"
 log_summary "context_md=$RUN_DIR/md/context.md"
 log_summary "graph_json=$RUN_DIR/json/graph.json"

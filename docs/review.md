@@ -7,14 +7,14 @@
 | Где | Что видно |
 | --- | --- |
 | `context.md` шапка | `Content completeness` (должно быть 1.00), `Concept coverage` (доля принятых слотов, может быть < 1) и шесть полей `mapping_quality` |
-| `context.md` блок | Каждая строка: `Row` (`row_key`), Kind, Disposition, Concept (`unknown` у abstain), формула и все значения оси. Заголовок периода — `Y23 (AA)` (ключ и буква колонки). Под таблицей `relations` с теми же `row_key`. Пустая формула у строки, на которую есть ссылка в `graph.md`, — дефект. Params: `## Parameters / {sheet}` |
+| `context.md` блок | Каждая строка: `Row` (`row_key`), `Path` (`label_path`), Kind, Disposition, Concept (`unknown` у abstain), `Cells` (role-ячейки: `L total: -86400`, `G Start: 01.01.2024`), формула и все значения оси. Заголовок периода — `Y23 (AA)` (ключ и буква колонки). Под таблицей `relations` с теми же `row_key`. Пустая формула у строки, на которую есть ссылка в `graph.md`, — дефект. Params: `## Parameters / {sheet}`, сценарии колонками `Live Case (L)` / `Case 1 (N)` |
 | `context.json` → `blocks[].rows` | Все kind, включая abstract; `disposition`, role-tagged `cells`, ряд `values`; инвариант полноты |
 | `context.json` → `mapping_stats` | `inventory_rows`, `mapped`, `abstained`, `excluded`, `abstract`, `unmapped_series`, completeness, `concept_coverage`, `mapping_quality` |
 | `context.json` → `graph` | Pointer на `graph.json` / parquet, counts, `empty_range_members` |
 | `graph.json` / `graph.md` + `GET .../graph/trace` | Сводка и formula-level `links` (`cell`, A1, `row_key`, `period_id`; диапазон одной ссылкой). `row_key` ссылки есть в строке `context.md`. Cell-level рёбра и AST — в `ir/*.parquet` |
 | `unmapped.json` | Abstained-строки **без** `values` |
 
-`scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `blocks[].rows` из context (или `rows` из mapping), оставляет `disposition=abstained` и выкидывает ряды значений. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown.
+`scripts/extract-unmapped.py` (его вызывает `scripts/run.sh`) берёт `blocks[].rows` из context (или `rows` из mapping), оставляет `disposition=abstained` и выкидывает ряды значений (`values`, `value_statuses`, `normalized_values` у строки и у каждой серии). `cells[].header` остаётся. Счётчик должен совпадать с числом `unknown` в таблицах блоков Markdown. `scripts/check-graph.py` дополнительно требует уникальные ключи периодов, запрещает колонку `total` / `stub` / `scenario` внутри оси, проверяет `start_date ≤ end_date` и непрерывность дат, и что строки `Start` / `End` и кэш role-ячеек есть в `context.md`. У link итога `period_id=null`.
 
 Excluded (check / helper / flag / technical) в `unmapped.json` не входят — они те же строки блока с `disposition=excluded`.
 

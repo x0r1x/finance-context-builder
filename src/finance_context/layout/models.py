@@ -45,6 +45,8 @@ class AxisPeriod(BaseModel):
     role: ColumnRole
     period_key: str
     group_key: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 class TimeAxis(BaseModel):
@@ -59,6 +61,7 @@ class TimeAxis(BaseModel):
 class RowCell(BaseModel):
     col: int
     role: ColumnRole
+    header: str | None = None
 
 
 class LayoutRow(BaseModel):

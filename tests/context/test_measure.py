@@ -125,3 +125,23 @@ def test_sign_pre_tax_income_is_not_outflow() -> None:
         statement="pnl",
     )
     assert measure.sign != "outflow"
+
+
+def test_currency_with_thousands_suffix_is_scaled_money() -> None:
+    measure = parse_measure("EUR'000")
+    assert (measure.unit, measure.currency, measure.scale) == ("money", "EUR", "k")
+
+
+def test_currency_per_energy_is_a_price() -> None:
+    measure = parse_measure("EUR/MWh")
+    assert (measure.unit, measure.currency, measure.per) == ("price", "EUR", "MWh")
+    assert measure.display() == "€/MWh"
+
+
+def test_multiple_and_date_units() -> None:
+    assert parse_measure("x").unit == "ratio"
+    assert parse_measure("Date").unit == "date"
+
+
+def test_months_per_year_is_a_count_not_a_rate() -> None:
+    assert parse_measure(None, "Months per year").unit == "count"

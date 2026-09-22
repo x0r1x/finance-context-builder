@@ -143,7 +143,8 @@ def build_row_context(
         headers = [period.text for period in primary.periods[:12]]
     value_kind = _value_kind(book, sheet, layout_row.row, block, pattern)
     unit_kind = _unit_from_row_cells(book, sheet, layout_row)
-    if unit_kind:
+    if unit_kind and not (unit_kind == "money" and value_kind == "rate"):
+        # A percent format on the values outranks a copied `EUR'000` caption.
         value_kind = unit_kind
     else:
         if _semantic_ratio(layout_row.label, value_kind):

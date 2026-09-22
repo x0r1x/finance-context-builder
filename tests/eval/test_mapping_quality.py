@@ -162,7 +162,7 @@ def test_cash_classified_as_flow_fails_semantic_and_temporal_checks() -> None:
                 label="Cash balance",
                 concept_id="bs.cash",
                 hints=RowHints(
-                    nature="flow",
+                    nature="balance",
                     time_semantics="flow",
                     statement="bs",
                     unit="money",
@@ -175,6 +175,28 @@ def test_cash_classified_as_flow_fails_semantic_and_temporal_checks() -> None:
     )
     assert metrics["semantic_coverage"] == 0.0
     assert metrics["temporal_coverage"] == 0.0
+
+
+def test_roll_forward_movement_keeps_stock_concept() -> None:
+    metrics = mapping_quality_metrics(
+        [
+            _row(
+                label="Retained earnings",
+                concept_id="bs.retained_earnings",
+                hints=RowHints(
+                    nature="flow",
+                    time_semantics="flow",
+                    statement="bs",
+                    unit="money",
+                    sign="inflow",
+                ),
+                semantic_identity=_identity("bs.retained_earnings", "equity"),
+                cash_semantics=CashSemantics(recognition="stock", cash_movement="none"),
+            )
+        ]
+    )
+    assert metrics["semantic_coverage"] == 1.0
+    assert metrics["temporal_coverage"] == 1.0
 
 
 def test_repayment_without_outflow_or_debt_stock_fails_semantic_check() -> None:
