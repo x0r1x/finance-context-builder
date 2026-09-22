@@ -91,7 +91,7 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert "formula_ast" not in payload
     assert "precedents_rows" not in payload
     graph = json.loads(payload)
-    assert graph["schema_version"] == "1.6.0"
+    assert graph["schema_version"] == "1.7.0"
     assert graph["iterate"] is False
     assert "edges_json" not in graph["artifacts"]
     assert "formula_ast" not in json.dumps(graph)
@@ -100,12 +100,14 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert (dest / "graph.md").is_file()
     ebitda = next(link for link in graph["links"] if link["cell"] == "P&L!C13")
     assert ebitda["formula"] == "=SUM(C9:C12)"
+    assert ebitda["formula_class"] == "aggregation"
     assert ebitda["row_key"] == "P&L|13|P&L!r1"
     assert ebitda["period_id"] == "2024"
     assert any("C9:C12" in ref for ref in ebitda["refs"])
     assert not any(ref.endswith("!C9") for ref in ebitda["refs"])
     direct = next(link for link in graph["links"] if link["cell"] == "P&L!B9")
     assert direct["formula"] == "=Operation!C14"
+    assert direct["formula_class"] == "cross_period"
     assert any(ref.endswith("Operation!C14") for ref in direct["refs"])
     assert "P&L!C13" in (dest / "graph.md").read_text(encoding="utf-8")
 
@@ -275,7 +277,7 @@ def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
     assert doc.workbook.iterate is True
     assert doc.graph.iterate is True
     graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
-    assert graph["schema_version"] == "1.6.0"
+    assert graph["schema_version"] == "1.7.0"
     assert graph["iterate"] is True
     assert graph["cycles"]
     members = {m for cycle in graph["cycles"] for m in cycle["members"]}

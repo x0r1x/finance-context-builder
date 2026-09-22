@@ -1,6 +1,6 @@
 # Срез метрики для отвечающей LLM
 
-Канон джобы не меняется: `context.json` / `context.md` (schema `1.9.0`) и `graph.json` / `graph.md` (schema `1.6.0`). Срез ниже — проекция промпта, не артефакт и не замена ряда `blocks[].rows`.
+Канон джобы — `context.json` / `context.md` (schema `1.10.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция промпта, не артефакт и не замена ряда `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
 
 Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [граф](graph.md).
 
@@ -15,7 +15,7 @@
 
 ## Пример
 
-Архитектурный пример. Этих полей нет в текущем JSON джобы: их собирают из строки, оси блока, `timeline` и `links` / trace.
+Архитектурный пример. Объект `observation` не пишется в JSON джобы: его собирают из строки, оси блока, `timeline` и `links` / trace.
 
 ```json
 {
@@ -29,6 +29,11 @@
     },
     "period_id": "Y5",
     "value": "1234.56",
+    "value_status": "cached",
+    "normalized_value": "1234560",
+    "scale_factor": 1000,
+    "period_position": "during_period",
+    "aggregation": "sum",
     "unit": {
       "kind": "money",
       "currency": "GBP",
@@ -37,6 +42,7 @@
     },
     "formula": {
       "text": "=RC[-1]*(1+Growth)",
+      "class": "cross_period",
       "precedents": []
     },
     "source": {
@@ -62,8 +68,13 @@
 | `dimensions` | `hints.segment` | Только если segment задан. Иначе ключ отсутствует |
 | `period_id` | `block.periods[]`, тот же индекс, что у `values[]` | Ключ оси (`Y5`, календарный год, дата). Grain берётся у блока |
 | `value` | `row.values[i]` | Строка кэша Excel или `null`. Не float: формулы не пересчитываются |
-| `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` — токен `unit` / `k` / `m` / `bn`, не множитель `1000`. Без `kind` ставка выглядит как деньги |
+| `value_status` | `row.value_statuses[i]` | `cached`, `empty`, `zero_explicit` или `not_applicable`. Пустую ячейку не подменяют нулём |
+| `normalized_value` | `row.normalized_values[i]` | Строка в базовых единицах или `null`, если число не разобрать. Не замена `value` |
+| `scale_factor` | `row.scale_factor` | Целый множитель `1` / `1000` / `1000000` / `1000000000` или `null` |
+| `period_position`, `aggregation` | поля строки | Например `during_period` и `sum`. Рядом с `hints.time_semantics` |
+| `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` — токен `unit` / `k` / `m` / `bn`. Множитель — отдельный `scale_factor`. Без `kind` ставка выглядит как деньги |
 | `formula.text` | `row.formula` | Один fingerprint на строку. Отличия ячеек — `formula_exceptions`, не второй текст по умолчанию |
+| `formula.class` | `links[].formula_class` | Один класс на ячейку формулы. AST не копируется |
 | `formula.precedents` | `graph.links[]` или `GET .../graph/trace` | Короткий список `row_key`, `concept_id`, `period_id`. AST не копируется |
 | `source.sheet`, `source.cell` | Строка + колонка периода; у формулы ещё `links[].cell` | Цитата. В `context.json` per-cell `source` нет |
 | `timeline.phase`, `phase_year`, `flags` | `timeline.periods[]` с тем же `period_id` | Копия в срез, чтобы модель не джойнила. В `blocks[].periods` фазу не дублируют |
@@ -74,6 +85,6 @@
 
 - Замены `context.json` каталогом наблюдений. Полнота остаётся рядом: одна строка, один fingerprint, `values[]` по оси.
 - `validation_context`. `phase` / `phase_year` — часы таймлайна, не результат проверки.
-- `scale: 1000` и JSON-числа вместо строки кэша.
+- Подмены `value` множителем или JSON-числом. Кэш остаётся строкой; множитель и базовая величина — отдельные поля.
 - AST. Он остаётся в `ir/cells.parquet` и попадает в разговор только отдельным запросом, не в обычный промпт.
 - Второго JSON джобы. Срез живёт в промпте отвечающей модели.

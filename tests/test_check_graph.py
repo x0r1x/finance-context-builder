@@ -24,7 +24,7 @@ def _write(path: Path, payload: dict) -> Path:
 
 def _ok_graph(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.6.0",
+        "schema_version": "1.7.0",
         "job_id": "job-1",
         "nodes": 8,
         "edges": 20,
@@ -33,6 +33,7 @@ def _ok_graph(**overrides: object) -> dict:
             {
                 "cell": "P&L!C13",
                 "formula": "=SUM(C9:C12)",
+                "formula_class": "aggregation",
                 "refs": ["P&L!C9:C12"],
                 "row_key": "P&L|13|P&L!r2",
                 "period_id": "2024",
@@ -51,7 +52,7 @@ def _ok_graph(**overrides: object) -> dict:
 
 def _ok_context(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.9.0",
+        "schema_version": "1.10.0",
         "graph": {"artifact": "graph.json", "nodes": 8, "edges": 20, "iterate": False},
         "blocks": [
             {
@@ -63,6 +64,11 @@ def _ok_context(**overrides: object) -> dict:
                         "concept_id": "pnl.ebitda",
                         "formula": "=SUM(RC[-4]:RC[-1])",
                         "values": ["13", "23"],
+                        "value_statuses": ["cached", "cached"],
+                        "normalized_values": ["13", "23"],
+                        "scale_factor": 1,
+                        "period_position": None,
+                        "aggregation": None,
                     }
                 ],
             }
@@ -126,7 +132,7 @@ def test_rejects_old_graph_schema_and_sidecar_artifacts(tmp_path: Path) -> None:
     )
     result = _run(str(context), str(graph))
     assert result.returncode == 1
-    assert "1.6" in result.stderr
+    assert "1.7" in result.stderr
     assert "edges_json" in result.stderr
 
 
@@ -151,7 +157,19 @@ def test_markdown_must_repeat_blocks_and_links(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     graph_md.write_text(
-        "# Formula graph\n\nNodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\n=SUM(C9:C12)\n",
+        "\n".join(
+            [
+                "# Formula graph",
+                "Nodes: 8",
+                "Edges: 20",
+                "P&L!C13",
+                "P&L\\|13\\|P&L!r2",
+                "2024",
+                "aggregation",
+                "=SUM(C9:C12)",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
     result = _run(
@@ -174,6 +192,7 @@ def test_link_row_key_must_exist_in_context(tmp_path: Path) -> None:
                 {
                     "cell": "P&L!C13",
                     "formula": "=SUM(C9:C12)",
+                    "formula_class": "aggregation",
                     "refs": ["P&L!C9:C12"],
                     "row_key": "P&L|99|P&L!r2",
                     "period_id": "2024",
@@ -184,6 +203,50 @@ def test_link_row_key_must_exist_in_context(tmp_path: Path) -> None:
     result = _run(str(context), str(graph))
     assert result.returncode == 1
     assert "row_key" in result.stderr
+
+
+def test_rejects_merged_cell_contract(tmp_path: Path) -> None:
+    context = _write(
+        tmp_path / "context.json",
+        _ok_context(formulas=[], series=[], audit_trail={}),
+    )
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    result = _run(str(context), str(graph))
+    assert result.returncode == 1
+    assert "merged cell contract" in result.stderr
+
+
+def test_markdown_must_show_status_scale_and_normalized_value(tmp_path: Path) -> None:
+    payload = _ok_context()
+    row = payload["blocks"][0]["rows"][0]
+    row["values"] = [None, "1.5"]
+    row["value_statuses"] = ["empty", "cached"]
+    row["normalized_values"] = [None, "1500"]
+    row["scale_factor"] = 1000
+    row["period_position"] = "during_period"
+    row["aggregation"] = "sum"
+    context = _write(tmp_path / "context.json", payload)
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    context_md = tmp_path / "context.md"
+    context_md.write_text(
+        "EBITDA\nP&L\\|13\\|P&L!r2\npnl.ebitda\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n",
+        encoding="utf-8",
+    )
+    graph_md = tmp_path / "graph.md"
+    graph_md.write_text(
+        "Nodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\naggregation\n=SUM(C9:C12)\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        str(context),
+        str(graph),
+        "--context-md",
+        str(context_md),
+        "--graph-md",
+        str(graph_md),
+    )
+    assert result.returncode == 1
+    assert "empty value status" in result.stderr
 
 
 def test_trace_rejects_ast(tmp_path: Path) -> None:

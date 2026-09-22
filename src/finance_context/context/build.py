@@ -4,6 +4,13 @@ import re
 from collections import Counter
 
 from finance_context.context.measure import parse_measure
+from finance_context.context.series import (
+    normalize_value,
+    phase_gate,
+    scale_factor_for,
+    temporal_profile,
+    value_status,
+)
 from finance_context.context.timeline import build_timeline
 from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
@@ -45,6 +52,7 @@ from finance_context.models.context import (
     SemanticIdentity,
     WorkbookRaw,
 )
+from finance_context.vocab import ValueStatus
 
 _METHOD: dict[MapSource, str] = {
     "glossary": "rule",
@@ -82,6 +90,12 @@ def build_context(
     edges: list[dict] | None = None,
 ) -> ContextDocument:
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+    timeline, timeline_warnings = build_timeline(
+        layout, cells, date1904=bool(workbook_meta.get("date1904"))
+    )
+    period_phases = {
+        item.period_id: item.phase for item in (timeline.periods if timeline else [])
+    }
     mapped_by_key = {row.row_key: row for row in mapping.rows}
     _precedents, dependents = row_adjacency(edges or [])
     concept_by_ref = {
@@ -221,6 +235,7 @@ def build_context(
                     hints=hints,
                     role_cells=role_cells,
                     series_unit=series_unit,
+                    period_phases=period_phases,
                     context_role=context_role,
                     secondary_concepts=secondary,
                     semantic_identity=identity,
@@ -247,9 +262,6 @@ def build_context(
         warnings.append(
             f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
         )
-    timeline, timeline_warnings = build_timeline(
-        layout, cells, date1904=bool(workbook_meta.get("date1904"))
-    )
     warnings.extend(timeline_warnings)
     if mapping.questions:
         warnings.append(f"{len(mapping.questions)} row(s) need mapping review")
@@ -351,6 +363,7 @@ def _row_for_layout(
     hints: RowHints,
     role_cells: list[RoleCell],
     series_unit: str | None,
+    period_phases: dict[str, str | None] | None = None,
     context_role: str | None = None,
     secondary_concepts: list[str] | None = None,
     semantic_identity: SemanticIdentity | None = None,
@@ -359,11 +372,16 @@ def _row_for_layout(
 ) -> BlockRow:
     row_num = layout_row.row
     keep_cols = {header.col for header in value_headers}
+    concept_id = mapped.concept_id if mapped else None
+    gate = phase_gate(mapped.label if mapped else layout_row.label, concept_id)
+    phases = period_phases or {}
     values: list[str | None] = []
+    statuses: list[ValueStatus] = []
     formats: list[str] = []
     for header in headers:
         if header.col not in keep_cols:
             values.append(None)
+            statuses.append("not_applicable")
             continue
         cell = by_addr.get((sheet_name, row_num, header.col))
         cached = None if cell is None else cell.get("cached_value")
@@ -379,10 +397,15 @@ def _row_for_layout(
             cached = displayed
         text = None if cached in (None, "") else str(cached)
         values.append(text)
+        phase = phases.get(str(header.period_key))
+        outside_phase = bool(gate and phase and gate != phase and text is None)
+        structural = layout_row.kind not in _SERIES_KINDS and text is None
+        statuses.append(
+            value_status(text, applicable=not outside_phase and not structural)
+        )
     unit_from_cell = next(
         (item.cached_value for item in role_cells if item.role == "unit"), None
     )
-    concept_id = mapped.concept_id if mapped else None
     measure = parse_measure(
         unit_from_cell,
         layout_row.label,
@@ -402,6 +425,9 @@ def _row_for_layout(
             "sign": hints.sign or measure.sign,
         }
     )
+    factor = scale_factor_for(hints.scale)
+    position, aggregation = temporal_profile(hints.time_semantics)
+    normalized = [normalize_value(value, factor) for value in values]
     disposition, exclusion_reason = _row_disposition(mapped, layout_row)
     method = _METHOD.get(mapped.source, "unmapped") if mapped else "unmapped"
     evidence = None
@@ -426,7 +452,12 @@ def _row_for_layout(
         article_role=mapped.article_role if mapped else None,
         unit=unit,
         mapping=evidence,
+        period_position=position,
+        aggregation=aggregation,
+        scale_factor=factor,
         values=values,
+        value_statuses=statuses,
+        normalized_values=normalized,
         disposition=disposition,
         exclusion_reason=exclusion_reason,
         kind=layout_row.kind,

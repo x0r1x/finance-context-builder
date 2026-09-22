@@ -150,7 +150,7 @@ def test_upload_and_download(tmp_path: Path) -> None:
         assert "P&L!C2" in traced_md.text
         assert md_doc.status_code == 200
         assert "Financial context" in md_doc.text
-        assert json_doc.json()["schema_version"] == "1.9.0"
+        assert json_doc.json()["schema_version"] == "1.10.0"
 
 
 def test_repeated_upload_rebuilds_compile_layout_mapping_and_reuses_parse(tmp_path: Path) -> None:

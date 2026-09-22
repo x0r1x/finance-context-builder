@@ -59,8 +59,19 @@ def _doc() -> ContextDocument:
                         formula="=RC[-1]",
                         unit="money",
                         mapping=MappingEvidence(method="rule", confidence="high", score=1.0),
-                        hints=RowHints(unit="money"),
+                        hints=RowHints(
+                            unit="money",
+                            currency="GBP",
+                            scale="k",
+                            time_semantics="bop",
+                            sign="stock",
+                        ),
+                        period_position="beginning",
+                        aggregation="first",
+                        scale_factor=1000,
                         values=["100", "110"],
+                        value_statuses=["cached", "cached"],
+                        normalized_values=["100000", "110000"],
                     )
                 ],
             )
@@ -195,6 +206,7 @@ def test_graph_and_trace_markdown_repeat_json_facts() -> None:
             FormulaLink(
                 cell="P&L!C13",
                 formula="=SUM(C9:C12)",
+                formula_class="aggregation",
                 refs=["P&L!C9:C12"],
                 row_key="P&L|13|P&L!r1",
                 period_id="2024",
@@ -209,6 +221,7 @@ def test_graph_and_trace_markdown_repeat_json_facts() -> None:
     assert "P&L!C9:C12" in rendered
     assert "P&L\\|13\\|P&L!r1" in rendered
     assert "2024" in rendered
+    assert "aggregation" in rendered
     trace = TraceDocument(
         origin="P&L!C13",
         direction="precedents",
