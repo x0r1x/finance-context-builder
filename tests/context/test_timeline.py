@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from finance_context.context.build import build_context
-from finance_context.context.timeline import build_timeline
+from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 from finance_context.mapping.models import MappingDocument
@@ -56,10 +56,10 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
     kinds = {row.label: row.kind for row in layout.sheets[0].blocks[0].rows}
     assert kinds["Construction"] == "flag"
     assert kinds["Operation"] == "flag"
-    timeline, warnings = build_timeline(layout, cells)
-    assert timeline is not None
+    axes, warnings = build_axes(layout, cells)
+    assert axes
     assert not warnings
-    by_id = {item.period_id: item for item in timeline.periods}
+    by_id = {item.period_key: item for item in axes[0].periods}
     assert by_id["Y1"].phase == "construction" and by_id["Y1"].phase_year == 1
     assert by_id["Y2"].phase == "construction" and by_id["Y2"].phase_year == 2
     assert by_id["Y3"].phase == "operation" and by_id["Y3"].phase_year == 1
@@ -75,10 +75,9 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
         mapping=MappingDocument(),
     )
     revenue_block = next(block for block in doc.blocks if block.sheet == "TBA")
-    y3 = next(item for item in revenue_block.periods if item["period_key"] == "Y3")
-    assert "phase" not in y3
+    assert revenue_block.periods == []
     rendered = render_markdown(doc)
-    assert "## Timeline" in rendered
+    assert "## Axes" in rendered
     assert "construction" in rendered
     flag_rows = [row for block in doc.blocks for row in block.rows if row.kind == "flag"]
     assert flag_rows
@@ -97,12 +96,12 @@ def test_calendar_book_timeline_has_no_phase() -> None:
         _c("P&L", "D2", "3"),
     ]
     layout = detect_layout(cells)
-    timeline, warnings = build_timeline(layout, cells)
-    assert timeline is not None
+    axes, warnings = build_axes(layout, cells)
+    assert len(axes) == 1
     assert not warnings
-    assert timeline.grain == "year"
-    assert all(item.phase is None for item in timeline.periods)
-    assert [item.calendar_year for item in timeline.periods] == ["2020", "2021", "2022"]
+    assert axes[0].grain == "year"
+    assert all(item.phase is None for item in axes[0].periods)
+    assert [item.calendar_year for item in axes[0].periods] == ["2020", "2021", "2022"]
 
 
 def test_duration_mismatch_warns_without_overriding_flags() -> None:
@@ -140,9 +139,9 @@ def test_duration_mismatch_warns_without_overriding_flags() -> None:
         _c("Input Assumptions", "D11", "0.3"),
     ]
     layout = detect_layout(cells)
-    timeline, warnings = build_timeline(layout, cells)
-    assert timeline is not None
-    assert [item.phase for item in timeline.periods] == [
+    axes, warnings = build_axes(layout, cells)
+    assert axes
+    assert [item.phase for item in axes[0].periods] == [
         "construction",
         "construction",
         "operation",

@@ -52,7 +52,7 @@ def _ok_graph(**overrides: object) -> dict:
 
 def _ok_context(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.10.0",
+        "schema_version": "1.11.0",
         "graph": {"artifact": "graph.json", "nodes": 8, "edges": 20, "iterate": False},
         "blocks": [
             {

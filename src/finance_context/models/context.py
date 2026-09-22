@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
 
-SCHEMA_VERSION = "1.10.0"
+SCHEMA_VERSION = "1.11.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -92,6 +92,18 @@ class RoleCell(BaseModel):
     cached_value: str | None = None
 
 
+class RowSeries(BaseModel):
+    """Values of one row on one axis. Aligned to that axis's periods."""
+
+    axis_id: str
+    formula: str | None = None
+    formula_exceptions: list[str] = Field(default_factory=list)
+    numeric_summary: NumericSummary | None = None
+    values: list[str | None] = Field(default_factory=list)
+    value_statuses: list[ValueStatus] = Field(default_factory=list)
+    normalized_values: list[str | None] = Field(default_factory=list)
+
+
 class BlockRow(BaseModel):
     """One layout line. Lives only inside its block."""
 
@@ -129,6 +141,7 @@ class BlockRow(BaseModel):
     values: list[str | None] = Field(default_factory=list)
     value_statuses: list[ValueStatus] = Field(default_factory=list)
     normalized_values: list[str | None] = Field(default_factory=list)
+    series: list[RowSeries] = Field(default_factory=list)
 
 
 class ModelPeriod(BaseModel):
@@ -138,6 +151,27 @@ class ModelPeriod(BaseModel):
     phase_year: int | None = None
     calendar_year: str | None = None
     flags: dict[str, bool] = Field(default_factory=dict)
+
+
+class ContextPeriod(BaseModel):
+    col: int
+    text: str = ""
+    role: str = "historical"
+    period_key: str
+    group_key: str | None = None
+    index: int = 0
+    phase: TimelinePhase | None = None
+    phase_year: int | None = None
+    calendar_year: str | None = None
+    flags: dict[str, bool] = Field(default_factory=dict)
+
+
+class ContextAxis(BaseModel):
+    id: str
+    sheet: str
+    grain: str | None = None
+    header_row: int
+    periods: list[ContextPeriod] = Field(default_factory=list)
 
 
 class WorkbookTimeline(BaseModel):
@@ -152,6 +186,7 @@ class FinancialBlock(BaseModel):
     label_col: int
     grain: str | None = None
     kind: str = "timeline"
+    axis_ids: list[str] = Field(default_factory=list)
     periods: list[dict[str, Any]] = Field(default_factory=list)
     rows: list[BlockRow] = Field(default_factory=list)
     relations: list[dict[str, Any]] = Field(default_factory=list)
@@ -233,7 +268,7 @@ class ContextDocument(BaseModel):
     schema_version: str = SCHEMA_VERSION
     meta: ArtifactMeta
     workbook: WorkbookRaw
-    timeline: WorkbookTimeline | None = None
+    axes: list[ContextAxis] = Field(default_factory=list)
     blocks: list[FinancialBlock] = Field(default_factory=list)
     mapping_stats: MappingStats = Field(default_factory=MappingStats)
     graph: GraphPointer = Field(default_factory=GraphPointer)

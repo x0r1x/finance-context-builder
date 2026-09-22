@@ -20,6 +20,7 @@ from finance_context.graph.models import (
 )
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
+from finance_context.layout.resolve import period_headers
 from finance_context.mapping.models import MappingDocument
 from finance_context.models.context import GraphPointer
 from finance_context.store.fs import read_parquet, write_json, write_parquet
@@ -228,7 +229,7 @@ def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, 
     for sheet in layout.sheets:
         for block in sheet.blocks:
             local: dict[str, int] = {}
-            for pos, header in enumerate(block.axis.headers):
+            for pos, header in enumerate(period_headers(sheet, block)):
                 period_by_cell[(sheet.name, header.col)] = header.period_key
                 if header.period_key not in local:
                     local[header.period_key] = pos

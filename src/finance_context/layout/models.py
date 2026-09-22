@@ -39,6 +39,23 @@ class Axis(BaseModel):
     headers: list[AxisHeader]
 
 
+class AxisPeriod(BaseModel):
+    col: int
+    text: str
+    role: ColumnRole
+    period_key: str
+    group_key: str | None = None
+
+
+class TimeAxis(BaseModel):
+    """One period axis on a sheet. Tables reference it; they do not own a copy."""
+
+    id: str
+    grain: str | None = None
+    header_row: int
+    periods: list[AxisPeriod]
+
+
 class RowCell(BaseModel):
     col: int
     role: ColumnRole
@@ -60,13 +77,15 @@ class LayoutRow(BaseModel):
 class Block(BaseModel):
     block_id: str
     label_col: int
-    axis: Axis
+    axis: Axis | None = None
+    axis_ids: list[str] = Field(default_factory=list)
     rows: list[LayoutRow]
     kind: BlockKind = "timeline"
 
 
 class SheetLayout(BaseModel):
     name: str
+    axes: list[TimeAxis] = Field(default_factory=list)
     blocks: list[Block]
 
 

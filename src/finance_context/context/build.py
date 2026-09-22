@@ -11,11 +11,12 @@ from finance_context.context.series import (
     temporal_profile,
     value_status,
 )
-from finance_context.context.timeline import build_timeline
+from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import format_addr
-from finance_context.layout.models import Layout, LayoutRow
+from finance_context.layout.models import AxisHeader, Layout, LayoutRow
 from finance_context.layout.params import is_scenario_selector_label
-from finance_context.layout.periods import display_cell_text, infer_grain
+from finance_context.layout.periods import display_cell_text
+from finance_context.layout.resolve import axes_for
 from finance_context.mapping.eval import (
     assess_mapping_quality,
     context_report_metrics,
@@ -40,7 +41,9 @@ from finance_context.models.context import (
     BlockRow,
     CandidateHit,
     CashSemantics,
+    ContextAxis,
     ContextDocument,
+    ContextPeriod,
     FinancialBlock,
     GraphPointer,
     MappingEvidence,
@@ -49,6 +52,7 @@ from finance_context.models.context import (
     ReportingRole,
     RoleCell,
     RowHints,
+    RowSeries,
     SemanticIdentity,
     WorkbookRaw,
 )
@@ -90,12 +94,10 @@ def build_context(
     edges: list[dict] | None = None,
 ) -> ContextDocument:
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
-    timeline, timeline_warnings = build_timeline(
+    axes, timeline_warnings = build_axes(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
-    period_phases = {
-        item.period_id: item.phase for item in (timeline.periods if timeline else [])
-    }
+    axes_by_id = {axis.id: axis for axis in axes}
     mapped_by_key = {row.row_key: row for row in mapping.rows}
     _precedents, dependents = row_adjacency(edges or [])
     concept_by_ref = {
@@ -121,20 +123,24 @@ def build_context(
     blocks: list[FinancialBlock] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            grain = infer_grain([h.period_key for h in block.axis.headers])
-            value_headers = [h for h in block.axis.headers if h.role in _SERIES_ROLES]
-            if getattr(block, "kind", "timeline") == "params":
-                grain = None
-                value_headers = [h for h in block.axis.headers if h.role in {"value", "scenario"}]
-            periods = [
-                {
-                    "col": header.col,
-                    "text": header.text,
-                    "role": header.role,
-                    "period_key": header.period_key,
-                }
-                for header in value_headers
-            ]
+            kind = getattr(block, "kind", "timeline")
+            views = _block_views(sheet, block, axes_by_id)
+            hint_headers = [header for _axis_id, headers, _phases in views for header in headers]
+            axis_ids = [axis_id for axis_id, _headers, _phases in views] if kind != "params" else []
+            periods = (
+                []
+                if axis_ids
+                else [
+                    {
+                        "col": header.col,
+                        "text": header.text,
+                        "role": header.role,
+                        "period_key": header.period_key,
+                    }
+                    for _axis_id, headers, _phases in views
+                    for header in headers
+                ]
+            )
             rows: list[BlockRow] = []
             parent_by_row = {r.row: r.label for r in block.rows}
             labeled = [r.label for r in block.rows if r.label]
@@ -148,16 +154,6 @@ def build_context(
                 label_path = list(layout_row.section_path)
                 if parent and parent not in label_path:
                     label_path = [*label_path, parent]
-                row_headers = value_headers
-                if is_scenario_selector_label(layout_row.label):
-                    row_headers = [h for h in value_headers if h.role == "value"]
-                fingerprint, exceptions, summary = _row_formula_and_numbers(
-                    sheet_name=sheet.name,
-                    row_num=layout_row.row,
-                    headers=row_headers,
-                    by_addr=by_addr,
-                    stub_cols=[item.col for item in layout_row.cells],
-                )
                 role_cells = _role_cells(
                     sheet.name, layout_row, by_addr, bool(workbook_meta.get("date1904"))
                 )
@@ -172,7 +168,7 @@ def build_context(
                 formats = _row_number_formats(
                     sheet_name=sheet.name,
                     row_num=layout_row.row,
-                    headers=row_headers,
+                    headers=hint_headers,
                     by_addr=by_addr,
                 )
                 hints = _hints_for(
@@ -216,31 +212,67 @@ def build_context(
                     secondary_concepts=secondary,
                 )
                 candidates = _candidates_for(mapped)
+                series: list[RowSeries] = []
+                for axis_id, headers, phases in views:
+                    row_headers = headers
+                    if is_scenario_selector_label(layout_row.label):
+                        row_headers = [header for header in headers if header.role == "value"]
+                    fingerprint, exceptions, summary = _row_formula_and_numbers(
+                        sheet_name=sheet.name,
+                        row_num=layout_row.row,
+                        headers=row_headers,
+                        by_addr=by_addr,
+                        stub_cols=[item.col for item in layout_row.cells],
+                    )
+                    values, statuses, normalized = _series_numbers(
+                        sheet_name=sheet.name,
+                        row_num=layout_row.row,
+                        layout_row=layout_row,
+                        mapped=mapped,
+                        headers=headers,
+                        value_headers=row_headers,
+                        by_addr=by_addr,
+                        date1904=bool(workbook_meta.get("date1904")),
+                        period_phases=phases,
+                        factor=scale_factor_for(hints.scale),
+                    )
+                    series.append(
+                        RowSeries(
+                            axis_id=axis_id,
+                            formula=fingerprint,
+                            formula_exceptions=exceptions,
+                            numeric_summary=summary,
+                            values=values,
+                            value_statuses=statuses,
+                            normalized_values=normalized,
+                        )
+                    )
+                first = series[0] if series else None
                 line = _row_for_layout(
                     sheet_name=sheet.name,
                     block_id=block.block_id,
                     layout_row=layout_row,
                     layout_row_parent=parent,
                     mapped=mapped,
-                    headers=value_headers,
-                    value_headers=row_headers,
+                    headers=[],
+                    value_headers=[],
                     by_addr=by_addr,
                     date1904=bool(workbook_meta.get("date1904")),
                     label_path=label_path,
                     neighbors=neighbors,
-                    formula=fingerprint,
-                    formula_exceptions=exceptions,
-                    numeric_summary=summary,
+                    formula=first.formula if first else None,
+                    formula_exceptions=list(first.formula_exceptions) if first else [],
+                    numeric_summary=first.numeric_summary if first else None,
                     candidates=candidates,
                     hints=hints,
                     role_cells=role_cells,
                     series_unit=series_unit,
-                    period_phases=period_phases,
                     context_role=context_role,
                     secondary_concepts=secondary,
                     semantic_identity=identity,
                     reporting_roles=reporting_roles,
                     cash_semantics=cash,
+                    series=series,
                 )
                 rows.append(line)
             blocks.append(
@@ -248,8 +280,9 @@ def build_context(
                     block_id=block.block_id,
                     sheet=sheet.name,
                     label_col=block.label_col,
-                    grain=grain,
-                    kind=getattr(block, "kind", "timeline"),
+                    grain=None,
+                    kind=kind,
+                    axis_ids=axis_ids,
                     periods=periods,
                     rows=rows,
                     relations=_relations_for_block(mapping.relations, block.block_id),
@@ -323,7 +356,7 @@ def build_context(
         schema_version=SCHEMA_VERSION,
         meta=meta,
         workbook=workbook,
-        timeline=timeline,
+        axes=axes,
         blocks=blocks,
         mapping_stats=MappingStats.model_validate(stats),
         graph=graph or GraphPointer(),
@@ -341,6 +374,88 @@ def _inventory_disposition(mapped: MappedRow | None, layout_row: LayoutRow) -> s
     if layout_row.kind == "flag":
         return "excluded"
     return None
+
+
+def _block_views(
+    sheet,
+    block,
+    axes_by_id: dict[str, ContextAxis],
+) -> list[tuple[str, list[AxisHeader], dict[str, str | None]]]:
+    kind = getattr(block, "kind", "timeline")
+    if kind == "params":
+        headers = [
+            header
+            for header in (block.axis.headers if block.axis is not None else [])
+            if header.role in {"value", "scenario"}
+        ]
+        return [(block.block_id, headers, {})]
+    views: list[tuple[str, list[AxisHeader], dict[str, str | None]]] = []
+    for axis in axes_for(sheet, block):
+        annotated = axes_by_id.get(axis.id)
+        headers: list[AxisHeader] = []
+        phases: dict[str, str | None] = {}
+        source: list[ContextPeriod] | list = (
+            annotated.periods if annotated is not None else axis.periods
+        )
+        for period in source:
+            role = period.role
+            if role not in _SERIES_ROLES:
+                continue
+            headers.append(
+                AxisHeader(
+                    col=period.col,
+                    text=period.text,
+                    role=role,
+                    period_key=period.period_key,
+                )
+            )
+            phase = getattr(period, "phase", None)
+            phases[period.period_key] = phase
+        views.append((axis.id, headers, phases))
+    return views
+
+
+def _series_numbers(
+    *,
+    sheet_name: str,
+    row_num: int,
+    layout_row: LayoutRow,
+    mapped: MappedRow | None,
+    headers: list,
+    value_headers: list,
+    by_addr: dict[tuple[str, int, int], dict],
+    date1904: bool,
+    period_phases: dict[str, str | None],
+    factor: int | None,
+) -> tuple[list[str | None], list[ValueStatus], list[str | None]]:
+    keep_cols = {header.col for header in value_headers}
+    concept_id = mapped.concept_id if mapped else None
+    gate = phase_gate(mapped.label if mapped else layout_row.label, concept_id)
+    values: list[str | None] = []
+    statuses: list[ValueStatus] = []
+    for header in headers:
+        if header.col not in keep_cols:
+            values.append(None)
+            statuses.append("not_applicable")
+            continue
+        cell = by_addr.get((sheet_name, row_num, header.col))
+        cached = None if cell is None else cell.get("cached_value")
+        fmt = None if cell is None else cell.get("number_format")
+        displayed = display_cell_text(
+            cached if cached is not None else None,
+            fmt,
+            date1904=date1904,
+        )
+        if displayed is not None:
+            cached = displayed
+        text = None if cached in (None, "") else str(cached)
+        values.append(text)
+        phase = period_phases.get(str(header.period_key))
+        outside_phase = bool(gate and phase and gate != phase and text is None)
+        structural = layout_row.kind not in _SERIES_KINDS and text is None
+        statuses.append(value_status(text, applicable=not outside_phase and not structural))
+    normalized = [normalize_value(value, factor) for value in values]
+    return values, statuses, normalized
 
 
 def _row_for_layout(
@@ -369,6 +484,7 @@ def _row_for_layout(
     semantic_identity: SemanticIdentity | None = None,
     reporting_roles: list[ReportingRole] | None = None,
     cash_semantics: CashSemantics | None = None,
+    series: list[RowSeries] | None = None,
 ) -> BlockRow:
     row_num = layout_row.row
     keep_cols = {header.col for header in value_headers}
@@ -427,6 +543,17 @@ def _row_for_layout(
     )
     factor = scale_factor_for(hints.scale)
     position, aggregation = temporal_profile(hints.time_semantics)
+    if series:
+        series = [
+            item.model_copy(
+                update={
+                    "normalized_values": [normalize_value(value, factor) for value in item.values]
+                }
+            )
+            for item in series
+        ]
+        values = list(series[0].values)
+        statuses = list(series[0].value_statuses)
     normalized = [normalize_value(value, factor) for value in values]
     disposition, exclusion_reason = _row_disposition(mapped, layout_row)
     method = _METHOD.get(mapped.source, "unmapped") if mapped else "unmapped"
@@ -458,6 +585,7 @@ def _row_for_layout(
         values=values,
         value_statuses=statuses,
         normalized_values=normalized,
+        series=list(series or []),
         disposition=disposition,
         exclusion_reason=exclusion_reason,
         kind=layout_row.kind,
