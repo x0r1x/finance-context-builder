@@ -2,7 +2,7 @@
 
 Маппинг — retrieve-and-align, не классификация на закрытом множестве. Таксономия — **словарь**, не воронка контента: строка не выбрасывается, если концепт не найден. Резолвер принимает `concept_id` только выше порога; иначе fact остаётся `unknown`, но в context остаются подпись, hints, соседи, формула и top-3 кандидатов.
 
-Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.11.0`.
+Код: `src/finance_context/mapping/`. Точка входа стадии — `mapping_workbook` (`stage.py`) → `map_layout` (`cascade.py`). Сборка полного контента — `build_context` (`context/build.py`), схема `1.12.0`.
 
 Связанные документы: [layout](layout.md), [таксономия](taxonomy.md), [граф](graph.md), [разбор unmapped](review.md), [архитектура](architecture.md).
 
@@ -139,7 +139,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 
 ## Hints и строки блока
 
-Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate / stock), `statement`, `unit` (`money` / `count` / `rate` / `years`), `currency` (`GBP` / `EUR` / `USD` / `RUB`; те же обработчики: символ, ISO, локальное сокращение — `£`/`gbp`/`pound`/`фунт`, `€`/`eur`/`euro`/`евро`, `$`/`usd`/`dollar`/`долл`, `₽`/`rub`/`руб`/`РУБ`), `scale` (`unit` / `k` / `m` / `bn`), `sign` (`inflow` / `outflow` / `stock`), плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`). `k£` в лейбле или колонке Units → `unit=money`, `currency=GBP`, `scale=k` (не `null`). `%` и percent-format → `rate`; голый `per year` без `%` тоже `rate`. Mapping `value_kind` для prune по-прежнему `count` на длительностях; в context длительность — `years`. Schema `1.11.0`, поля hints аддитивны. На строке рядом лежат `period_position` и `aggregation` (из `time_semantics`: flow → `during_period`/`sum`, bop → `beginning`/`first`, eop и stock → `end`/`last`, rate → `during_period`/`average`), `scale_factor` (1 / 1000 / 1000000 / 1000000000) и `normalized_values` в базовых единицах. `values` остаётся кэшем Excel. `value_statuses` отличает `cached`, явный `zero_explicit`, пустую `empty` и `not_applicable` вне фазы. В `context.md` это колонка Time и текст ячейки, не второй документ. Смысл, роль и денежная семантика — отдельные поля, см. выше. Unknown сразу полезен даунстриму.
+Даже при `concept_id = null` у строки в context есть `hints`: `nature` (flow/balance), `time_semantics` (flow / bop / eop / rate / stock), `statement`, `unit` (`money` / `count` / `rate` / `years`), `currency` (`GBP` / `EUR` / `USD` / `RUB`; те же обработчики: символ, ISO, локальное сокращение — `£`/`gbp`/`pound`/`фунт`, `€`/`eur`/`euro`/`евро`, `$`/`usd`/`dollar`/`долл`, `₽`/`rub`/`руб`/`РУБ`), `scale` (`unit` / `k` / `m` / `bn`), `sign` (`inflow` / `outflow` / `stock`), плюс `segment` (`pc`/`hv`) и `escalation` (`revenue`/`cost`). `k£` в лейбле или колонке Units → `unit=money`, `currency=GBP`, `scale=k` (не `null`). `%` и percent-format → `rate`; голый `per year` без `%` тоже `rate`. Mapping `value_kind` для prune по-прежнему `count` на длительностях; в context длительность — `years`. Schema `1.12.0`, поля hints аддитивны. Кэш серии — `points[]` (`period_key`, `value`, `value_status`, `normalized_value`) в порядке оси, не три параллельных списка. На строке рядом лежат `period_position` и `aggregation` (из `time_semantics`: flow → `during_period`/`sum`, bop → `beginning`/`first`, eop и stock → `end`/`last`, rate → `during_period`/`average`), `scale_factor` (1 / 1000 / 1000000 / 1000000000) и `normalized_values` в базовых единицах. `values` остаётся кэшем Excel. `value_statuses` отличает `cached`, явный `zero_explicit`, пустую `empty` и `not_applicable` вне фазы. В `context.md` это колонка Time и текст ячейки, не второй документ. Смысл, роль и денежная семантика — отдельные поля, см. выше. Unknown сразу полезен даунстриму.
 
 Fact-строки в `params`-блоке — `article_role=assumption` (INDEX живого сценария не делает их calculation). ALL-CAPS секции без числа — `abstract`, `disposition=header`, не concept. Строка **Scenario Chosen** — `flag` / `context_role=scenario_selector`: каскад её не тегирует, но строка блока обязана держать индекс (ячейка D).
 
@@ -159,7 +159,7 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 
 Выбранный `concept_id` — **отчётный концепт** этой строки (его ждут расчёты и gold). Он не исчерпывает смысл. Один лейбл живёт на разных уровнях: P&L `Gross revenues` → `pnl.revenue`; CFS `Gross Revenues` → `cf.receipts`, участие в CFADS — роль `cfads_input`, не концепт `cf.cfads`. `Equity` на балансе → `bs.equity`; `Equity (k£)` в Sources → `cf.equity_issue` плюс роль `cf.sources`.
 
-На строке context (`1.11.0`) и в `MappedRow` три поля. Кандидаты top-3 остаются сырыми сигналами и **не** считаются взаимозаменяемыми концептами.
+На строке context (`1.12.0`) и в `MappedRow` три поля. Кандидаты top-3 остаются сырыми сигналами и **не** считаются взаимозаменяемыми концептами.
 
 | Поле | Что это |
 | --- | --- |
