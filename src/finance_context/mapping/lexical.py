@@ -61,7 +61,36 @@ class LexicalSignal:
                     signal=self.name,
                     evidence=f"label matches {phrase!r}",
                 )
+        if not hits and n in _GENERIC_TOTALS:
+            hits.update(self._section_total(ctx, skipped))
         return list(hits.values())
+
+    def _section_total(self, ctx: RowContext, skipped: set[str]) -> dict[str, Candidate]:
+        """`Total` under `Non-current assets` is that section's total, not an unknown line."""
+        sections = [*reversed(ctx.section_path), ctx.parent_label]
+        for section in sections:
+            parent = normalize_label(section)
+            if not parent:
+                continue
+            found: dict[str, Candidate] = {}
+            for phrase, concept_id, _size in self.phrases:
+                concept = self.concepts.get(concept_id)
+                if concept is None or concept_id in skipped or phrase != parent:
+                    continue
+                if _blocked_by_anti(parent, concept, section):
+                    continue
+                found[concept_id] = Candidate(
+                    concept_id=concept_id,
+                    score=0.9,
+                    signal=self.name,
+                    evidence=f"total of section {section!r}",
+                )
+            if found:
+                return found
+        return {}
+
+
+_GENERIC_TOTALS = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
 
 
 def skipped_concept_ids(ctx: RowContext, patterns: list[LexicalPattern]) -> set[str]:

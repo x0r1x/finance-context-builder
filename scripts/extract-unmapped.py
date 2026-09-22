@@ -41,8 +41,19 @@ def _is_unmapped(row: dict[str, Any]) -> bool:
     return disposition == "abstained"
 
 
+_SERIES_KEYS = frozenset({"values", "value_statuses", "normalized_values"})
+
+
 def _compact(row: dict[str, Any]) -> dict[str, Any]:
-    out = {key: value for key, value in row.items() if key != "values"}
+    out = {key: value for key, value in row.items() if key not in _SERIES_KEYS}
+    series = out.get("series")
+    if isinstance(series, list):
+        out["series"] = [
+            {key: value for key, value in item.items() if key not in _SERIES_KEYS}
+            if isinstance(item, dict)
+            else item
+            for item in series
+        ]
     source = out.get("source")
     if isinstance(source, dict) and source.get("sheet") and source.get("addr"):
         out.setdefault("ref", f"{source['sheet']}!{source['addr']}")

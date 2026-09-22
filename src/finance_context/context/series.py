@@ -23,9 +23,13 @@ _TEMPORAL: dict[str, tuple[PeriodPosition, SeriesAggregation]] = {
     "eop": ("end", "last"),
     "stock": ("end", "last"),
     "rate": ("during_period", "average"),
+    "instant": ("instant", "none"),
 }
 
-_OPERATION_GATE = frozenset({"traffic", "toll", "revenue", "opex"})
+_OPERATION_GATE = frozenset(
+    {"traffic", "toll", "revenue", "opex", "dscr", "coverage", "cfads", "dividend", "dividends"}
+)
+_NOISE_RATIO = 1e-6
 _CONSTRUCTION_GATE = frozenset({"capex"})
 
 
@@ -74,7 +78,25 @@ def normalize_value(text: str | None, factor: int | None) -> str | None:
     number = _parse_number(text)
     if number is None:
         return None
-    return _format_number(number * factor)
+    return format_number(number * factor)
+
+
+def normalize_series(values: list[str | None], factor: int | None) -> list[str | None]:
+    """Base-unit amounts. A float residue far below the series scale is 0.
+
+    `1.9e-11` next to `60000` is rounding left by the workbook, not a balance.
+    """
+    out = [normalize_value(value, factor) for value in values]
+    numbers = [abs(_parse_number(item) or 0.0) for item in out if item is not None]
+    scale = max(numbers, default=0.0)
+    if scale == 0.0:
+        return out
+    return [
+        "0"
+        if item is not None and abs(_parse_number(item) or 0.0) < _NOISE_RATIO * scale
+        else item
+        for item in out
+    ]
 
 
 def _is_zero(text: str) -> bool:
@@ -94,7 +116,7 @@ def _parse_number(text: str) -> float | None:
         return None
 
 
-def _format_number(number: float) -> str:
+def format_number(number: float) -> str:
     if abs(number - round(number)) < 1e-9:
         return str(int(round(number)))
     return f"{number:.10f}".rstrip("0").rstrip(".")

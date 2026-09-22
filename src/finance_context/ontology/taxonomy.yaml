@@ -71,6 +71,36 @@ patterns:
       label_contains: [b/f, c/f, brought forward, carried forward, balance b, balance c]
       unless:
         section_contains: [equity]
+  - concept: cf.drawdown
+    score: 0.95
+    evidence: debt raised in sources of funds
+    when:
+      section_contains: [sources of funds]
+      label_in: [debt, senior debt, loan, term loan, bank debt]
+  - skip_concept: bs.debt
+    when:
+      section_contains: [sources of funds]
+      label_in: [debt, senior debt, loan, term loan, bank debt]
+  - concept: cf.uses
+    score: 0.95
+    evidence: premium paid in uses of funds
+    when:
+      section_contains: [uses of funds]
+      label_in: [share premium]
+  - skip_concept: bs.share_premium
+    when:
+      section_contains: [uses of funds]
+      label_in: [share premium]
+  - concept: pnl.price
+    score: 0.92
+    evidence: price case under a price forecast
+    when:
+      section_contains: [price forecast]
+      any:
+        - {label_contains: [case]}
+        - {label_contains: [applied]}
+      unless:
+        label_contains: [choice]
   - skip_concept: bs.ppe
     when:
       section_contains: [goodwill]
@@ -111,6 +141,7 @@ patterns:
       unless:
         any:
           - {label_contains: [sources, drawdown, equity, interest, fee, arrangement, total uses,
+              uses total, total debt, debt amount,
               total sources, lifetime, turbine, capacity, inflation, cpi, escalation, mw,
               share premium, share capital, goodwill, balance b, balance c, brought forward,
               carried forward, b/f, c/f, loan amount, full-wrap, due diligence, duration]}
@@ -220,7 +251,7 @@ patterns:
       unless:
         any:
           - {section_contains: [balance]}
-          - {label_contains: [available, fcfe, returns, ratio]}
+          - {label_contains: [available, fcfe, returns, ratio, irr, rate of return]}
   - skip_concept: bs.equity
     when:
       any:
@@ -304,6 +335,9 @@ concepts:
     anti_labels: [long term, net assets]
   - id: bs.assets_current
     labels: [Current assets, Оборотные активы]
+    anti_labels: [non-current, noncurrent]
+  - id: bs.assets_noncurrent
+    labels: [Non-current assets, Noncurrent assets, Fixed assets, Внеоборотные активы]
   - id: bs.ppe
     labels: [PPE, PP&E, Fixed assets, Asset, Основные средства]
     aliases: [Asset value opening, Asset value closing, Long term assets]
@@ -387,15 +421,17 @@ concepts:
     facets: {direction: inflow}
   - id: cf.uses
     labels: [Uses, Uses of funds, Sources and uses uses]
+    aliases: [Uses Total, Total uses]
     facets: {direction: outflow}
   - id: covenant.headroom
     labels: [Covenant headroom, Headroom to covenant, Запас по ковенанту]
     facets: {unit: ratio}
   - id: val.npv
     labels: [NPV, Net present value, ЧПС]
+    facets: {period_type: instant}
   - id: val.irr
     labels: [IRR, Internal rate of return, ВНД]
-    facets: {unit: rate}
+    facets: {period_type: instant, unit: rate}
   - id: val.wacc
     labels: [WACC, Discount rate, Ставка дисконта]
     facets: {unit: rate}
@@ -420,7 +456,7 @@ concepts:
   - id: cov.dscr_limit
     labels: [DSCR minimum, Lockup DSCR, Minimum DSCR covenant]
     exact_labels: [DSCR minimum]
-    facets: {unit: ratio, statement: cov}
+    facets: {period_type: instant, unit: ratio, statement: cov}
     anti_labels: [headroom, coverage ratio, average]
   - id: cov.llcr
     labels: [LLCR, Loan life coverage, Коэффициент покрытия за срок кредита]
@@ -571,24 +607,24 @@ concepts:
   - id: ops.lifetime
     labels: [Lifetime, Project life]
     anti_labels: [concession duration, operations duration, operating lifetime]
-    facets: {unit: count}
+    facets: {period_type: instant, unit: count}
   - id: ops.concession_duration
     labels: [Concession Duration, Concession period]
     exact_labels: [Concession Duration]
     anti_labels: [operations duration, operating lifetime, operating period]
-    facets: {unit: count}
+    facets: {period_type: instant, unit: count}
   - id: ops.operating_period
     labels: [Operations Duration, Operating lifetime, Operating period]
     exact_labels: [Operations Duration, Operating lifetime]
     anti_labels: [concession]
-    facets: {unit: count}
+    facets: {period_type: instant, unit: count}
   - id: ops.capacity
     labels: [Installed capacity, Capacity]
     aliases: [MW]
-    facets: {unit: count}
+    facets: {period_type: instant, unit: count}
   - id: ops.asset_count
     labels: [Number of wind turbines, Turbines, Wind turbines]
-    facets: {unit: count}
+    facets: {period_type: instant, unit: count}
   - id: ops.generation
     labels: [Generation, Electricity generation, Net generation, MWh]
     facets: {unit: count}
@@ -618,15 +654,16 @@ concepts:
     facets: {unit: rate}
   - id: val.coc
     labels: [Cost of capital, CoC]
-    facets: {unit: rate}
+    facets: {period_type: instant, unit: rate}
   - id: val.fcfe_equity
     labels: [FCFE / Equity, FCFE to equity, FCFE/Equity]
     facets: {unit: ratio}
   - id: val.total_investment
     labels: [Total Investment, Total investment]
+    facets: {period_type: instant}
   - id: debt.facility_amount
-    labels: [Loan amount, Facility size, Facility amount]
-    facets: {nature: balance}
+    labels: [Loan amount, Facility size, Facility amount, Total Debt Amount, Debt amount]
+    facets: {period_type: instant, nature: balance}
   - id: debt.upfront_fee_rate
     labels: [Up-front fee rate, Upfront fee rate]
     aliases: [Up-front fee, Debt up-front fee]
@@ -662,15 +699,16 @@ concepts:
   - id: ops.depreciation_life
     labels: [Straight line depreciation]
     exact_labels: [Straight line depreciation]
-    facets: {unit: count}
+    facets: {period_type: instant, unit: count}
   - id: ops.construction_period
     labels: [Development & Construction, Construction period, Construction Duration]
     aliases: [Construction Duration]
     exact_labels: [Development & Construction]
-    facets: {unit: count}
+    facets: {period_type: instant, unit: count}
   - id: ops.model_start
     labels: [Model start, Construction start, Model start / Construction start]
     exact_labels: [Model start / Construction start]
+    facets: {period_type: instant}
   - id: debt.margin_rate
     labels: [Fixed Rate Margin, Debt margin, Margin over]
     facets: {unit: rate}

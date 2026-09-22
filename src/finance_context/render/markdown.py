@@ -104,6 +104,10 @@ def _redundant_calendar(period) -> bool:
 def _visible_attributes(axis: ContextAxis) -> list[str]:
     periods = axis.periods
     attributes: list[str] = []
+    if any(period.start_date for period in periods):
+        attributes.append("Start")
+    if any(period.end_date for period in periods):
+        attributes.append("End")
     if any(period.group_key for period in periods):
         attributes.append("Group")
     if any(period.phase for period in periods):
@@ -132,6 +136,10 @@ def _period_table(axis: ContextAxis) -> list[str]:
 
 
 def _period_cell(attribute: str, period) -> str:
+    if attribute == "Start":
+        return _cell(period.start_date or "")
+    if attribute == "End":
+        return _cell(period.end_date or "")
     if attribute == "Group":
         return _cell(period.group_key or "")
     if attribute == "Phase":
@@ -233,16 +241,44 @@ def _block_section(block: FinancialBlock, axes_by_id: dict[str, ContextAxis]) ->
 
 def _value_table(rows: list[BlockRow], periods: list[dict], axis_id: str | None) -> list[str]:
     headers = [_period_label(item) for item in periods]
-    cols = ["Label", "Row", "Kind", "Disposition", "Concept", "Unit", "Time", "Formula", *headers]
+    cols = [
+        "Label",
+        "Row",
+        "Path",
+        "Kind",
+        "Disposition",
+        "Concept",
+        "Unit",
+        "Time",
+        "Formula",
+        "Cells",
+        *headers,
+    ]
     lines = [
         "| " + " | ".join(_cell(col) for col in cols) + " |",
         "| " + " | ".join("---" for _ in cols) + " |",
     ]
+    period_cols = {item.get("col") for item in periods}
     for row in rows:
         series = _series_for(row, axis_id)
-        lines.append(_row_line(row, len(periods), series))
+        lines.append(_row_line(row, len(periods), series, period_cols))
     lines.append("")
     return lines
+
+
+def _role_cells_label(row: BlockRow, period_cols: set) -> str:
+    """Cells left of the ruler: `L total: -86400`, `G Start: 01.01.2024`.
+
+    Units have their own column.
+    """
+    parts: list[str] = []
+    for item in row.cells:
+        if item.role == "unit" or item.col in period_cols or item.cached_value in (None, ""):
+            continue
+        letter = _column_letter(item.col)
+        name = item.header or item.role
+        parts.append(f"{letter} {name}: {item.cached_value}")
+    return "; ".join(parts)
 
 
 def _series_for(row: BlockRow, axis_id: str | None) -> RowSeries | None:
@@ -251,7 +287,12 @@ def _series_for(row: BlockRow, axis_id: str | None) -> RowSeries | None:
     return next((item for item in row.series if item.axis_id == axis_id), None)
 
 
-def _row_line(row: BlockRow, period_count: int, series: RowSeries | None = None) -> str:
+def _row_line(
+    row: BlockRow,
+    period_count: int,
+    series: RowSeries | None = None,
+    period_cols: set | None = None,
+) -> str:
     unit = _unit_label(row)
     concept = row.concept_id or ""
     confidence = row.mapping.confidence if row.mapping and row.mapping.confidence else ""
@@ -269,12 +310,14 @@ def _row_line(row: BlockRow, period_count: int, series: RowSeries | None = None)
     cells = [
         _cell(row.label),
         _cell(row.row_key),
+        _cell(" / ".join(row.label_path)),
         _cell(row.kind),
         _cell(row.disposition or ""),
         _cell(concept),
         _cell(unit),
         _cell(_time_label(row)),
         _cell(formula or ""),
+        _cell(_role_cells_label(row, period_cols or set())),
         *[
             _cell(_series_cell(value, _at(statuses, index), _at(normalized, index)))
             for index, value in enumerate(values[:period_count])
@@ -291,6 +334,7 @@ def _unit_label(row: BlockRow) -> str:
                 unit=row.hints.unit,
                 currency=row.hints.currency,
                 scale=row.hints.scale,
+                per=row.hints.unit_per,
             ).display()
             or row.unit
             or row.hints.unit
@@ -317,9 +361,19 @@ def _series_cell(value: str | None, status: str | None, normalized: str | None) 
     text = "" if value is None else str(value)
     if status == "zero_explicit":
         return text or "0"
-    if normalized and text and normalized != text:
+    if normalized and text and _differs(text, normalized):
         return f"{text} ({normalized})"
     return text
+
+
+def _differs(text: str, normalized: str) -> bool:
+    """Show the base-unit amount only when scale changes it, not when formatting does."""
+    try:
+        value = float(text.replace(",", ""))
+        base = float(normalized.replace(",", ""))
+    except ValueError:
+        return normalized != text
+    return abs(value - base) > 1e-9 * max(1.0, abs(value), abs(base))
 
 
 def _at(items: list[str | None], index: int) -> str | None:

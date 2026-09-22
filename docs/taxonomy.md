@@ -36,7 +36,7 @@ calculations:
 | `labels` | Канонические фразы для lexical и эмбеддингов |
 | `aliases` | Дополнительные фразы той же сущности (часто «как в книге») |
 | `broader` | Родитель в иерархии; SUM детей может унаследовать этот id |
-| `facets` | Оси FAST/XBRL: statement, nature, basis, direction, position, series, unit |
+| `facets` | Оси FAST/XBRL: statement, nature, basis, direction, position, series, unit, period_type |
 | `value_kind` | Алиас `facets.unit` на время миграции |
 | `statements` | Совместимость; заполняется из `facets.statement`, если пусто |
 | `section_hints` | Lexical срабатывает, только если хинт виден в контексте строки |
@@ -60,7 +60,8 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 | `direction` | inflow, outflow | FAST; XBRL balance (для flow) |
 | `position` | opening, closing | FAST BF/CF (для balance) |
 | `series` | constant, series | FAST: constant vs time series |
-| `unit` | money, rate, ratio, count | FAST unit / бывший `value_kind` |
+| `unit` | money, rate, ratio, count | FAST unit / бывший `value_kind`. В context `hints.unit` шире: `price` (`EUR/MWh`) и `date` — это не значения фасета |
+| `period_type` | instant, duration | XBRL `periodType`. `instant` у скаляров и входов (`val.npv`, `val.irr`, `ops.capacity`, `ops.model_start`, ставки). `duration` — поток за период. Пустое значение не сужает каскад |
 
 Коллизия `Other Income`: это два концепта с разным `basis` (accrual vs cash), а не один id с `anti_labels`.
 
@@ -83,7 +84,7 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 
 **PnL (`pnl.*`)** — выручка, объём (в т.ч. Traffic), цена, GMV, COGS, маржа, OPEX, EBITDA/EBIT, D&A, процент и ставка, налог / deferred / tax rate / accrued, net income, other income, pre-tax / taxable. `Income Tax` на CFS/ОДДС — `cf.tax_paid`, не `pnl.tax`.
 
-**Баланс (`bs.*`)** — итоги активов, PPE (в т.ч. Long term assets), обязательства, капитал (Net Assets как NAV), share capital / share premium, goodwill, cash, debt, AR/AP, запасы, RE, NWC, purchases к целевым дням запасов.
+**Баланс (`bs.*`)** — итоги активов, `bs.assets_noncurrent` / `bs.assets_current`, PPE (в т.ч. Long term assets), обязательства, капитал (Net Assets как NAV), share capital / share premium, goodwill, cash, debt, AR/AP, запасы, RE, NWC, purchases к целевым дням запасов. Generic `Total` без собственного лейбла резолвится по последней секции `label_path` (`Total` под Non-current assets → `bs.assets_noncurrent`). Токен единицы (`% p.a.`) в `label_path` не входит.
 
 **Движение денег (`cf.*`)** — CFO, D&A add-back, capex, дивиденды, эмиссия, FCF, net CF (в т.ч. голый `Cash Flow`), CFADS, sources/uses, `cf.debt_service` (итог principal+interest; голое `Debt service` по-прежнему exact на `debt.scheduled_payment`); **поступления** `cf.receipts` и дети; **выплаты** `cf.disbursements` и дети (`cf.opex_paid`, `cf.interest_paid`, `cf.tax_paid`); погашение и выборка. Строки Cashflow Statement с теми же лейблами, что на P&L (Gross Revenues, OPEX, Income Tax, Interest), мапятся в `cf.*`, не в `pnl.*`. CFADS — отдельный id, не синоним выручки.
 
@@ -96,6 +97,8 @@ Lexical индексирует **и** `labels`, **и** `aliases`. Embed стро
 **Операции (`ops.*`)** — `ops.concession_duration` (Concession Duration), `ops.operating_period` (Operations Duration / Operating lifetime), `ops.construction_period`; generic `ops.lifetime` только для неспецифичных Lifetime / Project life. Концессия объявлена как сумма construction + operating в `calculations`. Capacity / MW, число турбин (`ops.asset_count`, не headcount), generation / MWh, availability, CPI, `ops.inflation` (generic / PPA) плюс дети `ops.inflation_revenue` и `ops.inflation_cost`, `ops.volume_growth` (Traffic Evolution). Не мапить phasing 0.2/0.8 на финансовый id. PC/HV — `hints.segment`; cost vs revenue inflation — отдельные id **и** `hints.escalation`.
 
 **Прочее** — `val.npv` / `irr` / `wacc` / `val.coc` (Cost of capital, если это не тот же WACC) / `val.fcfe_equity` / `val.total_investment`; `ops.headcount`; `fx.*` (курс и переоценки).
+
+Один и тот же лейбл в разных секциях — разные концепты, даже на одном листе. `Debt` в «Sources of funds» → `cf.drawdown` (flow, inflow), не остаток `bs.debt` (`bs.debt` имеет anti-section `sources of funds`). `Share premium` в «Uses of funds» → `cf.uses` (flow, outflow), не `bs.share_premium`. Relation `roll_forward` задаёт время: b/f = bop, движение между b/f и c/f = flow, c/f = eop (`Retained earnings`, `Additions / subtractions`).
 
 Одинаковый человеческий лейбл может быть **двумя** концептами. Пример: `Other Income` в секции REVENUE EARNED → `pnl.other_income` (`basis: accrual`); в CASH INFLOWS → `cf.receipts.other` (`basis: cash`). `Income Tax` на P&L → `pnl.tax`; на CFS → `cf.tax_paid` (skip + pattern + statement crosswalk alias). `Gross Revenues` на CFS → `cf.receipts`, не `pnl.revenue` и не `cf.cfads`. `DSCR minimum` (константа ковенанта) → `cov.dscr_limit`; `Minimum Debt Service Coverage Ratio` (статистика ряда) → `cov.dscr`. Разведение — фасеты, паттерны и роли строки (`context_role`, `secondary_concepts`, `semantic_identity`, `reporting_roles`, `cash_semantics`), не несколько победителей каскада. Выбранный `concept_id` — слот отчёта. Экономический смысл лежит в `semantic_identity` и может быть другим id того же семейства (`cf.receipts` при identity `pnl.revenue`).
 

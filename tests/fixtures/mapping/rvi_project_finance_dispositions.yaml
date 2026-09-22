@@ -24,8 +24,16 @@ expectations:
   - {label: DSCR minimum, concept_id: cov.dscr_limit}
   - {label: Operating lifetime, concept_id: ops.operating_period}
   - {label: Operating lifetime, forbidden_concept_id: ops.lifetime}
-  - {label: Share premium, parent: Cashflow Statement, concept_id: bs.share_premium}
-  - {label: Share premium, parent: Uses of funds, concept_id: bs.share_premium}
+  - {label: Share premium, parent: Cashflow Statement, concept_id: cf.uses}
+  - {label: Share premium, parent: Uses of funds, concept_id: cf.uses}
+  - {label: Debt, parent: Sources of funds, concept_id: cf.drawdown}
+  - {label: Mid case, concept_id: pnl.price}
+  - {label: Low case, concept_id: pnl.price}
+  - {label: Applied (real terms), concept_id: pnl.price}
+  - {label: Target IRR equity investor, concept_id: val.irr}
+  - {label: Net Present Value, concept_id: val.npv}
+  - {label: Total, parent: Non-current assets, concept_id: bs.assets_noncurrent}
+  - {label: Total, parent: Current assets, concept_id: bs.assets_current}
   - {label: Variable land lease, parent: Cashflow Statement, concept_id: cf.opex_paid}
   - {label: Variable land lease, parent: Cashflow Statement, forbidden_concept_id: ops.lease_rate}
   - {label: PPA duration, forbidden_concept_id: pnl.revenue}

@@ -1,6 +1,6 @@
 # Срез метрики для отвечающей LLM
 
-Канон джобы — `context.json` / `context.md` (schema `1.11.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция промпта, не артефакт и не замена ряда `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
+Канон джобы — `context.json` / `context.md` (schema `1.13.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция промпта, не артефакт и не замена ряда `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
 
 Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [граф](graph.md).
 
@@ -34,6 +34,7 @@
     "scale_factor": 1000,
     "period_position": "during_period",
     "aggregation": "sum",
+    "scenario": null,
     "unit": {
       "kind": "money",
       "currency": "GBP",
@@ -53,6 +54,8 @@
       "axis_id": "Operation!r8",
       "phase": "operation",
       "phase_year": 1,
+      "start_date": "2026-01-01",
+      "end_date": "2026-12-31",
       "group_key": null,
       "flags": {}
     }
@@ -73,7 +76,9 @@
 | `value_status` | `row.value_statuses[i]` | `cached`, `empty`, `zero_explicit` или `not_applicable`. Пустую ячейку не подменяют нулём |
 | `normalized_value` | `row.normalized_values[i]` | Строка в базовых единицах или `null`, если число не разобрать. Не замена `value` |
 | `scale_factor` | `row.scale_factor` | Целый множитель `1` / `1000` / `1000000` / `1000000000` или `null` |
-| `period_position`, `aggregation` | поля строки | Например `during_period` и `sum`. Рядом с `hints.time_semantics` |
+| `period_position`, `aggregation` | поля строки | Например `during_period` и `sum`. Скаляр и строка params — `instant` / `none`. Рядом с `hints.time_semantics` |
+| `scenario` | заголовок value/scenario-колонки params (`cells[].header`) | `Live` или `Case N`. У timeline-строки ключ отсутствует |
+| `timeline.start_date`, `end_date` | `axes[].periods[]` | ISO, если ось собрана из полосы Start/End. Иначе ключи отсутствуют |
 | `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` — токен `unit` / `k` / `m` / `bn`. Множитель — отдельный `scale_factor`. Без `kind` ставка выглядит как деньги |
 | `formula.text` | `row.formula` | Один fingerprint на строку. Отличия ячеек — `formula_exceptions`, не второй текст по умолчанию |
 | `formula.class` | `links[].formula_class` | Один класс на ячейку формулы. AST не копируется |

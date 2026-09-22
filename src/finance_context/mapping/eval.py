@@ -45,7 +45,7 @@ _DURATION_IDS = {
     "ops.operating_period",
     "ops.construction_period",
 }
-_STOCK_TIME = {"stock", "bop", "eop"}
+_STOCK_TIME = {"stock", "bop", "eop", "instant"}
 
 
 def content_completeness(layout_rows: int, inventory_rows: int) -> float:
@@ -383,7 +383,7 @@ def _semantic_ok(row: QualityRow, rows: list[QualityRow]) -> bool:
     if concept_id.startswith("bs."):
         if row.cash_semantics.recognition != "stock":
             return False
-        if _hint(row, "time_semantics") not in _STOCK_TIME:
+        if _hint(row, "time_semantics") not in _STOCK_TIME and not _stock_movement(row):
             return False
     if _is_capitalized(row.label) and row.cash_semantics.recognition != "noncash":
         return False
@@ -456,6 +456,8 @@ def _block_has_debt_stock(row: QualityRow, rows: list[QualityRow]) -> bool:
 def _unit_ok(row: QualityRow, concept: Any) -> bool:
     actual = _hint(row, "unit") or getattr(row, "unit", None)
     expected = _expected_unit(row.concept_id, concept)
+    if actual == "price" and expected == "money":
+        return True
     return bool(actual) and actual == expected
 
 
@@ -488,11 +490,16 @@ def _temporal_ok(row: QualityRow, concept: Any) -> bool:
             return False
     nature = _hint(row, "nature")
     if row.concept_id.startswith("bs.") or nature == "balance":
-        if time_semantics not in _STOCK_TIME:
+        if time_semantics not in _STOCK_TIME and not _stock_movement(row):
             return False
     if _is_rate_concept(row.concept_id, concept) and time_semantics != "rate":
         return False
     return True
+
+
+def _stock_movement(row: QualityRow) -> bool:
+    """A roll-forward line between b/f and c/f is the period change of a stock."""
+    return _hint(row, "time_semantics") == "flow" and _hint(row, "nature") == "flow"
 
 
 def _is_rate_concept(concept_id: str, concept: Any) -> bool:

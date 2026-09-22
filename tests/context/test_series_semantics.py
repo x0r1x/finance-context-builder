@@ -137,3 +137,15 @@ def test_empty_operation_line_outside_phase_is_not_applicable() -> None:
     rendered = render_markdown(doc)
     assert "n/a" in rendered
     assert "| 0 |" in rendered or rendered.count(" 0 ") >= 1
+
+
+def test_float_residue_next_to_the_series_scale_is_zero() -> None:
+    from finance_context.context.series import normalize_series, temporal_profile
+
+    assert normalize_series(["-60000", "1.9099388737231493E-11", "5"], 1) == ["-60000", "0", "5"]
+    assert normalize_series(["0.000001", "0.000002"], 1) == ["0.000001", "0.000002"]
+    assert temporal_profile("instant") == ("instant", "none")
+
+
+def test_debt_service_cover_is_gated_to_operations() -> None:
+    assert phase_gate("Debt Service Coverage Ratio", "cov.dscr") == "operation"
