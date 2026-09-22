@@ -4,7 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-GRAPH_SCHEMA_VERSION = "1.6.0"
+from finance_context.vocab import FormulaClass
+
+GRAPH_SCHEMA_VERSION = "1.7.0"
 CycleClass = Literal["iterative_ok", "unexpected"]
 ID_CAP = 32
 
@@ -39,6 +41,7 @@ class FormulaLink(BaseModel):
 
     cell: str
     formula: str | None = None
+    formula_class: FormulaClass | None = None
     refs: list[str] = Field(default_factory=list)
     row_key: str | None = None
     period_id: str | None = None

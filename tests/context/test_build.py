@@ -98,6 +98,11 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.sheet == "CF"
     assert metric.row == 2
     assert metric.values == ["320000", "320000"]
+    assert metric.value_statuses == ["cached", "cached"]
+    assert metric.scale_factor == 1
+    assert metric.normalized_values == ["320000", "320000"]
+    assert metric.period_position == "beginning"
+    assert metric.aggregation == "first"
     assert metric.formula == "=RC[-1]"
     assert metric.mapping is not None
     assert metric.mapping.method == "rule"
@@ -296,7 +301,7 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert doc.mapping_stats.abstract == 1
     assert doc.mapping_stats.unmapped_series == 0
     assert doc.mapping_stats.concept_coverage == 1.0
-    assert doc.schema_version == "1.9.0"
+    assert doc.schema_version == "1.10.0"
     quality = doc.mapping_stats.mapping_quality
     assert quality.label_coverage == 1.0
     assert quality.semantic_coverage == 1.0

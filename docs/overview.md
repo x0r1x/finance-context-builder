@@ -2,7 +2,7 @@
 
 **finance-context-builder** — read-only сервис, который превращает Excel-модели cash-flow (`.xlsx` / `.xlsm`) в версионированный JSON и Markdown-контекст для людей и LLM.
 
-Формулы не пересчитываются: в артефакты попадают кэшированные значения Excel. Контент полный: каждая строка layout живёт один раз внутри своего блока. Таксономия — аннотация `concept_id`, не воронка: неверный тег хуже, чем `unknown`. Unknown-строка остаётся в блоке с иерархией подписи, соседями, формулой и top-3 кандидатами. JSON и Markdown — одни и те же факты.
+Формулы не пересчитываются: в артефакты попадают кэшированные значения Excel. Контент полный: каждая строка layout живёт один раз внутри своего блока. Таксономия — аннотация `concept_id`, не воронка: неверный тег хуже, чем `unknown`. Unknown-строка остаётся в блоке с иерархией подписи, соседями, формулой и top-3 кандидатами. JSON и Markdown — одни и те же факты. Ячейки, AST и рёбра не сливаются в один документ: они остаются в `raw/` и `ir/`, а публичные `context` и `graph` описывают строку отчёта и формульные links.
 
 Запуск, Docker и API — в [README](../README.md). Технический снимок слоёв — в [architecture.md](architecture.md) (EN).
 
@@ -27,8 +27,8 @@
 | `ir/` | Шаблоны, AST, `edges.parquet` (как в формуле) и `cell_edges.parquet` (развёрнутые ячейки) |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `graph.json` / `graph.md` | Схема `1.6.0`: counts cell-level parquet, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, A1-формула, `row_key`, `period_id`, входы; диапазон не развёрнут). AST и cell-edges остаются в `ir/` |
-| `context.json` / `context.md` | Схема `1.9.0`: паспорт, `timeline` (единственное место фаз и флагов), каждый блок и каждая строка (`row_key`, `disposition`, `concept_id`, одна формула, ряд значений по оси). Заголовок периода в Markdown — `period_key` и буква колонки (`Y23 (AA)`). Под блоком список `relations` теми же `row_key`. Без `inventory` / `unmapped` / `excluded`. `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph` |
+| `graph.json` / `graph.md` | Схема `1.7.0`: counts cell-level parquet, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, A1-формула, `formula_class`, `row_key`, `period_id`, входы; диапазон не развёрнут). В Markdown у links есть колонка Class. AST и cell-edges остаются в `ir/` |
+| `context.json` / `context.md` | Схема `1.10.0`: паспорт, `timeline` (единственное место фаз и флагов), каждый блок и каждая строка (`row_key`, `disposition`, `concept_id`, одна формула, ряд кэша по оси, `value_statuses`, `scale_factor`, `normalized_values`, `period_position`, `aggregation`). В Markdown рядом с Unit стоит Time (`flow/during_period/sum`), пустая ячейка — `empty`, период вне фазы — `n/a`, тысячи показываются как `k£ ×1000` и `1.5 (1500)`. Заголовок периода — `period_key` и буква колонки (`Y23 (AA)`). Под блоком список `relations` теми же `row_key`. Без `inventory` / `unmapped` / `excluded` и без реестра ячеек. `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph` |
 | `unmapped.json` | Abstained-строки из `blocks[].rows` (после `run.sh`, в корне прогона) |
 
 Отвечающей LLM отдают срез одного наблюдения из этих артефактов, а не второй JSON джобы: [llm.md](llm.md).

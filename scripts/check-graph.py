@@ -33,8 +33,28 @@ GRAPH_FORBIDDEN = frozenset(
 )
 GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "links", "artifacts")
 ARTIFACT_REQUIRED = ("cells", "edges", "cell_edges", "index")
-GRAPH_SCHEMA_PREFIX = "1.6"
-LINK_FIELDS = ("cell", "formula", "refs")
+GRAPH_SCHEMA_PREFIX = "1.7"
+CONTEXT_SCHEMA_PREFIX = "1.10"
+LINK_FIELDS = ("cell", "formula", "refs", "formula_class")
+ROW_SERIES_FIELDS = (
+    "value_statuses",
+    "normalized_values",
+    "scale_factor",
+    "period_position",
+    "aggregation",
+)
+VALUE_STATUSES = frozenset({"cached", "empty", "zero_explicit", "not_applicable"})
+FORMULA_CLASSES = frozenset(
+    {
+        "same_period",
+        "cross_period",
+        "aggregation",
+        "rollforward",
+        "conditional",
+        "hardcoded",
+    }
+)
+MERGED_CONTRACT = ("formulas", "concepts", "series", "audit_trail", "source_workbook")
 
 
 def load_json(path: Path) -> Any:
@@ -56,6 +76,17 @@ def _walk_keys(node: Any) -> set[str]:
 
 def check_context(context: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    schema = str(context.get("schema_version") or "")
+    if schema and not schema.startswith(CONTEXT_SCHEMA_PREFIX):
+        errors.append(
+            f"context.json schema_version must be {CONTEXT_SCHEMA_PREFIX}.x, got {schema!r}"
+        )
+    merged = [key for key in MERGED_CONTRACT if key in context]
+    if merged:
+        errors.append(
+            "context.json must stay a row document, not a merged cell contract: "
+            + ", ".join(merged)
+        )
     catalog = [key for key in ("inventory", "unmapped", "excluded") if key in context]
     if catalog:
         errors.append(
@@ -93,11 +124,33 @@ def check_context(context: dict[str, Any]) -> list[str]:
             if "source" in row:
                 errors.append("context.json row must not repeat a per-cell source")
                 break
-            values = row.get("values")
-            if isinstance(values, list) and any(isinstance(item, dict) for item in values):
-                errors.append("context.json values must be a flat list aligned to the block axis")
+            errors.extend(_check_row_series(row))
+            if errors:
                 break
     return errors
+
+
+def _check_row_series(row: dict[str, Any]) -> list[str]:
+    values = row.get("values")
+    if not isinstance(values, list):
+        return ["context.json row values must be a list"]
+    if any(isinstance(item, dict) for item in values):
+        return ["context.json values must be a flat list aligned to the block axis"]
+    missing = [key for key in ROW_SERIES_FIELDS if key not in row]
+    if missing:
+        return ["context.json row missing " + ", ".join(missing)]
+    statuses = row.get("value_statuses")
+    normalized = row.get("normalized_values")
+    if not isinstance(statuses, list) or len(statuses) != len(values):
+        return ["context.json value_statuses must align with values"]
+    if any(item not in VALUE_STATUSES for item in statuses):
+        return ["context.json value_statuses has an unknown status"]
+    if not isinstance(normalized, list) or len(normalized) != len(values):
+        return ["context.json normalized_values must align with values"]
+    factor = row.get("scale_factor")
+    if factor is not None and not isinstance(factor, int):
+        return ["context.json scale_factor must be an int or null"]
+    return []
 
 
 def check_graph(graph: dict[str, Any]) -> list[str]:
@@ -145,6 +198,10 @@ def check_graph(graph: dict[str, Any]) -> list[str]:
             refs = link.get("refs")
             if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
                 errors.append("graph.json link refs must be a list of addresses")
+                break
+            formula_class = link.get("formula_class")
+            if formula_class is not None and formula_class not in FORMULA_CLASSES:
+                errors.append(f"graph.json link formula_class {formula_class!r} is unknown")
                 break
     elif "links" in graph:
         errors.append("graph.json links must be a list")
@@ -218,7 +275,32 @@ def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
             if formula and str(formula) not in markdown:
                 errors.append(f"context.md missing formula {formula}")
                 break
+            errors.extend(_check_row_markdown(row, markdown))
+            if errors:
+                break
     return errors
+
+
+def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:
+    statuses = row.get("value_statuses") or []
+    if isinstance(statuses, list) and "empty" in statuses and "empty" not in markdown:
+        return ["context.md missing empty value status"]
+    if isinstance(statuses, list) and "not_applicable" in statuses and "n/a" not in markdown:
+        return ["context.md missing n/a value status"]
+    position = row.get("period_position")
+    aggregation = row.get("aggregation")
+    if position and aggregation and f"{position}/{aggregation}" not in markdown:
+        return [f"context.md missing time profile {position}/{aggregation}"]
+    factor = row.get("scale_factor")
+    if isinstance(factor, int) and factor not in (0, 1) and f"×{factor}" not in markdown:
+        return [f"context.md missing scale factor ×{factor}"]
+    values = row.get("values") or []
+    normalized = row.get("normalized_values") or []
+    if isinstance(values, list) and isinstance(normalized, list):
+        for value, norm in zip(values, normalized, strict=False):
+            if value and norm and str(norm) != str(value) and str(norm) not in markdown:
+                return [f"context.md missing normalized value {norm}"]
+    return []
 
 
 def check_graph_markdown(graph: dict[str, Any], markdown: str) -> list[str]:
@@ -244,6 +326,10 @@ def check_graph_markdown(graph: dict[str, Any], markdown: str) -> list[str]:
         period_id = link.get("period_id")
         if period_id and str(period_id) not in markdown:
             errors.append(f"graph.md missing period {period_id}")
+            break
+        formula_class = link.get("formula_class")
+        if formula_class and str(formula_class) not in markdown:
+            errors.append(f"graph.md missing formula class {formula_class}")
             break
     return errors
 

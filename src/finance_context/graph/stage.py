@@ -7,6 +7,7 @@ from pathlib import Path
 from finance_context.excel.a1 import index_to_col
 from finance_context.formulas.stage import IR_CELL_EDGE_COLUMNS
 from finance_context.graph.cycles import classify_cycles
+from finance_context.graph.formula_class import classify_formula
 from finance_context.graph.models import (
     GRAPH_SCHEMA_VERSION,
     ID_CAP,
@@ -91,7 +92,7 @@ def build_formula_graph(
     hints = circularity_hints(mapping, layout, index_rows, cycles)
     iterate = _workbook_iterate(dest_dir)
     doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
-    doc.links = _formula_links(cells, edges, row_meta, period_by_cell)
+    doc.links = _formula_links(cells, edges, row_meta, period_by_cell, enriched)
     write_json(dest_dir / "graph.json", doc.model_dump(mode="json", by_alias=True))
     from finance_context.render.graph import render_graph_markdown
 
@@ -313,11 +314,26 @@ def _opt_bool(value: object) -> bool | None:
     return bool(value)
 
 
+def _lags_by_source(cell_edges: list[dict]) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for edge in cell_edges:
+        source = str(edge.get("source") or "")
+        lag = edge.get("period_lag")
+        if not source or lag is None:
+            continue
+        bucket = grouped.setdefault(source, [])
+        text = str(lag)
+        if text not in bucket:
+            bucket.append(text)
+    return grouped
+
+
 def _formula_links(
     cells: list[dict],
     formula_edges: list[dict],
     row_meta: dict[tuple[str, int], tuple[str, str | None]],
     period_by_cell: dict[tuple[str, int], str],
+    cell_edges: list[dict] | None = None,
 ) -> list[FormulaLink]:
     formula_by_node: dict[str, str] = {}
     identity: dict[str, tuple[str | None, str | None]] = {}
@@ -341,13 +357,16 @@ def _formula_links(
             refs.append(str(target))
     for node in formula_by_node:
         grouped.setdefault(node, [])
+    lags = _lags_by_source(cell_edges or [])
     links: list[FormulaLink] = []
     for cell, refs in sorted(grouped.items()):
         row_key, period_id = identity.get(cell, (None, None))
+        formula = formula_by_node.get(cell)
         links.append(
             FormulaLink(
                 cell=cell,
-                formula=formula_by_node.get(cell),
+                formula=formula,
+                formula_class=classify_formula(formula, refs, lags.get(cell)),
                 refs=refs,
                 row_key=row_key,
                 period_id=period_id,

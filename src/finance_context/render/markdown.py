@@ -114,7 +114,7 @@ def _block_section(block: FinancialBlock) -> list[str]:
     if not block.rows:
         return lines
     headers = [_period_label(item) for item in block.periods]
-    cols = ["Label", "Row", "Kind", "Disposition", "Concept", "Unit", "Formula", *headers]
+    cols = ["Label", "Row", "Kind", "Disposition", "Concept", "Unit", "Time", "Formula", *headers]
     lines.append("| " + " | ".join(_cell(col) for col in cols) + " |")
     lines.append("| " + " | ".join("---" for _ in cols) + " |")
     for row in block.rows:
@@ -126,6 +126,34 @@ def _block_section(block: FinancialBlock) -> list[str]:
 
 
 def _row_line(row: BlockRow, period_count: int) -> str:
+    unit = _unit_label(row)
+    concept = row.concept_id or ""
+    confidence = row.mapping.confidence if row.mapping and row.mapping.confidence else ""
+    if concept and confidence:
+        concept = f"{concept} ({confidence})"
+    values = list(row.values)
+    statuses = list(row.value_statuses)
+    normalized = list(row.normalized_values)
+    if len(values) < period_count:
+        values.extend([None] * (period_count - len(values)))
+    cells = [
+        _cell(row.label),
+        _cell(row.row_key),
+        _cell(row.kind),
+        _cell(row.disposition or ""),
+        _cell(concept),
+        _cell(unit),
+        _cell(_time_label(row)),
+        _cell(row.formula or ""),
+        *[
+            _cell(_series_cell(value, _at(statuses, index), _at(normalized, index)))
+            for index, value in enumerate(values[:period_count])
+        ],
+    ]
+    return "| " + " | ".join(cells) + " |"
+
+
+def _unit_label(row: BlockRow) -> str:
     unit = next((cell.cached_value for cell in row.cells if cell.role == "unit"), None)
     if not unit:
         unit = (
@@ -138,24 +166,36 @@ def _row_line(row: BlockRow, period_count: int) -> str:
             or row.hints.unit
             or ""
         )
-    concept = row.concept_id or ""
-    confidence = row.mapping.confidence if row.mapping and row.mapping.confidence else ""
-    if concept and confidence:
-        concept = f"{concept} ({confidence})"
-    values = list(row.values)
-    if len(values) < period_count:
-        values.extend([None] * (period_count - len(values)))
-    cells = [
-        _cell(row.label),
-        _cell(row.row_key),
-        _cell(row.kind),
-        _cell(row.disposition or ""),
-        _cell(concept),
-        _cell(unit or ""),
-        _cell(row.formula or ""),
-        *[_cell(_raw(value)) for value in values[:period_count]],
-    ]
-    return "| " + " | ".join(cells) + " |"
+    if row.scale_factor not in (None, 1):
+        base = unit or "unit"
+        return f"{base} ×{row.scale_factor}"
+    return unit or ""
+
+
+def _time_label(row: BlockRow) -> str:
+    semantics = row.hints.time_semantics
+    if not any((semantics, row.period_position, row.aggregation)):
+        return ""
+    return "/".join(part or "-" for part in (semantics, row.period_position, row.aggregation))
+
+
+def _series_cell(value: str | None, status: str | None, normalized: str | None) -> str:
+    if status == "not_applicable":
+        return "n/a"
+    if status == "empty" or (status is None and value in (None, "")):
+        return "empty"
+    text = "" if value is None else str(value)
+    if status == "zero_explicit":
+        return text or "0"
+    if normalized and text and normalized != text:
+        return f"{text} ({normalized})"
+    return text
+
+
+def _at(items: list[str | None], index: int) -> str | None:
+    if index >= len(items):
+        return None
+    return items[index]
 
 
 def _relations_section(relations: list[dict]) -> list[str]:
@@ -207,12 +247,6 @@ def _column_letter(col: object) -> str:
     if isinstance(col, int) and col > 0:
         return index_to_col(col)
     return ""
-
-
-def _raw(value: str | None) -> str:
-    if value in (None, ""):
-        return ""
-    return str(value)
 
 
 def _cell(value: object) -> str:

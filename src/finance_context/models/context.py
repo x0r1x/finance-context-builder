@@ -4,7 +4,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.9.0"
+from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
+
+SCHEMA_VERSION = "1.10.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -121,7 +123,12 @@ class BlockRow(BaseModel):
     semantic_identity: SemanticIdentity | None = None
     reporting_roles: list[ReportingRole] = Field(default_factory=list)
     cash_semantics: CashSemantics | None = None
+    period_position: PeriodPosition | None = None
+    aggregation: SeriesAggregation | None = None
+    scale_factor: int | None = None
     values: list[str | None] = Field(default_factory=list)
+    value_statuses: list[ValueStatus] = Field(default_factory=list)
+    normalized_values: list[str | None] = Field(default_factory=list)
 
 
 class ModelPeriod(BaseModel):

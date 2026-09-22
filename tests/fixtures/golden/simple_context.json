@@ -22,6 +22,7 @@
       "relations": [],
       "rows": [
         {
+          "aggregation": "first",
           "article_role": null,
           "candidates": [],
           "cash_semantics": null,
@@ -35,14 +36,14 @@
           "formula_exceptions": [],
           "hidden": false,
           "hints": {
-            "currency": null,
+            "currency": "GBP",
             "escalation": null,
             "nature": null,
-            "scale": null,
+            "scale": "k",
             "segment": null,
-            "sign": null,
+            "sign": "stock",
             "statement": null,
-            "time_semantics": null,
+            "time_semantics": "bop",
             "unit": "money"
           },
           "indent": 0,
@@ -60,15 +61,25 @@
             "source": null
           },
           "neighbors": [],
+          "normalized_values": [
+            "100000",
+            "110000"
+          ],
           "numeric_summary": null,
           "parent_label": null,
+          "period_position": "beginning",
           "reporting_roles": [],
           "row": 2,
           "row_key": "CF|2|CF!r1",
+          "scale_factor": 1000,
           "secondary_concepts": [],
           "semantic_identity": null,
           "sheet": "CF",
           "unit": "money",
+          "value_statuses": [
+            "cached",
+            "cached"
+          ],
           "values": [
             "100",
             "110"
@@ -114,13 +125,13 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.9.0",
+    "schema_version": "1.10.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.9.0",
+  "schema_version": "1.10.0",
   "timeline": null,
   "warnings": [],
   "workbook": {

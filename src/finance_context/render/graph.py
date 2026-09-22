@@ -48,8 +48,8 @@ def render_graph_markdown(doc: GraphDocument) -> str:
         [
             "## Links",
             "",
-            "| Cell | Row | Period | Formula | Refs |",
-            "| --- | --- | --- | --- | --- |",
+            "| Cell | Row | Period | Class | Formula | Refs |",
+            "| --- | --- | --- | --- | --- | --- |",
         ]
     )
     for link in doc.links:
@@ -60,6 +60,7 @@ def render_graph_markdown(doc: GraphDocument) -> str:
                     _cell(link.cell),
                     _cell(link.row_key or ""),
                     _cell(link.period_id or ""),
+                    _cell(link.formula_class or ""),
                     _cell(link.formula or ""),
                     _cell(", ".join(link.refs)),
                 ]
