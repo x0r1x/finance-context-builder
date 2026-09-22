@@ -248,8 +248,18 @@ def check_link_identity(context: dict[str, Any], graph: dict[str, Any]) -> list[
     return errors
 
 
+def _check_axes_markdown(context: dict[str, Any], markdown: str) -> list[str]:
+    for axis in context.get("axes") or []:
+        if not isinstance(axis, dict) or not axis.get("id"):
+            continue
+        axis_id = str(axis["id"]).replace("|", "\\|")
+        if f"\n| {axis_id} |" not in markdown:
+            return [f"context.md axis {axis['id']} must head a table with periods as columns"]
+    return []
+
+
 def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
-    errors: list[str] = []
+    errors: list[str] = _check_axes_markdown(context, markdown)
     for block in context.get("blocks") or []:
         if not isinstance(block, dict):
             continue

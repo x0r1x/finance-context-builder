@@ -211,6 +211,44 @@ def test_markdown_must_repeat_blocks_and_links(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_markdown_axis_must_head_a_period_column_table(tmp_path: Path) -> None:
+    axis = {
+        "id": "PF Model!r9",
+        "sheet": "PF Model",
+        "grain": "year",
+        "header_row": 9,
+        "periods": [
+            {"col": 14, "period_key": "2021"},
+            {"col": 15, "period_key": "2022"},
+        ],
+    }
+    context = _write(tmp_path / "context.json", _ok_context(axes=[axis]))
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    body = "EBITDA\nP&L\\|13\\|P&L!r2\npnl.ebitda\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n"
+    graph_md = tmp_path / "graph.md"
+    graph_md.write_text(
+        "Nodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\naggregation\n=SUM(C9:C12)\n",
+        encoding="utf-8",
+    )
+    context_md = tmp_path / "context.md"
+    args = (str(context), str(graph), "--context-md", str(context_md), "--graph-md", str(graph_md))
+
+    context_md.write_text(
+        "### `PF Model!r9`\n\n| Period |\n| --- |\n| 2021 |\n| 2022 |\n\n" + body,
+        encoding="utf-8",
+    )
+    result = _run(*args)
+    assert result.returncode == 1
+    assert "PF Model!r9" in result.stderr
+
+    context_md.write_text(
+        "### `PF Model!r9`\n\n| PF Model!r9 | 2021 | 2022 |\n| --- | --- | --- |\n\n" + body,
+        encoding="utf-8",
+    )
+    result = _run(*args)
+    assert result.returncode == 0, result.stderr
+
+
 def test_link_row_key_must_exist_in_context(tmp_path: Path) -> None:
     context = _write(tmp_path / "context.json", _ok_context())
     graph = _write(

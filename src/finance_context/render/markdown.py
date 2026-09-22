@@ -101,44 +101,44 @@ def _redundant_calendar(period) -> bool:
     return calendar == key or calendar == key[:4]
 
 
-def _visible_columns(axis: ContextAxis) -> list[str]:
+def _visible_attributes(axis: ContextAxis) -> list[str]:
     periods = axis.periods
-    columns = ["Period"]
+    attributes: list[str] = []
     if any(period.group_key for period in periods):
-        columns.append("Group")
+        attributes.append("Group")
     if any(period.phase for period in periods):
-        columns.append("Phase")
+        attributes.append("Phase")
     if any(period.phase_year is not None for period in periods):
-        columns.append("Phase year")
+        attributes.append("Phase year")
     if any(period.calendar_year and not _redundant_calendar(period) for period in periods):
-        columns.append("Calendar")
+        attributes.append("Calendar")
     if any(period.flags for period in periods):
-        columns.append("Flags")
-    return columns
+        attributes.append("Flags")
+    return attributes
+
+
+def _axis_row(cells: list[str]) -> str:
+    return "| " + " | ".join(cells) + " |"
 
 
 def _period_table(axis: ContextAxis) -> list[str]:
-    columns = _visible_columns(axis)
-    lines = [
-        "| " + " | ".join(columns) + " |",
-        "| " + " | ".join("---" for _ in columns) + " |",
-    ]
-    for period in axis.periods:
-        cells = [_period_cell(column, period) for column in columns]
-        lines.append("| " + " | ".join(cells) + " |")
+    """One column per period; attributes such as phase are rows under the period keys."""
+    header = [_cell(axis.id), *[_cell(period.period_key) for period in axis.periods]]
+    lines = [_axis_row(header), _axis_row(["---"] * len(header))]
+    for attribute in _visible_attributes(axis):
+        cells = [attribute, *[_period_cell(attribute, period) for period in axis.periods]]
+        lines.append(_axis_row(cells))
     return lines
 
 
-def _period_cell(column: str, period) -> str:
-    if column == "Period":
-        return _cell(period.period_key)
-    if column == "Group":
+def _period_cell(attribute: str, period) -> str:
+    if attribute == "Group":
         return _cell(period.group_key or "")
-    if column == "Phase":
+    if attribute == "Phase":
         return _cell(period.phase or "")
-    if column == "Phase year":
+    if attribute == "Phase year":
         return "" if period.phase_year is None else str(period.phase_year)
-    if column == "Calendar":
+    if attribute == "Calendar":
         if _redundant_calendar(period):
             return ""
         return _cell(period.calendar_year or "")
@@ -180,11 +180,13 @@ def _month_runs(axis: ContextAxis) -> list[tuple[str, list[str]]] | None:
 
 def _month_summary(axis: ContextAxis) -> list[str]:
     runs = _month_runs(axis) or []
-    lines = ["| Group | Periods |", "| --- | --- |"]
-    for group, keys in runs:
-        span = keys[0] if keys[0] == keys[-1] else f"{keys[0]} .. {keys[-1]}"
-        lines.append(f"| {_cell(group)} | {_cell(span)} |")
-    return lines
+    header = [_cell(axis.id), *[_cell(group) for group, _keys in runs]]
+    spans = [keys[0] if keys[0] == keys[-1] else f"{keys[0]} .. {keys[-1]}" for _g, keys in runs]
+    return [
+        _axis_row(header),
+        _axis_row(["---"] * len(header)),
+        _axis_row(["Periods", *[_cell(span) for span in spans]]),
+    ]
 
 
 def _block_section(block: FinancialBlock, axes_by_id: dict[str, ContextAxis]) -> list[str]:

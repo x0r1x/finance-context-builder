@@ -211,6 +211,9 @@ def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
     assert "| Period | Group | Phase | Phase year | Calendar | Flags |" not in rendered
     assert "Phase" not in rendered
     assert "Calendar" not in rendered
-    assert "2020-01 .. 2020-03" in rendered
+    month_id = month["id"]
+    assert f"| {month_id} | 2020 | 2021 |\n| --- | --- | --- |\n" in rendered
+    assert "| Periods | 2020-01 .. 2020-03 | 2021-01 |" in rendered
+    assert f"| {year['id']} | 2020 | 2021 | 2022 |" in rendered
     assert "Axes:" in rendered
     assert rendered.count("### `") >= 2

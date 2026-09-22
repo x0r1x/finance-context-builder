@@ -13,7 +13,9 @@ from finance_context.graph.models import (
 from finance_context.models.context import (
     ArtifactMeta,
     BlockRow,
+    ContextAxis,
     ContextDocument,
+    ContextPeriod,
     FinancialBlock,
     MappingEvidence,
     MappingStats,
@@ -194,6 +196,54 @@ def test_markdown_parameters_include_selector_and_value() -> None:
     assert "Scenario Chosen" in rendered
     assert "Tax Rate" in rendered
     assert "0.3" in rendered
+
+
+def test_axes_print_periods_as_columns() -> None:
+    doc = ContextDocument(
+        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
+        workbook=WorkbookRaw(sheets=["PF Model", "TBA"], sheet_count=2),
+        axes=[
+            ContextAxis(
+                id="PF Model!r9",
+                sheet="PF Model",
+                grain="year",
+                header_row=9,
+                periods=[
+                    ContextPeriod(col=col, text=key, period_key=key, calendar_year=key)
+                    for col, key in ((14, "2021"), (15, "2022"), (25, "2032"))
+                ],
+            ),
+            ContextAxis(
+                id="TBA!r1",
+                sheet="TBA",
+                grain="year",
+                header_row=1,
+                periods=[
+                    ContextPeriod(
+                        col=2,
+                        period_key="Y1",
+                        phase="construction",
+                        phase_year=1,
+                        flags={"construction": True},
+                    ),
+                    ContextPeriod(
+                        col=3,
+                        period_key="Y2",
+                        phase="operation",
+                        phase_year=1,
+                        flags={"operation": True},
+                    ),
+                ],
+            ),
+        ],
+    )
+    rendered = render_markdown(doc)
+    assert "| PF Model!r9 | 2021 | 2022 | 2032 |\n| --- | --- | --- | --- |\n" in rendered
+    assert "| Period |" not in rendered
+    assert "| TBA!r1 | Y1 | Y2 |" in rendered
+    assert "| Phase | construction | operation |" in rendered
+    assert "| Phase year | 1 | 1 |" in rendered
+    assert "| Flags | construction | operation |" in rendered
 
 
 def test_graph_and_trace_markdown_repeat_json_facts() -> None:
