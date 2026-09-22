@@ -55,6 +55,10 @@ _ALLOWED_EXTRA = frozenset(
         "job_id",
         "host",
         "tls_ca",
+        "request",
+        "response",
+        "batch",
+        "batches",
     }
 )
 
@@ -103,6 +107,13 @@ def configure_logging(
     root.propagate = False
     for noisy in ("httpx", "httpcore", "openai", "uvicorn.access"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def debug_port_io(logger: logging.Logger, msg: str, **fields: object) -> None:
+    """Log model request and response bodies only when DEBUG is enabled."""
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    log_event(logger, logging.DEBUG, "port_io", msg, **fields)
 
 
 def log_event(logger: logging.Logger, level: int, event: str, msg: str, **fields: object) -> None:

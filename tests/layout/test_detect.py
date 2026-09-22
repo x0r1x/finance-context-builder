@@ -960,6 +960,65 @@ def test_repeated_year_banner_is_group_key_not_an_axis() -> None:
     assert [row.label for row in sheet.blocks[0].rows] == ["DC Capacity"]
 
 
+def test_repeated_section_headers_share_one_axis() -> None:
+    years = list(zip("CDE", range(2020, 2023), strict=True))
+    months = [("N", "янв.20"), ("O", "фев.20"), ("P", "мар.20"), ("Q", "апр.20")]
+    cells = []
+    for header_row, label_row, label in ((6, 7, "Revenue"), (21, 22, "Costs")):
+        cells.append(_c("Output", f"B{header_row}", "Item"))
+        for col, year in years:
+            cells.append(_c("Output", f"{col}{header_row}", str(year)))
+        for col, text in months:
+            cells.append(_c("Output", f"{col}{header_row}", text))
+        cells.append(_c("Output", f"B{label_row}", label))
+        for col, _year in years:
+            cells.append(_c("Output", f"{col}{label_row}", "1"))
+        for col, _text in months:
+            cells.append(_c("Output", f"{col}{label_row}", "2"))
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    assert len(sheet.blocks) == 2
+    assert len(sheet.axes) == 2
+    assert {axis.grain for axis in sheet.axes} == {"year", "month"}
+    assert sheet.blocks[0].axis_ids == sheet.blocks[1].axis_ids
+    assert sheet.blocks[0].block_id != sheet.blocks[1].block_id
+
+
+def test_conflicting_section_flags_keep_separate_axes() -> None:
+    cells = [
+        _c("Output", "B6", "Item"),
+        _c("Output", "C6", "2020"),
+        _c("Output", "D6", "2021"),
+        _c("Output", "E6", "2022"),
+        _c("Output", "B7", "Construction"),
+        _c("Output", "C7", "1"),
+        _c("Output", "D7", "1"),
+        _c("Output", "E7", "0"),
+        _c("Output", "B8", "Revenue"),
+        _c("Output", "C8", "10"),
+        _c("Output", "D8", "11"),
+        _c("Output", "E8", "12"),
+        _c("Output", "B12", "Item"),
+        _c("Output", "C12", "2020"),
+        _c("Output", "D12", "2021"),
+        _c("Output", "E12", "2022"),
+        _c("Output", "B13", "Construction"),
+        _c("Output", "C13", "0"),
+        _c("Output", "D13", "0"),
+        _c("Output", "E13", "1"),
+        _c("Output", "B14", "Costs"),
+        _c("Output", "C14", "1"),
+        _c("Output", "D14", "2"),
+        _c("Output", "E14", "3"),
+    ]
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    year_axes = [axis for axis in sheet.axes if axis.grain == "year"]
+    assert len(sheet.blocks) == 2
+    assert len(year_axes) == 2
+    assert sheet.blocks[0].axis_ids != sheet.blocks[1].axis_ids
+
+
 def test_short_start_end_left_of_timeline_is_dropped() -> None:
     cells = [
         _c("PF", "A1", "Start"),

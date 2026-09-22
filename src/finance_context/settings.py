@@ -3,13 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from finance_context.errors import PortError
 from finance_context.ports.protocols import ChatPort, EmbedPort
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_DEFAULT_EMBEDDING_BATCH_SIZE = 32
+_DEFAULT_EMBEDDING_CONCURRENCY = 4
+_DEFAULT_LLM_CONCURRENCY = 4
+_POOL_DEFAULTS = {
+    "embedding_batch_size": _DEFAULT_EMBEDDING_BATCH_SIZE,
+    "embedding_concurrency": _DEFAULT_EMBEDDING_CONCURRENCY,
+    "llm_concurrency": _DEFAULT_LLM_CONCURRENCY,
+}
 
 
 def _blank_to_none(value: object) -> object:
@@ -64,6 +72,9 @@ class Settings(BaseSettings):
     embedding_model: str | None = None
     embedding_tls_ca_file: Path | None = None
     embedding_path: str = "/embeddings"
+    embedding_batch_size: int = _DEFAULT_EMBEDDING_BATCH_SIZE
+    embedding_concurrency: int = _DEFAULT_EMBEDDING_CONCURRENCY
+    llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY
 
     llm_slot_wait_sec: float = 120
     job_timeout_sec: float = 3600
@@ -83,6 +94,25 @@ class Settings(BaseSettings):
     @classmethod
     def blank_str_to_none(cls, value: object) -> object:
         return _blank_to_none(value)
+
+    @field_validator(
+        "embedding_batch_size",
+        "embedding_concurrency",
+        "llm_concurrency",
+        mode="before",
+    )
+    @classmethod
+    def default_positive_int(cls, value: object, info: ValidationInfo) -> object:
+        fallback = _POOL_DEFAULTS[info.field_name]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return fallback
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return fallback
+        if number <= 0:
+            return fallback
+        return number
 
     @field_validator("llm_base_url", "embedding_base_url", mode="after")
     @classmethod
@@ -109,6 +139,7 @@ class Settings(BaseSettings):
                 model=self.llm_model,
                 ca_file=self.llm_tls_ca_file,
                 chat_path=self.llm_chat_path,
+                concurrency=self.llm_concurrency,
             )
         except PortError:
             return None
@@ -125,6 +156,8 @@ class Settings(BaseSettings):
                 model=self.embedding_model,
                 ca_file=self.embedding_tls_ca_file,
                 embed_path=self.embedding_path,
+                batch_size=self.embedding_batch_size,
+                concurrency=self.embedding_concurrency,
             )
         except PortError:
             return None

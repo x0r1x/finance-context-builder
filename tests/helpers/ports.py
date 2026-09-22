@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -39,10 +40,12 @@ class FakeChat:
         self.payload = payload
         self.calls = 0
         self.messages_seen: list[list[dict[str, Any]]] = []
+        self._lock = threading.Lock()
 
     def complete_json(self, schema: type[BaseModel], messages: list) -> BaseModel:
-        self.calls += 1
-        self.messages_seen.append(list(messages))
+        with self._lock:
+            self.calls += 1
+            self.messages_seen.append(list(messages))
         if self.payload is not None:
             return schema.model_validate(self.payload)
         fields = schema.model_fields

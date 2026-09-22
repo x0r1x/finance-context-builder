@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
 
@@ -164,6 +164,22 @@ class ContextPeriod(BaseModel):
     phase_year: int | None = None
     calendar_year: str | None = None
     flags: dict[str, bool] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if data.get("phase") is None:
+            data.pop("phase", None)
+            data.pop("phase_year", None)
+        if not data.get("flags"):
+            data.pop("flags", None)
+        if data.get("group_key") is None:
+            data.pop("group_key", None)
+        calendar = data.get("calendar_year")
+        key = str(data.get("period_key") or "")
+        if calendar is not None and (calendar == key or calendar == key[:4]):
+            data.pop("calendar_year", None)
+        return data
 
 
 class ContextAxis(BaseModel):
