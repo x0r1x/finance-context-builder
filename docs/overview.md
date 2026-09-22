@@ -12,6 +12,7 @@
 | Каскад маппинга, сигналы, пороги, glossary | [mapping.md](mapping.md) |
 | Таксономия: поля, семейства id, как добавлять смысл | [taxonomy.md](taxonomy.md) |
 | Граф формул, циклы, trace | [graph.md](graph.md) |
+| Срез одного наблюдения для отвечающей LLM | [llm.md](llm.md) |
 | Разбор `unknown` / `unmapped.json` после прогона | [review.md](review.md) |
 
 ## Что на входе и на выходе
@@ -29,6 +30,8 @@
 | `graph.json` / `graph.md` | Схема `1.6.0`: counts cell-level parquet, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, A1-формула, `row_key`, `period_id`, входы; диапазон не развёрнут). AST и cell-edges остаются в `ir/` |
 | `context.json` / `context.md` | Схема `1.9.0`: паспорт, `timeline` (единственное место фаз и флагов), каждый блок и каждая строка (`row_key`, `disposition`, `concept_id`, одна формула, ряд значений по оси). Заголовок периода в Markdown — `period_key` и буква колонки (`Y23 (AA)`). Под блоком список `relations` теми же `row_key`. Без `inventory` / `unmapped` / `excluded`. `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph` |
 | `unmapped.json` | Abstained-строки из `blocks[].rows` (после `run.sh`, в корне прогона) |
+
+Отвечающей LLM отдают срез одного наблюдения из этих артефактов, а не второй JSON джобы: [llm.md](llm.md).
 
 Между джобами: `$DATA_DIR/glossary.json` (выученные high-confidence пары) и `taxonomy_embeddings.npz` (кэш эмбеддингов концептов).
 
