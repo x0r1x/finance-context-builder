@@ -108,6 +108,8 @@ Endpoints:
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
 - `GET /healthz`, `GET /readyz`
 
+The live route schema is generated from these handlers: [Swagger UI](http://127.0.0.1:8080/docs), [ReDoc](http://127.0.0.1:8080/redoc), and `GET /openapi.json`. `context.json`, `graph.json`, and trace use the same models that write those files.
+
 HTTP `error` codes:
 
 | code | HTTP |

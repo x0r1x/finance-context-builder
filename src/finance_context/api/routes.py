@@ -3,22 +3,42 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from finance_context.api.context import AppContext
 from finance_context.api.errors import ApiError
+from finance_context.api.schemas import ErrorBody, HealthBody, JobBody, ReadyBody
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.errors import ContextError
 from finance_context.excel.zip_guard import open_xlsx_zip
+from finance_context.graph.models import GraphDocument, TraceDocument
+from finance_context.models.context import ContextDocument
 from finance_context.observability import log_event
 from finance_context.store.fs import atomic_write_bytes, file_lock, write_json
 
 router = APIRouter()
 _LOGGER = logging.getLogger("finance_context.api")
 _ALLOWED = {".xlsx", ".xlsm"}
+_From = Annotated[
+    str,
+    Query(alias="from", description="Cell address, row_key, or concept_id."),
+]
+_Direction = Annotated[
+    Literal["precedents", "dependents"],
+    Query(description="precedents walks inputs; dependents walks results."),
+]
+_Depth = Annotated[int, Query(description="How many hops to walk.")]
+_MARKDOWN = {
+    "content": {"text/markdown": {"schema": {"type": "string"}}},
+    "description": "Markdown rendering of the same document.",
+}
+
+
+def _errors(*codes: int) -> dict[int, dict[str, object]]:
+    return {code: {"model": ErrorBody} for code in codes}
 _STAGE_RANK = {
     "queued": 0,
     "parse": 1,
@@ -36,12 +56,12 @@ def _ctx(request: Request) -> AppContext:
     return request.app.state.ctx
 
 
-@router.get("/healthz")
+@router.get("/healthz", response_model=HealthBody, summary="Process is up")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/readyz")
+@router.get("/readyz", response_model=ReadyBody, summary="Process can accept work")
 async def readyz(request: Request) -> dict[str, object]:
     settings = _ctx(request).settings
     return {
@@ -52,10 +72,25 @@ async def readyz(request: Request) -> dict[str, object]:
     }
 
 
-@router.post("/v1/context-jobs")
+@router.post(
+    "/v1/context-jobs",
+    status_code=202,
+    response_model=JobBody,
+    summary="Upload a workbook and start or reuse its job",
+    responses=_errors(400, 413, 422),
+)
 async def post_job(
     request: Request,
     file: Annotated[UploadFile | None, File()] = None,
+    remap: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Rebuild layout, mapping, and context when the value is 1, true, or yes. "
+                "A live process for this book is stopped first."
+            ),
+        ),
+    ] = None,
 ) -> JSONResponse:
     ctx = _ctx(request)
     if file is None:
@@ -76,22 +111,22 @@ async def post_job(
             owner_path,
             {"content_sha256": digest, "source_filename": filename},
         )
-    remap = _remap_requested(request)
-    if ctx.processes.is_alive(job_id) and not remap:
+    do_remap = _remap_on(remap)
+    if ctx.processes.is_alive(job_id) and not do_remap:
         return JSONResponse(_running_body(job_id, dest), status_code=202)
-    if remap and ctx.processes.is_alive(job_id):
+    if do_remap and ctx.processes.is_alive(job_id):
         ctx.processes.stop(job_id)
     started = False
     with file_lock(dest / ".lock", blocking=False) as acquired:
         if not acquired:
             return JSONResponse(_running_body(job_id, dest), status_code=202)
         live = ctx.bus.get(job_id)
-        if not remap and live is not None and live.status in {"queued", "running"}:
+        if not do_remap and live is not None and live.status in {"queued", "running"}:
             return JSONResponse(
                 {"job_id": job_id, "status": live.status, "stage": live.stage},
                 status_code=202,
             )
-        if not remap:
+        if not do_remap:
             ready = _ready_meta(dest)
             if ready is not None:
                 return JSONResponse(
@@ -166,9 +201,8 @@ def _running_body(job_id: str, dest: Path) -> dict[str, object]:
     return {"job_id": job_id, "status": "running", "stage": "running"}
 
 
-def _remap_requested(request: Request) -> bool:
-    raw = request.query_params.get("remap", "")
-    return raw.strip().lower() in {"1", "true", "yes"}
+def _remap_on(raw: str | None) -> bool:
+    return (raw or "").strip().lower() in {"1", "true", "yes"}
 
 
 def _ready_meta(dest: Path) -> dict | None:
@@ -186,7 +220,12 @@ def _ready_meta(dest: Path) -> dict | None:
     return meta
 
 
-@router.get("/v1/context-jobs/{job_id}")
+@router.get(
+    "/v1/context-jobs/{job_id}",
+    response_model=JobBody,
+    summary="Job status",
+    responses={202: {"model": JobBody}, **_errors(404)},
+)
 async def get_job(request: Request, job_id: str) -> JSONResponse:
     ctx = _ctx(request)
     dest = ctx.store.dest_dir(job_id)
@@ -224,39 +263,64 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     raise ApiError(404, "not_found")
 
 
-@router.get("/v1/context-jobs/{job_id}/context.json")
+@router.get(
+    "/v1/context-jobs/{job_id}/context.json",
+    response_model=ContextDocument,
+    summary="Context JSON",
+    responses=_errors(404, 409),
+)
 async def get_context_json(request: Request, job_id: str) -> JSONResponse:
     path = _require_artifact(request, job_id, "context.json")
     payload = json.loads(path.read_text(encoding="utf-8"))
     return JSONResponse(payload)
 
 
-@router.get("/v1/context-jobs/{job_id}/context.md")
+@router.get(
+    "/v1/context-jobs/{job_id}/context.md",
+    response_class=PlainTextResponse,
+    summary="Context Markdown",
+    responses={200: _MARKDOWN, **_errors(404, 409)},
+)
 async def get_context_md(request: Request, job_id: str) -> PlainTextResponse:
     path = _require_artifact(request, job_id, "context.md")
     return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/markdown")
 
 
-@router.get("/v1/context-jobs/{job_id}/graph.json")
+@router.get(
+    "/v1/context-jobs/{job_id}/graph.json",
+    response_model=GraphDocument,
+    summary="Formula graph JSON",
+    responses=_errors(404, 409),
+)
 async def get_graph_json(request: Request, job_id: str) -> JSONResponse:
     path = _require_artifact(request, job_id, "graph.json")
     payload = json.loads(path.read_text(encoding="utf-8"))
     return JSONResponse(payload)
 
 
-@router.get("/v1/context-jobs/{job_id}/graph.md")
+@router.get(
+    "/v1/context-jobs/{job_id}/graph.md",
+    response_class=PlainTextResponse,
+    summary="Formula graph Markdown",
+    responses={200: _MARKDOWN, **_errors(404, 409)},
+)
 async def get_graph_md(request: Request, job_id: str) -> PlainTextResponse:
     path = _require_artifact(request, job_id, "graph.md")
     return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/markdown")
 
 
-@router.get("/v1/context-jobs/{job_id}/graph/trace")
+@router.get(
+    "/v1/context-jobs/{job_id}/graph/trace",
+    response_model=TraceDocument,
+    summary="Walk formula precedents or dependents",
+    responses=_errors(404, 409),
+)
 async def get_graph_trace(
     request: Request,
     job_id: str,
-    origin: Annotated[str, Query(alias="from")],
-    direction: str = "precedents",
-    depth: int = 8,
+    origin: _From,
+    direction: _Direction = "precedents",
+    depth: _Depth = 8,
 ) -> JSONResponse:
     dest = _ctx(request).store.dest_dir(job_id)
     if not dest.exists():
@@ -269,13 +333,18 @@ async def get_graph_trace(
     return JSONResponse(doc.model_dump(mode="json"))
 
 
-@router.get("/v1/context-jobs/{job_id}/graph/trace.md")
+@router.get(
+    "/v1/context-jobs/{job_id}/graph/trace.md",
+    response_class=PlainTextResponse,
+    summary="Walk formula precedents or dependents as Markdown",
+    responses={200: _MARKDOWN, **_errors(404, 409)},
+)
 async def get_graph_trace_md(
     request: Request,
     job_id: str,
-    origin: Annotated[str, Query(alias="from")],
-    direction: str = "precedents",
-    depth: int = 8,
+    origin: _From,
+    direction: _Direction = "precedents",
+    depth: _Depth = 8,
 ) -> PlainTextResponse:
     dest = _ctx(request).store.dest_dir(job_id)
     if not dest.exists():
