@@ -9,8 +9,8 @@ def test_pool_settings_default_when_unset(monkeypatch) -> None:
     monkeypatch.delenv("LLM_CONCURRENCY", raising=False)
     settings = Settings(_env_file=None)
     assert settings.embedding_batch_size == 32
-    assert settings.embedding_concurrency == 4
-    assert settings.llm_concurrency == 4
+    assert settings.embedding_concurrency == 1
+    assert settings.llm_concurrency == 1
 
 
 def test_blank_and_non_positive_pool_settings_use_defaults(monkeypatch) -> None:
@@ -19,5 +19,5 @@ def test_blank_and_non_positive_pool_settings_use_defaults(monkeypatch) -> None:
     monkeypatch.setenv("LLM_CONCURRENCY", "0")
     settings = Settings(_env_file=None)
     assert settings.embedding_batch_size == 32
-    assert settings.embedding_concurrency == 4
-    assert settings.llm_concurrency == 4
+    assert settings.embedding_concurrency == 1
+    assert settings.llm_concurrency == 1
