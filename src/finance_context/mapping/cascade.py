@@ -41,6 +41,7 @@ from finance_context.mapping.taxonomy import attached_document, implicit_calcula
 from finance_context.mapping.vectors import load_concept_vectors
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
+from finance_context.settings import _DEFAULT_LLM_CONCURRENCY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def map_layout(
     cache_path: Path | None = None,
     embedding_model: str = "",
     concept_index: ConceptIndex | None = None,
-    llm_concurrency: int = 1,
+    llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
     patterns: list[LexicalPattern] | None = None,
     calculations: list[Calculation] | None = None,
     edges: list[dict] | None = None,
@@ -326,7 +327,7 @@ def _chat_pass(
     slot_timeout_sec: float,
     resolver: Resolver,
     index: dict[str, list[float]],
-    llm_concurrency: int = 1,
+    llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
 ) -> None:
     if not _acquire(slots, "llm", slot_timeout_sec):
         log_event(

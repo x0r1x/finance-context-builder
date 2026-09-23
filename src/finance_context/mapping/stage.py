@@ -17,6 +17,7 @@ from finance_context.mapping.models import Concept, MappingDocument
 from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
+from finance_context.settings import _DEFAULT_LLM_CONCURRENCY
 from finance_context.store.fs import read_parquet, write_json
 
 _LOGGER = logging.getLogger("finance_context.mapping")
@@ -35,7 +36,7 @@ def mapping_workbook(
     embedding_model: str = "",
     glossary_path: Path | None = None,
     concept_index: ConceptIndex | None = None,
-    llm_concurrency: int = 1,
+    llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
 ) -> MappingDocument:
     path = dest_dir / "mapping.json"
     if path.exists():
