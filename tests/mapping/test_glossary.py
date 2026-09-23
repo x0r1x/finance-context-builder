@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from finance_context.mapping.glossary import (
@@ -17,6 +18,27 @@ def test_glossary_roundtrip(tmp_path: Path) -> None:
     save_glossary(path, {("opening cash", ""): "bs.cash"})
     loaded = load_glossary(path)
     assert loaded[("opening cash", "")] == "bs.cash"
+
+
+def test_concurrent_saves_keep_both_keys(tmp_path: Path) -> None:
+    path = tmp_path / "glossary.json"
+    barrier = threading.Barrier(2)
+
+    def add(label: str, concept: str) -> None:
+        barrier.wait(5)
+        save_glossary(path, {(label, ""): concept})
+
+    threads = [
+        threading.Thread(target=add, args=("opening cash", "bs.cash")),
+        threading.Thread(target=add, args=("revenue", "pnl.revenue")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    loaded = load_glossary(path)
+    assert loaded[("opening cash", "")] == "bs.cash"
+    assert loaded[("revenue", "")] == "pnl.revenue"
 
 
 def test_learn_from_high_confidence_rows() -> None:

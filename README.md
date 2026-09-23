@@ -11,7 +11,7 @@ Guides: [overview](docs/overview.md), [layout](docs/layout.md), [mapping](docs/m
 - `.xls`, `.xlsb`, and encrypted workbooks are rejected
 - Cached formula values must already be in the file
 - LLM/embeddings are optional: mapping falls back to structure + labels, then `unknown`
-- The HTTP worker is in-process. Multi-replica deploys need an external queue.
+- The HTTP worker is one process. Up to `JOB_CONCURRENCY` workbooks run at once (default 2). Mapping is serialized on that machine so LLM concurrency stays 1. Multi-replica deploys need an external queue; do not start `uvicorn` with more than one worker.
 
 Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). See `NOTICE`.
 
@@ -70,7 +70,7 @@ curl -s http://127.0.0.1:8080/healthz
 curl -s http://127.0.0.1:8080/readyz
 ```
 
-Submit a workbook. `POST` returns **202** and starts mapping. Repeated submission of the same workbook reuses parse and formula IR, and rebuilds layout, mapping, and context, calling embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
+Submit a workbook. `POST` returns **202** and starts mapping. A repeated POST of a workbook that already has context and graph returns that snapshot and does not rebuild. `POST /v1/context-jobs?remap=1` rebuilds layout, mapping, and context, reuses parse and formula IR when `ir/compile.json` matches, and calls embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
 
 | status | Meaning |
 | --- | --- |

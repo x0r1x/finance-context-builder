@@ -24,7 +24,7 @@
 | Артефакт | Содержание |
 | --- | --- |
 | `raw/` | Ячейки, формулы, кэш, форматы, `cell_presence.parquet` (`populated` / `styled_blank`) |
-| `ir/` | Шаблоны, AST, `edges.parquet` (как в формуле) и `cell_edges.parquet` (развёрнутые ячейки) |
+| `ir/` | Шаблоны, AST, `edges.parquet` (как в формуле), `cell_edges.parquet` (развёртка формул, лаг пустой), `graph_edges.parquet` (`col_offset` / `period_lag`) и `compile.json` (штамп схемы IR) |
 | `layout.json` | Блоки отчётов, оси периодов, виды строк |
 | `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
 | `graph.json` / `graph.md` | Схема `1.7.0`: counts cell-level parquet, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, A1-формула, `formula_class`, `row_key`, `period_id`, входы; диапазон не развёрнут). В Markdown у links есть колонка Class. AST и cell-edges остаются в `ir/` |

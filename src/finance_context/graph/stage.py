@@ -62,7 +62,7 @@ def build_formula_graph(
     period_of = {row[0]: row[5] for row in index_rows}
     enriched = [_enrich_edge(edge, period_of, period_index) for edge in cell_edges]
     write_parquet(
-        dest_dir / "ir" / "cell_edges.parquet",
+        dest_dir / "ir" / "graph_edges.parquet",
         IR_CELL_EDGE_COLUMNS,
         [
             (

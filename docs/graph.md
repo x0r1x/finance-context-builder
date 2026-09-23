@@ -14,7 +14,8 @@
 | --- | --- |
 | Формула, AST, кэш ячейки | `ir/cells.parquet` |
 | Ссылки как в формуле (диапазон — одна цель, named ranges) | `ir/edges.parquet` |
-| Cell→cell после expand: `dangling` / `dangling_reason` / `status` / `reason` / `evidence` / `range_ref` / `truncated` / `col_offset` / `period_lag` | `ir/cell_edges.parquet` |
+| Cell→cell после expand: `dangling` / `dangling_reason` / `status` / `reason` / `evidence` / `range_ref` / `truncated`. `col_offset` и `period_lag` здесь пустые | `ir/cell_edges.parquet` |
+| `col_offset` и `period_lag` после graph. `cell_edges` graph не переписывает | `ir/graph_edges.parquet` |
 | `row_key`, `concept_id`, `period_id`, `node_type` (включая `empty` для проверенных пустых ячеек) | `ir/graph_index.parquet`; у формулы ещё `links[].row_key` и `links[].period_id` |
 | Counts (`nodes` / `edges` — размеры cell-level parquet), `iterate`, циклы, `circularity_hints`, `dangling_classes` и `links[]` с `formula_class` | `graph.json` и то же в `graph.md` (schema `1.7.0`, колонка Class) |
 | Каждый `<c>` листа: `populated` или `styled_blank` | `raw/cell_presence.parquet` |
@@ -89,5 +90,5 @@ Mapping по-прежнему использует развёрнутые ranges
 
 - EBITDA `=SUM(J9:J12)` в `links` — один ref на диапазон. Развёртка по ячейкам остаётся в `ir/cell_edges.parquet`.
 - Пустые клетки внутри `INDEX(J8:O8)` — `empty` / `actual_blank_cell` в parquet и счётчик `dangling_classes`, не ошибка парсера и не ref в `links`. Одиночная ссылка на такую же пустую ячейку — `empty_ref`. Trace эти пустые адреса не показывает.
-- `P&L` Gross revenues `=Operation!…` с `C[-1]` получает `period_lag` ≠ `same` на cell-edge.
+- `P&L` Gross revenues `=Operation!…` с `C[-1]` получает `period_lag` ≠ `same` в `ir/graph_edges.parquet`. В `ir/cell_edges.parquet` лаг остаётся пустым.
 - От `pnl.ebitda` / `cf.cfads` trace доходит до Input Assumptions (traffic, inflation, rates), если формулы так связаны.

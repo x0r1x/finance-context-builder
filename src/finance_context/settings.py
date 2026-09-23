@@ -13,10 +13,12 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _DEFAULT_EMBEDDING_BATCH_SIZE = 32
 _DEFAULT_EMBEDDING_CONCURRENCY = 1
 _DEFAULT_LLM_CONCURRENCY = 1
+_DEFAULT_JOB_CONCURRENCY = 2
 _POOL_DEFAULTS = {
     "embedding_batch_size": _DEFAULT_EMBEDDING_BATCH_SIZE,
     "embedding_concurrency": _DEFAULT_EMBEDDING_CONCURRENCY,
     "llm_concurrency": _DEFAULT_LLM_CONCURRENCY,
+    "job_concurrency": _DEFAULT_JOB_CONCURRENCY,
 }
 
 
@@ -75,6 +77,7 @@ class Settings(BaseSettings):
     embedding_batch_size: int = _DEFAULT_EMBEDDING_BATCH_SIZE
     embedding_concurrency: int = _DEFAULT_EMBEDDING_CONCURRENCY
     llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY
+    job_concurrency: int = _DEFAULT_JOB_CONCURRENCY
 
     llm_slot_wait_sec: float = 120
     job_timeout_sec: float = 3600
@@ -99,6 +102,7 @@ class Settings(BaseSettings):
         "embedding_batch_size",
         "embedding_concurrency",
         "llm_concurrency",
+        "job_concurrency",
         mode="before",
     )
     @classmethod
