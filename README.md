@@ -70,7 +70,7 @@ curl -s http://127.0.0.1:8080/healthz
 curl -s http://127.0.0.1:8080/readyz
 ```
 
-Submit a workbook. `POST` returns **202** and starts mapping. A repeated POST of a workbook that already has context and graph returns that snapshot and does not rebuild. `POST /v1/context-jobs?remap=1` rebuilds layout, mapping, and context, reuses parse and formula IR when `ir/compile.json` matches, and calls embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
+Submit a workbook. `POST` returns **202** and the API starts a process for that book. A repeated POST while the process is alive does not start another. A repeated POST of a workbook that already has context and graph returns that snapshot and does not rebuild. `POST /v1/context-jobs?remap=1` stops the old process, then rebuilds layout, mapping, and context, reuses parse and formula IR when `ir/compile.json` matches, and calls embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
 
 | status | Meaning |
 | --- | --- |
@@ -78,7 +78,7 @@ Submit a workbook. `POST` returns **202** and starts mapping. A repeated POST of
 | `succeeded` | Mapped without open questions |
 | `needs_input` | Context is ready; some fact rows were left `unknown` (review questions) |
 | `degraded` | Same as `needs_input`, but LLM/embeddings were not configured |
-| `failed` | Pipeline error, or the worker exceeded `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`); no usable context. Submit the workbook again. |
+| `failed` | Pipeline error, or the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`); no usable context. Submit the workbook again. |
 
 `needs_input` is not a crash. `context.json`, `context.md`, `graph.json`, and `graph.md` are still served.
 
@@ -120,7 +120,7 @@ HTTP `error` codes:
 
 `report_not_ready` is an artifact or trace fetched before the job has written that file.
 
-Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `DATA_DIR`, `JOB_TIMEOUT_SEC` (default 3600). See `.env.example`.
+Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. `GET /readyz` reports `queue: in_process`: the job list lives in this API process, and each book runs in a child of it.
 
 Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/taxonomy.md](docs/taxonomy.md) and [docs/mapping.md](docs/mapping.md). Check/helper/flag rows are excluded from review questions; they stay in the block with `disposition=excluded`. Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
 
@@ -167,10 +167,10 @@ md/context.md      md/graph.md      md/trace.md
 healthz.json  readyz.json  post-job.json  job-status.json  summary.txt  unmapped.json
 ```
 
-The client checks the four document URLs, that `context.json` has no second row catalog and no AST, that `graph.json` is schema `1.5` with `links` (a range stays one ref), and that the Markdown twins repeat the same blocks and links, then smokes `GET .../graph/trace` and `.../graph/trace.md`. The script exiting with `OK` means the client finished; the server should still be listening on 8080.
+The client checks the four document URLs, that `context.json` has no second row catalog and no AST, that `graph.json` is schema `1.7` and `context.json` is schema `1.13` with `links` (a range stays one ref), and that the Markdown twins repeat the same blocks and links, then smokes `GET .../graph/trace` and `.../graph/trace.md`. The script exiting with `OK` means the client finished; the server should still be listening on 8080. A client timeout does not stop the book's process.
 
 ```bash
 bash scripts/run.sh path/to/model.xlsx
 ```
 
-If no path is given, it looks for `resources/cashflow.xlsx`. Override `BASE_URL` (default `http://127.0.0.1:8080`), `OUT_DIR` (default `./out`), and `JOB_TIMEOUT_SEC` (default `300`).
+If no path is given, it looks for `resources/cashflow.xlsx`. Override `BASE_URL` (default `http://127.0.0.1:8080`), `OUT_DIR` (default `./out`), and `JOB_TIMEOUT_SEC` (client poll, default `300` when unset). The server's `JOB_TIMEOUT_SEC` in `.env` is a different clock: it stops the process. Export the same value before `run.sh` if the client should wait that long.

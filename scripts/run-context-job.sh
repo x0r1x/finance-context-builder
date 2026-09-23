@@ -4,6 +4,8 @@ set -euo pipefail
 # Upload a workbook, poll the job, and save the two documents in two formats:
 #   $RUN_DIR/json/context.json  graph.json  trace.json
 #   $RUN_DIR/md/context.md      graph.md    trace.md
+# Polling stops after JOB_TIMEOUT_SEC (default 300). The book's process keeps
+# running until it finishes or the server hits its own JOB_TIMEOUT_SEC.
 # Usage: run-context-job.sh [path/to/model.xlsx]
 # Env: BASE_URL, OUT_DIR, RUN_DIR, JOB_TIMEOUT_SEC
 

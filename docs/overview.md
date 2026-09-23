@@ -39,6 +39,8 @@
 
 `parse → compile → layout → mapping → graph → build → render`.
 
+HTTP поднимает на каждую новую книгу отдельный процесс и дальше читает `meta.json`. CLI `build` остаётся одним процессом. Parquet пишет PyArrow: это кэш compile и вход trace после выхода процесса. Внутри одного прогона стадии передают уже собранные списки строк. Повторный POST готовой книги отдаёт снимок. `?remap=1` останавливает процесс этой книги и запускает новый. `scripts/run.sh` только опрашивает HTTP. Его `JOB_TIMEOUT_SEC` по умолчанию 300 секунд и процесс не останавливает; сервер останавливает процесс по своему `JOB_TIMEOUT_SEC` (в `.env.example` это 3600).
+
 Каскад маппинга резолвит `fact` / `flag` / `helper`. Если детектор не собрал ни timeline, ни params (проза / навигация) или не нашёл лейблы статей, fact-строк нет: статус может быть `succeeded` при пустом контексте — это layout, не таксономия. Подробности: [layout.md](layout.md).
 
 Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они строки своего блока (`disposition=header` у abstract). Значения по оси — массив на строке `fact` / `flag` / `helper`; у params — роли колонок и значения только в value-колонках. Формула строки одна. Cell-level adjacency и AST — в IR / [graph.md](graph.md). Даунстрим видит лейбл, `label_path`, соседей ±2, формулу, hints, кандидатов и кэш. Пустой `unmapped.json` не значит, что у каждой строки блока есть `concept_id`.
@@ -55,7 +57,7 @@
 | `succeeded` | Нет открытых mapping-вопросов |
 | `needs_input` | Контекст готов; часть fact-строк осталась `unknown` |
 | `degraded` | Как `needs_input`, но LLM и embeddings не настроены |
-| `failed` | Ошибка пайплайна, usable context нет |
+| `failed` | Ошибка пайплайна или процесс книги остановлен по серверному `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`). Usable context нет |
 
 `needs_input` — не падение: `context.json`, `context.md`, `graph.json` и `graph.md` всё равно отдаются.
 

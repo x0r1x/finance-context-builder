@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Calls the other API scripts. Service must already be running.
+# The script does not start a job process; POST on the server does.
 # Usage: run.sh [path/to/model.xlsx]
-# Env: BASE_URL, OUT_DIR, JOB_TIMEOUT_SEC
+# Env: BASE_URL, OUT_DIR, JOB_TIMEOUT_SEC (client poll only; default 300)
 
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPTS/common.sh"
