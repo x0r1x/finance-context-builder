@@ -442,7 +442,7 @@ def _column_roles(
     header_votes: dict[int, Counter[str]] = defaultdict(Counter)
     numeric_counts: Counter[int] = Counter()
     text_counts: Counter[int] = Counter()
-    for row_n, cells in by_row.items():
+    for _row_n, cells in by_row.items():
         for cell in cells:
             col = int(cell["col"])
             text = _text(cell, date1904)

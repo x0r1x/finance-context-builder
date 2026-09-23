@@ -5,6 +5,7 @@ import logging
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx, write_zip
 
@@ -98,6 +99,30 @@ def test_healthz_is_not_request_logged(tmp_path: Path, caplog) -> None:
         _capture_finance_logs(caplog)
         assert client.get("/healthz").status_code == 200
     assert not any(record.__dict__.get("event") == "http_start" for record in caplog.records)
+
+
+def test_readyz_reports_jobs_and_a_blocked_data_dir(tmp_path: Path) -> None:
+    with _app(tmp_path) as client:
+        body = client.get("/readyz").json()
+        assert body["status"] == "ready"
+        assert body["jobs"] == 0
+        assert body["queue"] == "in_process"
+    blocked = tmp_path / "not-a-directory"
+    blocked.write_text("x", encoding="utf-8")
+    settings = Settings(
+        data_dir=blocked,
+        llm_base_url=None,
+        embedding_base_url=None,
+        embedding_model=None,
+        _env_file=None,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/readyz")
+        assert response.status_code == 503
+        assert response.json()["status"] == "unavailable"
+        health = client.get("/healthz")
+        assert health.status_code == 200
+        assert health.json() == {"status": "ok"}
 
 
 def test_readyz_logs_request_start_and_done(tmp_path: Path, caplog) -> None:
@@ -288,8 +313,27 @@ def test_repeat_post_keeps_ready_snapshot(tmp_path: Path) -> None:
         assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
+def test_job_id_must_be_a_content_hash(tmp_path: Path) -> None:
+    from finance_context.api.errors import ApiError
+    from finance_context.api.routes import _check_job_id
+
+    with pytest.raises(ApiError) as caught:
+        _check_job_id("..")
+    assert caught.value.http_status == 404
+    assert caught.value.code == "not_found"
+    with _app(tmp_path) as client:
+        for path in (
+            "/v1/context-jobs/not-a-hash",
+            "/v1/context-jobs/not-a-hash/context.json",
+            "/v1/context-jobs/" + ("A" * 64),
+        ):
+            response = client.get(path)
+            assert response.status_code == 404
+            assert response.json()["error"] == "not_found"
+
+
 def test_get_context_md_rewrites_a_finished_job(tmp_path: Path) -> None:
-    job_id = "finished-job"
+    job_id = "a" * 64
     dest = tmp_path / "data" / "jobs" / job_id
     dest.mkdir(parents=True)
     context = {
@@ -462,6 +506,80 @@ def test_get_job_reads_compile_stage_from_disk(tmp_path: Path, monkeypatch) -> N
             assert body["stage"] == "compile"
     finally:
         pause.unlink(missing_ok=True)
+
+
+def test_second_job_waits_behind_the_process_cap(tmp_path: Path, monkeypatch) -> None:
+    pause = _hold_stage(tmp_path, monkeypatch, "mapping")
+    other = build_xlsx(
+        tmp_path / "other.xlsx",
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="A2", value="Costs", type="s"),
+                    CellSpec(addr="B2", value="50"),
+                ],
+            )
+        ],
+        shared_strings=["Item", "2023", "Costs"],
+    )
+    source = _xlsx(tmp_path / "model.xlsx")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        max_upload_bytes=1024 * 1024,
+        llm_base_url=None,
+        embedding_base_url=None,
+        embedding_model=None,
+        max_concurrent_jobs=1,
+        _env_file=None,
+    )
+    try:
+        with TestClient(create_app(settings)) as client:
+            first = _upload(client, source)
+            assert first.status_code == 202
+            job_id = first.json()["job_id"]
+            assert _wait_disk_stage(tmp_path, job_id, "mapping")
+            repeated = _upload(client, source)
+            assert repeated.status_code == 202
+            blocked = _upload(client, other)
+            assert blocked.status_code == 429
+            assert blocked.json()["error"] == "too_many_jobs"
+            pause.unlink()
+            assert _wait_for_terminal(client, job_id)["status"] in {
+                "succeeded",
+                "degraded",
+                "needs_input",
+            }
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if client.app.state.ctx.processes.alive_count() == 0:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError("job process did not exit")
+            accepted = _upload(client, other)
+            assert accepted.status_code == 202
+            assert accepted.json()["status"] in {"queued", "running"}
+    finally:
+        pause.unlink(missing_ok=True)
+
+
+def test_dead_queued_job_relaunches(tmp_path: Path) -> None:
+    source = _xlsx(tmp_path / "model.xlsx")
+    data = source.read_bytes()
+    job_id = job_id_for(sha256_bytes(data))
+    with _app(tmp_path) as client:
+        ctx = client.app.state.ctx
+        assert ctx.bus.enqueue(job_id)
+        assert ctx.bus.current_generation(job_id) == 1
+        response = _upload(client, source)
+        assert response.status_code == 202
+        assert ctx.bus.current_generation(job_id) == 2
+        body = response.json()
+        assert body["job_id"] == job_id
+        assert body["status"] in {"queued", "running", "succeeded", "degraded", "needs_input"}
 
 
 def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:

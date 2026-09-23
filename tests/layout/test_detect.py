@@ -726,8 +726,16 @@ def test_params_block_from_scenario_matrix() -> None:
 def test_prose_and_shortcut_sheets_are_rejected() -> None:
     cells = [
         _c("Cover", "A1", "Strictly confidential educational material for modelling."),
-        _c("Cover", "A2", "No representation or warranty of any kind is made in relation to accuracy."),
-        _c("Cover", "A3", "This spreadsheet is for educational purposes only and must not be relied on."),
+        _c(
+            "Cover",
+            "A2",
+            "No representation or warranty of any kind is made in relation to accuracy.",
+        ),
+        _c(
+            "Cover",
+            "A3",
+            "This spreadsheet is for educational purposes only and must not be relied on.",
+        ),
         _c("Shortcuts", "A1", "CTRL"),
         _c("Shortcuts", "B1", "+"),
         _c("Shortcuts", "C1", "Arrow Keys"),
@@ -955,7 +963,9 @@ def test_repeated_year_banner_is_group_key_not_an_axis() -> None:
     assert grains == {"year", "month"}
     month = next(axis for axis in sheet.axes if axis.grain == "month")
     assert [period.group_key for period in month.periods] == ["2020", "2020", "2020", "2021"]
-    assert all(len(axis.periods) == len({p.period_key for p in axis.periods}) for axis in sheet.axes)
+    assert all(
+        len(axis.periods) == len({p.period_key for p in axis.periods}) for axis in sheet.axes
+    )
     assert sheet.blocks[0].axis_ids == [axis.id for axis in sheet.axes]
     assert [row.label for row in sheet.blocks[0].rows] == ["DC Capacity"]
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -61,6 +62,10 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     assert "P&L" in sheets
     again = pipeline.run(dest, job_id="job-test")
     assert again.meta.job_id == doc.meta.job_id
+    document = json.loads((dest / "context.json").read_text(encoding="utf-8"))
+    assert "generation" not in document["meta"]
+    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert meta["generation"] == 0
 
 
 def test_run_job_process_emits_stage_done_on_stdout(tmp_path: Path, capsys, monkeypatch) -> None:

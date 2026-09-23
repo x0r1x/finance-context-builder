@@ -51,7 +51,11 @@ def infer_secondary_concepts(
     context_role: str,
     feeds_cfads: bool = False,
 ) -> list[str]:
-    """Layout roles that sit beside the selected concept. `feeds_cfads` stays a participation flag on `context_role`, not a second identity `cf.cfads`."""
+    """Layout roles that sit beside the selected concept.
+
+    `feeds_cfads` stays a participation flag on `context_role`,
+    not a second identity `cf.cfads`.
+    """
     del feeds_cfads
     extra: list[str] = []
     if context_role == "uses" and concept_id and concept_id != "cf.uses":

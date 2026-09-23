@@ -796,7 +796,13 @@ def test_concession_and_operations_duration_are_not_the_same_concept() -> None:
     )
     layout = Layout(sheets=[SheetLayout(name="Input Assumptions", blocks=[block])])
     cells = [
-        {"sheet": "Input Assumptions", "row": row, "col": 3, "addr": f"C{row}", "cached_value": "years"}
+        {
+            "sheet": "Input Assumptions",
+            "row": row,
+            "col": 3,
+            "addr": f"C{row}",
+            "cached_value": "years",
+        }
         for row in (8, 9, 10)
     ]
     doc = map_layout(

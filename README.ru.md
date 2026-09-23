@@ -13,7 +13,7 @@ Read-only сервис: Excel-модели cash-flow (`.xlsx` / `.xlsm`) пре�
 - `.xls`, `.xlsb` и зашифрованные книги отклоняются
 - Кэш формул уже должен быть в файле
 - LLM и эмбеддинги необязательны: маппинг откатывается к structure + labels, затем `unknown`
-- Каждая новая книга считается в своём процессе. Parquet в `data/jobs/` — кэш, который переживает этот процесс. Внутри одного прогона стадии передают списки строк и не перечитывают файл, который только что записали. Читает и пишет эти файлы PyArrow. Несколько реплик требуют внешнюю очередь; не запускайте `uvicorn` больше чем с одним worker.
+- Каждая новая книга считается в своём процессе, одновременно не больше `MAX_CONCURRENT_JOBS` (по умолчанию 2). Parquet в `data/jobs/` — кэш, который переживает этот процесс. Внутри одного прогона стадии передают списки строк и не перечитывают файл, который только что записали. Читает и пишет эти файлы PyArrow. `finance-context serve` запускает один worker: несколько реплик API на одном каталоге не поддерживаются.
 
 Адаптировано из [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). См. `NOTICE`.
 
@@ -40,7 +40,7 @@ LLM и эмбеддинги необязательны: без них маппи
 uv run finance-context build path/to/model.xlsx -o ./out
 ```
 
-Пишет `context.json`, `context.md`, `graph.json` и `graph.md`.
+Пишет `context.json`, `context.md`, `graph.json` и `graph.md`. Если эти `context.json` и `context.md` уже лежат в каталоге, команда печатает `reused` и пайплайн не запускает. `--remap` удаляет layout, mapping и опубликованные документы, затем собирает их заново; parse и formula IR той же книги сохраняются.
 
 Строки, которым маппинг не нашёл концепт:
 
@@ -114,10 +114,11 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 | `zip_rejected` | 422 |
 | `not_found` | 404 |
 | `report_not_ready` | 409 |
+| `too_many_jobs` | 429 |
 
 `report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл.
 
-Окружение: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (если не задан, дефолт процесса `qwen3.6-27b-fp8`), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, на книгу), `DATA_DIR`, `JOB_TIMEOUT_SEC` (серверный дефолт 3600). См. `.env.example`. `GET /readyz` сообщает `queue: in_process`: список джобов живёт в этом процессе API, а каждая книга считается в его дочернем процессе.
+Окружение: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (если не задан, дефолт процесса `qwen3.6-27b-fp8`), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, на книгу), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (серверный дефолт 3600). См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503.
 
 Выученные high-confidence пары лежат в `$DATA_DIR/glossary.json` и используются на следующих джобах. Таксономия — `src/finance_context/ontology/taxonomy.yaml`. Как добавить концепт или alias и как каскад использует эти поля: [docs/ru/taxonomy.md](docs/ru/taxonomy.md) и [docs/ru/mapping.md](docs/ru/mapping.md). Строки check/helper/flag в вопросы на разбор не входят; они остаются в блоке с `disposition=excluded`. Несмапленные бизнес-строки остаются `unknown` с кандидатами, а не берут ближайший тег.
 
@@ -128,7 +129,7 @@ cp .env.example .env   # необязательно; LLM и эмбеддинги
 docker compose up --build
 ```
 
-Оставьте Compose запущенным. API: `http://127.0.0.1:8080`. Артефакты джобов и `glossary.json` попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`: таксономия и код маппинга — те, что запечены в образ. После правок онтологии пересоберите образ.
+Оставьте Compose запущенным. API опубликован только на `127.0.0.1:8080`. Артефакты джобов и `glossary.json` попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`: таксономия и код маппинга — те, что запечены в образ. После правок онтологии пересоберите образ.
 
 Loopback-URL LLM в `.env` (`http://127.0.0.1:1234/v1`) внутри контейнера переписываются на `host.docker.internal`, чтобы LM Studio на хосте оставался доступен. Сервер моделей должен слушать все интерфейсы или gateway хоста, а не только другую изолированную сеть.
 
@@ -136,7 +137,7 @@ Loopback-URL LLM в `.env` (`http://127.0.0.1:1234/v1`) внутри конте�
 
 ```bash
 docker build -t finance-context-builder .
-docker run --rm -v "$PWD/data:/app/data" --env-file .env -p 8080:8080 \
+docker run --rm -v "$PWD/data:/app/data" --env-file .env -p 127.0.0.1:8080:8080 \
   --add-host=host.docker.internal:host-gateway finance-context-builder
 ```
 

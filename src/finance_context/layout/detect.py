@@ -1191,7 +1191,8 @@ def _data_rows(
         # statement (`Balance Sheet`) and gold cannot tell Current from Non-current.
         if (
             section_stack
-            and label.strip().casefold() in {"total", "subtotal", "sub total", "sum", "итого", "всего"}
+            and label.strip().casefold()
+            in {"total", "subtotal", "sub total", "sum", "итого", "всего"}
             and (parent_row is None or parent_row in {item.row for item in section_stack})
         ):
             parent_row = section_stack[-1].row
