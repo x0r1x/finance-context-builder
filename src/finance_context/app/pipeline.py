@@ -19,7 +19,7 @@ from finance_context.mapping.stage import mapping_workbook
 from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.mapping.vectors import TaxonomyPrefetch
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
-from finance_context.observability import job_id_var, log_event, stage_var
+from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 from finance_context.render.markdown import render_markdown
 from finance_context.settings import Settings
@@ -246,8 +246,9 @@ class Pipeline:
 
 def run_job_process(data_dir: str, job_id: str) -> None:
     """Entry point for a spawned interpreter. Runs one book on this process's main thread."""
-    _install_stage_pause()
     settings = Settings(data_dir=Path(data_dir))
+    configure_logging(level=settings.log_level, json_output=settings.log_json)
+    _install_stage_pause()
     dest = settings.data_dir / "jobs" / job_id
     try:
         Pipeline(settings).run(dest, job_id=job_id)

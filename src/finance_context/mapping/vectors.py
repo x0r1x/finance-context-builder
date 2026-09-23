@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import io
 import json
+import logging
 import threading
 from pathlib import Path
 
@@ -11,8 +12,11 @@ import numpy as np
 
 from finance_context.mapping.knn import concept_vectors
 from finance_context.mapping.models import Concept
+from finance_context.observability import log_event
 from finance_context.ports.protocols import EmbedPort
 from finance_context.store.fs import atomic_write_bytes
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def cache_key(taxonomy: list[Concept], *, model: str, dim: int) -> str:
@@ -83,6 +87,7 @@ def load_concept_vectors(
         return concept_vectors(embed, taxonomy)
     cached = _read_if_valid(cache_path, taxonomy, model)
     if cached is not None:
+        _log_cache_hit(cached)
         return cached
     index = concept_vectors(embed, taxonomy)
     if not index:
@@ -93,10 +98,23 @@ def load_concept_vectors(
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         cached = _read_if_valid(cache_path, taxonomy, model)
         if cached is not None:
+            _log_cache_hit(cached)
             return cached
         dim = len(next(iter(index.values())))
         _write_npz(cache_path, cache_key(taxonomy, model=model, dim=dim), index)
     return index
+
+
+def _log_cache_hit(index: dict[str, list[float]]) -> None:
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "embed_cache",
+        "taxonomy embeddings cached",
+        port="embed",
+        reason="cache",
+        count=len(index),
+    )
 
 
 def _read_if_valid(

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from tests.helpers.ports import FakeChat, FakeEmbed, GrantSlots
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
-from finance_context.app.pipeline import Pipeline
+from finance_context.app.pipeline import Pipeline, _timed, run_job_process
 from finance_context.excel import parse_workbook
 from finance_context.settings import Settings
 
@@ -60,3 +61,26 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     assert "P&L" in sheets
     again = pipeline.run(dest, job_id="job-test")
     assert again.meta.job_id == doc.meta.job_id
+
+
+def test_run_job_process_emits_stage_done_on_stdout(tmp_path: Path, capsys, monkeypatch) -> None:
+    logger = logging.getLogger("finance_context")
+    saved = (list(logger.handlers), logger.level, logger.propagate)
+    monkeypatch.setattr(Settings, "embed", lambda self: None)
+    monkeypatch.setattr(Settings, "chat", lambda self: None)
+
+    def fake_run(self, dest, *, job_id, **kwargs):
+        _timed("parse", lambda: None)
+
+    monkeypatch.setattr(Pipeline, "run", fake_run)
+    try:
+        logger.handlers.clear()
+        logger.propagate = True
+        run_job_process(str(tmp_path), "job-child")
+        captured = capsys.readouterr().out
+    finally:
+        logger.handlers[:] = saved[0]
+        logger.setLevel(saved[1])
+        logger.propagate = saved[2]
+    assert '"event": "stage_done"' in captured
+    assert '"stage": "parse"' in captured

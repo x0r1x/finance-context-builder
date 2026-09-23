@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx, write_zip
 
 from finance_context.api.app import create_app
+from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.settings import Settings
 
 
@@ -251,6 +253,36 @@ def test_repeat_post_keeps_ready_snapshot(tmp_path: Path) -> None:
         assert repeated.json()["status"] not in {"queued", "running"}
         assert (job_dir / "context.json").read_bytes() == context
         assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_ready_post_logs_job_reuse_and_does_not_launch(tmp_path: Path, caplog) -> None:
+    source = _xlsx(tmp_path / "model.xlsx")
+    data = source.read_bytes()
+    job_id = job_id_for(sha256_bytes(data))
+    dest = tmp_path / "data" / "jobs" / job_id
+    dest.mkdir(parents=True)
+    for name in ("context.json", "context.md", "graph.json", "graph.md"):
+        (dest / name).write_text("{}\n", encoding="utf-8")
+    (dest / "meta.json").write_text(
+        json.dumps({"status": "succeeded", "stage": "done"}),
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.INFO, logger="finance_context")
+    with _app(tmp_path) as client:
+        logging.getLogger("finance_context").addHandler(caplog.handler)
+        response = _upload(client, source)
+        processes = client.app.state.ctx.processes
+        assert job_id not in processes._procs
+    assert response.status_code == 202
+    assert response.json()["status"] == "succeeded"
+    assert response.json()["stage"] == "done"
+    assert any(
+        record.__dict__.get("event") == "job_reuse"
+        and record.__dict__.get("job_id") == job_id
+        and record.__dict__.get("status") == "succeeded"
+        and record.__dict__.get("stage") == "done"
+        for record in caplog.records
+    )
 
 
 def test_two_children_reach_mapping_together(tmp_path: Path, monkeypatch) -> None:
