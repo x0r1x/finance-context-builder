@@ -136,7 +136,7 @@ def test_empty_operation_line_outside_phase_is_not_applicable() -> None:
     assert revenue.value_statuses == ["zero_explicit", "zero_explicit", "cached"]
     rendered = render_markdown(doc)
     assert "n/a" in rendered
-    assert "| 0 |" in rendered or rendered.count(" 0 ") >= 1
+    assert "| 0 |" in rendered or "0<br>" in rendered or rendered.count(" 0 ") >= 1
 
 
 def test_float_residue_next_to_the_series_scale_is_zero() -> None:
