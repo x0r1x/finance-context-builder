@@ -101,6 +101,8 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
 - `GET /healthz`, `GET /readyz`
 
+Живая схема роутов строится из этих обработчиков: [Swagger UI](http://127.0.0.1:8080/docs), [ReDoc](http://127.0.0.1:8080/redoc) и `GET /openapi.json`. `context.json`, `graph.json` и trace описаны теми же моделями, которыми эти файлы пишутся.
+
 Коды `error`:
 
 | code | HTTP |
