@@ -17,6 +17,7 @@ from finance_context.excel.zip_guard import open_xlsx_zip
 from finance_context.graph.models import GraphDocument, TraceDocument
 from finance_context.models.context import ContextDocument
 from finance_context.observability import log_event
+from finance_context.render.markdown import refresh_context_markdown
 from finance_context.store.fs import atomic_write_bytes, file_lock, write_json
 
 router = APIRouter()
@@ -174,6 +175,7 @@ def _clear_downstream_artifacts(dest: Path) -> None:
         "mapping.json",
         "context.json",
         "context.md",
+        "context.md.renderer",
         "meta.json",
         "graph.json",
         "graph.md",
@@ -292,6 +294,14 @@ async def get_context_json(request: Request, job_id: str) -> JSONResponse:
 )
 async def get_context_md(request: Request, job_id: str) -> PlainTextResponse:
     path = _require_artifact(request, job_id, "context.md")
+    if refresh_context_markdown(path.parent):
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "context_md_refresh",
+            "context.md rewritten from context.json",
+            job_id=job_id,
+        )
     return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/markdown")
 
 

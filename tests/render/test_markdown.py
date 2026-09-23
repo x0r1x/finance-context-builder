@@ -24,7 +24,7 @@ from finance_context.models.context import (
     WorkbookRaw,
 )
 from finance_context.render.graph import render_graph_markdown, render_trace_markdown
-from finance_context.render.markdown import render_markdown
+from finance_context.render.markdown import refresh_context_markdown, render_markdown
 
 GOLDEN_MD = Path(__file__).resolve().parents[1] / "fixtures" / "golden" / "simple_context.md"
 GOLDEN_JSON = Path(__file__).resolve().parents[1] / "fixtures" / "golden" / "simple_context.json"
@@ -128,8 +128,8 @@ def test_period_cell_prints_the_graph_address_under_the_value() -> None:
         ],
     )
     rendered = render_markdown(doc)
-    assert "1.3458683383241299<br>PF Model!AA172" in rendered
-    assert "empty<br>PF Model!AA537" in rendered
+    assert "1.3458683383241299 [PF Model!AA172]" in rendered
+    assert "empty [PF Model!AA537]" in rendered
     assert "PF Model!AA172" not in doc.model_dump_json()
 
 
@@ -363,3 +363,42 @@ def test_graph_and_trace_markdown_repeat_json_facts() -> None:
     assert "P&L!C13" in trace_md
     assert "P&L!C9:C12" in trace_md
     assert "formula_ast" not in trace_md
+
+
+def test_refresh_rewrites_stale_markdown_and_leaves_json(tmp_path: Path) -> None:
+    doc = ContextDocument(
+        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
+        workbook=WorkbookRaw(),
+        blocks=[
+            FinancialBlock(
+                block_id="PF Model!r7",
+                sheet="PF Model",
+                label_col=1,
+                periods=[{"col": 27, "period_key": "2038", "text": "2038", "role": "forecast"}],
+                rows=[
+                    BlockRow(
+                        row_key="PF Model|172|PF Model!r7",
+                        sheet="PF Model",
+                        row=172,
+                        kind="fact",
+                        label="CPI",
+                        values=["1.3458683383241299"],
+                        value_statuses=["cached"],
+                    )
+                ],
+            )
+        ],
+    )
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    context_path = tmp_path / "context.json"
+    payload = doc.model_dump_json()
+    context_path.write_text(payload, encoding="utf-8")
+    (tmp_path / "context.md").write_text("1.3458683383241299\n", encoding="utf-8")
+    (tmp_path / "graph.md").write_text("PF Model!AA172\n", encoding="utf-8")
+    assert refresh_context_markdown(tmp_path) is True
+    rendered = (tmp_path / "context.md").read_text(encoding="utf-8")
+    assert "1.3458683383241299 [PF Model!AA172]" in rendered
+    assert context_path.read_text(encoding="utf-8") == payload
+    assert (tmp_path / "graph.md").read_text(encoding="utf-8") == "PF Model!AA172\n"
+    assert "PF Model!AA172" not in payload
+    assert refresh_context_markdown(tmp_path) is False

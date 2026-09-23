@@ -438,6 +438,45 @@ def test_markdown_must_show_status_scale_and_normalized_value(tmp_path: Path) ->
     assert "empty value status" in result.stderr
 
 
+def test_period_value_must_carry_the_graph_cell(tmp_path: Path) -> None:
+    payload = _ok_context()
+    row = payload["blocks"][0]["rows"][0]
+    row["sheet"] = "P&L"
+    row["row"] = 13
+    payload["blocks"][0]["periods"] = [{"col": 3, "period_key": "2024", "text": "2024"}]
+    context = _write(tmp_path / "context.json", payload)
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    context_md = tmp_path / "context.md"
+    graph_md = tmp_path / "graph.md"
+    graph_md.write_text(
+        "Nodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\naggregation\n=SUM(C9:C12)\n",
+        encoding="utf-8",
+    )
+    context_md.write_text(
+        "EBITDA\nP&L\\|13\\|P&L!r2\npnl.ebitda\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n13\n",
+        encoding="utf-8",
+    )
+    args = (
+        str(context),
+        str(graph),
+        "--context-md",
+        str(context_md),
+        "--graph-md",
+        str(graph_md),
+    )
+    bare = _run(*args)
+    assert bare.returncode == 1
+    assert "missing [P&L!C13]" in bare.stderr
+    assert "=SUM(C9:C12)" not in bare.stderr
+
+    context_md.write_text(
+        "EBITDA\nP&L\\|13\\|P&L!r2\npnl.ebitda\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n13 [P&L!C13]\n",
+        encoding="utf-8",
+    )
+    linked = _run(*args)
+    assert linked.returncode == 0, linked.stderr
+
+
 def test_trace_rejects_ast(tmp_path: Path) -> None:
     trace = _write(
         tmp_path / "trace.json",

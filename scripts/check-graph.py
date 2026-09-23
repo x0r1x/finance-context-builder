@@ -342,9 +342,67 @@ def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
                 errors.append(f"context.md missing formula {formula}")
                 break
             errors.extend(_check_row_markdown(row, markdown))
+            errors.extend(_check_period_cell_addresses(context, block, row, markdown))
             if errors:
                 break
     return errors
+
+
+def _column_letter(col: object) -> str:
+    if isinstance(col, bool) or not isinstance(col, int) or col < 1:
+        return ""
+    n = col
+    chars: list[str] = []
+    while n:
+        n, rem = divmod(n - 1, 26)
+        chars.append(chr(65 + rem))
+    return "".join(reversed(chars))
+
+
+def _block_periods(context: dict[str, Any], block: dict[str, Any]) -> list[dict[str, Any]]:
+    """Periods the block table prints. Role cells are not periods."""
+    axis_ids = [str(item) for item in block.get("axis_ids") or [] if item]
+    if axis_ids:
+        by_id = {
+            str(axis.get("id")): axis
+            for axis in context.get("axes") or []
+            if isinstance(axis, dict) and axis.get("id")
+        }
+        periods: list[dict[str, Any]] = []
+        for axis_id in axis_ids:
+            axis = by_id.get(axis_id)
+            if axis is None:
+                continue
+            periods.extend(item for item in axis.get("periods") or [] if isinstance(item, dict))
+        return periods
+    return [item for item in block.get("periods") or [] if isinstance(item, dict)]
+
+
+def _check_period_cell_addresses(
+    context: dict[str, Any],
+    block: dict[str, Any],
+    row: dict[str, Any],
+    markdown: str,
+) -> list[str]:
+    """A period value must carry `[Sheet!A1]`. The formula stays in graph.md."""
+    sheet = row.get("sheet")
+    number = row.get("row")
+    if (
+        not isinstance(sheet, str)
+        or not sheet
+        or isinstance(number, bool)
+        or not isinstance(number, int)
+        or number < 1
+    ):
+        return []
+    for period in _block_periods(context, block):
+        letter = _column_letter(period.get("col"))
+        if not letter:
+            continue
+        addr = f"{sheet}!{letter}{number}"
+        if f"[{addr}]" not in markdown:
+            return [f"context.md period value missing [{addr}]"]
+    return []
 
 
 def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:

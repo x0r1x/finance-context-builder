@@ -21,7 +21,7 @@ from finance_context.mapping.vectors import TaxonomyPrefetch
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
 from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
-from finance_context.render.markdown import render_markdown
+from finance_context.render.markdown import refresh_context_markdown, write_context_markdown
 from finance_context.settings import Settings
 from finance_context.store.fs import file_lock, read_parquet, write_json
 
@@ -78,6 +78,7 @@ class Pipeline:
         context_path = dest_dir / "context.json"
         markdown_path = dest_dir / "context.md"
         if context_path.is_file() and markdown_path.is_file():
+            refresh_context_markdown(dest_dir)
             return ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
         source = dest_dir / "source.xlsx"
         if not source.is_file():
@@ -229,11 +230,7 @@ class Pipeline:
         )
         _write_sorted_json(dest_dir / "context.json", doc.model_dump(mode="json"))
         set_stage("render", status="running")
-        markdown = render_markdown(doc)
-        (dest_dir / "context.md").parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest_dir / "context.md.tmp"
-        tmp.write_text(markdown, encoding="utf-8")
-        tmp.replace(dest_dir / "context.md")
+        write_context_markdown(dest_dir, doc)
         _raise_if_cancelled(progress)
         _write_meta(
             dest_dir,
