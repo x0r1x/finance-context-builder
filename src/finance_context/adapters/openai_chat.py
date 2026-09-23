@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 _PLACEHOLDER_KEY = "not-needed"
-_DEFAULT_CONCURRENCY = 4
+_DEFAULT_CONCURRENCY = 1
 
 
 class OpenAIChat:

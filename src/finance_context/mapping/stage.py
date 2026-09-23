@@ -35,7 +35,7 @@ def mapping_workbook(
     embedding_model: str = "",
     glossary_path: Path | None = None,
     concept_index: ConceptIndex | None = None,
-    llm_concurrency: int = 4,
+    llm_concurrency: int = 1,
 ) -> MappingDocument:
     path = dest_dir / "mapping.json"
     if path.exists():

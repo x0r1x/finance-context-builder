@@ -62,7 +62,7 @@ def map_layout(
     cache_path: Path | None = None,
     embedding_model: str = "",
     concept_index: ConceptIndex | None = None,
-    llm_concurrency: int = 4,
+    llm_concurrency: int = 1,
     patterns: list[LexicalPattern] | None = None,
     calculations: list[Calculation] | None = None,
     edges: list[dict] | None = None,
@@ -326,7 +326,7 @@ def _chat_pass(
     slot_timeout_sec: float,
     resolver: Resolver,
     index: dict[str, list[float]],
-    llm_concurrency: int = 4,
+    llm_concurrency: int = 1,
 ) -> None:
     if not _acquire(slots, "llm", slot_timeout_sec):
         log_event(

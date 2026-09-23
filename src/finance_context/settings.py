@@ -11,8 +11,8 @@ from finance_context.ports.protocols import ChatPort, EmbedPort
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _DEFAULT_EMBEDDING_BATCH_SIZE = 32
-_DEFAULT_EMBEDDING_CONCURRENCY = 4
-_DEFAULT_LLM_CONCURRENCY = 4
+_DEFAULT_EMBEDDING_CONCURRENCY = 1
+_DEFAULT_LLM_CONCURRENCY = 1
 _POOL_DEFAULTS = {
     "embedding_batch_size": _DEFAULT_EMBEDDING_BATCH_SIZE,
     "embedding_concurrency": _DEFAULT_EMBEDDING_CONCURRENCY,
