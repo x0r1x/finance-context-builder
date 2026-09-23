@@ -18,7 +18,7 @@ from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 from finance_context.settings import _DEFAULT_LLM_CONCURRENCY
-from finance_context.store.fs import file_lock, read_parquet, write_json
+from finance_context.store.fs import read_parquet, write_json
 
 _LOGGER = logging.getLogger("finance_context.mapping")
 
@@ -37,62 +37,8 @@ def mapping_workbook(
     glossary_path: Path | None = None,
     concept_index: ConceptIndex | None = None,
     llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
-) -> MappingDocument:
-    root = _shared_data_dir(glossary_path, cache_path)
-    if root is None:
-        return _mapping_workbook(
-            dest_dir,
-            embed=embed,
-            chat=chat,
-            slots=slots,
-            glossary=glossary,
-            taxonomy=taxonomy,
-            cache_path=cache_path,
-            slot_timeout_sec=slot_timeout_sec,
-            embedding_model=embedding_model,
-            glossary_path=glossary_path,
-            concept_index=concept_index,
-            llm_concurrency=llm_concurrency,
-        )
-    with file_lock(root / "mapping.lock"):
-        return _mapping_workbook(
-            dest_dir,
-            embed=embed,
-            chat=chat,
-            slots=slots,
-            glossary=glossary,
-            taxonomy=taxonomy,
-            cache_path=cache_path,
-            slot_timeout_sec=slot_timeout_sec,
-            embedding_model=embedding_model,
-            glossary_path=glossary_path,
-            concept_index=concept_index,
-            llm_concurrency=llm_concurrency,
-        )
-
-
-def _shared_data_dir(glossary_path: Path | None, cache_path: Path | None) -> Path | None:
-    if glossary_path is not None:
-        return glossary_path.parent
-    if cache_path is not None:
-        return cache_path.parent
-    return None
-
-
-def _mapping_workbook(
-    dest_dir: Path,
-    *,
-    embed: EmbedPort | None,
-    chat: ChatPort | None,
-    slots: SlotGate | None,
-    glossary: dict[tuple[str, str], str] | None,
-    taxonomy: list[Concept] | None,
-    cache_path: Path | None,
-    slot_timeout_sec: float,
-    embedding_model: str,
-    glossary_path: Path | None,
-    concept_index: ConceptIndex | None,
-    llm_concurrency: int,
+    cells: list[dict] | None = None,
+    edges: list[dict] | None = None,
 ) -> MappingDocument:
     path = dest_dir / "mapping.json"
     if path.exists():
@@ -102,17 +48,18 @@ def _mapping_workbook(
     layout = Layout.model_validate(
         json.loads((dest_dir / "layout.json").read_text(encoding="utf-8"))
     )
-    cells: list[dict] = []
-    ir_cells = dest_dir / "ir" / "cells.parquet"
-    if ir_cells.exists():
-        cells = read_parquet(ir_cells)
-    edges: list[dict] = []
-    ir_cell_edges = dest_dir / "ir" / "cell_edges.parquet"
-    ir_edges = dest_dir / "ir" / "edges.parquet"
-    if ir_cell_edges.exists():
-        edges = read_parquet(ir_cell_edges)
-    elif ir_edges.exists():
-        edges = read_parquet(ir_edges)
+    if cells is None:
+        ir_cells = dest_dir / "ir" / "cells.parquet"
+        cells = read_parquet(ir_cells) if ir_cells.is_file() else []
+    if edges is None:
+        ir_cell_edges = dest_dir / "ir" / "cell_edges.parquet"
+        ir_edges = dest_dir / "ir" / "edges.parquet"
+        if ir_cell_edges.is_file():
+            edges = read_parquet(ir_cell_edges)
+        elif ir_edges.is_file():
+            edges = read_parquet(ir_edges)
+        else:
+            edges = []
     tax = taxonomy or load_taxonomy()
     snapshot = dict(load_glossary(glossary_path))
     merged = dict(snapshot)

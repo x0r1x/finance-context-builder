@@ -5,6 +5,7 @@ from pathlib import Path
 
 from finance_context.adapters.disk_store import DiskStore
 from finance_context.adapters.memory_bus import MemoryJobBus
+from finance_context.api.processes import JobProcesses
 from finance_context.app.pipeline import Pipeline
 from finance_context.settings import Settings
 
@@ -15,6 +16,7 @@ class AppContext:
     store: DiskStore
     bus: MemoryJobBus
     pipeline: Pipeline
+    processes: JobProcesses
     max_upload_bytes: int
 
     @property

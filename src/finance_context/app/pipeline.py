@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -130,10 +131,22 @@ class Pipeline:
             _timed("parse", lambda: parse_workbook(source, dest_dir))
         set_stage("compile")
         if not ir_is_current(dest_dir):
-            _timed("compile", lambda: compile_workbook(dest_dir))
+            compiled = _timed("compile", lambda: compile_workbook(dest_dir))
+            ir_cells = compiled.cells
+            ir_edges = compiled.edges
+            ir_cell_edges = compiled.cell_edges
+        else:
+            ir_cells, ir_edges, ir_cell_edges = _read_ir(dest_dir)
         set_stage("layout")
         if not (dest_dir / "layout.json").is_file():
-            _timed("layout", lambda: layout_workbook(dest_dir))
+            layout = _timed(
+                "layout",
+                lambda: layout_workbook(dest_dir, cells=ir_cells, edges=ir_edges),
+            )
+        else:
+            layout = Layout.model_validate_json(
+                (dest_dir / "layout.json").read_text(encoding="utf-8")
+            )
         set_stage("mapping")
         mapping = _timed(
             "mapping",
@@ -148,12 +161,12 @@ class Pipeline:
                 glossary_path=self.settings.data_dir / "glossary.json",
                 concept_index=prefetch,
                 llm_concurrency=self.settings.llm_concurrency,
+                cells=ir_cells,
+                edges=ir_cell_edges,
             ),
         )
-        layout = Layout.model_validate_json((dest_dir / "layout.json").read_text(encoding="utf-8"))
-        cells = read_parquet(dest_dir / "ir" / "cells.parquet")
-        edges_path = dest_dir / "ir" / "edges.parquet"
-        edges = read_parquet(edges_path) if edges_path.is_file() else []
+        cells = ir_cells
+        edges = ir_edges
         workbook_meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status(mapping, embed=self.embed, chat=self.chat)
         set_stage("graph", status="running")
@@ -161,7 +174,13 @@ class Pipeline:
             graph = _timed(
                 "graph",
                 lambda: build_formula_graph(
-                    dest_dir, job_id=job_id, layout=layout, mapping=mapping
+                    dest_dir,
+                    job_id=job_id,
+                    layout=layout,
+                    mapping=mapping,
+                    cells=ir_cells,
+                    edges=ir_edges,
+                    cell_edges=ir_cell_edges,
                 ),
             )
         else:
@@ -223,6 +242,76 @@ class Pipeline:
             questions=[q.model_dump(mode="json") for q in mapping.questions],
         )
         return doc
+
+
+def run_job_process(data_dir: str, job_id: str) -> None:
+    """Entry point for a spawned interpreter. Runs one book on this process's main thread."""
+    _install_stage_pause()
+    settings = Settings(data_dir=Path(data_dir))
+    dest = settings.data_dir / "jobs" / job_id
+    try:
+        Pipeline(settings).run(dest, job_id=job_id)
+    except Exception as exc:
+        mark_job_failed(dest, job_id, type(exc).__name__)
+        raise
+
+
+def mark_job_failed(dest: Path, job_id: str, error: str) -> None:
+    ready = ("context.json", "context.md", "graph.json", "graph.md")
+    if all((dest / name).is_file() for name in ready):
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    write_json(
+        dest / "meta.json",
+        {
+            "job_id": job_id,
+            "status": "failed",
+            "stage": "failed",
+            "error": error,
+            "warnings": [],
+            "questions": [],
+        },
+    )
+
+
+def _install_stage_pause() -> None:
+    stage = os.environ.get("FINANCE_CONTEXT_PAUSE_STAGE", "").strip()
+    if not stage:
+        return
+    attr = {
+        "parse": "parse_workbook",
+        "compile": "compile_workbook",
+        "layout": "layout_workbook",
+        "mapping": "mapping_workbook",
+    }.get(stage)
+    if attr is None:
+        return
+    original = globals()[attr]
+
+    def wrapped(*args, **kwargs):
+        _wait_for_pause_release()
+        return original(*args, **kwargs)
+
+    globals()[attr] = wrapped
+
+
+def _wait_for_pause_release() -> None:
+    raw = os.environ.get("FINANCE_CONTEXT_PAUSE_FILE", "").strip()
+    if not raw:
+        return
+    marker = Path(raw)
+    deadline = time.monotonic() + 60
+    while marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+def _read_ir(dest_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
+    cells = read_parquet(dest_dir / "ir" / "cells.parquet")
+    edges_path = dest_dir / "ir" / "edges.parquet"
+    edges = read_parquet(edges_path) if edges_path.is_file() else []
+    cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
+    cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
+    return cells, edges, cell_edges
 
 
 def _start_taxonomy_prefetch(pipeline: Pipeline) -> TaxonomyPrefetch | None:

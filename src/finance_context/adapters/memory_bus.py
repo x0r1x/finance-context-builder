@@ -25,14 +25,16 @@ class MemoryJobBus:
     _live: dict[str, JobRecord] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    async def enqueue(self, job_id: str) -> None:
+    async def enqueue(self, job_id: str) -> bool:
+        """Register a new run. False when this job is already queued or running."""
         with self._lock:
             rec = self._live.get(job_id)
             if rec is not None and rec.status in {"queued", "running"}:
-                return
+                return False
             generation = 1 if rec is None else rec.generation + 1
             self._live[job_id] = JobRecord(job_id=job_id, generation=generation)
         await self._queue.put(job_id)
+        return True
 
     async def claim(self) -> str | None:
         job_id = await self._queue.get()

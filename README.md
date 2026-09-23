@@ -11,7 +11,7 @@ Guides: [overview](docs/overview.md), [layout](docs/layout.md), [mapping](docs/m
 - `.xls`, `.xlsb`, and encrypted workbooks are rejected
 - Cached formula values must already be in the file
 - LLM/embeddings are optional: mapping falls back to structure + labels, then `unknown`
-- The HTTP worker is one process. Up to `JOB_CONCURRENCY` workbooks run at once (default 2). Mapping is serialized on that machine so LLM concurrency stays 1. Multi-replica deploys need an external queue; do not start `uvicorn` with more than one worker.
+- Each new workbook runs in its own process. Parquet under `data/jobs/` is the cache that outlives that process. Inside one run, stages pass row lists and do not reread a file they just wrote. PyArrow reads and writes those files. Multi-replica deploys need an external queue; do not start `uvicorn` with more than one worker.
 
 Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). See `NOTICE`.
 

@@ -84,6 +84,9 @@ def load_concept_vectors(
     cached = _read_if_valid(cache_path, taxonomy, model)
     if cached is not None:
         return cached
+    index = concept_vectors(embed, taxonomy)
+    if not index:
+        return index
     lock_path = cache_path.with_name(cache_path.name + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as handle:
@@ -91,11 +94,9 @@ def load_concept_vectors(
         cached = _read_if_valid(cache_path, taxonomy, model)
         if cached is not None:
             return cached
-        index = concept_vectors(embed, taxonomy)
-        if index:
-            dim = len(next(iter(index.values())))
-            _write_npz(cache_path, cache_key(taxonomy, model=model, dim=dim), index)
-        return index
+        dim = len(next(iter(index.values())))
+        _write_npz(cache_path, cache_key(taxonomy, model=model, dim=dim), index)
+    return index
 
 
 def _read_if_valid(

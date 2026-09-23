@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -9,7 +8,6 @@ from typing import Annotated
 from fastapi import APIRouter, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from finance_context.adapters.memory_bus import MemoryJobBus
 from finance_context.api.context import AppContext
 from finance_context.api.errors import ApiError
 from finance_context.app.ids import job_id_for, sha256_bytes
@@ -78,17 +76,19 @@ async def post_job(
             owner_path,
             {"content_sha256": digest, "source_filename": filename},
         )
-    live = ctx.bus.get(job_id)
-    if live is not None and live.status in {"queued", "running"}:
-        return JSONResponse(
-            {"job_id": job_id, "status": live.status, "stage": live.stage},
-            status_code=202,
-        )
     remap = _remap_requested(request)
+    if ctx.processes.is_alive(job_id) and not remap:
+        return JSONResponse(_running_body(job_id, dest), status_code=202)
+    if remap and ctx.processes.is_alive(job_id):
+        ctx.processes.stop(job_id)
+    started = False
     with file_lock(dest / ".lock", blocking=False) as acquired:
         if not acquired:
+            return JSONResponse(_running_body(job_id, dest), status_code=202)
+        live = ctx.bus.get(job_id)
+        if not remap and live is not None and live.status in {"queued", "running"}:
             return JSONResponse(
-                {"job_id": job_id, "status": "running", "stage": "running"},
+                {"job_id": job_id, "status": live.status, "stage": live.stage},
                 status_code=202,
             )
         if not remap:
@@ -110,7 +110,9 @@ async def post_job(
             "layout and mapping artifacts invalidated",
             job_id=job_id,
         )
-        await ctx.bus.enqueue(job_id)
+        started = await ctx.bus.enqueue(job_id)
+    if started:
+        ctx.processes.launch(job_id)
     rec = ctx.bus.get(job_id)
     return JSONResponse(
         {
@@ -146,6 +148,22 @@ def _clear_downstream_artifacts(dest: Path) -> None:
 
 
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
+
+
+def _running_body(job_id: str, dest: Path) -> dict[str, object]:
+    meta_path = dest / "meta.json"
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            meta = None
+        if isinstance(meta, dict) and meta.get("stage"):
+            return {
+                "job_id": job_id,
+                "status": meta.get("status") or "running",
+                "stage": meta.get("stage"),
+            }
+    return {"job_id": job_id, "status": "running", "stage": "running"}
 
 
 def _remap_requested(request: Request) -> bool:
@@ -191,9 +209,12 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
             meta["stage"] = live.stage
             meta["error"] = live.error
         elif live is not None and live.status in {"queued", "running"} and not artifacts_ready:
-            meta["status"] = live.status
-            meta["stage"] = _fresher_stage(meta.get("stage"), live.stage)
-            meta["error"] = live.error
+            if _STAGE_RANK.get(str(live.stage or ""), -1) > _STAGE_RANK.get(
+                str(meta.get("stage") or ""), -1
+            ):
+                meta["status"] = live.status
+                meta["stage"] = live.stage
+                meta["error"] = live.error
         return JSONResponse(_job_body(job_id, meta))
     if live is not None:
         return JSONResponse(
@@ -311,43 +332,3 @@ def _validate_upload(filename: str, data: bytes, max_bytes: int) -> None:
         zf.close()
 
 
-def _fresher_stage(disk: object, live: object) -> str:
-    disk_stage = str(disk or "")
-    live_stage = str(live or "")
-    if _STAGE_RANK.get(live_stage, -1) > _STAGE_RANK.get(disk_stage, -1):
-        return live_stage
-    return disk_stage or live_stage
-
-
-def start_worker(
-    bus: MemoryJobBus,
-    run_job,
-    *,
-    timeout_sec: float | None = None,
-    on_timeout=None,
-) -> asyncio.Task:
-    async def loop() -> None:
-        while True:
-            job_id = await bus.claim()
-            if job_id is None:
-                continue
-            generation = bus.current_generation(job_id)
-            try:
-                runner = asyncio.to_thread(run_job, job_id, generation)
-                if timeout_sec is None or timeout_sec <= 0:
-                    await runner
-                else:
-                    await asyncio.wait_for(runner, timeout_sec)
-            except TimeoutError:
-                if on_timeout is not None:
-                    on_timeout(job_id, generation)
-            except Exception:
-                log_event(
-                    _LOGGER,
-                    logging.ERROR,
-                    "job_failed",
-                    "worker job failed",
-                    exc_info=True,
-                )
-
-    return asyncio.create_task(loop())

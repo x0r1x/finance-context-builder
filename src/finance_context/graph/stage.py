@@ -42,13 +42,18 @@ def build_formula_graph(
     job_id: str,
     layout: Layout,
     mapping: MappingDocument,
+    cells: list[dict] | None = None,
+    edges: list[dict] | None = None,
+    cell_edges: list[dict] | None = None,
 ) -> GraphPointer:
-    cells = read_parquet(dest_dir / "ir" / "cells.parquet")
-    edges = read_parquet(dest_dir / "ir" / "edges.parquet") if (
-        dest_dir / "ir" / "edges.parquet"
-    ).is_file() else []
-    cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
-    cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
+    if cells is None:
+        cells = read_parquet(dest_dir / "ir" / "cells.parquet")
+    if edges is None:
+        edges_path = dest_dir / "ir" / "edges.parquet"
+        edges = read_parquet(edges_path) if edges_path.is_file() else []
+    if cell_edges is None:
+        cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
+        cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
 
     row_meta = _row_meta(layout, mapping)
     period_by_cell, period_index = _period_maps(layout)

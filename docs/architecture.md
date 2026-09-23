@@ -110,8 +110,8 @@ High-confidence `glossary` / `rule` / `structure` / `lexical` hits are merged in
 
 ## Storage
 
-`data/jobs/{job_id}/` on disk through `ArtifactStore`. Cross-job learned tags: `data/glossary.json`. Taxonomy embedding cache: `data/taxonomy_embeddings.npz`. Swap the store adapter for object storage without changing the pipeline.
+`data/jobs/{job_id}/` on disk through `ArtifactStore`. Cross-job learned tags: `data/glossary.json`. Taxonomy embedding cache: `data/taxonomy_embeddings.npz`. Parquet is written with PyArrow. A run keeps the row lists it just built and reads `ir/*.parquet` again only on a later process, when `ir/compile.json` still matches. Swap the store adapter for object storage without changing the pipeline.
 
 ## API
 
-One process, in-memory queue. `job_concurrency` (default 2) pipelines run at once; mapping itself is one at a time via `data/mapping.lock`, so the LLM budget stays `llm_concurrency`. A second POST of a finished workbook returns the snapshot. Rebuild layout, mapping, and context with `?remap=1`. Do not run `uvicorn --workers` greater than 1: the queue is in-process. Statuses: `queued`, `running`, `succeeded`, `degraded`, `needs_input`, `failed`.
+Each accepted workbook starts a spawned process whose main thread runs the full pipeline. There is no thread pool and no shared mapping lock. `llm_concurrency` limits only that book. A second POST while that process is alive does not start another. A second POST of a finished workbook returns the snapshot. `?remap=1` stops the old process and starts a new one. Status comes from `meta.json` on disk. Do not run `uvicorn --workers` greater than 1: job processes are children of this API process. Statuses: `queued`, `running`, `succeeded`, `degraded`, `needs_input`, `failed`.

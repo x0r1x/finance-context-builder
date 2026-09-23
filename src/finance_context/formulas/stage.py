@@ -111,44 +111,50 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
     cell_edges = expand_cell_edges(
         edges, known, known_sheets=sheets, presence=presence
     )
+    edge_rows = [(e.source, e.kind, e.target, e.unresolved, e.truncated) for e in edges]
+    cell_edge_rows = [
+        (
+            edge.source,
+            edge.target,
+            edge.kind,
+            edge.unresolved,
+            edge.truncated,
+            edge.dangling,
+            None,
+            None,
+            edge.dangling_reason,
+            edge.status,
+            edge.reason,
+            edge.evidence,
+            edge.range_ref,
+            edge.abs_col,
+            edge.abs_row,
+            edge.abs_col_end,
+            edge.abs_row_end,
+            edge.named,
+        )
+        for edge in cell_edges
+    ]
     write_parquet(dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, ir_rows)
-    write_parquet(
-        dest_dir / "ir" / "edges.parquet",
-        IR_EDGE_COLUMNS,
-        [(e.source, e.kind, e.target, e.unresolved, e.truncated) for e in edges],
-    )
-    write_parquet(
-        dest_dir / "ir" / "cell_edges.parquet",
-        IR_CELL_EDGE_COLUMNS,
-        [
-            (
-                edge.source,
-                edge.target,
-                edge.kind,
-                edge.unresolved,
-                edge.truncated,
-                edge.dangling,
-                None,
-                None,
-                edge.dangling_reason,
-                edge.status,
-                edge.reason,
-                edge.evidence,
-                edge.range_ref,
-                edge.abs_col,
-                edge.abs_row,
-                edge.abs_col_end,
-                edge.abs_row_end,
-                edge.named,
-            )
-            for edge in cell_edges
-        ],
-    )
+    write_parquet(dest_dir / "ir" / "edges.parquet", IR_EDGE_COLUMNS, edge_rows)
+    write_parquet(dest_dir / "ir" / "cell_edges.parquet", IR_CELL_EDGE_COLUMNS, cell_edge_rows)
     write_json(
         dest_dir / "ir" / "compile.json",
         {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
     )
-    return CompileResult(csr=csr)
+    return CompileResult(
+        csr=csr,
+        cells=_as_dicts(IR_CELL_COLUMNS, ir_rows),
+        edges=_as_dicts(IR_EDGE_COLUMNS, edge_rows),
+        cell_edges=_as_dicts(IR_CELL_EDGE_COLUMNS, cell_edge_rows),
+    )
+
+
+def _as_dicts(
+    columns: tuple[tuple[str, str], ...], rows: list[tuple[object, ...]]
+) -> list[dict[str, object]]:
+    names = [name for name, _dtype in columns]
+    return [dict(zip(names, row, strict=True)) for row in rows]
 
 
 def compile_schema_id() -> str:
