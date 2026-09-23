@@ -304,6 +304,49 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert phases.count("operation") == 30
         assert axis.periods[0].start_date == "2024-01-01"
         assert axis.periods[-1].end_date == "2062-12-31"
+        assert all(period.role == "forecast" for period in axis.periods)
+        model_rows = [row for row in context_rows if row.sheet == "PF Model"]
+        thousand = next(row for row in model_rows if row.label == "Thousand")
+        assert thousand.hints.scale is None
+        assert "1000" in (thousand.values or [])
+        assert "1000" in (thousand.normalized_values or [])
+        assert "1000000" not in (thousand.normalized_values or [])
+        cpi_rate = next(row for row in model_rows if row.row == 165 and row.label == "CPI")
+        cpi_index = next(row for row in model_rows if row.row == 172 and row.label == "CPI")
+        assert cpi_rate.concept_id == "ops.inflation"
+        assert cpi_index.concept_id == "ops.cpi"
+        assert cpi_index.hints.time_semantics == "stock"
+        current_total = next(
+            row
+            for row in model_rows
+            if row.label == "Total" and row.parent_label == "Current assets"
+        )
+        assert current_total.concept_id == "bs.assets_current"
+        principal = next(
+            row
+            for row in model_rows
+            if row.label == "Principal repayment" and row.parent_label == "Linear repayment"
+        )
+        assert principal.concept_id == "cf.repayment"
+        for label in (
+            "Commercial Management",
+            "O&M period 1",
+            "O&M period 2",
+            "O&M period 3",
+            "Technical Management",
+            "Balancing costs",
+        ):
+            cash_rows = [
+                row
+                for row in model_rows
+                if row.label == label
+                and (
+                    row.parent_label == "Cashflow Statement"
+                    or "Cashflow Statement" in (row.label_path or [])
+                )
+            ]
+            assert cash_rows, label
+            assert all(row.concept_id == "cf.opex_paid" for row in cash_rows)
         flags = {name for period in axis.periods for name in period.flags}
         assert not flags & {"live case", "case number", "mid case", "low case"}
         assert ctx_doc.mapping_stats.mapping_quality.unit_coverage >= 0.8

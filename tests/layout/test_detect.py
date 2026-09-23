@@ -1042,3 +1042,47 @@ def test_short_start_end_left_of_timeline_is_dropped() -> None:
     keys = [h.period_key for h in sheet.blocks[0].axis.headers]
     assert keys == ["2020", "2021", "2022", "2023"]
 
+
+def test_unit_caption_does_not_replace_the_debt_section() -> None:
+    cells = [
+        _c("PF", "L1", "2024"),
+        _c("PF", "M1", "2025"),
+        _c("PF", "B2", "Senior Debt"),
+        _c("PF", "C3", "Linear repayment"),
+        _c("PF", "B4", "% p.a."),
+        _c("PF", "D5", "Balance b/f"),
+        _c("PF", "L5", "10"),
+        _c("PF", "D6", "Principal repayment"),
+        _c("PF", "L6", "2"),
+        _c("PF", "D7", "Balance c/f"),
+        _c("PF", "L7", "8"),
+    ]
+    layout = detect_layout(cells)
+    rows = {row.label: row for row in layout.sheets[0].blocks[0].rows}
+    assert "Linear repayment" in rows["Balance b/f"].section_path
+    assert "% p.a." not in rows["Principal repayment"].section_path
+    assert rows["Principal repayment"].parent_row == rows["Linear repayment"].row
+    assert rows["Balance c/f"].parent_row == rows["Linear repayment"].row
+
+
+def test_totals_take_the_asset_section_as_parent() -> None:
+    cells = [
+        _c("PF", "L1", "2024"),
+        _c("PF", "M1", "2025"),
+        _c("PF", "B2", "Balance Sheet"),
+        _c("PF", "C3", "Non-current assets"),
+        _c("PF", "C4", "Total"),
+        _c("PF", "L4", "10"),
+        _c("PF", "C5", "Current assets"),
+        _c("PF", "C6", "Total"),
+        _c("PF", "L6", "4"),
+    ]
+    layout = detect_layout(cells)
+    totals = [row for row in layout.sheets[0].blocks[0].rows if row.label == "Total"]
+    by_section = {tuple(row.section_path): row for row in totals}
+    noncurrent = by_section[("Balance Sheet", "Non-current assets")]
+    current = by_section[("Balance Sheet", "Current assets")]
+    labels = {row.row: row.label for row in layout.sheets[0].blocks[0].rows}
+    assert labels[noncurrent.parent_row] == "Non-current assets"
+    assert labels[current.parent_row] == "Current assets"
+

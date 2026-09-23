@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from finance_context.context.measure import Measure
+from finance_context.context.series import format_number
 from finance_context.excel.a1 import index_to_col
 from finance_context.models.context import (
     BlockRow,
@@ -324,6 +325,7 @@ def _row_line(
                     value,
                     _at(statuses, index),
                     _at(normalized, index),
+                    percent=_is_percent_row(row),
                     addr=_cell_addr(row, periods[index]),
                 )
             )
@@ -360,11 +362,20 @@ def _time_label(row: BlockRow) -> str:
     return "/".join(part or "-" for part in (semantics, row.period_position, row.aggregation))
 
 
+def _is_percent_row(row: BlockRow) -> bool:
+    """A `%` unit cell, or a percent number format carried as the unit token."""
+    return any(
+        cell.role == "unit" and cell.cached_value and "%" in str(cell.cached_value)
+        for cell in row.cells
+    )
+
+
 def _series_cell(
     value: str | None,
     status: str | None,
     normalized: str | None,
     *,
+    percent: bool = False,
     addr: str = "",
 ) -> str:
     if status == "not_applicable":
@@ -375,6 +386,12 @@ def _series_cell(
         text = "" if value is None else str(value)
         if status == "zero_explicit":
             text = text or "0"
+        elif percent and text and "%" not in text:
+            shown = _percent_amount(text)
+            if shown is not None:
+                text = f"{text} ({shown}%)"
+            elif normalized and text and _differs(text, normalized):
+                text = f"{text} ({normalized})"
         elif normalized and text and _differs(text, normalized):
             text = f"{text} ({normalized})"
     if addr:
@@ -388,6 +405,17 @@ def _cell_addr(row: BlockRow, period: dict) -> str:
     if not letter or not row.sheet or not row.row:
         return ""
     return f"{row.sheet}!{letter}{row.row}"
+
+
+def _percent_amount(text: str) -> str | None:
+    cleaned = text.strip().replace(" ", "").replace(",", "")
+    if not cleaned:
+        return None
+    try:
+        number = float(cleaned)
+    except ValueError:
+        return None
+    return format_number(number * 100)
 
 
 def _differs(text: str, normalized: str) -> bool:
@@ -436,7 +464,7 @@ def _period_label(header: dict) -> str:
     key = str(header.get("period_key") or "").strip()
     name = key if _prefers_period_key(text, key) else (text or key)
     letter = _column_letter(header.get("col"))
-    if name and letter:
+    if name and letter and name != letter:
         return f"{name} ({letter})"
     return name or letter
 

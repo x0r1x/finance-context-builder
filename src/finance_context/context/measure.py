@@ -205,7 +205,10 @@ def currency_code_from_text(text: str | None) -> str | None:
 
 
 def _scale_from(text: str) -> str | None:
-    blob = text.casefold()
+    blob = text.casefold().strip()
+    # The row *is* the multiplier (`Thousand` = 1000), not an amount in thousands.
+    if re.fullmatch(r"thousands?|millions?|billions?", blob):
+        return None
     if re.search(r"\bbn\b|\bbillion", blob) or "bn£" in blob or "£bn" in blob:
         return "bn"
     if re.search(r"\bmillion", blob) or re.search(r"m[£$€₽]|[£$€₽]m\b", blob):

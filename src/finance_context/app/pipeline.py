@@ -170,7 +170,11 @@ class Pipeline:
         workbook_meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status(mapping, embed=self.embed, chat=self.chat)
         set_stage("graph", status="running")
-        if not (dest_dir / "graph.json").is_file():
+        # graph.json can outlive ir/graph_edges.parquet (a remap drops the parquet).
+        # Trace walks that file, so a missing parquet has to be rebuilt.
+        if not (dest_dir / "graph.json").is_file() or not (
+            dest_dir / "ir" / "graph_edges.parquet"
+        ).is_file():
             graph = _timed(
                 "graph",
                 lambda: build_formula_graph(

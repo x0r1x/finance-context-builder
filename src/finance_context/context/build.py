@@ -776,6 +776,9 @@ def _hints_for(
         time_semantics = "rate"
     elif layout_row.kind == "fact" and time_semantics is None:
         time_semantics = "flow"
+    if concept_id == "ops.cpi" or _is_index_unit(unit_text):
+        time_semantics = "stock"
+        nature = nature or "balance"
     if time_semantics == "flow" and nature == "balance":
         time_semantics = "stock"
     if time_semantics == "flow" and _concept_period_type(concept_id) == "instant":
@@ -971,6 +974,10 @@ def _is_static_row(
 def _percent_formatted(formats: list[str]) -> bool:
     percents = sum(1 for fmt in formats if "%" in fmt)
     return percents > 0 and percents * 2 >= len(formats)
+
+
+def _is_index_unit(unit_text: str | None) -> bool:
+    return (unit_text or "").strip().casefold() == "index"
 
 
 def _concept_period_type(concept_id: str | None) -> str | None:

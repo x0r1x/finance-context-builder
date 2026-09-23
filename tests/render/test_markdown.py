@@ -148,6 +148,38 @@ def test_markdown_matches_golden() -> None:
     assert "bs.cash" in rendered
 
 
+def test_percent_unit_shows_the_fraction_and_the_percent() -> None:
+    doc = ContextDocument(
+        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
+        workbook=WorkbookRaw(sheets=["PF"], sheet_count=1, cell_count=1),
+        blocks=[
+            FinancialBlock(
+                block_id="PF!r1",
+                sheet="PF",
+                label_col=1,
+                periods=[{"col": 2, "text": "2024", "role": "forecast", "period_key": "2024"}],
+                rows=[
+                    BlockRow(
+                        row_key="PF|1|PF!r1",
+                        sheet="PF",
+                        row=1,
+                        kind="fact",
+                        label="CPI",
+                        hints=RowHints(unit="rate", time_semantics="rate"),
+                        cells=[RoleCell(addr="B1", col=1, role="unit", cached_value="%")],
+                        values=["0.02"],
+                        value_statuses=["cached"],
+                        normalized_values=["0.02"],
+                    )
+                ],
+            )
+        ],
+    )
+    rendered = render_markdown(doc)
+    assert "0.02 (2%)" in rendered
+    assert "0.02" in rendered
+
+
 def test_markdown_keeps_every_period_and_excluded_row() -> None:
     periods = [
         {"col": index, "text": f"Y{index}", "role": "relative", "period_key": f"Y{index}"}

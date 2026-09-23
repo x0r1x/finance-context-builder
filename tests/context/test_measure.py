@@ -132,6 +132,13 @@ def test_currency_with_thousands_suffix_is_scaled_money() -> None:
     assert (measure.unit, measure.currency, measure.scale) == ("money", "EUR", "k")
 
 
+def test_scale_token_label_is_not_a_scaled_amount() -> None:
+    measure = parse_measure(label="Thousand")
+    assert measure.scale is None
+    assert parse_measure(label="Million").scale is None
+    assert parse_measure(label="Maintenance k£").scale == "k"
+
+
 def test_currency_per_energy_is_a_price() -> None:
     measure = parse_measure("EUR/MWh")
     assert (measure.unit, measure.currency, measure.per) == ("price", "EUR", "MWh")

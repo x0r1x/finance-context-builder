@@ -73,12 +73,19 @@ def value_status(text: str | None, *, applicable: bool) -> ValueStatus:
 
 
 def normalize_value(text: str | None, factor: int | None) -> str | None:
-    if text in (None, "") or factor is None:
+    """Canonical decimal. Scale multiplies only when the factor is not 1.
+
+    `factor is None` still parses scientific notation and float residue.
+    A date or other non-number stays `None`. The cached `values[]` string
+    is left unchanged by the caller.
+    """
+    if text in (None, ""):
         return None
     number = _parse_number(text)
     if number is None:
         return None
-    return format_number(number * factor)
+    multiplier = 1 if factor in (None, 1) else factor
+    return format_number(number * multiplier)
 
 
 def normalize_series(values: list[str | None], factor: int | None) -> list[str | None]:
