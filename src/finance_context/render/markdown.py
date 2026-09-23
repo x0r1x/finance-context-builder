@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from finance_context.context.measure import Measure
+from finance_context.context.series import format_number
 from finance_context.excel.a1 import index_to_col
 from finance_context.models.context import (
     BlockRow,
@@ -319,7 +320,14 @@ def _row_line(
         _cell(formula or ""),
         _cell(_role_cells_label(row, period_cols or set())),
         *[
-            _cell(_series_cell(value, _at(statuses, index), _at(normalized, index)))
+            _cell(
+                _series_cell(
+                    value,
+                    _at(statuses, index),
+                    _at(normalized, index),
+                    percent=_is_percent_row(row),
+                )
+            )
             for index, value in enumerate(values[:period_count])
         ],
     ]
@@ -353,7 +361,21 @@ def _time_label(row: BlockRow) -> str:
     return "/".join(part or "-" for part in (semantics, row.period_position, row.aggregation))
 
 
-def _series_cell(value: str | None, status: str | None, normalized: str | None) -> str:
+def _is_percent_row(row: BlockRow) -> bool:
+    """A `%` unit cell, or a percent number format carried as the unit token."""
+    return any(
+        cell.role == "unit" and cell.cached_value and "%" in str(cell.cached_value)
+        for cell in row.cells
+    )
+
+
+def _series_cell(
+    value: str | None,
+    status: str | None,
+    normalized: str | None,
+    *,
+    percent: bool = False,
+) -> str:
     if status == "not_applicable":
         return "n/a"
     if status == "empty" or (status is None and value in (None, "")):
@@ -361,9 +383,24 @@ def _series_cell(value: str | None, status: str | None, normalized: str | None) 
     text = "" if value is None else str(value)
     if status == "zero_explicit":
         return text or "0"
+    if percent and text and "%" not in text:
+        shown = _percent_amount(text)
+        if shown is not None:
+            return f"{text} ({shown}%)"
     if normalized and text and _differs(text, normalized):
         return f"{text} ({normalized})"
     return text
+
+
+def _percent_amount(text: str) -> str | None:
+    cleaned = text.strip().replace(" ", "").replace(",", "")
+    if not cleaned:
+        return None
+    try:
+        number = float(cleaned)
+    except ValueError:
+        return None
+    return format_number(number * 100)
 
 
 def _differs(text: str, normalized: str) -> bool:
@@ -412,7 +449,7 @@ def _period_label(header: dict) -> str:
     key = str(header.get("period_key") or "").strip()
     name = key if _prefers_period_key(text, key) else (text or key)
     letter = _column_letter(header.get("col"))
-    if name and letter:
+    if name and letter and name != letter:
         return f"{name} ({letter})"
     return name or letter
 

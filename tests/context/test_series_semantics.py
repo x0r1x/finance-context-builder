@@ -147,5 +147,14 @@ def test_float_residue_next_to_the_series_scale_is_zero() -> None:
     assert temporal_profile("instant") == ("instant", "none")
 
 
+def test_cached_number_is_canonical_without_a_scale_factor() -> None:
+    from finance_context.context.series import normalize_series
+
+    assert normalize_series(["7.927055656909944E-2"], None) == ["0.0792705566"]
+    assert normalize_series(["1.0612079999999999"], None) == ["1.061208"]
+    assert normalize_series(["1000"], None) == ["1000"]
+    assert normalize_series(["2.5"], 1000) == ["2500"]
+
+
 def test_debt_service_cover_is_gated_to_operations() -> None:
     assert phase_gate("Debt Service Coverage Ratio", "cov.dscr") == "operation"

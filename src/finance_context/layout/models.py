@@ -31,6 +31,7 @@ class AxisHeader(BaseModel):
     text: str
     role: ColumnRole
     period_key: str
+    explicit_role: bool = False
 
 
 class Axis(BaseModel):
@@ -44,6 +45,7 @@ class AxisPeriod(BaseModel):
     text: str
     role: ColumnRole
     period_key: str
+    explicit_role: bool = False
     group_key: str | None = None
     start_date: str | None = None
     end_date: str | None = None

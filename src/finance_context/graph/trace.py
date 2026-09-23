@@ -27,6 +27,10 @@ def trace_graph(
     else:
         index = {}
     edges_path = dest_dir / "ir" / "graph_edges.parquet"
+    if not edges_path.is_file():
+        # Enriched edges are written with the graph. A job that only kept the
+        # formula cell edges still has the precedents (PF Model!AA172 → Z172).
+        edges_path = dest_dir / "ir" / "cell_edges.parquet"
     edges = read_parquet(edges_path) if edges_path.is_file() else []
 
     fwd: dict[str, list[dict]] = defaultdict(list)
@@ -53,7 +57,8 @@ def trace_graph(
     nodes: list[TraceNode] = []
     used_edges: list[TraceEdge] = []
     queue: deque[tuple[str, int]] = deque((node, 0) for node in starts)
-    stopped = "depth"
+    stopped: str | None = None
+    hit_depth = False
     while queue:
         current, level = queue.popleft()
         if current in seen:
@@ -65,9 +70,11 @@ def trace_graph(
         if direction == "precedents" and meta.get("node_type") == "input" and level > 0:
             stopped = "input"
             continue
-        if level >= depth:
-            continue
         outgoing = fwd[current] if direction == "precedents" else rev[current]
+        if level >= depth:
+            if outgoing:
+                hit_depth = True
+            continue
         emitted: set[tuple[str, str]] = set()
         for edge in outgoing:
             nxt = str(edge["target"] if direction == "precedents" else edge["source"])
@@ -106,6 +113,8 @@ def trace_graph(
                 continue
             queue.append((nxt, level + 1))
 
+    if stopped is None:
+        stopped = "depth" if hit_depth else ("leaf" if not used_edges else "complete")
     return TraceDocument(
         origin=origin,
         direction=direction,  # type: ignore[arg-type]

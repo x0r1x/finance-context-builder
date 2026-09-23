@@ -6,11 +6,15 @@ from pathlib import Path
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.app.pipeline import Pipeline
-from finance_context.formulas.stage import compile_schema_id
+from finance_context.formulas.stage import (
+    IR_CELL_COLUMNS,
+    IR_CELL_EDGE_COLUMNS,
+    compile_schema_id,
+)
 from finance_context.graph.stage import build_formula_graph
 from finance_context.graph.trace import trace_graph
 from finance_context.settings import Settings
-from finance_context.store.fs import read_parquet, write_json
+from finance_context.store.fs import read_parquet, write_json, write_parquet
 
 
 def _finance_book(path: Path) -> Path:
@@ -339,3 +343,79 @@ def test_bad_schema_id_recompiles(tmp_path: Path) -> None:
     assert (dest / "ir" / "cells.parquet").read_bytes() != b"broken"
     stamp = json.loads((dest / "ir" / "compile.json").read_text(encoding="utf-8"))
     assert stamp["schema_id"] == compile_schema_id()
+
+
+def _ir_cell(sheet: str, addr: str, row: int, col: int) -> tuple:
+    return (sheet, row, col, addr, None, None, False, "1", False, None, None, None)
+
+
+def _ir_edge(source: str, target: str) -> tuple:
+    return (
+        source,
+        target,
+        "ref",
+        False,
+        False,
+        False,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        False,
+    )
+
+
+def test_trace_reads_cell_edges_when_graph_edges_are_missing(tmp_path: Path) -> None:
+    dest = tmp_path / "job"
+    ir = dest / "ir"
+    write_parquet(
+        ir / "cells.parquet",
+        IR_CELL_COLUMNS,
+        [
+            _ir_cell("PF Model", "AA172", 172, 27),
+            _ir_cell("PF Model", "Z172", 172, 26),
+            _ir_cell("PF Model", "AA165", 165, 27),
+            _ir_cell("PF Model", "Y172", 172, 25),
+        ],
+    )
+    write_parquet(
+        ir / "cell_edges.parquet",
+        IR_CELL_EDGE_COLUMNS,
+        [
+            _ir_edge("PF Model!AA172", "PF Model!Z172"),
+            _ir_edge("PF Model!AA172", "PF Model!AA165"),
+            _ir_edge("PF Model!Z172", "PF Model!Y172"),
+        ],
+    )
+    traced = trace_graph(dest, origin="PF Model!AA172", direction="precedents", depth=6)
+    assert {node.node_id for node in traced.nodes} >= {
+        "PF Model!AA172",
+        "PF Model!Z172",
+        "PF Model!AA165",
+        "PF Model!Y172",
+    }
+    assert {(edge.source, edge.target) for edge in traced.edges} >= {
+        ("PF Model!AA172", "PF Model!Z172"),
+        ("PF Model!AA172", "PF Model!AA165"),
+    }
+    assert traced.stopped == "complete"
+
+    shallow = trace_graph(dest, origin="PF Model!AA172", direction="precedents", depth=1)
+    assert "PF Model!Y172" not in {node.node_id for node in shallow.nodes}
+    assert shallow.stopped == "depth"
+
+    write_parquet(
+        ir / "cell_edges.parquet",
+        IR_CELL_EDGE_COLUMNS,
+        [_ir_edge("PF Model!Z172", "PF Model!Y172")],
+    )
+    leaf = trace_graph(dest, origin="PF Model!AA172", direction="precedents", depth=6)
+    assert leaf.edges == []
+    assert leaf.stopped == "leaf"

@@ -217,3 +217,38 @@ def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
     assert f"| {year['id']} | 2020 | 2021 | 2022 |" in rendered
     assert "Axes:" in rendered
     assert rendered.count("### `") >= 2
+
+
+def test_phased_year_axis_is_forecast_unless_the_header_says_actual() -> None:
+    cells = [
+        _c("PF", "A1", "Item"),
+        _c("PF", "B1", "2023A"),
+        _c("PF", "C1", "2024"),
+        _c("PF", "D1", "2025E"),
+        _c("PF", "E1", "2056"),
+        _c("PF", "A2", "Construction"),
+        _c("PF", "B2", "0"),
+        _c("PF", "C2", "1"),
+        _c("PF", "D2", "0"),
+        _c("PF", "E2", "0"),
+        _c("PF", "A3", "Operations"),
+        _c("PF", "B3", "0"),
+        _c("PF", "C3", "0"),
+        _c("PF", "D3", "1"),
+        _c("PF", "E3", "0"),
+        _c("PF", "A4", "Revenue"),
+        _c("PF", "C4", "10"),
+        _c("PF", "D4", "11"),
+    ]
+    layout = detect_layout(cells)
+    headers = {header.period_key: header for header in layout.sheets[0].axes[0].periods}
+    assert headers["2024"].role == "historical"
+    assert headers["2024"].explicit_role is False
+    assert headers["2023"].role == "historical" and headers["2023"].explicit_role is True
+    assert headers["2025"].role == "forecast" and headers["2025"].explicit_role is True
+    axes, _warnings = build_axes(layout, cells)
+    roles = {period.period_key: period.role for period in axes[0].periods}
+    assert roles["2023"] == "historical"
+    assert roles["2024"] == "forecast"
+    assert roles["2025"] == "forecast"
+    assert roles["2056"] == "forecast"

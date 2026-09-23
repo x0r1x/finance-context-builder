@@ -291,7 +291,7 @@ def _constants_block(
     headers = [
         AxisHeader(
             col=col,
-            text=_header_name(by_row, col, rows, date1904) or f"Value {index_to_col(col)}",
+            text=_header_name(by_row, col, rows, date1904) or index_to_col(col),
             role="value",
             period_key=f"value-{index_to_col(col).lower()}",
         )

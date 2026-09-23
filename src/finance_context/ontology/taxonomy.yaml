@@ -221,6 +221,26 @@ patterns:
       label_contains: [interest]
       unless:
         label_contains: [rate, capitalized]
+  - concept: ops.inflation
+    score: 0.96
+    evidence: cpi rate on an inflation profile
+    when:
+      label_in: [cpi]
+      section_contains: [inflation]
+      unless:
+        section_contains: [indexation]
+  - concept: cf.opex_paid
+    score: 0.93
+    evidence: named operating cost on the cashflow statement
+    when:
+      section_contains: [cash flow]
+      any:
+        - {label_contains: [commercial management]}
+        - {label_contains: [technical management]}
+        - {label_contains: [balancing]}
+        - {label_contains: [o and m]}
+      unless:
+        label_contains: [ebitda, ebit, revenue, cfads, tax, interest, capex]
   - concept: ops.inflation_cost
     score: 0.95
     evidence: cost inflation assumption
