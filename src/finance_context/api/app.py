@@ -58,14 +58,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        worker = start_worker(
-            bus,
-            run_job,
-            timeout_sec=settings.job_timeout_sec,
-            on_timeout=on_timeout,
-        )
+        workers = [
+            start_worker(
+                bus,
+                run_job,
+                timeout_sec=settings.job_timeout_sec,
+                on_timeout=on_timeout,
+            )
+            for _ in range(settings.job_concurrency)
+        ]
         yield
-        worker.cancel()
+        for worker in workers:
+            worker.cancel()
 
     app = FastAPI(title="finance-context-builder", lifespan=lifespan)
     app.state.ctx = AppContext(

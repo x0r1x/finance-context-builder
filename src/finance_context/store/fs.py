@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import json
-from collections.abc import Sequence
+import os
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +27,49 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(data)
+    _fsync(tmp)
     tmp.replace(path)
+
+
+def _fsync(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+@contextmanager
+def file_lock(path: Path, *, blocking: bool = True) -> Iterator[bool]:
+    """Exclusive flock on a sidecar. Non-blocking failure yields False."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    locked = False
+    try:
+        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        try:
+            fcntl.flock(handle.fileno(), flags)
+            locked = True
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        if locked:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def update_json(path: Path, mutate: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+    """Re-read JSON under a sidecar lock, then write the mutated document."""
+    lock_path = path.with_name(path.name + ".lock")
+    with file_lock(lock_path):
+        current: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                loaded = None
+            if isinstance(loaded, dict):
+                current = loaded
+        write_json(path, mutate(current))
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -50,6 +95,7 @@ def write_parquet(
         con.execute(f"COPY cells TO '{dest}' (FORMAT PARQUET)")
     finally:
         con.close()
+    _fsync(tmp)
     tmp.replace(path)
 
 

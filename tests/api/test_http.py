@@ -183,7 +183,8 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
             for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet")
         }
 
-        repeated = client.post("/v1/context-jobs", files=files)
+        (job_dir / "ir" / "graph_edges.parquet").write_bytes(b"stale-graph-edges")
+        repeated = client.post("/v1/context-jobs?remap=1", files=files)
         assert repeated.status_code == 202
         assert _wait_for_terminal(client, job_id)["status"] in {
             "succeeded",
@@ -201,6 +202,80 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
         assert "rows" in json.loads(mapping_path.read_text(encoding="utf-8"))
         assert (job_dir / "context.json").is_file()
         assert (job_dir / "context.md").is_file()
+        assert (job_dir / "ir" / "graph_edges.parquet").is_file()
+        assert (job_dir / "ir" / "graph_edges.parquet").read_bytes() != b"stale-graph-edges"
+
+
+def test_repeat_post_keeps_ready_snapshot(tmp_path: Path) -> None:
+    source = _xlsx(tmp_path / "model.xlsx")
+    with _app(tmp_path) as client:
+        created = _upload(client, source)
+        job_id = created.json()["job_id"]
+        assert _wait_for_terminal(client, job_id)["status"] in {
+            "succeeded",
+            "degraded",
+            "needs_input",
+        }
+        job_dir = tmp_path / "data" / "jobs" / job_id
+        context = (job_dir / "context.json").read_bytes()
+        sentinel = job_dir / "graph-edges.json"
+        sentinel.write_text("keep", encoding="utf-8")
+        repeated = _upload(client, source)
+        assert repeated.status_code == 202
+        assert repeated.json()["status"] not in {"queued", "running"}
+        assert (job_dir / "context.json").read_bytes() == context
+        assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_two_jobs_run_at_once(tmp_path: Path, monkeypatch) -> None:
+    barrier = threading.Barrier(2)
+    finished = threading.Event()
+
+    def fake_run(
+        self,
+        dest_dir,
+        *,
+        job_id,
+        source_filename=None,
+        content_sha256=None,
+        progress=None,
+    ):
+        barrier.wait(5)
+        finished.set()
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(Pipeline, "run", fake_run)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        max_upload_bytes=1024 * 1024,
+        llm_base_url=None,
+        embedding_base_url=None,
+        embedding_model=None,
+        job_concurrency=2,
+        _env_file=None,
+    )
+    other = build_xlsx(
+        tmp_path / "other.xlsx",
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="A2", value="Costs", type="s"),
+                    CellSpec(addr="B2", value="50"),
+                ],
+            )
+        ],
+        shared_strings=["Item", "2023", "Costs"],
+    )
+    with TestClient(create_app(settings)) as client:
+        first = _upload(client, _xlsx(tmp_path / "model.xlsx"))
+        second = _upload(client, other)
+        assert first.status_code == 202
+        assert second.status_code == 202
+        assert first.json()["job_id"] != second.json()["job_id"]
+        assert finished.wait(5)
 
 
 def _upload(client: TestClient, source: Path):

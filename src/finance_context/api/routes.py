@@ -16,7 +16,7 @@ from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.errors import ContextError
 from finance_context.excel.zip_guard import open_xlsx_zip
 from finance_context.observability import log_event
-from finance_context.store.fs import atomic_write_bytes, write_json
+from finance_context.store.fs import atomic_write_bytes, file_lock, write_json
 
 router = APIRouter()
 _LOGGER = logging.getLogger("finance_context.api")
@@ -84,15 +84,33 @@ async def post_job(
             {"job_id": job_id, "status": live.status, "stage": live.stage},
             status_code=202,
         )
-    _clear_downstream_artifacts(dest)
-    log_event(
-        _LOGGER,
-        logging.INFO,
-        "job_remap",
-        "layout and mapping artifacts invalidated",
-        job_id=job_id,
-    )
-    await ctx.bus.enqueue(job_id)
+    remap = _remap_requested(request)
+    with file_lock(dest / ".lock", blocking=False) as acquired:
+        if not acquired:
+            return JSONResponse(
+                {"job_id": job_id, "status": "running", "stage": "running"},
+                status_code=202,
+            )
+        if not remap:
+            ready = _ready_meta(dest)
+            if ready is not None:
+                return JSONResponse(
+                    {
+                        "job_id": job_id,
+                        "status": ready.get("status"),
+                        "stage": ready.get("stage"),
+                    },
+                    status_code=202,
+                )
+        _clear_downstream_artifacts(dest)
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "job_remap",
+            "layout and mapping artifacts invalidated",
+            job_id=job_id,
+        )
+        await ctx.bus.enqueue(job_id)
     rec = ctx.bus.get(job_id)
     return JSONResponse(
         {
@@ -124,6 +142,30 @@ def _clear_downstream_artifacts(dest: Path) -> None:
         for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet"):
             (ir / name).unlink(missing_ok=True)
     (ir / "graph_index.parquet").unlink(missing_ok=True)
+    (ir / "graph_edges.parquet").unlink(missing_ok=True)
+
+
+_READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
+
+
+def _remap_requested(request: Request) -> bool:
+    raw = request.query_params.get("remap", "")
+    return raw.strip().lower() in {"1", "true", "yes"}
+
+
+def _ready_meta(dest: Path) -> dict | None:
+    if not all((dest / name).is_file() for name in _READY_ARTIFACTS):
+        return None
+    meta_path = dest / "meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(meta, dict) or meta.get("status") in {"queued", "running", None}:
+        return None
+    return meta
 
 
 @router.get("/v1/context-jobs/{job_id}")
@@ -198,7 +240,7 @@ async def get_graph_trace(
     dest = _ctx(request).store.dest_dir(job_id)
     if not dest.exists():
         raise ApiError(404, "not_found")
-    if not (dest / "ir" / "cell_edges.parquet").is_file():
+    if not (dest / "graph.json").is_file():
         raise ApiError(409, "report_not_ready")
     from finance_context.graph.trace import trace_graph
 
@@ -217,7 +259,7 @@ async def get_graph_trace_md(
     dest = _ctx(request).store.dest_dir(job_id)
     if not dest.exists():
         raise ApiError(404, "not_found")
-    if not (dest / "ir" / "cell_edges.parquet").is_file():
+    if not (dest / "graph.json").is_file():
         raise ApiError(409, "report_not_ready")
     from finance_context.graph.trace import trace_graph
     from finance_context.render.graph import render_trace_markdown

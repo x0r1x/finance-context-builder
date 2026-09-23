@@ -26,7 +26,7 @@ def trace_graph(
         index = {row["node_id"]: row for row in read_parquet(index_path)}
     else:
         index = {}
-    edges_path = dest_dir / "ir" / "cell_edges.parquet"
+    edges_path = dest_dir / "ir" / "graph_edges.parquet"
     edges = read_parquet(edges_path) if edges_path.is_file() else []
 
     fwd: dict[str, list[dict]] = defaultdict(list)

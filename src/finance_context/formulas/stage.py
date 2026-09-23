@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -7,7 +8,9 @@ from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.formulas.csr import build_csr, expand_cell_edges
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.formulas.models import CompileResult, Edge
-from finance_context.store.fs import read_parquet, write_parquet
+from finance_context.store.fs import read_parquet, write_json, write_parquet
+
+COMPILE_FILES = ("cells.parquet", "edges.parquet", "cell_edges.parquet")
 
 IR_CELL_COLUMNS = (
     ("sheet", "VARCHAR"),
@@ -141,7 +144,38 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
             for edge in cell_edges
         ],
     )
+    write_json(
+        dest_dir / "ir" / "compile.json",
+        {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
+    )
     return CompileResult(csr=csr)
+
+
+def compile_schema_id() -> str:
+    names = [
+        name
+        for columns in (IR_CELL_COLUMNS, IR_EDGE_COLUMNS, IR_CELL_EDGE_COLUMNS)
+        for name, _dtype in columns
+    ]
+    return hashlib.sha256("\n".join(names).encode()).hexdigest()
+
+
+def ir_is_current(dest_dir: Path) -> bool:
+    ir = dest_dir / "ir"
+    if not all((ir / name).is_file() for name in COMPILE_FILES):
+        return False
+    path = ir / "compile.json"
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("schema_id") == compile_schema_id() and list(
+        payload.get("files") or []
+    ) == list(COMPILE_FILES)
 
 
 def _presence_index(dest_dir: Path) -> dict[str, str]:

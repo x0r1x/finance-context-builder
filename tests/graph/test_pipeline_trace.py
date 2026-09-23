@@ -6,9 +6,11 @@ from pathlib import Path
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.app.pipeline import Pipeline
+from finance_context.formulas.stage import compile_schema_id
+from finance_context.graph.stage import build_formula_graph
 from finance_context.graph.trace import trace_graph
 from finance_context.settings import Settings
-from finance_context.store.fs import read_parquet
+from finance_context.store.fs import read_parquet, write_json
 
 
 def _finance_book(path: Path) -> Path:
@@ -126,10 +128,19 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     ebitda = [e for e in edges if e["source"] == "P&L!C13"]
     targets = {e["target"] for e in ebitda}
     assert {"P&L!C9", "P&L!C10", "P&L!C11", "P&L!C12"} <= targets
+    formula_lag = [
+        e for e in edges if e["source"] == "P&L!B9" and e["target"] == "Operation!C14"
+    ]
+    assert formula_lag
+    assert formula_lag[0]["period_lag"] is None
 
-    lag_edges = [e for e in edges if e["source"] == "P&L!B9" and e["target"] == "Operation!C14"]
+    graph_edges = read_parquet(dest / "ir" / "graph_edges.parquet")
+    lag_edges = [
+        e for e in graph_edges if e["source"] == "P&L!B9" and e["target"] == "Operation!C14"
+    ]
     assert lag_edges
     assert lag_edges[0]["period_lag"] not in {None, "same"}
+    assert graph["artifacts"]["graph_edges"] == "ir/graph_edges.parquet"
 
     traced = trace_graph(dest, origin="P&L!C13", direction="precedents", depth=6)
     node_ids = {n.node_id for n in traced.nodes}
@@ -285,3 +296,46 @@ def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
     breakers = {b for cycle in graph["cycles"] for b in cycle.get("breakers") or []}
     assert "CF!B6" in breakers or "CF!C6" in breakers
     assert all(cycle["class"] == "unexpected" for cycle in graph["cycles"])
+
+
+def test_graph_does_not_rewrite_cell_edges(tmp_path: Path, monkeypatch) -> None:
+    seen: dict[str, bytes] = {}
+
+    def wrapped(dest_dir: Path, **kwargs: object):
+        seen["before"] = (dest_dir / "ir" / "cell_edges.parquet").read_bytes()
+        result = build_formula_graph(dest_dir, **kwargs)  # type: ignore[arg-type]
+        assert (dest_dir / "ir" / "cell_edges.parquet").read_bytes() == seen["before"]
+        return result
+
+    monkeypatch.setattr("finance_context.app.pipeline.build_formula_graph", wrapped)
+    source = _finance_book(tmp_path / "model.xlsx")
+    dest = tmp_path / "job"
+    dest.mkdir()
+    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None).run(
+        dest, job_id="bytes-job", source_filename="model.xlsx"
+    )
+    assert seen["before"]
+
+
+def test_bad_schema_id_recompiles(tmp_path: Path) -> None:
+    source = _finance_book(tmp_path / "model.xlsx")
+    dest = tmp_path / "job"
+    dest.mkdir()
+    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    pipeline.run(dest, job_id="stamp-job", source_filename="model.xlsx")
+    (dest / "ir" / "cells.parquet").write_bytes(b"broken")
+    write_json(
+        dest / "ir" / "compile.json",
+        {
+            "schema_id": "bad",
+            "files": ["cells.parquet", "edges.parquet", "cell_edges.parquet"],
+        },
+    )
+    (dest / "context.json").unlink()
+    (dest / "context.md").unlink()
+    pipeline.run(dest, job_id="stamp-job", source_filename="model.xlsx")
+    assert (dest / "ir" / "cells.parquet").read_bytes() != b"broken"
+    stamp = json.loads((dest / "ir" / "compile.json").read_text(encoding="utf-8"))
+    assert stamp["schema_id"] == compile_schema_id()

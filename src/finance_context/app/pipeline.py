@@ -9,7 +9,7 @@ from finance_context.adapters.slots import AlwaysGrant
 from finance_context.context.build import build_context
 from finance_context.errors import ContextError, PortError
 from finance_context.excel.stage import parse_workbook
-from finance_context.formulas.stage import compile_workbook
+from finance_context.formulas.stage import compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
 from finance_context.layout.models import Layout
 from finance_context.layout.stage import layout_workbook
@@ -22,7 +22,7 @@ from finance_context.observability import job_id_var, log_event, stage_var
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 from finance_context.render.markdown import render_markdown
 from finance_context.settings import Settings
-from finance_context.store.fs import read_parquet, write_json
+from finance_context.store.fs import file_lock, read_parquet, write_json
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
 
@@ -52,13 +52,15 @@ class Pipeline:
     ) -> ContextDocument:
         token_job = job_id_var.set(job_id)
         try:
-            return self._run(
-                dest_dir,
-                job_id=job_id,
-                source_filename=source_filename,
-                content_sha256=content_sha256,
-                progress=progress,
-            )
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            with file_lock(dest_dir / ".lock"):
+                return self._run(
+                    dest_dir,
+                    job_id=job_id,
+                    source_filename=source_filename,
+                    content_sha256=content_sha256,
+                    progress=progress,
+                )
         finally:
             job_id_var.reset(token_job)
 
@@ -127,9 +129,7 @@ class Pipeline:
         if not (dest_dir / "raw" / "workbook.json").is_file():
             _timed("parse", lambda: parse_workbook(source, dest_dir))
         set_stage("compile")
-        if not (dest_dir / "ir" / "cells.parquet").is_file() or not (
-            dest_dir / "ir" / "cell_edges.parquet"
-        ).is_file():
+        if not ir_is_current(dest_dir):
             _timed("compile", lambda: compile_workbook(dest_dir))
         set_stage("layout")
         if not (dest_dir / "layout.json").is_file():

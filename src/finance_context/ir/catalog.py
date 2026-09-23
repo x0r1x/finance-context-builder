@@ -25,6 +25,10 @@ class IrCatalog:
         if index.is_file():
             path = _sql_path(index)
             con.execute(f"CREATE VIEW graph_index AS SELECT * FROM read_parquet('{path}')")
+        graph_edges = audit_dir / "ir" / "graph_edges.parquet"
+        if graph_edges.is_file():
+            path = _sql_path(graph_edges)
+            con.execute(f"CREATE VIEW graph_edges AS SELECT * FROM read_parquet('{path}')")
         return cls(con)
 
     def sql(self, query: str) -> Any:

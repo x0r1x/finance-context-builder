@@ -7,7 +7,7 @@ from finance_context.mapping.lexical import skipped_concept_ids
 from finance_context.mapping.models import Candidate, LexicalPattern, RowContext
 from finance_context.mapping.normalize import normalize_label, section_class
 from finance_context.mapping.structure import BookView
-from finance_context.store.fs import write_json
+from finance_context.store.fs import update_json
 
 # Same label, two live concepts: accrual/stock identity versus the statement projection.
 _STATEMENT_PAIRS = {
@@ -26,6 +26,28 @@ def load_glossary(path: Path | None) -> dict[tuple[str, str], str]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    if isinstance(raw, dict):
+        return _glossary_from_payload(raw)
+    if isinstance(raw, list):
+        return _glossary_from_payload({"entries": raw})
+    return {}
+
+
+def save_glossary(path: Path, glossary: dict[tuple[str, str], str]) -> None:
+    """Merge keys with setdefault. A stale full dict must not drop another writer's rows."""
+
+    def mutate(current: dict) -> dict:
+        loaded = _glossary_from_payload(current)
+        for (label, parent), concept_id in glossary.items():
+            key = (normalize_label(label), normalize_label(parent))
+            if key[0] and concept_id:
+                loaded.setdefault(key, str(concept_id))
+        return _glossary_payload(loaded)
+
+    update_json(path, mutate)
+
+
+def _glossary_from_payload(raw: dict) -> dict[tuple[str, str], str]:
     items = raw.get("entries", raw) if isinstance(raw, dict) else raw
     out: dict[tuple[str, str], str] = {}
     if not isinstance(items, list):
@@ -41,12 +63,12 @@ def load_glossary(path: Path | None) -> dict[tuple[str, str], str]:
     return out
 
 
-def save_glossary(path: Path, glossary: dict[tuple[str, str], str]) -> None:
+def _glossary_payload(glossary: dict[tuple[str, str], str]) -> dict:
     entries = [
         {"label": label, "parent": parent, "concept_id": concept_id}
         for (label, parent), concept_id in sorted(glossary.items())
     ]
-    write_json(path, {"entries": entries})
+    return {"entries": entries}
 
 
 def reconcile_glossary(

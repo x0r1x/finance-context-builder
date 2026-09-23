@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from tests.helpers.parquet import load_parquet
@@ -7,6 +8,7 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.excel import parse_workbook
 from finance_context.formulas import compile_workbook
+from finance_context.formulas.stage import compile_schema_id
 from finance_context.ir.catalog import IrCatalog
 
 
@@ -42,6 +44,10 @@ def test_compile_writes_ir_artifacts_and_templates(tmp_path: Path, dest: Path) -
     assert (dest / "ir" / "cell_edges.parquet").is_file()
     cell_edges = load_parquet(dest / "ir" / "cell_edges.parquet")
     assert any(e["source"] == "P&L!D24" and e["target"] == "Inputs!D5" for e in cell_edges)
+    assert all(edge["period_lag"] is None and edge["col_offset"] is None for edge in cell_edges)
+    stamp = json.loads((dest / "ir" / "compile.json").read_text(encoding="utf-8"))
+    assert stamp["schema_id"] == compile_schema_id()
+    assert stamp["files"] == ["cells.parquet", "edges.parquet", "cell_edges.parquet"]
 
 
 def test_compile_does_not_reparse_when_reading_ir_via_catalog(
