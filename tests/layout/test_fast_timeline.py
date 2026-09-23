@@ -59,7 +59,7 @@ def test_checks_and_constants_are_a_params_block_with_captioned_columns() -> Non
     sheet = _layout().sheets[0]
     constants = next(block for block in sheet.blocks if block.block_id == f"{SHEET}!r11")
     assert constants.kind == "params"
-    assert [header.text for header in constants.axis.headers] == ["Reference", "Result", "Value H"]
+    assert [header.text for header in constants.axis.headers] == ["Reference", "Result", "H"]
     rows = {row.row: row for row in constants.rows}
     assert rows[31].kind == "fact"
     assert rows[13].kind == "helper"

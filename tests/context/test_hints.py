@@ -102,6 +102,36 @@ def test_opening_balance_stays_bop() -> None:
     assert hints.sign == "stock"
 
 
+def test_cpi_index_is_a_level_and_the_rate_stays_a_rate() -> None:
+    index = LayoutRow(row=172, label="CPI", kind="fact")
+    mapped_index = MappedRow(
+        row_key="PF|172|b",
+        sheet="PF Model",
+        row=172,
+        block_id="b",
+        label="CPI",
+        concept_id="ops.cpi",
+        article_role="assumption",
+        source="rule",
+    )
+    index_hints = _hints_for(mapped_index, index, "Index", sheet="PF Model")
+    assert index_hints.time_semantics == "stock"
+    rate = LayoutRow(row=165, label="CPI", kind="fact")
+    mapped_rate = MappedRow(
+        row_key="PF|165|b",
+        sheet="PF Model",
+        row=165,
+        block_id="b",
+        label="CPI",
+        concept_id="ops.inflation",
+        article_role="assumption",
+        source="rule",
+    )
+    rate_hints = _hints_for(mapped_rate, rate, "%", sheet="PF Model")
+    assert rate_hints.time_semantics == "rate"
+    assert rate_hints.unit == "rate"
+
+
 def test_k_pound_in_label_sets_money_gbp() -> None:
     row = LayoutRow(row=10, label="Revenue k£", kind="fact")
     mapped = MappedRow(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from finance_context.mapping.lexical import skipped_concept_ids
+from finance_context.mapping.lexical import _GENERIC_TOTALS, skipped_concept_ids
 from finance_context.mapping.models import Candidate, LexicalPattern, RowContext
 from finance_context.mapping.normalize import normalize_label, section_class
 from finance_context.mapping.structure import BookView
@@ -144,6 +144,13 @@ def learn_from_rows(
     return learned
 
 
+def _specific_section(ctx: RowContext) -> bool:
+    parent = normalize_label(ctx.parent_label)
+    return any(
+        normalize_label(section) not in {"", parent} for section in ctx.section_path
+    )
+
+
 def _statement_pair(left: str, right: str) -> bool:
     return (left, right) in _STATEMENT_PAIRS or (right, left) in _STATEMENT_PAIRS
 
@@ -163,7 +170,12 @@ class GlossarySignal:
         }
 
     def propose(self, ctx: RowContext, book: BookView) -> list[Candidate]:
-        key = (normalize_label(ctx.label), normalize_label(ctx.parent_label))
+        label = normalize_label(ctx.label)
+        # `Total` under Current assets and under Non-current assets share the
+        # sheet parent. A learned pair must not paint both with one concept.
+        if label in _GENERIC_TOTALS and _specific_section(ctx):
+            return []
+        key = (label, normalize_label(ctx.parent_label))
         concept_id = self.glossary.get(key)
         if concept_id is None:
             concept_id = self.glossary.get((normalize_label(ctx.label), ""))

@@ -913,3 +913,135 @@ def test_inflation_fees_and_cfs_opex_split() -> None:
     assert by_key[("CFS", "OPEX")] == "cf.opex_paid"
     assert by_key[("CFS", "Interest")] == "cf.interest_paid"
 
+
+def test_rvi_section_totals_cpi_and_cash_opex() -> None:
+    taxonomy = load_taxonomy()
+    headers = [
+        AxisHeader(col=3, text="2024", role="historical", period_key="2024"),
+        AxisHeader(col=4, text="2025", role="forecast", period_key="2025"),
+    ]
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="PF Model",
+                blocks=[
+                    Block(
+                        block_id="PF Model!r1",
+                        label_col=1,
+                        axis=Axis(id="PF Model!r1", row=1, headers=headers),
+                        rows=[
+                            LayoutRow(row=2, label="Balance Sheet", kind="abstract"),
+                            LayoutRow(
+                                row=4,
+                                label="Total",
+                                parent_row=2,
+                                section_path=["Balance Sheet", "Non-current assets"],
+                            ),
+                            LayoutRow(
+                                row=6,
+                                label="Total",
+                                parent_row=2,
+                                section_path=["Balance Sheet", "Current assets"],
+                            ),
+                            LayoutRow(row=10, label="Linear repayment", kind="abstract"),
+                            LayoutRow(
+                                row=11,
+                                label="Balance b/f",
+                                parent_row=10,
+                                section_path=["Senior Debt", "Linear repayment"],
+                            ),
+                            LayoutRow(
+                                row=12,
+                                label="Principal repayment",
+                                parent_row=10,
+                                section_path=["Senior Debt", "Linear repayment"],
+                            ),
+                            LayoutRow(
+                                row=13,
+                                label="Balance c/f",
+                                parent_row=10,
+                                section_path=["Senior Debt", "Linear repayment"],
+                            ),
+                            LayoutRow(
+                                row=165,
+                                label="CPI",
+                                section_path=["Inflation profiles (annually)"],
+                                cells=[RowCell(col=2, role="unit")],
+                            ),
+                            LayoutRow(
+                                row=172,
+                                label="CPI",
+                                section_path=["Inflation profiles (annually)", "Indexation"],
+                                cells=[RowCell(col=2, role="unit")],
+                            ),
+                        ],
+                    )
+                ],
+            ),
+            SheetLayout(
+                name="Cashflow Statement",
+                blocks=[
+                    Block(
+                        block_id="Cashflow Statement!r1",
+                        label_col=1,
+                        axis=Axis(id="Cashflow Statement!r1", row=1, headers=headers),
+                        rows=[
+                            LayoutRow(
+                                row=216,
+                                label="Commercial Management",
+                                section_path=["Cashflow Statement", "Operating costs"],
+                            ),
+                            LayoutRow(
+                                row=218,
+                                label="O&M period 1",
+                                section_path=["Cashflow Statement", "Operating costs"],
+                            ),
+                            LayoutRow(
+                                row=221,
+                                label="Technical Management",
+                                section_path=["Cashflow Statement", "Operating costs"],
+                            ),
+                            LayoutRow(
+                                row=223,
+                                label="Balancing costs",
+                                section_path=["Cashflow Statement", "Operating costs"],
+                            ),
+                            LayoutRow(
+                                row=230,
+                                label="Variable land lease",
+                                section_path=["Cashflow Statement", "Operating costs"],
+                            ),
+                        ],
+                    )
+                ],
+            ),
+        ]
+    )
+    cells = [
+        {"sheet": "PF Model", "row": 165, "col": 2, "cached_value": "%"},
+        {"sheet": "PF Model", "row": 165, "col": 3, "cached_value": "0.02", "number_format": "0%"},
+        {"sheet": "PF Model", "row": 172, "col": 2, "cached_value": "Index"},
+        {"sheet": "PF Model", "row": 172, "col": 3, "cached_value": "1.02"},
+        {"sheet": "Cashflow Statement", "row": 216, "col": 3, "cached_value": "10"},
+        {"sheet": "Cashflow Statement", "row": 230, "col": 3, "cached_value": "4"},
+    ]
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={("Total", "Balance Sheet"): "bs.assets_noncurrent"},
+        cells=cells,
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_key = {(row.sheet, row.row): row.concept_id for row in doc.rows}
+    assert by_key[("PF Model", 4)] == "bs.assets_noncurrent"
+    assert by_key[("PF Model", 6)] == "bs.assets_current"
+    assert by_key[("PF Model", 11)] == "bs.debt"
+    assert by_key[("PF Model", 12)] == "cf.repayment"
+    assert by_key[("PF Model", 13)] == "bs.debt"
+    assert by_key[("PF Model", 165)] == "ops.inflation"
+    assert by_key[("PF Model", 172)] == "ops.cpi"
+    for row_n in (216, 218, 221, 223, 230):
+        assert by_key[("Cashflow Statement", row_n)] == "cf.opex_paid"
+

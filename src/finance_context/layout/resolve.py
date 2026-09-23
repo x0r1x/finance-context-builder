@@ -21,6 +21,7 @@ def time_axis_from_embedded(axis: Axis, grain: str | None = None) -> TimeAxis:
                 text=header.text,
                 role=header.role,
                 period_key=header.period_key,
+                explicit_role=header.explicit_role,
             )
             for header in axis.headers
         ],

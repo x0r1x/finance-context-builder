@@ -774,9 +774,15 @@ def _axes_from_band(
         if hit.period_key[:4].isdigit():
             year_hint = hit.period_key[:4]
         text = _column_text(col, band_rows, by_row, date1904, prefer_end=prefer_end)
-        role = _column_role(col, atoms, hit, role_runs)
+        role, explicit_role = _column_role(col, atoms, hit, role_runs)
         composed.append(
-            AxisHeader(col=col, text=text, role=role, period_key=hit.period_key)
+            AxisHeader(
+                col=col,
+                text=text,
+                role=role,
+                period_key=hit.period_key,
+                explicit_role=explicit_role,
+            )
         )
     runs = _split_header_runs(composed)
     axes: list[TimeAxis] = []
@@ -805,6 +811,7 @@ def _axes_from_band(
                         text=header.text,
                         role=header.role,
                         period_key=header.period_key,
+                        explicit_role=header.explicit_role,
                         start_date=bounds.get(header.col, (None, None))[0],
                         end_date=bounds.get(header.col, (None, None))[1],
                     )
@@ -896,18 +903,20 @@ def _column_text(
     return " ".join(parts)
 
 
-def _column_role(col: int, atoms: list[HeaderAtom], hit, role_runs: dict[int, str]):
+def _column_role(
+    col: int, atoms: list[HeaderAtom], hit, role_runs: dict[int, str]
+) -> tuple[str, bool]:
     for atom in atoms:
         if atom.explicit_role and atom.role in {"historical", "forecast", "stub"}:
             if atom.kind == "full" and atom.period_key in {"actual", "plan"}:
                 continue
-            return atom.role
+            return atom.role, True
     for atom in atoms:
         if atom.kind == "role_marker" and atom.role in {"historical", "forecast"}:
-            return atom.role
+            return atom.role, True
     if col in role_runs:
-        return role_runs[col]
-    return hit.role
+        return role_runs[col], True
+    return hit.role, bool(getattr(hit, "explicit_role", False))
 
 
 def _role_runs(
@@ -1161,7 +1170,10 @@ def _data_rows(
                 prev.check_row for prev in _ancestors(out, indent)
             )
             kind = "helper" if in_check else "fact"
-        if kind == "abstract":
+        unit_caption = is_unit_text(label)
+        if unit_caption:
+            pass
+        elif kind == "abstract":
             while section_stack and section_stack[-1].indent >= indent:
                 section_stack.pop()
         else:
@@ -1170,10 +1182,18 @@ def _data_rows(
         section_path = [item.label for item in section_stack]
         parent_row = None
         for prev in reversed(out):
+            if is_unit_text(prev.label):
+                continue
             if prev.indent < indent:
                 parent_row = prev.row
                 break
-        if parent_row is None and section_stack:
+        # `Total` shares the section header's indent, so the outline parent is the
+        # statement (`Balance Sheet`) and gold cannot tell Current from Non-current.
+        if (
+            section_stack
+            and label.strip().casefold() in {"total", "subtotal", "sub total", "sum", "итого", "всего"}
+            and (parent_row is None or parent_row in {item.row for item in section_stack})
+        ):
             parent_row = section_stack[-1].row
         item = LayoutRow(
             row=row_n,
