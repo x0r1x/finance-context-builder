@@ -17,7 +17,7 @@ from finance_context.mapping.models import Concept, MappingDocument
 from finance_context.mapping.taxonomy import load_taxonomy
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
-from finance_context.settings import _DEFAULT_LLM_CONCURRENCY
+from finance_context.settings import _DEFAULT_LLM_CONCURRENCY, _DEFAULT_LLM_SLOT_WAIT_SEC
 from finance_context.store.fs import read_parquet, write_json
 
 _LOGGER = logging.getLogger("finance_context.mapping")
@@ -32,7 +32,7 @@ def mapping_workbook(
     glossary: dict[tuple[str, str], str] | None = None,
     taxonomy: list[Concept] | None = None,
     cache_path: Path | None = None,
-    slot_timeout_sec: float = 120.0,
+    slot_timeout_sec: float = _DEFAULT_LLM_SLOT_WAIT_SEC,
     embedding_model: str = "",
     glossary_path: Path | None = None,
     concept_index: ConceptIndex | None = None,

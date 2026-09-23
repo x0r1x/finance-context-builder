@@ -10,6 +10,8 @@ from finance_context.errors import PortError
 from finance_context.ports.protocols import ChatPort, EmbedPort
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_DEFAULT_DATA_DIR = Path("data")
+_DEFAULT_LLM_SLOT_WAIT_SEC = 120.0
 _DEFAULT_EMBEDDING_BATCH_SIZE = 32
 _DEFAULT_EMBEDDING_CONCURRENCY = 1
 _DEFAULT_LLM_CONCURRENCY = 1
@@ -58,7 +60,7 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    data_dir: Path = Path("data")
+    data_dir: Path = _DEFAULT_DATA_DIR
     max_upload_bytes: int = 50 * 1024 * 1024
 
     llm_base_url: str | None = None
@@ -76,7 +78,7 @@ class Settings(BaseSettings):
     embedding_concurrency: int = _DEFAULT_EMBEDDING_CONCURRENCY
     llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY
 
-    llm_slot_wait_sec: float = 120
+    llm_slot_wait_sec: float = _DEFAULT_LLM_SLOT_WAIT_SEC
     job_timeout_sec: float = 3600
     log_level: str = "INFO"
     log_json: bool = True

@@ -11,13 +11,15 @@ from finance_context.adapters.routes import EMBED_SUFFIX, openai_path, wrap_sync
 from finance_context.adapters.tls import log_host
 from finance_context.errors import PortError
 from finance_context.observability import debug_port_io, log_event
-from finance_context.settings import _DEFAULT_EMBEDDING_CONCURRENCY
+from finance_context.settings import (
+    _DEFAULT_EMBEDDING_BATCH_SIZE,
+    _DEFAULT_EMBEDDING_CONCURRENCY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 
 _PLACEHOLDER_KEY = "not-needed"
-_DEFAULT_BATCH_SIZE = 32
 
 
 class OpenAIEmbed:
@@ -29,7 +31,7 @@ class OpenAIEmbed:
         model: str,
         ca_file: Path | None = None,
         embed_path: str = EMBED_SUFFIX,
-        batch_size: int = _DEFAULT_BATCH_SIZE,
+        batch_size: int = _DEFAULT_EMBEDDING_BATCH_SIZE,
         concurrency: int = _DEFAULT_EMBEDDING_CONCURRENCY,
     ) -> None:
         from openai import OpenAI
@@ -54,7 +56,7 @@ class OpenAIEmbed:
                 exc_type=type(exc).__name__,
             )
             raise PortError(str(exc), port="embed") from exc
-        self._batch_size = batch_size if batch_size > 0 else _DEFAULT_BATCH_SIZE
+        self._batch_size = batch_size if batch_size > 0 else _DEFAULT_EMBEDDING_BATCH_SIZE
         self._concurrency = concurrency if concurrency > 0 else _DEFAULT_EMBEDDING_CONCURRENCY
         http = httpx.Client(
             transport=transport,
