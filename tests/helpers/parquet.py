@@ -3,17 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import duckdb
+from finance_context.store.fs import read_parquet
 
 
 def load_parquet(path: Path) -> list[dict]:
-    con = duckdb.connect(":memory:")
-    try:
-        rel = con.execute(f"SELECT * FROM read_parquet('{path.as_posix()}')")
-        cols = [d[0] for d in rel.description]
-        return [dict(zip(cols, row, strict=True)) for row in rel.fetchall()]
-    finally:
-        con.close()
+    return read_parquet(path)
 
 
 def load_cells(audit_dir: Path) -> list[dict]:

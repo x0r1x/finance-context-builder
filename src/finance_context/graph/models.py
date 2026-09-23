@@ -75,6 +75,7 @@ class GraphDocument(BaseModel):
             "cells": "ir/cells.parquet",
             "edges": "ir/edges.parquet",
             "cell_edges": "ir/cell_edges.parquet",
+            "graph_edges": "ir/graph_edges.parquet",
             "index": "ir/graph_index.parquet",
         }
     )

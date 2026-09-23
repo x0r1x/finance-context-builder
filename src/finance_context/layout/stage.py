@@ -3,23 +3,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from finance_context.ir.catalog import IrCatalog
 from finance_context.layout.detect import detect_layout
 from finance_context.layout.models import Layout
 from finance_context.store.fs import read_parquet, write_json
 
 
-def layout_workbook(dest_dir: Path, catalog: IrCatalog | None = None) -> Layout:
-    cells = read_parquet(dest_dir / "ir" / "cells.parquet")
+def layout_workbook(
+    dest_dir: Path,
+    *,
+    cells: list[dict] | None = None,
+    edges: list[dict] | None = None,
+) -> Layout:
+    if cells is None:
+        cells = read_parquet(dest_dir / "ir" / "cells.parquet")
+    if edges is None:
+        edges = _read_edges(dest_dir)
     date1904 = False
     meta_path = dest_dir / "raw" / "workbook.json"
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         date1904 = bool(meta.get("date1904"))
-    layout = detect_layout(cells, date1904=date1904, edges=_read_edges(dest_dir))
+    layout = detect_layout(cells, date1904=date1904, edges=edges)
     write_json(dest_dir / "layout.json", layout.model_dump(mode="json"))
-    if catalog is not None:
-        register_layout(layout, catalog)
     return layout
 
 
@@ -28,66 +33,3 @@ def _read_edges(dest_dir: Path) -> list[dict]:
     if not path.is_file():
         return []
     return read_parquet(path)
-
-
-def register_layout(layout: Layout, catalog: IrCatalog) -> None:
-    catalog.upsert_layout(
-        axis_headers=_axis_rows(layout),
-        layout_rows=_row_rows(layout),
-    )
-
-
-def _axis_rows(layout: Layout) -> list[dict]:
-    out: list[dict] = []
-    for sheet in layout.sheets:
-        for axis in sheet.axes:
-            for period in axis.periods:
-                out.append(
-                    {
-                        "sheet": sheet.name,
-                        "block_id": axis.id,
-                        "col": period.col,
-                        "role": period.role,
-                        "header_text": period.text,
-                        "period_key": period.period_key,
-                        "group_key": period.group_key,
-                    }
-                )
-        for block in sheet.blocks:
-            if getattr(block, "kind", "timeline") != "params" or block.axis is None:
-                continue
-            for header in block.axis.headers:
-                out.append(
-                    {
-                        "sheet": sheet.name,
-                        "block_id": block.block_id,
-                        "col": header.col,
-                        "role": header.role,
-                        "header_text": header.text,
-                        "period_key": header.period_key,
-                        "group_key": None,
-                    }
-                )
-    return out
-
-
-def _row_rows(layout: Layout) -> list[dict]:
-    out: list[dict] = []
-    for sheet in layout.sheets:
-        for block in sheet.blocks:
-            for row in block.rows:
-                out.append(
-                    {
-                        "sheet": sheet.name,
-                        "block_id": block.block_id,
-                        "row": row.row,
-                        "label": row.label,
-                        "parent_row": row.parent_row,
-                        "check_row": row.check_row,
-                        "label_col": (
-                            row.label_col if row.label_col is not None else block.label_col
-                        ),
-                        "indent": row.indent,
-                    }
-                )
-    return out

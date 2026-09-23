@@ -55,7 +55,7 @@ def serve(
     port: int = 8080,
     data_dir: Annotated[Path | None, typer.Option("--data-dir")] = None,
 ) -> None:
-    """Run the in-process FastAPI worker."""
+    """Serve the API. Each workbook runs in its own process."""
     if data_dir is not None:
         import os
 

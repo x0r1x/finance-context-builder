@@ -6,7 +6,6 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.excel import parse_workbook
 from finance_context.formulas import compile_workbook
-from finance_context.ir.catalog import IrCatalog
 from finance_context.layout import layout_workbook
 
 
@@ -50,25 +49,23 @@ def test_layout_writes_json_registers_axes_and_no_findings(
     )
     parse_workbook(source, dest)
     compile_workbook(dest)
-    catalog = IrCatalog.open(dest)
-    try:
-        layout = layout_workbook(dest, catalog)
-        assert (dest / "layout.json").is_file()
-        assert not (dest / "candidates.json").exists()
-        assert not (dest / "report.json").exists()
-        assert len(layout.sheets[0].blocks) == 2
-        headers = catalog.sql(
-            "SELECT sheet, block_id, col, role FROM axis_headers ORDER BY block_id, col"
-        ).fetchall()
-        assert len(headers) >= 4
-        roles = {row[3] for row in headers}
-        assert "historical" in roles or "forecast" in roles
-        checks = catalog.sql(
-            "SELECT label FROM layout_rows WHERE check_row"
-        ).fetchall()
-        assert ("Check",) in checks
-    finally:
-        catalog.close()
+    layout = layout_workbook(dest)
+    assert (dest / "layout.json").is_file()
+    assert not (dest / "candidates.json").exists()
+    assert not (dest / "report.json").exists()
+    assert len(layout.sheets[0].blocks) == 2
+    periods = [period for axis in layout.sheets[0].axes for period in axis.periods]
+    assert len(periods) >= 4
+    roles = {period.role for period in periods}
+    assert "historical" in roles or "forecast" in roles
+    checks = [
+        row.label
+        for sheet in layout.sheets
+        for block in sheet.blocks
+        for row in block.rows
+        if row.check_row
+    ]
+    assert "Check" in checks
 
 
 def test_layout_decodes_date_serial_from_workbook_meta(tmp_path: Path, dest: Path) -> None:
@@ -93,10 +90,8 @@ def test_layout_decodes_date_serial_from_workbook_meta(tmp_path: Path, dest: Pat
     )
     parse_workbook(source, dest)
     compile_workbook(dest)
-    catalog = IrCatalog.open(dest)
-    try:
-        layout = layout_workbook(dest, catalog)
-        keys = [h.period_key for h in layout.sheets[0].blocks[0].axis.headers]
-        assert keys == ["2022Q3", "2022Q4"]
-    finally:
-        catalog.close()
+    layout = layout_workbook(dest)
+    axis = layout.sheets[0].blocks[0].axis
+    assert axis is not None
+    keys = [header.period_key for header in axis.headers]
+    assert keys == ["2022Q3", "2022Q4"]

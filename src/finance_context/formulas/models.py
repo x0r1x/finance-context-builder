@@ -39,3 +39,6 @@ class CsrGraph:
 @dataclass
 class CompileResult:
     csr: CsrGraph
+    cells: list[dict[str, Any]] = field(default_factory=list)
+    edges: list[dict[str, Any]] = field(default_factory=list)
+    cell_edges: list[dict[str, Any]] = field(default_factory=list)

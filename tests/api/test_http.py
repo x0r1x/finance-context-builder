@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
 from pathlib import Path
 
@@ -9,9 +8,7 @@ from fastapi.testclient import TestClient
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx, write_zip
 
 from finance_context.api.app import create_app
-from finance_context.app.pipeline import Pipeline
 from finance_context.settings import Settings
-from finance_context.store.fs import write_json
 
 
 def _app(tmp_path: Path) -> TestClient:
@@ -43,6 +40,35 @@ def _xlsx(path: Path) -> Path:
         ],
         shared_strings=["Item", "2023", "2024E", "Revenue"],
     )
+
+
+def _hold_stage(tmp_path: Path, monkeypatch, stage: str) -> Path:
+    pause = tmp_path / f"pause-{stage}"
+    pause.write_text("hold", encoding="utf-8")
+    monkeypatch.setenv("FINANCE_CONTEXT_PAUSE_STAGE", stage)
+    monkeypatch.setenv("FINANCE_CONTEXT_PAUSE_FILE", str(pause))
+    return pause
+
+
+def _disk_stage(tmp_path: Path, job_id: str) -> str | None:
+    path = tmp_path / "data" / "jobs" / job_id / "meta.json"
+    if not path.is_file():
+        return None
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    stage = meta.get("stage")
+    return str(stage) if stage else None
+
+
+def _wait_disk_stage(tmp_path: Path, job_id: str, stage: str) -> bool:
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if _disk_stage(tmp_path, job_id) == stage:
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _wait_for_terminal(client: TestClient, job_id: str) -> dict:
@@ -183,7 +209,8 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
             for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet")
         }
 
-        repeated = client.post("/v1/context-jobs", files=files)
+        (job_dir / "ir" / "graph_edges.parquet").write_bytes(b"stale-graph-edges")
+        repeated = client.post("/v1/context-jobs?remap=1", files=files)
         assert repeated.status_code == 202
         assert _wait_for_terminal(client, job_id)["status"] in {
             "succeeded",
@@ -201,6 +228,76 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
         assert "rows" in json.loads(mapping_path.read_text(encoding="utf-8"))
         assert (job_dir / "context.json").is_file()
         assert (job_dir / "context.md").is_file()
+        assert (job_dir / "ir" / "graph_edges.parquet").is_file()
+        assert (job_dir / "ir" / "graph_edges.parquet").read_bytes() != b"stale-graph-edges"
+
+
+def test_repeat_post_keeps_ready_snapshot(tmp_path: Path) -> None:
+    source = _xlsx(tmp_path / "model.xlsx")
+    with _app(tmp_path) as client:
+        created = _upload(client, source)
+        job_id = created.json()["job_id"]
+        assert _wait_for_terminal(client, job_id)["status"] in {
+            "succeeded",
+            "degraded",
+            "needs_input",
+        }
+        job_dir = tmp_path / "data" / "jobs" / job_id
+        context = (job_dir / "context.json").read_bytes()
+        sentinel = job_dir / "graph-edges.json"
+        sentinel.write_text("keep", encoding="utf-8")
+        repeated = _upload(client, source)
+        assert repeated.status_code == 202
+        assert repeated.json()["status"] not in {"queued", "running"}
+        assert (job_dir / "context.json").read_bytes() == context
+        assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_two_children_reach_mapping_together(tmp_path: Path, monkeypatch) -> None:
+    pause = tmp_path / "pause"
+    pause.write_text("hold", encoding="utf-8")
+    monkeypatch.setenv("FINANCE_CONTEXT_PAUSE_STAGE", "mapping")
+    monkeypatch.setenv("FINANCE_CONTEXT_PAUSE_FILE", str(pause))
+    other = build_xlsx(
+        tmp_path / "other.xlsx",
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="A2", value="Costs", type="s"),
+                    CellSpec(addr="B2", value="50"),
+                ],
+            )
+        ],
+        shared_strings=["Item", "2023", "Costs"],
+    )
+    try:
+        with _app(tmp_path) as client:
+            first = _upload(client, _xlsx(tmp_path / "model.xlsx"))
+            second = _upload(client, other)
+            assert first.status_code == 202
+            assert second.status_code == 202
+            first_id = first.json()["job_id"]
+            second_id = second.json()["job_id"]
+            assert first_id != second_id
+            deadline = time.monotonic() + 60
+            stages = {}
+            while time.monotonic() < deadline:
+                stages = {
+                    job_id: _disk_stage(tmp_path, job_id) for job_id in (first_id, second_id)
+                }
+                if all(stage not in {None, "", "queued"} for stage in stages.values()):
+                    break
+                time.sleep(0.05)
+            assert stages[first_id] not in {None, "", "queued"}
+            assert stages[second_id] not in {None, "", "queued"}
+            processes = client.app.state.ctx.processes
+            assert processes.is_alive(first_id)
+            assert processes.is_alive(second_id)
+    finally:
+        pause.unlink(missing_ok=True)
 
 
 def _upload(client: TestClient, source: Path):
@@ -217,108 +314,39 @@ def _upload(client: TestClient, source: Path):
 
 
 def test_get_job_keeps_fresher_disk_stage(tmp_path: Path, monkeypatch) -> None:
-    started = threading.Event()
-    release = threading.Event()
-
-    def fake_run(
-        self,
-        dest_dir,
-        *,
-        job_id,
-        source_filename=None,
-        content_sha256=None,
-        progress=None,
-    ):
-        write_json(
-            dest_dir / "meta.json",
-            {
-                "job_id": job_id,
-                "status": "running",
-                "stage": "mapping",
-                "warnings": [],
-                "questions": [],
-            },
-        )
-        started.set()
-        release.wait(5)
-        raise RuntimeError("stop")
-
-    monkeypatch.setattr(Pipeline, "run", fake_run)
+    pause = _hold_stage(tmp_path, monkeypatch, "mapping")
     source = _xlsx(tmp_path / "model.xlsx")
     try:
         with _app(tmp_path) as client:
             created = _upload(client, source)
             assert created.status_code == 202
             job_id = created.json()["job_id"]
-            assert started.wait(5)
+            assert _wait_disk_stage(tmp_path, job_id, "mapping")
             body = client.get(f"/v1/context-jobs/{job_id}").json()
             assert body["status"] == "running"
             assert body["stage"] == "mapping"
     finally:
-        release.set()
+        pause.unlink(missing_ok=True)
 
 
-def test_get_job_follows_pipeline_progress(tmp_path: Path, monkeypatch) -> None:
-    started = threading.Event()
-    release = threading.Event()
-
-    def fake_run(
-        self,
-        dest_dir,
-        *,
-        job_id,
-        source_filename=None,
-        content_sha256=None,
-        progress=None,
-    ):
-        write_json(
-            dest_dir / "meta.json",
-            {
-                "job_id": job_id,
-                "status": "running",
-                "stage": "parse",
-                "warnings": [],
-                "questions": [],
-            },
-        )
-        assert progress is not None
-        progress.progress("compile")
-        started.set()
-        release.wait(5)
-        raise RuntimeError("stop")
-
-    monkeypatch.setattr(Pipeline, "run", fake_run)
+def test_get_job_reads_compile_stage_from_disk(tmp_path: Path, monkeypatch) -> None:
+    pause = _hold_stage(tmp_path, monkeypatch, "compile")
     source = _xlsx(tmp_path / "model.xlsx")
     try:
         with _app(tmp_path) as client:
             created = _upload(client, source)
             assert created.status_code == 202
             job_id = created.json()["job_id"]
-            assert started.wait(5)
+            assert _wait_disk_stage(tmp_path, job_id, "compile")
             body = client.get(f"/v1/context-jobs/{job_id}").json()
             assert body["status"] == "running"
             assert body["stage"] == "compile"
     finally:
-        release.set()
+        pause.unlink(missing_ok=True)
 
 
 def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
-    release = threading.Event()
-
-    def fake_run(
-        self,
-        dest_dir,
-        *,
-        job_id,
-        source_filename=None,
-        content_sha256=None,
-        progress=None,
-    ):
-        if not release.is_set():
-            release.wait(5)
-        raise RuntimeError("stop")
-
-    monkeypatch.setattr(Pipeline, "run", fake_run)
+    pause = _hold_stage(tmp_path, monkeypatch, "mapping")
     source = _xlsx(tmp_path / "model.xlsx")
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -326,7 +354,8 @@ def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
         llm_base_url=None,
         embedding_base_url=None,
         embedding_model=None,
-        job_timeout_sec=0.2,
+        job_timeout_sec=1,
+        _env_file=None,
     )
     try:
         with TestClient(create_app(settings)) as client:
@@ -337,9 +366,8 @@ def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
             assert body["status"] == "failed"
             assert body["stage"] == "failed"
             assert body["error"] == "TimeoutError"
-            release.set()
             repeated = _upload(client, source)
             assert repeated.status_code == 202
             assert repeated.json()["status"] in {"queued", "running"}
     finally:
-        release.set()
+        pause.unlink(missing_ok=True)

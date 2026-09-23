@@ -37,6 +37,8 @@ def mapping_workbook(
     glossary_path: Path | None = None,
     concept_index: ConceptIndex | None = None,
     llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
+    cells: list[dict] | None = None,
+    edges: list[dict] | None = None,
 ) -> MappingDocument:
     path = dest_dir / "mapping.json"
     if path.exists():
@@ -46,19 +48,21 @@ def mapping_workbook(
     layout = Layout.model_validate(
         json.loads((dest_dir / "layout.json").read_text(encoding="utf-8"))
     )
-    cells: list[dict] = []
-    ir_cells = dest_dir / "ir" / "cells.parquet"
-    if ir_cells.exists():
-        cells = read_parquet(ir_cells)
-    edges: list[dict] = []
-    ir_cell_edges = dest_dir / "ir" / "cell_edges.parquet"
-    ir_edges = dest_dir / "ir" / "edges.parquet"
-    if ir_cell_edges.exists():
-        edges = read_parquet(ir_cell_edges)
-    elif ir_edges.exists():
-        edges = read_parquet(ir_edges)
+    if cells is None:
+        ir_cells = dest_dir / "ir" / "cells.parquet"
+        cells = read_parquet(ir_cells) if ir_cells.is_file() else []
+    if edges is None:
+        ir_cell_edges = dest_dir / "ir" / "cell_edges.parquet"
+        ir_edges = dest_dir / "ir" / "edges.parquet"
+        if ir_cell_edges.is_file():
+            edges = read_parquet(ir_cell_edges)
+        elif ir_edges.is_file():
+            edges = read_parquet(ir_edges)
+        else:
+            edges = []
     tax = taxonomy or load_taxonomy()
-    merged = dict(load_glossary(glossary_path))
+    snapshot = dict(load_glossary(glossary_path))
+    merged = dict(snapshot)
     merged.update(glossary or {})
     merged = reconcile_glossary(merged, tax)
     doc = map_layout(
@@ -77,7 +81,10 @@ def mapping_workbook(
         edges=edges,
     )
     if glossary_path is not None:
-        save_glossary(glossary_path, learn_from_rows(merged, doc.rows))
+        learned = learn_from_rows(merged, doc.rows)
+        delta = {key: concept for key, concept in learned.items() if key not in snapshot}
+        if delta:
+            save_glossary(glossary_path, delta)
     write_json(path, doc.model_dump(mode="json"))
     log_event(
         _LOGGER,

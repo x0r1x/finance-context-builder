@@ -1,17 +1,19 @@
 # finance-context-builder
 
+[Русский](README.ru.md) · **English**
+
 Read-only service that turns Excel cash-flow workbooks (`.xlsx` / `.xlsm`) into versioned JSON and Markdown context. Formulas are preserved; values come from Excel cached results and are not recalculated.
 
-Every layout row is kept once inside its block in `context.json` (schema `1.13.0`), including assumption tables without a period axis (`params`) and left-of-timeline scalars with roles (`value` / `unit` / `total` / `stub`) and a column `header` (Start, Live Case, Min). A period may carry `start_date` and `end_date`. Scalars and params rows use `period_position=instant` and `aggregation=none`. `context.md` adds `Path` and `Cells` columns and `Start` / `End` rows under `## Axes`. A total or stub column is not a period (`period_id` is null on its graph link). A row carries flat `values`, aligned `value_statuses` and `normalized_values`, plus `scale_factor`, `period_position`, and `aggregation`. `context.md` repeats the same blocks, rows, `row_key`, time profile, and values; an empty cell is `empty` and a period outside the line's phase is `n/a`. Period headers include the period key and column letter. Cells, formula AST, and the dependency graph stay in `raw/` and `ir/` — they are not merged into one JSON or one Markdown file. The accepted `concept_id` is the reporting slot; `semantic_identity`, `reporting_roles`, and `cash_semantics` keep economic meaning, layout role, and accrual versus cash apart. Sheet axes are published once on `axes` (grain, periods, `group_key`, and construction/operation phases from the flag rows on that axis). A timeline block stores `axis_ids` and one value series per axis; phase is not copied onto the block. A repeated year banner over months is `group_key`, not a second axis. Side-by-side year and month columns that share a header band stay one table. `mapping_stats.concept_coverage` is the share of annotatable rows with an accepted concept. `mapping_stats.mapping_quality` scores label, semantic, unit, temporal, and formula checks; a coverage of 1.0 does not mean those checks passed. An empty `unmapped.json` is not “every block row has a concept”. A small taxonomy may annotate a line with `concept_id`, or abstain: a wrong tag is worse than `unknown`. Structure (formula graph and neighbors) first, then labels, then embeddings, then an optional LLM rerank. Unknown rows still carry hints, neighbors, one formula, role-tagged cells, and top-3 candidates. `graph.json` and `graph.md` (schema `1.7.0`) publish summary counts and formula-level links with `formula_class`, `row_key`, and `period_id`. The Class column in `graph.md` repeats `formula_class`. AST and the expanded cell graph stay in `ir/*.parquet` — [graph](docs/graph.md).
+Every layout row is kept once inside its block in `context.json` (schema `1.13.0`), including assumption tables without a period axis (`params`) and left-of-timeline scalars with roles (`value` / `unit` / `total` / `stub`) and a column `header` (Start, Live Case, Min). A period may carry `start_date` and `end_date`. Scalars and params rows use `period_position=instant` and `aggregation=none`. `context.md` adds `Path` and `Cells` columns and `Start` / `End` rows under `## Axes`. A total or stub column is not a period (`period_id` is null on its graph link). A row carries flat `values`, aligned `value_statuses` and `normalized_values`, plus `scale_factor`, `period_position`, and `aggregation`. `context.md` repeats the same blocks, rows, `row_key`, time profile, and values; an empty cell is `empty` and a period outside the line's phase is `n/a`. Period headers include the period key and column letter. Cells, formula AST, and the dependency graph stay in `raw/` and `ir/` — they are not merged into one JSON or one Markdown file. The accepted `concept_id` is the reporting slot; `semantic_identity`, `reporting_roles`, and `cash_semantics` keep economic meaning, layout role, and accrual versus cash apart. Sheet axes are published once on `axes` (grain, periods, `group_key`, and construction/operation phases from the flag rows on that axis). A timeline block stores `axis_ids` and one value series per axis; phase is not copied onto the block. A repeated year banner over months is `group_key`, not a second axis. Side-by-side year and month columns that share a header band stay one table. `mapping_stats.concept_coverage` is the share of annotatable rows with an accepted concept. `mapping_stats.mapping_quality` scores label, semantic, unit, temporal, and formula checks; a coverage of 1.0 does not mean those checks passed. An empty `unmapped.json` is not “every block row has a concept”. A small taxonomy may annotate a line with `concept_id`, or abstain: a wrong tag is worse than `unknown`. Structure (formula graph and neighbors) first, then labels, then embeddings, then an optional LLM rerank. Unknown rows still carry hints, neighbors, one formula, role-tagged cells, and top-3 candidates. `graph.json` and `graph.md` (schema `1.7.0`) publish summary counts and formula-level links with `formula_class`, `row_key`, and `period_id`. The Class column in `graph.md` repeats `formula_class`. AST and the expanded cell graph stay in `ir/*.parquet` — [graph](docs/en/graph.md).
 
-Guides: [overview](docs/overview.md), [layout](docs/layout.md), [mapping](docs/mapping.md), [taxonomy](docs/taxonomy.md), [graph](docs/graph.md), [unmapped review](docs/review.md), [architecture](docs/architecture.md).
+Guides: [overview](docs/en/overview.md), [layout](docs/en/layout.md), [mapping](docs/en/mapping.md), [taxonomy](docs/en/taxonomy.md), [graph](docs/en/graph.md), [LLM slice](docs/en/llm.md), [unmapped review](docs/en/review.md), [architecture](docs/en/architecture.md).
 
 ## Limits (MVP)
 
 - `.xls`, `.xlsb`, and encrypted workbooks are rejected
 - Cached formula values must already be in the file
 - LLM/embeddings are optional: mapping falls back to structure + labels, then `unknown`
-- The HTTP worker is in-process. Multi-replica deploys need an external queue.
+- Each new workbook runs in its own process. Parquet under `data/jobs/` is the cache that outlives that process. Inside one run, stages pass row lists and do not reread a file they just wrote. PyArrow reads and writes those files. Multi-replica deploys need an external queue; do not start `uvicorn` with more than one worker.
 
 Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). See `NOTICE`.
 
@@ -70,7 +72,7 @@ curl -s http://127.0.0.1:8080/healthz
 curl -s http://127.0.0.1:8080/readyz
 ```
 
-Submit a workbook. `POST` returns **202** and starts mapping. Repeated submission of the same workbook reuses parse and formula IR, and rebuilds layout, mapping, and context, calling embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
+Submit a workbook. `POST` returns **202** and the API starts a process for that book. A repeated POST while the process is alive does not start another. A repeated POST of a workbook that already has context and graph returns that snapshot and does not rebuild. `POST /v1/context-jobs?remap=1` stops the old process, then rebuilds layout, mapping, and context, reuses parse and formula IR when `ir/compile.json` matches, and calls embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
 
 | status | Meaning |
 | --- | --- |
@@ -78,7 +80,7 @@ Submit a workbook. `POST` returns **202** and starts mapping. Repeated submissio
 | `succeeded` | Mapped without open questions |
 | `needs_input` | Context is ready; some fact rows were left `unknown` (review questions) |
 | `degraded` | Same as `needs_input`, but LLM/embeddings were not configured |
-| `failed` | Pipeline error, or the worker exceeded `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`); no usable context. Submit the workbook again. |
+| `failed` | Pipeline error, or the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`); no usable context. Submit the workbook again. |
 
 `needs_input` is not a crash. `context.json`, `context.md`, `graph.json`, and `graph.md` are still served.
 
@@ -120,9 +122,9 @@ HTTP `error` codes:
 
 `report_not_ready` is an artifact or trace fetched before the job has written that file.
 
-Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `DATA_DIR`, `JOB_TIMEOUT_SEC` (default 3600). See `.env.example`.
+Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. `GET /readyz` reports `queue: in_process`: the job list lives in this API process, and each book runs in a child of it.
 
-Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/taxonomy.md](docs/taxonomy.md) and [docs/mapping.md](docs/mapping.md). Check/helper/flag rows are excluded from review questions; they stay in the block with `disposition=excluded`. Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
+Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows are excluded from review questions; they stay in the block with `disposition=excluded`. Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
 
 ## Docker
 
@@ -167,10 +169,10 @@ md/context.md      md/graph.md      md/trace.md
 healthz.json  readyz.json  post-job.json  job-status.json  summary.txt  unmapped.json
 ```
 
-The client checks the four document URLs, that `context.json` has no second row catalog and no AST, that `graph.json` is schema `1.5` with `links` (a range stays one ref), and that the Markdown twins repeat the same blocks and links, then smokes `GET .../graph/trace` and `.../graph/trace.md`. The script exiting with `OK` means the client finished; the server should still be listening on 8080.
+The client checks the four document URLs, that `context.json` has no second row catalog and no AST, that `graph.json` is schema `1.7` and `context.json` is schema `1.13` with `links` (a range stays one ref), and that the Markdown twins repeat the same blocks and links, then smokes `GET .../graph/trace` and `.../graph/trace.md`. The script exiting with `OK` means the client finished; the server should still be listening on 8080. A client timeout does not stop the book's process.
 
 ```bash
 bash scripts/run.sh path/to/model.xlsx
 ```
 
-If no path is given, it looks for `resources/cashflow.xlsx`. Override `BASE_URL` (default `http://127.0.0.1:8080`), `OUT_DIR` (default `./out`), and `JOB_TIMEOUT_SEC` (default `300`).
+If no path is given, it looks for `resources/cashflow.xlsx`. Override `BASE_URL` (default `http://127.0.0.1:8080`), `OUT_DIR` (default `./out`), and `JOB_TIMEOUT_SEC` (client poll, default `300` when unset). The server's `JOB_TIMEOUT_SEC` in `.env` is a different clock: it stops the process. Export the same value before `run.sh` if the client should wait that long.

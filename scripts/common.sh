@@ -1,4 +1,8 @@
 # Shared helpers for API scripts. Source from the other scripts; do not run directly.
+# JOB_TIMEOUT_SEC is how long this client polls. It does not stop the book's process.
+# The server stops that process after its own JOB_TIMEOUT_SEC (Settings default 3600).
+# When this variable is unset here, the client default below is 300, even if the
+# server was started from .env with 3600.
 
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$_COMMON_DIR/.." && pwd)"
@@ -122,7 +126,7 @@ poll_job() {
     case "$status" in
       queued | running)
         if ((SECONDS >= deadline)); then
-          echo "job ${job_id} timed out after ${JOB_TIMEOUT_SEC}s (status=${status})" >&2
+          echo "client stopped polling job ${job_id} after ${JOB_TIMEOUT_SEC}s (status=${status}); the book's process keeps running until it finishes or the server JOB_TIMEOUT_SEC stops it" >&2
           return 1
         fi
         sleep 1
