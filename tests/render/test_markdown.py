@@ -88,6 +88,51 @@ def _doc() -> ContextDocument:
     )
 
 
+def test_period_cell_prints_the_graph_address_under_the_value() -> None:
+    doc = ContextDocument(
+        meta=ArtifactMeta(job_id="job1", status="succeeded", stage="done"),
+        workbook=WorkbookRaw(sheets=["PF Model"], sheet_count=1, cell_count=2),
+        blocks=[
+            FinancialBlock(
+                block_id="PF Model!r7",
+                sheet="PF Model",
+                label_col=1,
+                periods=[
+                    {"col": 27, "text": "31.12.2038", "role": "forecast", "period_key": "2038"},
+                ],
+                rows=[
+                    BlockRow(
+                        row_key="PF Model|172|PF Model!r7",
+                        sheet="PF Model",
+                        row=172,
+                        kind="fact",
+                        label="CPI",
+                        disposition="mapped",
+                        concept_id="ops.cpi",
+                        values=["1.3458683383241299"],
+                        value_statuses=["cached"],
+                        normalized_values=["1.3458683383"],
+                    ),
+                    BlockRow(
+                        row_key="PF Model|537|PF Model!r7",
+                        sheet="PF Model",
+                        row=537,
+                        kind="fact",
+                        label="Missing",
+                        disposition="mapped",
+                        values=[None],
+                        value_statuses=["empty"],
+                    ),
+                ],
+            )
+        ],
+    )
+    rendered = render_markdown(doc)
+    assert "1.3458683383241299<br>PF Model!AA172" in rendered
+    assert "empty<br>PF Model!AA537" in rendered
+    assert "PF Model!AA172" not in doc.model_dump_json()
+
+
 def test_markdown_matches_golden() -> None:
     doc = _doc()
     rendered = render_markdown(doc)

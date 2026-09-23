@@ -262,7 +262,7 @@ def _value_table(rows: list[BlockRow], periods: list[dict], axis_id: str | None)
     period_cols = {item.get("col") for item in periods}
     for row in rows:
         series = _series_for(row, axis_id)
-        lines.append(_row_line(row, len(periods), series, period_cols))
+        lines.append(_row_line(row, periods, series, period_cols))
     lines.append("")
     return lines
 
@@ -290,7 +290,7 @@ def _series_for(row: BlockRow, axis_id: str | None) -> RowSeries | None:
 
 def _row_line(
     row: BlockRow,
-    period_count: int,
+    periods: list[dict],
     series: RowSeries | None = None,
     period_cols: set | None = None,
 ) -> str:
@@ -306,8 +306,8 @@ def _row_line(
     values = list(source_values)
     statuses = list(source_statuses)
     normalized = list(source_normalized)
-    if len(values) < period_count:
-        values.extend([None] * (period_count - len(values)))
+    if len(values) < len(periods):
+        values.extend([None] * (len(periods) - len(values)))
     cells = [
         _cell(row.label),
         _cell(row.row_key),
@@ -326,9 +326,10 @@ def _row_line(
                     _at(statuses, index),
                     _at(normalized, index),
                     percent=_is_percent_row(row),
+                    addr=_cell_addr(row, periods[index]),
                 )
             )
-            for index, value in enumerate(values[:period_count])
+            for index, value in enumerate(values[: len(periods)])
         ],
     ]
     return "| " + " | ".join(cells) + " |"
@@ -375,21 +376,35 @@ def _series_cell(
     normalized: str | None,
     *,
     percent: bool = False,
+    addr: str = "",
 ) -> str:
     if status == "not_applicable":
-        return "n/a"
-    if status == "empty" or (status is None and value in (None, "")):
-        return "empty"
-    text = "" if value is None else str(value)
-    if status == "zero_explicit":
-        return text or "0"
-    if percent and text and "%" not in text:
-        shown = _percent_amount(text)
-        if shown is not None:
-            return f"{text} ({shown}%)"
-    if normalized and text and _differs(text, normalized):
-        return f"{text} ({normalized})"
+        text = "n/a"
+    elif status == "empty" or (status is None and value in (None, "")):
+        text = "empty"
+    else:
+        text = "" if value is None else str(value)
+        if status == "zero_explicit":
+            text = text or "0"
+        elif percent and text and "%" not in text:
+            shown = _percent_amount(text)
+            if shown is not None:
+                text = f"{text} ({shown}%)"
+            elif normalized and text and _differs(text, normalized):
+                text = f"{text} ({normalized})"
+        elif normalized and text and _differs(text, normalized):
+            text = f"{text} ({normalized})"
+    if addr:
+        return f"{text}<br>{addr}"
     return text
+
+
+def _cell_addr(row: BlockRow, period: dict) -> str:
+    """Graph and trace key for this period cell. The axis table is not a cell."""
+    letter = _column_letter(period.get("col"))
+    if not letter or not row.sheet or not row.row:
+        return ""
+    return f"{row.sheet}!{letter}{row.row}"
 
 
 def _percent_amount(text: str) -> str | None:

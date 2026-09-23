@@ -9,7 +9,7 @@
 | Где | Что видно |
 | --- | --- |
 | `context.md` шапка | `Content completeness` (должно быть 1.00), `Concept coverage` (доля принятых слотов, может быть < 1) и шесть полей `mapping_quality` |
-| `context.md` блок | Каждая строка: `Row` (`row_key`), `Path` (`label_path`), Kind, Disposition, Concept (`unknown` у abstain), `Cells` (role-ячейки: `L total: -86400`, `G Start: 01.01.2024`), формула и все значения оси. Заголовок периода — `Y23 (AA)` (ключ и буква колонки). Под таблицей `relations` с теми же `row_key`. Пустая формула у строки, на которую есть ссылка в `graph.md`, — дефект. Params: `## Parameters / {sheet}`, сценарии колонками `Live Case (L)` / `Case 1 (N)` |
+| `context.md` блок | Каждая строка: `Row` (`row_key`), `Path` (`label_path`), Kind, Disposition, Concept (`unknown` у abstain), `Cells` (role-ячейки: `L total: -86400`, `G Start: 01.01.2024`), формула и все значения оси. Ячейка периода показывает кэш и под ним `Sheet!A1`. Заголовок периода — `Y23 (AA)` (ключ и буква колонки). Под таблицей `relations` с теми же `row_key`. Пустая формула у строки, на которую есть ссылка в `graph.md`, — дефект. Params: `## Parameters / {sheet}`, сценарии колонками `Live Case (L)` / `Case 1 (N)` |
 | `context.json` → `blocks[].rows` | Все kind, включая abstract; `disposition`, role-tagged `cells`, ряд `values`; инвариант полноты |
 | `context.json` → `mapping_stats` | `inventory_rows`, `mapped`, `abstained`, `excluded`, `abstract`, `unmapped_series`, completeness, `concept_coverage`, `mapping_quality` |
 | `context.json` → `graph` | Pointer на `graph.json` / parquet, counts, `empty_range_members` |
