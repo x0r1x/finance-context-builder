@@ -88,6 +88,39 @@ def test_healthz(tmp_path: Path) -> None:
         assert client.get("/healthz").json() == {"status": "ok"}
 
 
+def _capture_finance_logs(caplog):
+    caplog.set_level(logging.INFO, logger="finance_context")
+    logging.getLogger("finance_context").addHandler(caplog.handler)
+
+
+def test_healthz_is_not_request_logged(tmp_path: Path, caplog) -> None:
+    with _app(tmp_path) as client:
+        _capture_finance_logs(caplog)
+        assert client.get("/healthz").status_code == 200
+    assert not any(record.__dict__.get("event") == "http_start" for record in caplog.records)
+
+
+def test_readyz_logs_request_start_and_done(tmp_path: Path, caplog) -> None:
+    with _app(tmp_path) as client:
+        _capture_finance_logs(caplog)
+        response = client.get("/readyz?probe=1")
+    assert response.status_code == 200
+    assert any(
+        record.__dict__.get("event") == "http_start"
+        and record.__dict__.get("method") == "GET"
+        and record.__dict__.get("path") == "/readyz?probe=1"
+        for record in caplog.records
+    )
+    assert any(
+        record.__dict__.get("event") == "http_done"
+        and record.__dict__.get("method") == "GET"
+        and record.__dict__.get("path") == "/readyz?probe=1"
+        and record.__dict__.get("http_code") == 200
+        and isinstance(record.__dict__.get("duration_ms"), int)
+        for record in caplog.records
+    )
+
+
 def test_rejects_unsupported_extension(tmp_path: Path) -> None:
     with _app(tmp_path) as client:
         response = client.post(
@@ -281,6 +314,19 @@ def test_ready_post_logs_job_reuse_and_does_not_launch(tmp_path: Path, caplog) -
         and record.__dict__.get("job_id") == job_id
         and record.__dict__.get("status") == "succeeded"
         and record.__dict__.get("stage") == "done"
+        for record in caplog.records
+    )
+    assert any(
+        record.__dict__.get("event") == "http_start"
+        and record.__dict__.get("method") == "POST"
+        and record.__dict__.get("path") == "/v1/context-jobs"
+        for record in caplog.records
+    )
+    assert any(
+        record.__dict__.get("event") == "http_done"
+        and record.__dict__.get("method") == "POST"
+        and record.__dict__.get("path") == "/v1/context-jobs"
+        and record.__dict__.get("http_code") == 202
         for record in caplog.records
     )
 
