@@ -30,6 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data_dir=settings.data_dir,
         bus=bus,
         timeout_sec=settings.job_timeout_sec,
+        max_concurrent_jobs=settings.max_concurrent_jobs,
     )
 
     @asynccontextmanager

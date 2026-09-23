@@ -7,6 +7,7 @@ import typer
 import uvicorn
 
 from finance_context.adapters.disk_store import DiskStore
+from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.pipeline import Pipeline
 from finance_context.observability import configure_logging
@@ -21,6 +22,7 @@ def build(
     source: Path,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     data_dir: Annotated[Path, typer.Option("--data-dir")] = _DEFAULT_DATA_DIR,
+    remap: Annotated[bool, typer.Option("--remap")] = False,
 ) -> None:
     """Parse an Excel workbook and write context and graph as JSON and Markdown."""
     settings = Settings(data_dir=data_dir)
@@ -35,16 +37,27 @@ def build(
         dest / "owner.json",
         {"content_sha256": digest, "source_filename": source.name},
     )
+    published = (
+        dest / "context.json",
+        dest / "context.md",
+        dest / "graph.json",
+        dest / "graph.md",
+    )
+    if not remap and published[0].is_file() and published[1].is_file():
+        for path in published:
+            typer.echo(path)
+        typer.echo("reused")
+        return
+    if remap:
+        clear_downstream_artifacts(dest)
     doc = Pipeline(settings).run(
         dest,
         job_id=job_id,
         source_filename=source.name,
         content_sha256=digest,
     )
-    typer.echo(dest / "context.json")
-    typer.echo(dest / "context.md")
-    typer.echo(dest / "graph.json")
-    typer.echo(dest / "graph.md")
+    for path in published:
+        typer.echo(path)
     typer.echo(doc.meta.status)
 
 
@@ -59,4 +72,10 @@ def serve(
         import os
 
         os.environ["DATA_DIR"] = str(data_dir)
-    uvicorn.run("finance_context.api.app:app_from_env", host=host, port=port, factory=True)
+    uvicorn.run(
+        "finance_context.api.app:app_from_env",
+        host=host,
+        port=port,
+        factory=True,
+        workers=1,
+    )

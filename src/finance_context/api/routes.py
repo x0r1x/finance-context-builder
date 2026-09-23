@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from finance_context.api.context import AppContext
 from finance_context.api.errors import ApiError
 from finance_context.api.schemas import ErrorBody, HealthBody, JobBody, ReadyBody
+from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.errors import ContextError
 from finance_context.excel.zip_guard import open_xlsx_zip
@@ -23,6 +27,7 @@ from finance_context.store.fs import atomic_write_bytes, file_lock, write_json
 router = APIRouter()
 _LOGGER = logging.getLogger("finance_context.api")
 _ALLOWED = {".xlsx", ".xlsm"}
+_JOB_ID = re.compile(r"^[0-9a-f]{64}$")
 _From = Annotated[
     str,
     Query(alias="from", description="Cell address, row_key, or concept_id."),
@@ -62,15 +67,33 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/readyz", response_model=ReadyBody, summary="Process can accept work")
-async def readyz(request: Request) -> dict[str, object]:
-    settings = _ctx(request).settings
-    return {
-        "status": "ready",
+@router.get(
+    "/readyz",
+    response_model=ReadyBody,
+    summary="Process can accept work",
+    responses={503: {"model": ReadyBody}},
+)
+async def readyz(request: Request) -> JSONResponse:
+    ctx = _ctx(request)
+    settings = ctx.settings
+    writable = _data_dir_writable(settings.data_dir)
+    body = {
+        "status": "ready" if writable else "unavailable",
         "llm": settings.llm_configured(),
         "embeddings": settings.embed_configured(),
         "queue": "in_process",
+        "jobs": ctx.processes.alive_count(),
     }
+    return JSONResponse(body, status_code=200 if writable else 503)
+
+
+def _data_dir_writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(dir=path, prefix=".ready-", delete=True):
+            return True
+    except OSError:
+        return False
 
 
 @router.post(
@@ -78,7 +101,7 @@ async def readyz(request: Request) -> dict[str, object]:
     status_code=202,
     response_model=JobBody,
     summary="Upload a workbook and start or reuse its job",
-    responses=_errors(400, 413, 422),
+    responses=_errors(400, 413, 422, 429),
 )
 async def post_job(
     request: Request,
@@ -117,16 +140,21 @@ async def post_job(
         return JSONResponse(_running_body(job_id, dest), status_code=202)
     if do_remap and ctx.processes.is_alive(job_id):
         ctx.processes.stop(job_id)
-    started = False
     with file_lock(dest / ".lock", blocking=False) as acquired:
         if not acquired:
             return JSONResponse(_running_body(job_id, dest), status_code=202)
         live = ctx.bus.get(job_id)
         if not do_remap and live is not None and live.status in {"queued", "running"}:
-            return JSONResponse(
-                {"job_id": job_id, "status": live.status, "stage": live.stage},
-                status_code=202,
-            )
+            if ctx.processes.is_alive(job_id):
+                return JSONResponse(
+                    {"job_id": job_id, "status": live.status, "stage": live.stage},
+                    status_code=202,
+                )
+            if not ctx.bus.abandon(job_id, live.generation, "process_lost"):
+                return JSONResponse(
+                    {"job_id": job_id, "status": live.status, "stage": live.stage},
+                    status_code=202,
+                )
         if not do_remap:
             ready = _ready_meta(dest)
             if ready is not None:
@@ -147,17 +175,27 @@ async def post_job(
                     },
                     status_code=202,
                 )
-        _clear_downstream_artifacts(dest)
-        log_event(
-            _LOGGER,
-            logging.INFO,
-            "job_remap",
-            "layout and mapping artifacts invalidated",
-            job_id=job_id,
-        )
-        started = await ctx.bus.enqueue(job_id)
-    if started:
-        ctx.processes.launch(job_id)
+        if not ctx.processes.try_acquire(job_id):
+            raise ApiError(429, "too_many_jobs")
+        try:
+            clear_downstream_artifacts(dest)
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "job_remap",
+                "layout and mapping artifacts invalidated",
+                job_id=job_id,
+            )
+            started = ctx.bus.enqueue(job_id)
+            launched = ctx.processes.launch(job_id) if started else False
+        except Exception:
+            ctx.processes.release_reservation(job_id)
+            raise
+        if not launched:
+            ctx.processes.release_reservation(job_id)
+            if started:
+                ctx.bus.abandon(job_id, ctx.bus.current_generation(job_id), "too_many_jobs")
+                raise ApiError(429, "too_many_jobs")
     rec = ctx.bus.get(job_id)
     return JSONResponse(
         {
@@ -167,30 +205,6 @@ async def post_job(
         },
         status_code=202,
     )
-
-
-def _clear_downstream_artifacts(dest: Path) -> None:
-    for name in (
-        "layout.json",
-        "mapping.json",
-        "context.json",
-        "context.md",
-        "context.md.renderer",
-        "meta.json",
-        "graph.json",
-        "graph.md",
-        "graph-edges.json",
-        "graph-dangling.json",
-        "formulas.json",
-    ):
-        (dest / name).unlink(missing_ok=True)
-    ir = dest / "ir"
-    # Formula IR depends only on the workbook bytes. A remap of the same source keeps it.
-    if not (dest / "source.xlsx").is_file():
-        for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet"):
-            (ir / name).unlink(missing_ok=True)
-    (ir / "graph_index.parquet").unlink(missing_ok=True)
-    (ir / "graph_edges.parquet").unlink(missing_ok=True)
 
 
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
@@ -238,6 +252,7 @@ def _ready_meta(dest: Path) -> dict | None:
     responses={202: {"model": JobBody}, **_errors(404)},
 )
 async def get_job(request: Request, job_id: str) -> JSONResponse:
+    _check_job_id(job_id)
     ctx = _ctx(request)
     dest = ctx.store.dest_dir(job_id)
     if not dest.exists():
@@ -280,10 +295,9 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     summary="Context JSON",
     responses=_errors(404, 409),
 )
-async def get_context_json(request: Request, job_id: str) -> JSONResponse:
+async def get_context_json(request: Request, job_id: str) -> FileResponse:
     path = _require_artifact(request, job_id, "context.json")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return JSONResponse(payload)
+    return FileResponse(path, media_type="application/json")
 
 
 @router.get(
@@ -292,9 +306,9 @@ async def get_context_json(request: Request, job_id: str) -> JSONResponse:
     summary="Context Markdown",
     responses={200: _MARKDOWN, **_errors(404, 409)},
 )
-async def get_context_md(request: Request, job_id: str) -> PlainTextResponse:
+async def get_context_md(request: Request, job_id: str) -> FileResponse:
     path = _require_artifact(request, job_id, "context.md")
-    if refresh_context_markdown(path.parent):
+    if await asyncio.to_thread(refresh_context_markdown, path.parent):
         log_event(
             _LOGGER,
             logging.INFO,
@@ -302,7 +316,7 @@ async def get_context_md(request: Request, job_id: str) -> PlainTextResponse:
             "context.md rewritten from context.json",
             job_id=job_id,
         )
-    return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/markdown")
+    return FileResponse(path, media_type="text/markdown")
 
 
 @router.get(
@@ -311,10 +325,9 @@ async def get_context_md(request: Request, job_id: str) -> PlainTextResponse:
     summary="Formula graph JSON",
     responses=_errors(404, 409),
 )
-async def get_graph_json(request: Request, job_id: str) -> JSONResponse:
+async def get_graph_json(request: Request, job_id: str) -> FileResponse:
     path = _require_artifact(request, job_id, "graph.json")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return JSONResponse(payload)
+    return FileResponse(path, media_type="application/json")
 
 
 @router.get(
@@ -323,9 +336,9 @@ async def get_graph_json(request: Request, job_id: str) -> JSONResponse:
     summary="Formula graph Markdown",
     responses={200: _MARKDOWN, **_errors(404, 409)},
 )
-async def get_graph_md(request: Request, job_id: str) -> PlainTextResponse:
+async def get_graph_md(request: Request, job_id: str) -> FileResponse:
     path = _require_artifact(request, job_id, "graph.md")
-    return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/markdown")
+    return FileResponse(path, media_type="text/markdown")
 
 
 @router.get(
@@ -341,6 +354,7 @@ async def get_graph_trace(
     direction: _Direction = "precedents",
     depth: _Depth = 8,
 ) -> JSONResponse:
+    _check_job_id(job_id)
     dest = _ctx(request).store.dest_dir(job_id)
     if not dest.exists():
         raise ApiError(404, "not_found")
@@ -348,7 +362,9 @@ async def get_graph_trace(
         raise ApiError(409, "report_not_ready")
     from finance_context.graph.trace import trace_graph
 
-    doc = trace_graph(dest, origin=origin, direction=direction, depth=depth)
+    doc = await asyncio.to_thread(
+        trace_graph, dest, origin=origin, direction=direction, depth=depth
+    )
     return JSONResponse(doc.model_dump(mode="json"))
 
 
@@ -365,6 +381,7 @@ async def get_graph_trace_md(
     direction: _Direction = "precedents",
     depth: _Depth = 8,
 ) -> PlainTextResponse:
+    _check_job_id(job_id)
     dest = _ctx(request).store.dest_dir(job_id)
     if not dest.exists():
         raise ApiError(404, "not_found")
@@ -373,11 +390,20 @@ async def get_graph_trace_md(
     from finance_context.graph.trace import trace_graph
     from finance_context.render.graph import render_trace_markdown
 
-    doc = trace_graph(dest, origin=origin, direction=direction, depth=depth)
-    return PlainTextResponse(render_trace_markdown(doc), media_type="text/markdown")
+    doc = await asyncio.to_thread(
+        trace_graph, dest, origin=origin, direction=direction, depth=depth
+    )
+    body = await asyncio.to_thread(render_trace_markdown, doc)
+    return PlainTextResponse(body, media_type="text/markdown")
+
+
+def _check_job_id(job_id: str) -> None:
+    if _JOB_ID.fullmatch(job_id) is None:
+        raise ApiError(404, "not_found")
 
 
 def _require_artifact(request: Request, job_id: str, name: str) -> Path:
+    _check_job_id(job_id)
     dest = _ctx(request).store.dest_dir(job_id)
     path = dest / name
     if not dest.exists():
@@ -411,8 +437,6 @@ def _validate_upload(filename: str, data: bytes, max_bytes: int) -> None:
         raise ContextError("empty_file")
     if len(data) > max_bytes:
         raise ContextError("file_too_large")
-    from tempfile import NamedTemporaryFile
-
     with NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
         tmp.write(data)
         tmp.flush()

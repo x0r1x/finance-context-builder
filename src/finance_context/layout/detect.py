@@ -1187,11 +1187,16 @@ def _data_rows(
             if prev.indent < indent:
                 parent_row = prev.row
                 break
+        # A fact in the same column as its section header has no shallower indent.
+        # section_path already kept that header; parent_row should name it too.
+        if parent_row is None and section_stack and kind != "abstract":
+            parent_row = section_stack[-1].row
         # `Total` shares the section header's indent, so the outline parent is the
         # statement (`Balance Sheet`) and gold cannot tell Current from Non-current.
         if (
             section_stack
-            and label.strip().casefold() in {"total", "subtotal", "sub total", "sum", "итого", "всего"}
+            and label.strip().casefold()
+            in {"total", "subtotal", "sub total", "sum", "итого", "всего"}
             and (parent_row is None or parent_row in {item.row for item in section_stack})
         ):
             parent_row = section_stack[-1].row

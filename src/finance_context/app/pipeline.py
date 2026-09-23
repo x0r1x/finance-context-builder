@@ -23,9 +23,11 @@ from finance_context.observability import configure_logging, job_id_var, log_eve
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 from finance_context.render.markdown import refresh_context_markdown, write_context_markdown
 from finance_context.settings import Settings
-from finance_context.store.fs import file_lock, read_parquet, write_json
+from finance_context.store.fs import file_lock, read_parquet, update_json
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
+_TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
+_READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
 
 
 class Pipeline:
@@ -50,6 +52,7 @@ class Pipeline:
         source_filename: str | None = None,
         content_sha256: str | None = None,
         progress: object | None = None,
+        generation: int = 0,
     ) -> ContextDocument:
         token_job = job_id_var.set(job_id)
         try:
@@ -61,6 +64,7 @@ class Pipeline:
                     source_filename=source_filename,
                     content_sha256=content_sha256,
                     progress=progress,
+                    generation=generation,
                 )
         finally:
             job_id_var.reset(token_job)
@@ -73,6 +77,7 @@ class Pipeline:
         source_filename: str | None,
         content_sha256: str | None,
         progress: object | None,
+        generation: int,
     ) -> ContextDocument:
         dest_dir.mkdir(parents=True, exist_ok=True)
         context_path = dest_dir / "context.json"
@@ -92,6 +97,7 @@ class Pipeline:
                 content_sha256=content_sha256,
                 progress=progress,
                 prefetch=prefetch,
+                generation=generation,
             )
         finally:
             if prefetch is not None:
@@ -106,6 +112,7 @@ class Pipeline:
         content_sha256: str | None,
         progress: object | None,
         prefetch: TaxonomyPrefetch | None,
+        generation: int,
     ) -> ContextDocument:
         source = dest_dir / "source.xlsx"
         owner = _load_owner(dest_dir)
@@ -121,6 +128,7 @@ class Pipeline:
                 stage=stage,
                 source_filename=source_filename,
                 content_sha256=content_sha256,
+                generation=generation,
             )
             if progress is not None:
                 fn = getattr(progress, "progress", None)
@@ -241,39 +249,45 @@ class Pipeline:
             content_sha256=content_sha256,
             warnings=doc.warnings,
             questions=[q.model_dump(mode="json") for q in mapping.questions],
+            generation=generation,
         )
         return doc
 
 
-def run_job_process(data_dir: str, job_id: str) -> None:
+def run_job_process(data_dir: str, job_id: str, generation: int = 0) -> None:
     """Entry point for a spawned interpreter. Runs one book on this process's main thread."""
     settings = Settings(data_dir=Path(data_dir))
     configure_logging(level=settings.log_level, json_output=settings.log_json)
     _install_stage_pause()
     dest = settings.data_dir / "jobs" / job_id
     try:
-        Pipeline(settings).run(dest, job_id=job_id)
+        Pipeline(settings).run(dest, job_id=job_id, generation=generation)
     except Exception as exc:
-        mark_job_failed(dest, job_id, type(exc).__name__)
+        mark_job_failed(dest, job_id, type(exc).__name__, generation)
         raise
 
 
-def mark_job_failed(dest: Path, job_id: str, error: str) -> None:
-    ready = ("context.json", "context.md", "graph.json", "graph.md")
-    if all((dest / name).is_file() for name in ready):
-        return
+def mark_job_failed(dest: Path, job_id: str, error: str, generation: int = 0) -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    write_json(
-        dest / "meta.json",
-        {
+
+    def mutate(current: dict) -> dict:
+        seen = _stored_generation(current)
+        if seen is not None and seen != generation:
+            return current
+        ready = all((dest / name).is_file() for name in _READY_ARTIFACTS)
+        if ready and current.get("status") in _TERMINAL_STATUS:
+            return current
+        return {
             "job_id": job_id,
             "status": "failed",
             "stage": "failed",
             "error": error,
             "warnings": [],
             "questions": [],
-        },
-    )
+            "generation": generation,
+        }
+
+    update_json(dest / "meta.json", mutate)
 
 
 def _install_stage_pause() -> None:
@@ -363,7 +377,17 @@ def _timed(stage: str, fn):
         stage_var.reset(token)
 
 
+def _stored_generation(payload: dict) -> int | None:
+    if "generation" not in payload:
+        return None
+    try:
+        return int(payload["generation"])
+    except (TypeError, ValueError):
+        return None
+
+
 def _write_meta(dest_dir: Path, **fields: object) -> None:
+    generation = int(fields.get("generation") or 0)
     meta = ArtifactMeta(
         job_id=str(fields["job_id"]),
         status=fields.get("status", "running"),  # type: ignore[arg-type]
@@ -373,8 +397,16 @@ def _write_meta(dest_dir: Path, **fields: object) -> None:
         warnings=list(fields.get("warnings") or []),  # type: ignore[arg-type]
         questions=list(fields.get("questions") or []),  # type: ignore[arg-type]
         error=fields.get("error"),  # type: ignore[arg-type]
-    )
-    write_json(dest_dir / "meta.json", meta.model_dump(mode="json"))
+    ).model_dump(mode="json")
+    meta["generation"] = generation
+
+    def mutate(current: dict) -> dict:
+        seen = _stored_generation(current)
+        if seen is not None and seen > generation:
+            return current
+        return meta
+
+    update_json(dest_dir / "meta.json", mutate)
 
 
 def _write_sorted_json(path: Path, data: dict) -> None:

@@ -13,7 +13,7 @@ Guides: [overview](docs/en/overview.md), [layout](docs/en/layout.md), [mapping](
 - `.xls`, `.xlsb`, and encrypted workbooks are rejected
 - Cached formula values must already be in the file
 - LLM/embeddings are optional: mapping falls back to structure + labels, then `unknown`
-- Each new workbook runs in its own process. Parquet under `data/jobs/` is the cache that outlives that process. Inside one run, stages pass row lists and do not reread a file they just wrote. PyArrow reads and writes those files. Multi-replica deploys need an external queue; do not start `uvicorn` with more than one worker.
+- Each new workbook runs in its own process, at most `MAX_CONCURRENT_JOBS` at once (default 2). Parquet under `data/jobs/` is the cache that outlives that process. Inside one run, stages pass row lists and do not reread a file they just wrote. PyArrow reads and writes those files. `finance-context serve` starts one worker: several API replicas on one data directory are not supported.
 
 Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). See `NOTICE`.
 
@@ -44,7 +44,7 @@ Fill `LLM_API_KEY` / `EMBEDDING_API_KEY` (LM Studio token) and model ids if you 
 uv run finance-context build path/to/model.xlsx -o ./out
 ```
 
-Writes `context.json`, `context.md`, `graph.json`, and `graph.md`.
+Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If `context.json` and `context.md` are already in the output directory, the command prints `reused` and does not run the pipeline. `--remap` deletes layout, mapping, and the published documents, then builds them again; parse and formula IR for the same book stay.
 
 To extract rows that the mapping stage left without a concept, run:
 
@@ -121,10 +121,11 @@ HTTP `error` codes:
 | `zip_rejected` | 422 |
 | `not_found` | 404 |
 | `report_not_ready` | 409 |
+| `too_many_jobs` | 429 |
 
 `report_not_ready` is an artifact or trace fetched before the job has written that file.
 
-Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. `GET /readyz` reports `queue: in_process`: the job list lives in this API process, and each book runs in a child of it.
+Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503.
 
 Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows are excluded from review questions; they stay in the block with `disposition=excluded`. Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
 
@@ -135,7 +136,7 @@ cp .env.example .env   # optional; LLM/embeddings may stay unset
 docker compose up --build
 ```
 
-Leave Compose running. API: `http://127.0.0.1:8080`. Job artifacts and `glossary.json` go to `./data` on the host. Compose mounts **`./data` only**, not `src/`: taxonomy and mapping code are whatever was baked into the image — rebuild after ontology changes.
+Leave Compose running. The API is published only on `127.0.0.1:8080`. Job artifacts and `glossary.json` go to `./data` on the host. Compose mounts **`./data` only**, not `src/`: taxonomy and mapping code are whatever was baked into the image — rebuild after ontology changes.
 
 Loopback LLM URLs in `.env` (`http://127.0.0.1:1234/v1`) are rewritten to `host.docker.internal` inside the container so LM Studio on the host stays reachable. Keep the model server listening on all interfaces or on the host gateway, not only inside another isolated network.
 
@@ -143,7 +144,7 @@ API container without Compose. The image command is `finance-context serve`:
 
 ```bash
 docker build -t finance-context-builder .
-docker run --rm -v "$PWD/data:/app/data" --env-file .env -p 8080:8080 \
+docker run --rm -v "$PWD/data:/app/data" --env-file .env -p 127.0.0.1:8080:8080 \
   --add-host=host.docker.internal:host-gateway finance-context-builder
 ```
 

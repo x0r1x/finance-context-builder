@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import threading
 from dataclasses import dataclass, field
 
@@ -19,13 +18,12 @@ class JobRecord:
 
 @dataclass
 class MemoryJobBus:
-    """In-process queue. Replace with Redis for multi-replica deploys."""
+    """Live job records for this API process. Run status is read from meta.json."""
 
-    _queue: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
     _live: dict[str, JobRecord] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    async def enqueue(self, job_id: str) -> bool:
+    def enqueue(self, job_id: str) -> bool:
         """Register a new run. False when this job is already queued or running."""
         with self._lock:
             rec = self._live.get(job_id)
@@ -33,17 +31,7 @@ class MemoryJobBus:
                 return False
             generation = 1 if rec is None else rec.generation + 1
             self._live[job_id] = JobRecord(job_id=job_id, generation=generation)
-        await self._queue.put(job_id)
         return True
-
-    async def claim(self) -> str | None:
-        job_id = await self._queue.get()
-        with self._lock:
-            rec = self._live.get(job_id)
-            if rec is not None and not rec.cancel and rec.status in {"queued", "running"}:
-                rec.status = "running"
-                rec.stage = "parse"
-        return job_id
 
     def get(self, job_id: str) -> JobRecord | None:
         with self._lock:
@@ -89,7 +77,8 @@ class MemoryJobBus:
             rec.stage = stage
             rec.status = "running"
 
-    def expire(self, job_id: str, generation: int) -> bool:
+    def abandon(self, job_id: str, generation: int, error: str) -> bool:
+        """Mark this generation failed so a later enqueue can start another run."""
         with self._lock:
             rec = self._live.get(job_id)
             if rec is None or rec.generation != generation:
@@ -99,8 +88,11 @@ class MemoryJobBus:
             rec.cancel = True
             rec.status = "failed"
             rec.stage = "failed"
-            rec.error = "TimeoutError"
+            rec.error = error
             return True
+
+    def expire(self, job_id: str, generation: int) -> bool:
+        return self.abandon(job_id, generation, "TimeoutError")
 
     def set_terminal(
         self,
