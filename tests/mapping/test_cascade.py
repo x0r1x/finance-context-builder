@@ -126,6 +126,55 @@ def test_glossary_exact_beats_knn() -> None:
     assert embed.calls == 0
 
 
+def test_glossary_hit_logs_model_skip(caplog) -> None:
+    embed = FakeEmbed(VECS)
+    chat = FakeChat("pnl.gmv")
+    layout = _layout(LayoutRow(row=2, label="Выручка"))
+    caplog.set_level(logging.INFO, logger="finance_context")
+    map_layout(
+        layout,
+        taxonomy=TAXONOMY,
+        glossary={("выручка", ""): "pnl.revenue"},
+        embed=embed,
+        chat=chat,
+        slots=GrantSlots(),
+    )
+    assert embed.calls == 0
+    assert chat.calls == 0
+    skips = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("event") == "model_skip"
+        and record.__dict__.get("reason") == "resolved"
+        and record.__dict__.get("skipped") is True
+        and record.__dict__.get("count") == 0
+    ]
+    assert {record.__dict__.get("port") for record in skips} == {"embed", "chat"}
+
+
+def test_missing_ports_log_unconfigured(caplog) -> None:
+    layout = _layout(LayoutRow(row=2, label="Mystery line"))
+    caplog.set_level(logging.INFO, logger="finance_context")
+    doc = map_layout(
+        layout,
+        taxonomy=TAXONOMY,
+        glossary={},
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    assert doc.rows[0].source == "question"
+    skips = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("event") == "model_skip"
+        and record.__dict__.get("reason") == "unconfigured"
+        and record.__dict__.get("skipped") is True
+        and record.__dict__.get("count") == 1
+    ]
+    assert {record.__dict__.get("port") for record in skips} == {"embed", "chat"}
+
+
 def test_gmv_is_not_pnl_revenue() -> None:
     layout = _layout(LayoutRow(row=2, label="GMV"))
     doc = map_layout(

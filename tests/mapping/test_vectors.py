@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import logging
 import threading
 from pathlib import Path
 
@@ -24,6 +25,24 @@ def test_second_load_reuses_npz(tmp_path: Path) -> None:
     reused = load_concept_vectors(second, TAXONOMY, cache_path=path, model="m")
     assert second.calls == 0
     assert reused["pnl.revenue"] == [1.0, 0.0, 0.0]
+
+
+def test_npz_hit_logs_cache_and_skips_embed(tmp_path: Path, caplog) -> None:
+    path = tmp_path / "taxonomy_embeddings.npz"
+    first = FakeEmbed({"revenue": [1.0, 0.0, 0.0]})
+    load_concept_vectors(first, TAXONOMY, cache_path=path, model="m")
+    caplog.set_level(logging.INFO, logger="finance_context")
+    caplog.clear()
+    second = FakeEmbed({"revenue": [0.0, 1.0, 0.0]})
+    load_concept_vectors(second, TAXONOMY, cache_path=path, model="m")
+    assert second.calls == 0
+    assert any(
+        record.__dict__.get("event") == "embed_cache"
+        and record.__dict__.get("reason") == "cache"
+        and record.__dict__.get("port") == "embed"
+        and record.__dict__.get("count") == 1
+        for record in caplog.records
+    )
 
 
 def test_npz_invalidated_when_model_changes(tmp_path: Path) -> None:

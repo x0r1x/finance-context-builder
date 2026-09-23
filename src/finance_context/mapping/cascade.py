@@ -121,6 +121,8 @@ def map_layout(
             signals,
             concept_index,
         )
+    else:
+        _log_model_skip("embed", need_knn, embed)
 
     need_chat = [
         ctx for ctx in pending if ctx.row_key not in book.concepts and not exclusion_reason(ctx)
@@ -137,6 +139,8 @@ def map_layout(
             index,
             llm_concurrency=llm_concurrency,
         )
+    else:
+        _log_model_skip("chat", need_chat, chat)
     for ctx in pending:
         if ctx.row_key not in book.concepts and not exclusion_reason(ctx):
             _resolve_row(ctx, book, [StructureSignal()], resolver)
@@ -190,6 +194,19 @@ class _Pending:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.ctx, name)
+
+
+def _log_model_skip(port: str, pending: list, client: object) -> None:
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "model_skip",
+        "model not called",
+        port=port,
+        count=len(pending),
+        reason="unconfigured" if pending and client is None else "resolved",
+        skipped=True,
+    )
 
 
 def _collect_contexts(

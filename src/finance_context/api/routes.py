@@ -129,6 +129,15 @@ async def post_job(
         if not do_remap:
             ready = _ready_meta(dest)
             if ready is not None:
+                log_event(
+                    _LOGGER,
+                    logging.INFO,
+                    "job_reuse",
+                    "finished job reused",
+                    job_id=job_id,
+                    status=ready.get("status"),
+                    stage=ready.get("stage"),
+                )
                 return JSONResponse(
                     {
                         "job_id": job_id,
