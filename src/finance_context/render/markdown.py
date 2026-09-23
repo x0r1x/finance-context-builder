@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from finance_context.context.measure import Measure
 from finance_context.context.series import format_number
 from finance_context.excel.a1 import index_to_col
@@ -12,6 +14,9 @@ from finance_context.models.context import (
 )
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
+# Bump when period-cell text changes, so a finished job rewrites context.md.
+MARKDOWN_RENDERER = "period-cell-bracket"
+_RENDERER_STAMP = "context.md.renderer"
 
 
 def render_markdown(doc: ContextDocument) -> str:
@@ -40,6 +45,33 @@ def render_markdown(doc: ContextDocument) -> str:
     for block in doc.blocks:
         lines.extend(_block_section(block, axes_by_id))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def write_context_markdown(dest: Path, doc: ContextDocument) -> None:
+    """Write context.md and the renderer stamp. The workbook is not read."""
+    dest.mkdir(parents=True, exist_ok=True)
+    tmp = dest / "context.md.tmp"
+    tmp.write_text(render_markdown(doc), encoding="utf-8")
+    tmp.replace(dest / "context.md")
+    (dest / _RENDERER_STAMP).write_text(MARKDOWN_RENDERER + "\n", encoding="utf-8")
+
+
+def refresh_context_markdown(dest: Path) -> bool:
+    """Rewrite context.md from context.json when the renderer stamp is old.
+
+    A matching stamp leaves the file alone. Graph files and the workbook stay.
+    """
+    markdown_path = dest / "context.md"
+    stamp_path = dest / _RENDERER_STAMP
+    current = stamp_path.read_text(encoding="utf-8").strip() if stamp_path.is_file() else ""
+    if current == MARKDOWN_RENDERER and markdown_path.is_file():
+        return False
+    context_path = dest / "context.json"
+    if not context_path.is_file():
+        return False
+    doc = ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
+    write_context_markdown(dest, doc)
+    return True
 
 
 def _coverage_lines(doc: ContextDocument) -> list[str]:
@@ -395,7 +427,7 @@ def _series_cell(
         elif normalized and text and _differs(text, normalized):
             text = f"{text} ({normalized})"
     if addr:
-        return f"{text}<br>{addr}"
+        return f"{text} [{addr}]"
     return text
 
 
