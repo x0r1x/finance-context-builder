@@ -92,7 +92,9 @@ def detect_layout(
     for name, sheet_cells in by_sheet.items():
         blocks, axes = _blocks_for_sheet(name, sheet_cells, date1904, edges)
         sheets.append(SheetLayout(name=name, blocks=blocks, axes=axes))
-    return Layout(sheets=sheets)
+    layout = Layout(sheets=sheets)
+    _link_workbook_timelines(layout, cells, date1904)
+    return layout
 
 
 def _blocks_for_sheet(
@@ -220,6 +222,169 @@ def _period_count(axis: TimeAxis) -> int:
 
 def _axis_cols(axis: TimeAxis) -> set[int]:
     return {period.col for period in axis.periods}
+
+
+_SHARE_GRAINS = frozenset({"model_year", "year"})
+
+
+def _link_workbook_timelines(layout: Layout, cells: list[dict], date1904: bool) -> None:
+    """Same period-key sequence shares one published axis. Columns stay local."""
+    by_addr = {
+        (str(cell["sheet"]), int(cell["row"]), int(cell["col"])): cell for cell in cells
+    }
+    located: list[tuple[int, int, SheetLayout, TimeAxis]] = []
+    for sheet_index, sheet in enumerate(layout.sheets):
+        for axis_index, axis in enumerate(sheet.axes):
+            located.append((sheet_index, axis_index, sheet, axis))
+    groups: dict[tuple, list[_TimelineMember]] = {}
+    for sheet_index, axis_index, sheet, axis in located:
+        signature = _workbook_timeline_signature(axis)
+        if signature is None:
+            continue
+        member = _TimelineMember(
+            sheet_index=sheet_index,
+            axis_index=axis_index,
+            sheet=sheet,
+            axis=axis,
+            dates=_timeline_dates(axis),
+            flags=_timeline_flags(sheet, axis, by_addr, date1904),
+        )
+        groups.setdefault(signature, []).append(member)
+    alias: dict[str, str] = {}
+    for members in groups.values():
+        for bucket in _timeline_buckets(members):
+            if len(bucket) < 2:
+                continue
+            canonical = max(bucket, key=_timeline_rank)
+            for member in bucket:
+                alias[member.axis.id] = canonical.axis.id
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            if getattr(block, "kind", "timeline") != "timeline" or not block.axis_ids:
+                continue
+            block.timeline_ids = [alias.get(axis_id, axis_id) for axis_id in block.axis_ids]
+
+
+def _workbook_timeline_signature(axis: TimeAxis) -> tuple | None:
+    if axis.grain not in _SHARE_GRAINS:
+        return None
+    periods = _timeline_periods(axis)
+    if len(periods) < 3:
+        return None
+    return (
+        axis.grain,
+        tuple((period.period_key, period.role, period.group_key) for period in periods),
+    )
+
+
+def _timeline_periods(axis: TimeAxis) -> list[AxisPeriod]:
+    return [
+        period
+        for period in axis.periods
+        if period.role in _PERIOD_ROLES and period.period_key not in _STRUCTURAL_KEYS
+    ]
+
+
+def _timeline_dates(axis: TimeAxis) -> tuple[tuple[str | None, str | None], ...] | None:
+    dates = tuple((period.start_date, period.end_date) for period in _timeline_periods(axis))
+    if any(start or end for start, end in dates):
+        return dates
+    return None
+
+
+def _timeline_flags(
+    sheet: SheetLayout,
+    axis: TimeAxis,
+    by_addr: dict[tuple[str, int, int], dict],
+    date1904: bool,
+) -> tuple[tuple[str, tuple[bool, ...]], ...] | None:
+    rows = [
+        row
+        for block in sheet.blocks
+        if getattr(block, "kind", "timeline") == "timeline" and axis.id in block.axis_ids
+        for row in block.rows
+        if row.kind == "flag"
+    ]
+    if not rows:
+        return None
+    periods = _timeline_periods(axis)
+    items: list[tuple[str, tuple[bool, ...]]] = []
+    for row in rows:
+        bits = tuple(
+            _flag_bit(by_addr.get((sheet.name, row.row, period.col)), date1904)
+            for period in periods
+        )
+        items.append((row.label, bits))
+    return tuple(items)
+
+
+def _timeline_buckets(members: list[_TimelineMember]) -> list[list[_TimelineMember]]:
+    buckets: list[_TimelineBucket] = []
+    for member in members:
+        placed = False
+        for bucket in buckets:
+            if not _dates_compatible(bucket.dates, member.dates):
+                continue
+            if not _flags_compatible(bucket.flags or (), member.flags or ()):
+                continue
+            bucket.members.append(member)
+            if bucket.dates is None:
+                bucket.dates = member.dates
+            if bucket.flags is None:
+                bucket.flags = member.flags
+            placed = True
+            break
+        if not placed:
+            buckets.append(
+                _TimelineBucket(dates=member.dates, flags=member.flags, members=[member])
+            )
+    return [bucket.members for bucket in buckets]
+
+
+def _dates_compatible(
+    left: tuple[tuple[str | None, str | None], ...] | None,
+    right: tuple[tuple[str | None, str | None], ...] | None,
+) -> bool:
+    if left is None or right is None:
+        return True
+    return left == right
+
+
+def _timeline_rank(member: _TimelineMember) -> tuple[bool, int, int, int]:
+    flag_count = 0 if member.flags is None else len(member.flags)
+    return (member.dates is not None, flag_count, -member.sheet_index, -member.axis_index)
+
+
+class _TimelineMember:
+    def __init__(
+        self,
+        *,
+        sheet_index: int,
+        axis_index: int,
+        sheet: SheetLayout,
+        axis: TimeAxis,
+        dates: tuple[tuple[str | None, str | None], ...] | None,
+        flags: tuple[tuple[str, tuple[bool, ...]], ...] | None,
+    ) -> None:
+        self.sheet_index = sheet_index
+        self.axis_index = axis_index
+        self.sheet = sheet
+        self.axis = axis
+        self.dates = dates
+        self.flags = flags
+
+
+class _TimelineBucket:
+    def __init__(
+        self,
+        *,
+        dates: tuple[tuple[str | None, str | None], ...] | None,
+        flags: tuple[tuple[str, tuple[bool, ...]], ...] | None,
+        members: list[_TimelineMember],
+    ) -> None:
+        self.dates = dates
+        self.flags = flags
+        self.members = members
 
 
 def _axis_signature(axis: TimeAxis) -> tuple:

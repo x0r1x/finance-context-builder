@@ -256,14 +256,17 @@ def _block_section(block: FinancialBlock, axes_by_id: dict[str, ContextAxis]) ->
         for axis in referenced:
             if len(referenced) > 1:
                 lines.extend([f"### `{axis.id}`", ""])
-            headers = [
-                {
-                    "text": period.text,
-                    "period_key": period.period_key,
-                    "col": period.col,
-                }
-                for period in axis.periods
-            ]
+            if len(referenced) == 1 and block.periods:
+                headers = block.periods
+            else:
+                headers = [
+                    {
+                        "text": period.text,
+                        "period_key": period.period_key,
+                        "col": period.col,
+                    }
+                    for period in axis.periods
+                ]
             lines.extend(_value_table(block.rows, headers, axis.id))
     else:
         lines.extend(_value_table(block.rows, block.periods, None))

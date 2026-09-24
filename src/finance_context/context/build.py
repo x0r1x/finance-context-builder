@@ -44,7 +44,6 @@ from finance_context.models.context import (
     CashSemantics,
     ContextAxis,
     ContextDocument,
-    ContextPeriod,
     FinancialBlock,
     GraphPointer,
     MappingEvidence,
@@ -129,21 +128,21 @@ def build_context(
             kind = getattr(block, "kind", "timeline")
             views = _block_views(sheet, block, axes_by_id)
             hint_headers = [header for _axis_id, headers, _phases in views for header in headers]
-            axis_ids = [axis_id for axis_id, _headers, _phases in views] if kind != "params" else []
-            periods = (
-                []
-                if axis_ids
-                else [
-                    {
-                        "col": header.col,
-                        "text": header.text,
-                        "role": header.role,
-                        "period_key": header.period_key,
-                    }
-                    for _axis_id, headers, _phases in views
-                    for header in headers
-                ]
+            axis_ids = (
+                list(dict.fromkeys(axis_id for axis_id, _headers, _phases in views))
+                if kind != "params"
+                else []
             )
+            periods = _local_periods(views, axes_by_id) if axis_ids else [
+                {
+                    "col": header.col,
+                    "text": header.text,
+                    "role": header.role,
+                    "period_key": header.period_key,
+                }
+                for _axis_id, headers, _phases in views
+                for header in headers
+            ]
             rows: list[BlockRow] = []
             parent_by_row = {r.row: r.label for r in block.rows}
             labeled = [r.label for r in block.rows if r.label]
@@ -395,6 +394,31 @@ def _inventory_disposition(mapped: MappedRow | None, layout_row: LayoutRow) -> s
     return None
 
 
+def _local_periods(
+    views: list[tuple[str, list[AxisHeader], dict[str, str | None]]],
+    axes_by_id: dict[str, ContextAxis],
+) -> list[dict[str, object]]:
+    """Column map for a block whose timeline columns differ from the shared axis."""
+    if len(views) != 1:
+        return []
+    axis_id, headers, _phases = views[0]
+    axis = axes_by_id.get(axis_id)
+    if axis is None:
+        return []
+    canon = {period.period_key: period.col for period in axis.periods}
+    if all(canon.get(header.period_key) == header.col for header in headers):
+        return []
+    return [
+        {
+            "col": header.col,
+            "text": header.text,
+            "role": header.role,
+            "period_key": header.period_key,
+        }
+        for header in headers
+    ]
+
+
 def _block_views(
     sheet,
     block,
@@ -409,17 +433,22 @@ def _block_views(
         ]
         return [(block.block_id, headers, {})]
     views: list[tuple[str, list[AxisHeader], dict[str, str | None]]] = []
+    published = list(block.timeline_ids)
+    if len(published) != len(block.axis_ids):
+        published = list(block.axis_ids)
+    published_for = dict(zip(block.axis_ids, published, strict=False))
     for axis in axes_for(sheet, block):
-        annotated = axes_by_id.get(axis.id)
+        published_id = published_for.get(axis.id, axis.id)
+        annotated = axes_by_id.get(published_id)
+        by_key = {period.period_key: period for period in annotated.periods} if annotated else {}
         headers: list[AxisHeader] = []
         phases: dict[str, str | None] = {}
-        source: list[ContextPeriod] | list = (
-            annotated.periods if annotated is not None else axis.periods
-        )
-        for period in source:
-            role = period.role
-            if role not in _SERIES_ROLES:
+        for period in axis.periods:
+            structural = period.period_key in {"actual", "plan", "total", "stub"}
+            if period.role not in _SERIES_ROLES or structural:
                 continue
+            canon = by_key.get(period.period_key)
+            role = canon.role if canon is not None and canon.role in _SERIES_ROLES else period.role
             headers.append(
                 AxisHeader(
                     col=period.col,
@@ -428,9 +457,8 @@ def _block_views(
                     period_key=period.period_key,
                 )
             )
-            phase = getattr(period, "phase", None)
-            phases[period.period_key] = phase
-        views.append((axis.id, headers, phases))
+            phases[period.period_key] = getattr(canon, "phase", None) if canon is not None else None
+        views.append((published_id, headers, phases))
     return views
 
 

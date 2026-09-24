@@ -246,7 +246,10 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert by_id["Y4"].phase == "construction" and by_id["Y4"].phase_year == 4
         assert by_id["Y5"].phase == "operation" and by_id["Y5"].phase_year == 1
         construction = next(block for block in ctx_doc.blocks if block.sheet == "Construction")
-        assert construction.periods == []
+        assert construction.axis_ids == [phased.id]
+        assert construction.periods
+        assert construction.periods[0]["period_key"] == "Y1"
+        assert construction.periods[0]["col"] == 5
         flag_mapped = [row for row in doc.rows if row.exclusion_reason == "flag"]
         assert flag_mapped
         assert all(row.concept_id is None for row in flag_mapped)

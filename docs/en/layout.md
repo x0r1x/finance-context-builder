@@ -36,6 +36,8 @@ The widest candidate is `primary`. What remains:
 
 Calendar columns of one header are split into runs at an empty column and at a grain change (`2020` vs `янв.25`). A year repeated over the same columns as a finer axis does not become an axis: it writes `group_key` onto that axis's periods. A year and a month in one header band with one label column are one table (`axis_ids`): rows once, value series per axis. The same column sequence and keys in the next section's header do not open a second axis: the section points at the first (`Output!r6c3`). Section blocks stay distinct. If two sections put different flags on the same period, the axes are not merged. Week and biweek axes are not collapsed when keys repeat.
 
+The same `model_year` or `year` key sequence is one published axis, even when the columns are shifted or the headers sit on different sheets. A value stays in its own column: `Y1` can be column D on one sheet and E on another. Start, end, phase, and flags come from the fullest axis and match in `context.json` and `context.md`. Axes stay apart when both have dates and those dates disagree, or when two non-empty flag sets differ. `Y1` and `2024` do not merge. Different sequence lengths do not merge either.
+
 `body_rows` are cut from the **filtered** list, not from the raw header bands.
 
 Formula-copy (the same `formula_template` in neighboring columns, length ≥ 3) sets the timeline geometry: headers confirm it. Flags and constants that are not copied along the row are not an axis.
