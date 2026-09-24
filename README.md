@@ -44,7 +44,7 @@ Fill `LLM_API_KEY` / `EMBEDDING_API_KEY` (LM Studio token) and model ids if you 
 uv run finance-context build path/to/model.xlsx -o ./out
 ```
 
-Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If those documents are already in the output directory and `meta.json` carries the same `publisher` hash, the command prints `reused` and does not run the pipeline. A missing or different `publisher` deletes layout, mapping, and the published documents, then builds them again; parse and formula IR for the same book stay.
+Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If those documents are already in the output directory and `meta.json` carries the same `publisher` hash, the command prints `reused` and does not run the pipeline. A missing `publisher`, or a stamp with no `stages` map, deletes layout, mapping, and the published documents, then builds them again; parse and formula IR stay. `meta.stages` names the first changed stage (`compile`, `layout`, `mapping`, `graph`, `publish`), and only that stage and everything after it are deleted. A `publish` change rewrites context and leaves mapping and graph. A `compile` change also deletes `raw/` and formula IR.
 
 To extract rows that the mapping stage left without a concept, run:
 
@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8080/healthz
 curl -s http://127.0.0.1:8080/readyz
 ```
 
-Submit a workbook. `POST` returns **202** and the API starts a process for that book. A repeated POST while the process is alive does not start another, unless the publisher code on disk no longer matches `meta.json`. A repeated POST of a workbook whose snapshot was built by this same code returns that snapshot and does not rebuild. A missing or different `publisher` stops a live process for that book, then rebuilds layout, mapping, and context, reuses parse and formula IR when `ir/compile.json` matches, and calls embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
+Submit a workbook. `POST` returns **202** and the API starts a process for that book. A repeated POST while the process is alive does not start another, unless `meta.json` has a `publisher` stamp and the code on disk no longer matches it. A missing stamp does not stop the live process. A repeated POST of a workbook whose snapshot was built by this same code returns that snapshot and does not rebuild. A missing or different `publisher` rebuilds from the first stale stage. With no `stages` map that is layout, mapping, and context, and parse plus formula IR stay when `ir/compile.json` matches. Embeddings and LLM run again only when mapping itself is rebuilt, and only for rows that structure and labels did not resolve. After an API restart, a job still `queued` or `running` becomes `failed` with `error` `process_lost`. `GET` does the same when that process is already gone. Poll until `status` is terminal:
 
 | status | Meaning |
 | --- | --- |
@@ -80,7 +80,7 @@ Submit a workbook. `POST` returns **202** and the API starts a process for that 
 | `succeeded` | Mapped without open questions |
 | `needs_input` | Context is ready; some fact rows were left `unknown` (review questions) |
 | `degraded` | Same as `needs_input`, but LLM/embeddings were not configured |
-| `failed` | Pipeline error, or the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`); no usable context. Submit the workbook again. |
+| `failed` | Pipeline error, the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`), or the API restarted while the job was still `queued` or `running` (`error` is `process_lost`). Submit the workbook again. |
 
 `needs_input` is not a crash. `context.json`, `context.md`, `graph.json`, and `graph.md` are still served.
 
