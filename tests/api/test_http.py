@@ -619,3 +619,45 @@ def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
             assert repeated.json()["status"] in {"queued", "running"}
     finally:
         pause.unlink(missing_ok=True)
+
+
+def test_startup_marks_orphaned_running_job(tmp_path: Path) -> None:
+    job_id = "ab" * 32
+    dest = tmp_path / "data" / "jobs" / job_id
+    dest.mkdir(parents=True)
+    (dest / "meta.json").write_text(
+        json.dumps(
+            {"job_id": job_id, "status": "running", "stage": "parse", "generation": 2}
+        ),
+        encoding="utf-8",
+    )
+    with _app(tmp_path):
+        stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert stored["status"] == "failed"
+    assert stored["error"] == "process_lost"
+    assert stored["generation"] == 2
+    assert not (dest / "context.json").exists()
+
+
+def test_get_marks_orphaned_running_job(tmp_path: Path) -> None:
+    job_id = "cd" * 32
+    with _app(tmp_path) as client:
+        dest = tmp_path / "data" / "jobs" / job_id
+        dest.mkdir(parents=True)
+        (dest / "meta.json").write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "status": "queued",
+                    "stage": "queued",
+                    "generation": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
+        response = client.get(f"/v1/context-jobs/{job_id}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "failed"
+        assert body["error"] == "process_lost"
+        assert not (dest / "context.json").exists()

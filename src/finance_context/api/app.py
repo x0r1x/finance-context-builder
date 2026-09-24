@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 
@@ -12,7 +14,7 @@ from finance_context.api.context import AppContext
 from finance_context.api.errors import ApiError, api_error_handler, context_error_handler
 from finance_context.api.processes import JobProcesses
 from finance_context.api.routes import router
-from finance_context.app.pipeline import Pipeline
+from finance_context.app.pipeline import Pipeline, mark_job_failed
 from finance_context.errors import ContextError
 from finance_context.observability import configure_logging, log_event
 from finance_context.settings import Settings
@@ -35,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        reconcile_orphaned_jobs(settings.data_dir)
         yield
         processes.stop_all()
 
@@ -56,6 +59,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 def app_from_env() -> FastAPI:
     return create_app(Settings())
+
+
+def reconcile_orphaned_jobs(data_dir: Path) -> None:
+    """A restart has no live children. Jobs left queued or running did not finish."""
+    jobs = data_dir / "jobs"
+    if not jobs.is_dir():
+        return
+    for dest in jobs.iterdir():
+        if not dest.is_dir():
+            continue
+        meta_path = dest / "meta.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(meta, dict) or meta.get("status") not in {"queued", "running"}:
+            continue
+        try:
+            generation = int(meta.get("generation") or 0)
+        except (TypeError, ValueError):
+            generation = 0
+        mark_job_failed(
+            dest,
+            str(meta.get("job_id") or dest.name),
+            "process_lost",
+            generation,
+        )
 
 
 def _request_path(request: Request) -> str:
