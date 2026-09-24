@@ -41,7 +41,7 @@ Across jobs: `$DATA_DIR/glossary.json` (learned high-confidence pairs) and `taxo
 
 `parse → compile → layout → mapping → graph → build → render`.
 
-HTTP starts a separate process for each new book and then reads `meta.json`. CLI `build` stays one process. PyArrow writes parquet: it is the compile cache and the trace input after the process exits. Inside one run, stages pass the row lists they already built. A repeat POST of a finished book returns the snapshot. `?remap=1` stops that book's process and starts a new one. `scripts/run.sh` only polls HTTP. Its `JOB_TIMEOUT_SEC` defaults to 300 seconds and does not stop the process; the server stops the process at its own `JOB_TIMEOUT_SEC` (3600 in `.env.example`).
+HTTP starts a separate process for each new book and then reads `meta.json`. CLI `build` stays one process. PyArrow writes parquet: it is the compile cache and the trace input after the process exits. Inside one run, stages pass the row lists they already built. A repeat POST of a finished book returns the snapshot when `meta.json` `publisher` matches the code on disk. A different or missing `publisher` stops that book's process and starts a new one. `scripts/run.sh` only polls HTTP. Its `JOB_TIMEOUT_SEC` defaults to 300 seconds and does not stop the process; the server stops the process at its own `JOB_TIMEOUT_SEC` (3600 in `.env.example`).
 
 The mapping cascade resolves `fact` / `flag` / `helper`. If the detector built neither a timeline nor params (prose / navigation) or found no article labels, there are no fact rows: the status can be `succeeded` with an empty context. That is layout, not the taxonomy. Details: [layout.md](layout.md).
 

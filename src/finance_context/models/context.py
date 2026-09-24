@@ -196,6 +196,8 @@ class ContextAxis(BaseModel):
     sheet: str
     grain: str | None = None
     header_row: int
+    # Shared key sequence. Equals ``id`` when this axis is not grouped.
+    timeline_id: str | None = None
     periods: list[ContextPeriod] = Field(default_factory=list)
 
 

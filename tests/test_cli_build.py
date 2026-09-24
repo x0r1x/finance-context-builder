@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -20,7 +21,9 @@ def _offline_settings(**kwargs: object) -> Settings:
     )
 
 
-def test_build_reuses_a_snapshot_until_remap(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_build_reuses_a_snapshot_until_the_publisher_changes(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
     monkeypatch.setattr("finance_context.cli.Settings", _offline_settings)
     source = build_xlsx(
         tmp_path / "model.xlsx",
@@ -57,8 +60,13 @@ def test_build_reuses_a_snapshot_until_remap(tmp_path: Path, capsys, monkeypatch
     assert context.stat().st_mtime_ns == stamped
     assert cells.read_bytes() == cell_bytes
 
-    build(source, output=dest, data_dir=data_dir, remap=True)
+    meta_path = dest / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["publisher"] = "stale"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    build(source, output=dest, data_dir=data_dir)
     assert context.stat().st_mtime_ns != stamped
     assert cells.read_bytes() == cell_bytes
     assert raw.is_file()
+    assert json.loads(meta_path.read_text(encoding="utf-8"))["publisher"] != "stale"
     assert "reused" not in capsys.readouterr().out

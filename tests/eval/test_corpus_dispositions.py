@@ -246,7 +246,9 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert by_id["Y4"].phase == "construction" and by_id["Y4"].phase_year == 4
         assert by_id["Y5"].phase == "operation" and by_id["Y5"].phase_year == 1
         construction = next(block for block in ctx_doc.blocks if block.sheet == "Construction")
-        assert construction.axis_ids == [phased.id]
+        local_axis = next(axis for axis in ctx_doc.axes if axis.id == "Construction!r2")
+        assert local_axis.timeline_id == phased.id
+        assert construction.axis_ids == [local_axis.id]
         assert construction.periods
         assert construction.periods[0]["period_key"] == "Y1"
         assert construction.periods[0]["col"] == 5

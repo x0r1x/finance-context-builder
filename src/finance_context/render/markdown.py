@@ -104,25 +104,74 @@ def _quality_lines(doc: ContextDocument) -> list[str]:
 
 
 def _axes_section(axes: list[ContextAxis]) -> list[str]:
-    lines = ["## Axes", ""]
+    groups: dict[str, list[ContextAxis]] = {}
+    order: list[str] = []
     for axis in axes:
-        lines.extend(
-            [
-                f"### `{axis.id}`",
-                "",
-                (
-                    f"Grain: `{axis.grain or 'n/a'}`. "
-                    f"Sheet: `{axis.sheet}`. "
-                    f"Periods: {len(axis.periods)}."
-                ),
-                "",
-            ]
-        )
-        if _month_runs(axis) is not None:
-            lines.extend(_month_summary(axis))
+        key = axis.timeline_id or axis.id
+        if key not in groups:
+            order.append(key)
+            groups[key] = []
+        groups[key].append(axis)
+    lines = ["## Axes", ""]
+    for key in order:
+        members = groups[key]
+        if len(members) < 2:
+            lines.extend(_one_axis(members[0]))
+            continue
+        canon = next((item for item in members if item.id == key), members[0])
+        if _month_runs(canon) is not None:
+            lines.extend(
+                [
+                    f"Grain: `{canon.grain or 'n/a'}`. Periods: {len(canon.periods)}.",
+                    "",
+                ]
+            )
+            lines.extend(_month_summary(canon))
+            lines.append("")
         else:
-            lines.extend(_period_table(axis))
-        lines.append("")
+            lines.extend(_shared_axis_table(members, canon))
+    return lines
+
+
+def _one_axis(axis: ContextAxis) -> list[str]:
+    lines = [
+        f"### `{axis.id}`",
+        "",
+        (
+            f"Grain: `{axis.grain or 'n/a'}`. "
+            f"Sheet: `{axis.sheet}`. "
+            f"Periods: {len(axis.periods)}."
+        ),
+        "",
+    ]
+    if _month_runs(axis) is not None:
+        lines.extend(_month_summary(axis))
+    else:
+        lines.extend(_period_table(axis))
+    lines.append("")
+    return lines
+
+
+def _shared_axis_table(members: list[ContextAxis], canon: ContextAxis) -> list[str]:
+    """One grid: each axis is a row of its column letters, attributes follow once."""
+    header = ["Axis", *[_cell(period.period_key) for period in canon.periods]]
+    lines = [
+        f"Grain: `{canon.grain or 'n/a'}`. Periods: {len(canon.periods)}.",
+        "",
+        _axis_row(header),
+        _axis_row(["---"] * len(header)),
+    ]
+    for axis in members:
+        letters = {period.period_key: _column_letter(period.col) for period in axis.periods}
+        lines.append(
+            _axis_row(
+                [_cell(axis.id), *[letters.get(period.period_key, "") for period in canon.periods]]
+            )
+        )
+    for attribute in _visible_attributes(canon):
+        cells = [attribute, *[_period_cell(attribute, period) for period in canon.periods]]
+        lines.append(_axis_row(cells))
+    lines.append("")
     return lines
 
 
@@ -240,10 +289,24 @@ def _block_section(block: FinancialBlock, axes_by_id: dict[str, ContextAxis]) ->
     )
     if referenced:
         names = ", ".join(f"`{axis.id}`" for axis in referenced)
-        summary = (
-            f"Block: `{block.block_id}`. Kind: `{block.kind}`. "
-            f"Axes: {names}. Rows: {len(block.rows)}."
+        timelines = list(
+            dict.fromkeys(
+                axis.timeline_id
+                for axis in referenced
+                if axis.timeline_id and axis.timeline_id != axis.id
+            )
         )
+        if timelines:
+            shared = ", ".join(f"`{item}`" for item in timelines)
+            summary = (
+                f"Block: `{block.block_id}`. Kind: `{block.kind}`. "
+                f"Axis: {names}. Timeline: {shared}. Rows: {len(block.rows)}."
+            )
+        else:
+            summary = (
+                f"Block: `{block.block_id}`. Kind: `{block.kind}`. "
+                f"Axes: {names}. Rows: {len(block.rows)}."
+            )
     else:
         summary = (
             f"Block: `{block.block_id}`. Kind: `{block.kind}`.{grain} "

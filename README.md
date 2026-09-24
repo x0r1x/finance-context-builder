@@ -44,7 +44,7 @@ Fill `LLM_API_KEY` / `EMBEDDING_API_KEY` (LM Studio token) and model ids if you 
 uv run finance-context build path/to/model.xlsx -o ./out
 ```
 
-Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If `context.json` and `context.md` are already in the output directory, the command prints `reused` and does not run the pipeline. `--remap` deletes layout, mapping, and the published documents, then builds them again; parse and formula IR for the same book stay.
+Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If those documents are already in the output directory and `meta.json` carries the same `publisher` hash, the command prints `reused` and does not run the pipeline. A missing or different `publisher` deletes layout, mapping, and the published documents, then builds them again; parse and formula IR for the same book stay.
 
 To extract rows that the mapping stage left without a concept, run:
 
@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8080/healthz
 curl -s http://127.0.0.1:8080/readyz
 ```
 
-Submit a workbook. `POST` returns **202** and the API starts a process for that book. A repeated POST while the process is alive does not start another. A repeated POST of a workbook that already has context and graph returns that snapshot and does not rebuild. `POST /v1/context-jobs?remap=1` stops the old process, then rebuilds layout, mapping, and context, reuses parse and formula IR when `ir/compile.json` matches, and calls embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
+Submit a workbook. `POST` returns **202** and the API starts a process for that book. A repeated POST while the process is alive does not start another, unless the publisher code on disk no longer matches `meta.json`. A repeated POST of a workbook whose snapshot was built by this same code returns that snapshot and does not rebuild. A missing or different `publisher` stops a live process for that book, then rebuilds layout, mapping, and context, reuses parse and formula IR when `ir/compile.json` matches, and calls embeddings/LLM for rows unresolved by structure and labels. Poll until `status` is terminal:
 
 | status | Meaning |
 | --- | --- |

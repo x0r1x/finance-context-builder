@@ -398,14 +398,15 @@ def _local_periods(
     views: list[tuple[str, list[AxisHeader], dict[str, str | None]]],
     axes_by_id: dict[str, ContextAxis],
 ) -> list[dict[str, object]]:
-    """Column map for a block whose timeline columns differ from the shared axis."""
+    """Column map for a block whose columns differ from the shared timeline."""
     if len(views) != 1:
         return []
     axis_id, headers, _phases = views[0]
-    axis = axes_by_id.get(axis_id)
-    if axis is None:
+    local = axes_by_id.get(axis_id)
+    if local is None:
         return []
-    canon = {period.period_key: period.col for period in axis.periods}
+    shared = axes_by_id.get(local.timeline_id or local.id) or local
+    canon = {period.period_key: period.col for period in shared.periods}
     if all(canon.get(header.period_key) == header.col for header in headers):
         return []
     return [
@@ -458,7 +459,7 @@ def _block_views(
                 )
             )
             phases[period.period_key] = getattr(canon, "phase", None) if canon is not None else None
-        views.append((published_id, headers, phases))
+        views.append((axis.id, headers, phases))
     return views
 
 
