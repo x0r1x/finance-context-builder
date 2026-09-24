@@ -54,8 +54,16 @@ def _hold_stage(tmp_path: Path, monkeypatch, stage: str) -> Path:
     return pause
 
 
+def _job_dir(tmp_path: Path, job_id: str) -> Path:
+    return tmp_path / "data" / "sessions" / "local" / "jobs" / job_id
+
+
+def _book_dir(tmp_path: Path, job_id: str) -> Path:
+    return tmp_path / "data" / "shared" / "books" / job_id
+
+
 def _disk_stage(tmp_path: Path, job_id: str) -> str | None:
-    path = tmp_path / "data" / "jobs" / job_id / "meta.json"
+    path = _job_dir(tmp_path, job_id) / "meta.json"
     if not path.is_file():
         return None
     try:
@@ -259,18 +267,19 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
             "needs_input",
         }
 
-        job_dir = tmp_path / "data" / "jobs" / job_id
-        sentinel = job_dir / "raw" / "keep-on-publisher-change"
+        job_dir = _job_dir(tmp_path, job_id)
+        book_dir = _book_dir(tmp_path, job_id)
+        sentinel = book_dir / "raw" / "keep-on-publisher-change"
         sentinel.write_text("keep", encoding="utf-8")
         mapping_path = job_dir / "mapping.json"
         mapping_path.write_text("not valid json", encoding="utf-8")
-        (job_dir / "layout.json").write_text("{}", encoding="utf-8")
+        (book_dir / "layout.json").write_text("{}", encoding="utf-8")
         meta_path = job_dir / "meta.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["publisher"] = "stale"
         meta_path.write_text(json.dumps(meta), encoding="utf-8")
         ir_bytes = {
-            name: (job_dir / "ir" / name).read_bytes()
+            name: (book_dir / "ir" / name).read_bytes()
             for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet")
         }
 
@@ -284,11 +293,11 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
         }
 
         assert sentinel.read_text(encoding="utf-8") == "keep"
-        assert (job_dir / "source.xlsx").is_file()
-        assert (job_dir / "raw" / "workbook.json").is_file()
+        assert (book_dir / "source.xlsx").is_file()
+        assert (book_dir / "raw" / "workbook.json").is_file()
         for name, payload in ir_bytes.items():
-            assert (job_dir / "ir" / name).read_bytes() == payload
-        layout = json.loads((job_dir / "layout.json").read_text(encoding="utf-8"))
+            assert (book_dir / "ir" / name).read_bytes() == payload
+        layout = json.loads((book_dir / "layout.json").read_text(encoding="utf-8"))
         assert "sheets" in layout
         assert "rows" in json.loads(mapping_path.read_text(encoding="utf-8"))
         assert (job_dir / "context.json").is_file()
@@ -307,7 +316,7 @@ def test_repeat_post_keeps_ready_snapshot(tmp_path: Path) -> None:
             "degraded",
             "needs_input",
         }
-        job_dir = tmp_path / "data" / "jobs" / job_id
+        job_dir = _job_dir(tmp_path, job_id)
         context = (job_dir / "context.json").read_bytes()
         sentinel = job_dir / "graph-edges.json"
         sentinel.write_text("keep", encoding="utf-8")
@@ -339,7 +348,7 @@ def test_job_id_must_be_a_content_hash(tmp_path: Path) -> None:
 
 def test_get_context_md_rewrites_a_finished_job(tmp_path: Path) -> None:
     job_id = "a" * 64
-    dest = tmp_path / "data" / "jobs" / job_id
+    dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
     context = {
         "meta": {"job_id": job_id, "status": "succeeded", "stage": "done"},
@@ -382,7 +391,7 @@ def test_ready_post_logs_job_reuse_and_does_not_launch(tmp_path: Path, caplog) -
     source = _xlsx(tmp_path / "model.xlsx")
     data = source.read_bytes()
     job_id = job_id_for(sha256_bytes(data))
-    dest = tmp_path / "data" / "jobs" / job_id
+    dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
     for name in ("context.json", "context.md", "graph.json", "graph.md"):
         (dest / name).write_text("{}\n", encoding="utf-8")
@@ -623,7 +632,7 @@ def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
 
 def test_startup_marks_orphaned_running_job(tmp_path: Path) -> None:
     job_id = "ab" * 32
-    dest = tmp_path / "data" / "jobs" / job_id
+    dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
     (dest / "meta.json").write_text(
         json.dumps(
@@ -642,7 +651,7 @@ def test_startup_marks_orphaned_running_job(tmp_path: Path) -> None:
 def test_get_marks_orphaned_running_job(tmp_path: Path) -> None:
     job_id = "cd" * 32
     with _app(tmp_path) as client:
-        dest = tmp_path / "data" / "jobs" / job_id
+        dest = _job_dir(tmp_path, job_id)
         dest.mkdir(parents=True)
         (dest / "meta.json").write_text(
             json.dumps(

@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     )
 
     data_dir: Path = _DEFAULT_DATA_DIR
+    session_id: str = "local"
     max_upload_bytes: int = 50 * 1024 * 1024
 
     llm_base_url: str | None = None

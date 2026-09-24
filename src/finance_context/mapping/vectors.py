@@ -19,14 +19,17 @@ from finance_context.store.fs import atomic_write_bytes
 _LOGGER = logging.getLogger(__name__)
 
 
-def cache_key(taxonomy: list[Concept], *, model: str, dim: int) -> str:
+def taxonomy_digest(taxonomy: list[Concept]) -> str:
     payload = json.dumps(
         [{"id": c.id, "labels": list(c.labels), "definition": c.definition} for c in taxonomy],
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    digest = hashlib.sha256(payload.encode()).hexdigest()
-    return f"{digest}:{model}:{dim}"
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def cache_key(taxonomy: list[Concept], *, model: str, dim: int) -> str:
+    return f"{taxonomy_digest(taxonomy)}:{model}:{dim}"
 
 
 class TaxonomyPrefetch:

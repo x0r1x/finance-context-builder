@@ -46,9 +46,17 @@ def build(
     data = source.read_bytes()
     digest = sha256_bytes(data)
     job_id = job_id_for(digest)
-    dest = output or DiskStore(data_dir).dest_dir(job_id)
+    store = DiskStore(data_dir, session_id=settings.session_id)
+    if output is None:
+        dest = store.dest_dir(job_id)
+        shared: Path | None = store.shared_dir(job_id)
+    else:
+        dest = output
+        shared = None
     dest.mkdir(parents=True, exist_ok=True)
-    atomic_write_bytes(dest / "source.xlsx", data)
+    book = shared or dest
+    book.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(book / "source.xlsx", data)
     write_json(
         dest / "owner.json",
         {"content_sha256": digest, "source_filename": source.name},
@@ -64,12 +72,13 @@ def build(
             typer.echo(path)
         typer.echo("reused")
         return
-    clear_downstream_artifacts(dest, stale_from=stale_from_meta(_read_meta(dest)))
+    clear_downstream_artifacts(dest, stale_from=stale_from_meta(_read_meta(dest)), shared=shared)
     doc = Pipeline(settings).run(
         dest,
         job_id=job_id,
         source_filename=source.name,
         content_sha256=digest,
+        shared_dir=shared,
     )
     for path in published:
         typer.echo(path)

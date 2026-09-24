@@ -7,6 +7,7 @@ from pathlib import Path
 
 from finance_context.adapters.memory_bus import MemoryJobBus
 from finance_context.app.pipeline import mark_job_failed, run_job_process
+from finance_context.store.paths import LOCAL_SESSION, session_job_dir
 
 _TERMINAL = {"succeeded", "degraded", "needs_input", "failed"}
 
@@ -44,8 +45,10 @@ class JobProcesses:
         bus: MemoryJobBus,
         timeout_sec: float,
         max_concurrent_jobs: int = 2,
+        session_id: str = LOCAL_SESSION,
     ) -> None:
         self._data_dir = str(data_dir)
+        self._session_id = session_id or LOCAL_SESSION
         self._bus = bus
         self._timeout = timeout_sec
         self._max = max_concurrent_jobs if max_concurrent_jobs > 0 else 2
@@ -87,7 +90,7 @@ class JobProcesses:
         ctx = multiprocessing.get_context("spawn")
         proc = ctx.Process(
             target=run_job_process,
-            args=(self._data_dir, job_id, generation),
+            args=(self._data_dir, job_id, generation, self._session_id),
             name=f"finance-job-{job_id[:8]}",
         )
         started = False
@@ -155,7 +158,7 @@ class JobProcesses:
                 reap_process(proc)
             if self._is_closed(job_id, generation) or not self._bus.owns(job_id, generation):
                 return
-            dest = Path(self._data_dir) / "jobs" / job_id
+            dest = session_job_dir(Path(self._data_dir), job_id, self._session_id)
             if timed_out:
                 mark_job_failed(dest, job_id, "TimeoutError", generation)
                 self._bus.expire(job_id, generation)

@@ -36,9 +36,9 @@ Layout помечает тело блока видами строк. Каска�
 6. Финальный проход только `structure` (подтянуть то, что открылось после embed/chat).
 7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph.json` `links` и trace, не в `context.blocks[].relations`.
 
-Пустой список на embed или chat пишет INFO `model_skip`: `reason=resolved`, если нерезолвнутых строк нет, и `reason=unconfigured`, если порт не задан, а строки остались. Попадание в `taxonomy_embeddings.npz` пишет INFO `embed_cache` с `reason=cache` и модель не вызывает.
+Пустой список на embed или chat пишет INFO `model_skip`: `reason=resolved`, если нерезолвнутых строк нет, и `reason=unconfigured`, если порт не задан, а строки остались. Попадание в `shared/embeddings/{model}-{taxhash}.npz` пишет INFO `embed_cache` с `reason=cache` и модель не вызывает.
 
-Каждая книга по HTTP считается в своём процессе, со своими клиентами чата и эмбеддингов. Общего замка на mapping нет. Промах `taxonomy_embeddings.npz` не ждёт чужой эмбеддинг: замок только на запись, и только если файл всё ещё пуст или протух. `glossary.json` по-прежнему дописывается под своим замком.
+Каждая книга по HTTP считается в своём процессе, со своими клиентами чата и эмбеддингов. Общего замка на mapping нет. Промах файла эмбеддингов не ждёт чужой эмбеддинг: замок только на запись, и только если файл всё ещё пуст или протух. `sessions/{session}/glossary.json` дописывается под своим замком и не виден другой сессии.
 
 Повторный POST готовой книги (`context.json`, `context.md`, `graph.json`, `graph.md` и терминальный `meta.json` с тем же `publisher`) отдаёт снимок и файлы не удаляет. Повторный POST, пока процесс этой книги жив, второй процесс не стартует. Живой процесс останавливается, только если штамп `publisher` есть и отличается. Пустой штамп или штамп без карты `stages` пересобирает всё от layout вниз и сохраняет `raw/` и formula IR. `meta.stages` выбирает хвост: `compile` удаляет `raw/`, formula IR и всё после них; `layout` удаляет layout, mapping, graph и context; `mapping` удаляет mapping, graph и context; `graph` удаляет graph и context; `publish` удаляет только `context.json` и `context.md`. Formula IR пишется заново, если `ir/compile.json` не совпал со схемой колонок. `ir/graph_edges.parquet` удаляется вместе с `graph.json`, когда устарела стадия graph или более ранняя. CLI печатает `reused`, только если опубликованные документы и тот же `publisher` уже на диске. Если одного из них нет, стадии всё равно скипаются по своим артефактам (`raw/workbook.json`, штамп `ir/compile.json`, `layout.json`, `mapping.json`, `graph.json`). Удаление только `context.json` не пересобирает mapping.
 
@@ -155,7 +155,7 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 
 ## Glossary
 
-Файл `$DATA_DIR/glossary.json`, ключ `(normalized_label, normalized_parent)`. Перед каскадом `reconcile_glossary` переписывает записи, чей лейбл теперь принадлежит другому концепту (иначе split duration остался бы на старом id). После джоба `learn_from_rows` дописывает только строки с `confidence = high` и `source` из `{glossary, rule, structure, lexical}`. Chat и embed **не** сохраняются.
+Файл `$DATA_DIR/sessions/{session}/glossary.json`, ключ `(normalized_label, normalized_parent)`. Другая сессия его не читает. Перед каскадом `reconcile_glossary` переписывает записи, чей лейбл теперь принадлежит другому концепту (иначе split duration остался бы на старом id). После джоба `learn_from_rows` дописывает только строки с `confidence = high` и `source` из `{glossary, rule, structure, lexical}`. Chat и embed **не** сохраняются.
 
 Дополнительно кладётся ключ с классом секции (`section_class`), чтобы тот же лейбл в похожей секции другой книги подхватился.
 

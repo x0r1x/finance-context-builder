@@ -65,6 +65,6 @@ Markdown repeats JSON: every axis column and every block row. Tables are not tru
 
 ```bash
 uv run python scripts/extract-unmapped.py out/<run>/json/context.json -o out/<run>/unmapped.json
-uv run python scripts/extract-unmapped.py data/jobs/<job-id>/mapping.json
+uv run python scripts/extract-unmapped.py data/sessions/local/jobs/<job-id>/mapping.json
 uv run pytest tests/test_extract_unmapped.py tests/eval/test_cashflow_dispositions.py tests/eval/test_corpus_dispositions.py
 ```

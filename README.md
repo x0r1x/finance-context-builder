@@ -13,7 +13,7 @@ Guides: [overview](docs/en/overview.md), [layout](docs/en/layout.md), [mapping](
 - `.xls`, `.xlsb`, and encrypted workbooks are rejected
 - Cached formula values must already be in the file
 - LLM/embeddings are optional: mapping falls back to structure + labels, then `unknown`
-- Each new workbook runs in its own process, at most `MAX_CONCURRENT_JOBS` at once (default 2). Parquet under `data/jobs/` is the cache that outlives that process. Inside one run, stages pass row lists and do not reread a file they just wrote. PyArrow reads and writes those files. `finance-context serve` starts one worker: several API replicas on one data directory are not supported.
+- Each new workbook runs in its own process, at most `MAX_CONCURRENT_JOBS` at once (default 2). Formula IR and layout for a workbook live under `data/shared/books/{sha256}/` and are the same for every session. Mapping, context, graph, and that session's `glossary.json` live under `data/sessions/{session}/jobs/{sha256}/` (`session` defaults to `local`). Inside one run, stages pass row lists and do not reread a file they just wrote. PyArrow reads and writes those files. `finance-context serve` starts one worker: several API replicas on one data directory are not supported.
 
 Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). See `NOTICE`.
 
@@ -127,7 +127,7 @@ HTTP `error` codes:
 
 Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503.
 
-Learned high-confidence mappings persist in `$DATA_DIR/glossary.json` and are reused on later jobs. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows are excluded from review questions; they stay in the block with `disposition=excluded`. Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
+Learned high-confidence mappings persist in `$DATA_DIR/sessions/{session}/glossary.json` and are reused on later jobs in that session only. Another session does not read them. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows are excluded from review questions; they stay in the block with `disposition=excluded`. Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
 
 ## Docker
 
@@ -136,7 +136,7 @@ cp .env.example .env   # optional; LLM/embeddings may stay unset
 docker compose up --build
 ```
 
-Leave Compose running. The API is published only on `127.0.0.1:8080`. Job artifacts and `glossary.json` go to `./data` on the host. Compose mounts **`./data` only**, not `src/`: taxonomy and mapping code are whatever was baked into the image — rebuild after ontology changes.
+Leave Compose running. The API is published only on `127.0.0.1:8080`. Shared book cache and per-session glossary, mapping, and publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`: taxonomy and mapping code are whatever was baked into the image — rebuild after ontology changes.
 
 Loopback LLM URLs in `.env` (`http://127.0.0.1:1234/v1`) are rewritten to `host.docker.internal` inside the container so LM Studio on the host stays reachable. Keep the model server listening on all interfaces or on the host gateway, not only inside another isolated network.
 

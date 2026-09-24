@@ -39,21 +39,23 @@ def mapping_workbook(
     llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
     cells: list[dict] | None = None,
     edges: list[dict] | None = None,
+    book_dir: Path | None = None,
 ) -> MappingDocument:
+    book = book_dir or dest_dir
     path = dest_dir / "mapping.json"
     if path.exists():
         log_event(_LOGGER, logging.INFO, "stage_skip", "artifact exists", stage="mapping")
         return MappingDocument.model_validate_json(path.read_text(encoding="utf-8"))
     t0 = time.monotonic()
     layout = Layout.model_validate(
-        json.loads((dest_dir / "layout.json").read_text(encoding="utf-8"))
+        json.loads((book / "layout.json").read_text(encoding="utf-8"))
     )
     if cells is None:
-        ir_cells = dest_dir / "ir" / "cells.parquet"
+        ir_cells = book / "ir" / "cells.parquet"
         cells = read_parquet(ir_cells) if ir_cells.is_file() else []
     if edges is None:
-        ir_cell_edges = dest_dir / "ir" / "cell_edges.parquet"
-        ir_edges = dest_dir / "ir" / "edges.parquet"
+        ir_cell_edges = book / "ir" / "cell_edges.parquet"
+        ir_edges = book / "ir" / "edges.parquet"
         if ir_cell_edges.is_file():
             edges = read_parquet(ir_cell_edges)
         elif ir_edges.is_file():

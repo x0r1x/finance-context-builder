@@ -156,6 +156,6 @@ If the formula is a division but the label is about coverage, label semantics wi
 - A substring in `_semantic_ratio` (`ratio` inside `generation`).
 - Copying a P&L id onto the Cashflow Statement through a structure alias with no crosswalk (`pnl.tax` instead of `cf.tax_paid`).
 - `statement=cf` on the whole Cashflow sheet, which pulls `Cash in hand` / share premium off `bs.*`.
-- A hand edit of `glossary.json` instead of yaml: glossary is rewritten from the next high-confidence jobs and is not in git.
+- A hand edit of `sessions/{session}/glossary.json` instead of yaml. That file is one session's memory, not a shared dictionary and not a file in git. A later job does not replace a key that is already stored; it only adds a missing key.
 - Exclude for a business row that is merely “unclear”.
 - Duplicating an id with different case, or synonyms `cf.receipts` / `cf.inflows` without `broader`.

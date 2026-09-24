@@ -25,7 +25,7 @@ _HTTP_LOGGER = logging.getLogger("finance_context.api.http")
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     configure_logging(level=settings.log_level, json_output=settings.log_json)
-    store = DiskStore(settings.data_dir)
+    store = DiskStore(settings.data_dir, session_id=settings.session_id)
     bus = MemoryJobBus()
     pipeline = Pipeline(settings)
     processes = JobProcesses(
@@ -33,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         bus=bus,
         timeout_sec=settings.job_timeout_sec,
         max_concurrent_jobs=settings.max_concurrent_jobs,
+        session_id=settings.session_id,
     )
 
     @asynccontextmanager
@@ -63,31 +64,39 @@ def app_from_env() -> FastAPI:
 
 def reconcile_orphaned_jobs(data_dir: Path) -> None:
     """A restart has no live children. Jobs left queued or running did not finish."""
-    jobs = data_dir / "jobs"
-    if not jobs.is_dir():
+    sessions = data_dir / "sessions"
+    if not sessions.is_dir():
         return
-    for dest in jobs.iterdir():
-        if not dest.is_dir():
+    for session in sessions.iterdir():
+        jobs = session / "jobs"
+        if not jobs.is_dir():
             continue
-        meta_path = dest / "meta.json"
-        if not meta_path.is_file():
-            continue
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(meta, dict) or meta.get("status") not in {"queued", "running"}:
-            continue
-        try:
-            generation = int(meta.get("generation") or 0)
-        except (TypeError, ValueError):
-            generation = 0
-        mark_job_failed(
-            dest,
-            str(meta.get("job_id") or dest.name),
-            "process_lost",
-            generation,
-        )
+        for dest in jobs.iterdir():
+            _mark_orphan(dest)
+
+
+def _mark_orphan(dest: Path) -> None:
+    if not dest.is_dir():
+        return
+    meta_path = dest / "meta.json"
+    if not meta_path.is_file():
+        return
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(meta, dict) or meta.get("status") not in {"queued", "running"}:
+        return
+    try:
+        generation = int(meta.get("generation") or 0)
+    except (TypeError, ValueError):
+        generation = 0
+    mark_job_failed(
+        dest,
+        str(meta.get("job_id") or dest.name),
+        "process_lost",
+        generation,
+    )
 
 
 def _request_path(request: Request) -> str:
