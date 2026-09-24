@@ -44,3 +44,5 @@ class RawCell(BaseModel):
     hidden: bool = False
     number_format: str | None = None
     comment: str | None = None
+    shared_si: int | None = None
+    shared_master: bool = False

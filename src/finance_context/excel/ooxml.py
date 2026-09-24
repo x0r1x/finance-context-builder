@@ -398,6 +398,7 @@ def _parse_sheet(
     cells: list[RawCell] = []
     for item in pending:
         formula = item.formula
+        is_master = item.shared_si is not None and formula is not None
         if item.shared_si is not None and not formula and item.shared_si in masters:
             mcol, mrow, mformula = masters[item.shared_si]
             formula = shift_formula(mformula, mcol, mrow, item.col, item.row)
@@ -414,6 +415,8 @@ def _parse_sheet(
                 hidden=item.hidden,
                 number_format=item.number_format,
                 comment=item.comment,
+                shared_si=item.shared_si,
+                shared_master=is_master,
             )
         )
     return cells, locale_ru, presence

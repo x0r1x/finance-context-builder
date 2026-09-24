@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from finance_context.excel.a1 import col_to_index, index_to_col, parse_addr
+from finance_context.excel.a1 import col_to_index, format_addr, index_to_col, parse_addr
 from finance_context.formulas.models import Edge, ParsedFormula
 
 _DYNAMIC_FUNCS = {"INDIRECT", "OFFSET"}
@@ -62,6 +62,69 @@ class FormulaEngine:
             return ParsedFormula(ast=ast, template=template, unparsed=False, edges=edges)
         except (FormulaSyntaxError, ValueError):
             return ParsedFormula(ast=None, template=None, unparsed=True, edges=[])
+
+
+def shift_parsed(
+    parsed: ParsedFormula,
+    *,
+    sheet: str,
+    from_col: int,
+    from_row: int,
+    to_col: int,
+    to_row: int,
+    sep: str,
+    decimal: str,
+) -> ParsedFormula:
+    """Move a parsed master onto another cell of the same shared group."""
+    if parsed.unparsed or parsed.ast is None:
+        return ParsedFormula(ast=None, template=None, unparsed=True, edges=[])
+    dc = to_col - from_col
+    dr = to_row - from_row
+    ast = parsed.ast if dc == 0 and dr == 0 else _shift_ast(parsed.ast, dc, dr)
+    source = f"{sheet}!{format_addr(to_col, to_row)}"
+    edges: list[Edge] = []
+    _collect_edges(ast, sheet, source, edges, suppress=False)
+    template = "=" + _render(ast, to_col, to_row, sep, decimal)
+    return ParsedFormula(ast=ast, template=template, unparsed=False, edges=edges)
+
+
+def _shift_point(
+    point: dict[str, Any], dc: int, dr: int, *, cols: bool, rows: bool
+) -> dict[str, Any]:
+    out = dict(point)
+    if cols and "col" in out and not out.get("abs_col"):
+        out["col"] = max(int(out["col"]) + dc, 1)
+    if rows and "row" in out and not out.get("abs_row"):
+        out["row"] = max(int(out["row"]) + dr, 1)
+    return out
+
+
+def _shift_ast(node: dict[str, Any], dc: int, dr: int) -> dict[str, Any]:
+    op = node.get("op")
+    if op == "ref":
+        return _shift_point(node, dc, dr, cols=True, rows=True)
+    if op == "range":
+        out = dict(node)
+        move_cols = not node.get("row_only")
+        move_rows = not node.get("col_only")
+        if isinstance(node.get("start"), dict):
+            out["start"] = _shift_point(
+                node["start"], dc, dr, cols=move_cols, rows=move_rows
+            )
+        if isinstance(node.get("end"), dict):
+            out["end"] = _shift_point(node["end"], dc, dr, cols=move_cols, rows=move_rows)
+        return out
+    if op == "func":
+        return {**node, "args": [_shift_ast(arg, dc, dr) for arg in node.get("args") or []]}
+    if op == "bin":
+        return {
+            **node,
+            "left": _shift_ast(node["left"], dc, dr),
+            "right": _shift_ast(node["right"], dc, dr),
+        }
+    if op in {"unary", "percent"}:
+        return {**node, "expr": _shift_ast(node["expr"], dc, dr)}
+    return dict(node)
 
 
 def _tokenize(text: str, decimal: str, sep: str) -> list[Token]:
