@@ -78,7 +78,7 @@ New matching ideas are new `Signal` implementations (`propose(ctx, book) -> list
 
 | Signal | Role |
 | --- | --- |
-| `glossary` | Learned `(normalized_label, parent) → concept_id` from `data/glossary.json`. |
+| `glossary` | Learned `(normalized_label, parent) → concept_id` from `data/sessions/{session}/glossary.json`. |
 | `structure` | Formula graph: passthrough alias across sheets, `SUM` of child rows when **every** member is mapped (shared id or `broader`), inflows minus outflows, roll-forward, proration vs true ratio. Also ±2 neighbor labels and row-level dependents from `ir/cell_edges.parquet`, falling back to `ir/edges.parquet` (a line that feeds mapped `pnl.opex` / `cf.uses` gets a category prior). |
 | `lexical` | Taxonomy labels and stable phrases. |
 | `embed` | Dense retrieve over concept labels/definitions; accept only with cosine gap. |
@@ -100,7 +100,7 @@ Quality is two numbers, not one: **content completeness** (block rows vs layout 
 
 ### Learned glossary
 
-High-confidence `glossary` / `rule` / `structure` / `lexical` hits are merged into `DATA_DIR/glossary.json` after a job. The next workbook reuses them. Chat guesses are not stored. Taxonomy is edited when a **new meaning** appears (`bs.nwc`), not for every new label.
+High-confidence `glossary` / `rule` / `structure` / `lexical` hits are merged into `DATA_DIR/sessions/{session}/glossary.json` after a job. The next workbook in that session reuses them. Another session does not. Chat guesses are not stored. Taxonomy is edited when a **new meaning** appears (`bs.nwc`), not for every new label.
 
 ### Status
 
@@ -112,7 +112,7 @@ High-confidence `glossary` / `rule` / `structure` / `lexical` hits are merged in
 
 ## Storage
 
-`data/jobs/{job_id}/` on disk through `ArtifactStore`. Cross-job learned tags: `data/glossary.json`. Taxonomy embedding cache: `data/taxonomy_embeddings.npz`. Parquet is written with PyArrow. A run keeps the row lists it just built and reads `ir/*.parquet` again only on a later process, when `ir/compile.json` still matches. Swap the store adapter for object storage without changing the pipeline.
+`data/shared/books/{job_id}/` holds source, raw, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and layout. `data/sessions/{session}/jobs/{job_id}/` holds mapping, context, graph, meta, plus `ir/graph_edges.parquet` and `ir/graph_index.parquet`, because those follow the mapping. Learned tags: `data/sessions/{session}/glossary.json`, for that session only. Taxonomy embedding cache: `data/shared/embeddings/{model}-{taxhash}.npz`. The session name is `SESSION_ID`, default `local`. Parquet is written with PyArrow. A run keeps the row lists it just built and reads `ir/*.parquet` again only on a later process, when `ir/compile.json` still matches. Swap the store adapter for object storage without changing the pipeline.
 
 ## API
 

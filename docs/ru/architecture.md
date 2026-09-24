@@ -78,7 +78,7 @@ flowchart TD
 
 | Сигнал | Роль |
 | --- | --- |
-| `glossary` | Выученная пара `(normalized_label, parent) → concept_id` из `data/glossary.json`. |
+| `glossary` | Выученная пара `(normalized_label, parent) → concept_id` из `data/sessions/{session}/glossary.json`. |
 | `structure` | Граф формул: alias-копия между листами, `SUM` дочерних строк, когда замаплен **каждый** член (общий id или `broader`), поступления минус выплаты, roll-forward, proration против настоящего ratio. Также лейблы соседей ±2 и dependents уровня строки из `ir/cell_edges.parquet`, с запасным `ir/edges.parquet` (строка, которая питает уже замапленные `pnl.opex` / `cf.uses`, получает prior категории). |
 | `lexical` | Лейблы таксономии и устойчивые фразы. |
 | `embed` | Dense retrieve по лейблам и определениям концептов; принятие только при cosine gap. |
@@ -100,7 +100,7 @@ Structure — главный сигнал, когда формула одноз�
 
 ### Выученный glossary
 
-High-confidence попадания `glossary` / `rule` / `structure` / `lexical` после джоба дописываются в `DATA_DIR/glossary.json`. Следующая книга их переиспользует. Догадки chat не сохраняются. Таксономию правят, когда появляется **новый смысл** (`bs.nwc`), а не на каждый новый лейбл.
+High-confidence попадания `glossary` / `rule` / `structure` / `lexical` после джоба дописываются в `DATA_DIR/sessions/{session}/glossary.json`. Следующая книга этой сессии их переиспользует. Другая сессия — нет. Догадки chat не сохраняются. Таксономию правят, когда появляется **новый смысл** (`bs.nwc`), а не на каждый новый лейбл.
 
 ### Статус
 
@@ -112,7 +112,7 @@ High-confidence попадания `glossary` / `rule` / `structure` / `lexical`
 
 ## Хранение
 
-`data/jobs/{job_id}/` на диске через `ArtifactStore`. Выученные теги между джобами: `data/glossary.json`. Кэш эмбеддингов таксономии: `data/taxonomy_embeddings.npz`. Parquet пишет PyArrow. Прогон держит только что собранные списки строк и читает `ir/*.parquet` снова только в другом процессе, когда `ir/compile.json` всё ещё совпадает. Адаптер хранилища можно заменить на object storage, не меняя пайплайн.
+`data/shared/books/{job_id}/` хранит source, raw, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и layout. `data/sessions/{session}/jobs/{job_id}/` хранит mapping, context, graph, meta, а также `ir/graph_edges.parquet` и `ir/graph_index.parquet`, потому что они зависят от mapping. Выученные теги: `data/sessions/{session}/glossary.json`, только для этой сессии. Кэш эмбеддингов таксономии: `data/shared/embeddings/{model}-{taxhash}.npz`. Имя сессии — `SESSION_ID`, по умолчанию `local`. Parquet пишет PyArrow. Прогон держит только что собранные списки строк и читает `ir/*.parquet` снова только в другом процессе, когда `ir/compile.json` всё ещё совпадает. Адаптер хранилища можно заменить на object storage, не меняя пайплайн.
 
 ## API
 

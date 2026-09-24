@@ -18,13 +18,19 @@ from finance_context.layout.stage import layout_workbook
 from finance_context.mapping.models import MappingDocument
 from finance_context.mapping.stage import mapping_workbook
 from finance_context.mapping.taxonomy import load_taxonomy
-from finance_context.mapping.vectors import TaxonomyPrefetch
+from finance_context.mapping.vectors import TaxonomyPrefetch, taxonomy_digest
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
 from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 from finance_context.render.markdown import refresh_context_markdown, write_context_markdown
 from finance_context.settings import Settings
 from finance_context.store.fs import file_lock, read_parquet, update_json
+from finance_context.store.paths import (
+    embedding_cache_file,
+    glossary_file,
+    session_job_dir,
+    shared_book_dir,
+)
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
 _TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
@@ -54,19 +60,35 @@ class Pipeline:
         content_sha256: str | None = None,
         progress: object | None = None,
         generation: int = 0,
+        shared_dir: Path | None = None,
     ) -> ContextDocument:
         token_job = job_id_var.set(job_id)
+        book = shared_dir or dest_dir
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
-            with file_lock(dest_dir / ".lock"):
-                return self._run(
-                    dest_dir,
-                    job_id=job_id,
-                    source_filename=source_filename,
-                    content_sha256=content_sha256,
-                    progress=progress,
-                    generation=generation,
-                )
+            book.mkdir(parents=True, exist_ok=True)
+            if book == dest_dir:
+                with file_lock(dest_dir / ".lock"):
+                    return self._run(
+                        dest_dir,
+                        job_id=job_id,
+                        source_filename=source_filename,
+                        content_sha256=content_sha256,
+                        progress=progress,
+                        generation=generation,
+                        shared_dir=None,
+                    )
+            with file_lock(book / ".lock"):
+                with file_lock(dest_dir / ".lock"):
+                    return self._run(
+                        dest_dir,
+                        job_id=job_id,
+                        source_filename=source_filename,
+                        content_sha256=content_sha256,
+                        progress=progress,
+                        generation=generation,
+                        shared_dir=book,
+                    )
         finally:
             job_id_var.reset(token_job)
 
@@ -79,14 +101,17 @@ class Pipeline:
         content_sha256: str | None,
         progress: object | None,
         generation: int,
+        shared_dir: Path | None = None,
     ) -> ContextDocument:
+        book = shared_dir or dest_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
+        book.mkdir(parents=True, exist_ok=True)
         context_path = dest_dir / "context.json"
         markdown_path = dest_dir / "context.md"
         if context_path.is_file() and markdown_path.is_file():
             refresh_context_markdown(dest_dir)
             return ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
-        source = dest_dir / "source.xlsx"
+        source = book / "source.xlsx"
         if not source.is_file():
             raise ContextError("empty_file", "source.xlsx missing")
         prefetch = _start_taxonomy_prefetch(self)
@@ -99,6 +124,7 @@ class Pipeline:
                 progress=progress,
                 prefetch=prefetch,
                 generation=generation,
+                shared_dir=book if book != dest_dir else None,
             )
         finally:
             if prefetch is not None:
@@ -114,8 +140,10 @@ class Pipeline:
         progress: object | None,
         prefetch: TaxonomyPrefetch | None,
         generation: int,
+        shared_dir: Path | None = None,
     ) -> ContextDocument:
-        source = dest_dir / "source.xlsx"
+        book = shared_dir or dest_dir
+        source = book / "source.xlsx"
         owner = _load_owner(dest_dir)
         source_filename = source_filename or owner.get("source_filename")
         content_sha256 = content_sha256 or owner.get("content_sha256")
@@ -137,27 +165,31 @@ class Pipeline:
                     fn(stage)
 
         set_stage("parse")
-        if not (dest_dir / "raw" / "workbook.json").is_file():
-            _timed("parse", lambda: parse_workbook(source, dest_dir))
+        if not (book / "raw" / "workbook.json").is_file():
+            _timed("parse", lambda: parse_workbook(source, book))
         set_stage("compile")
-        if not ir_is_current(dest_dir):
-            compiled = _timed("compile", lambda: compile_workbook(dest_dir))
+        if not ir_is_current(book):
+            compiled = _timed("compile", lambda: compile_workbook(book))
             ir_cells = compiled.cells
             ir_edges = compiled.edges
             ir_cell_edges = compiled.cell_edges
         else:
-            ir_cells, ir_edges, ir_cell_edges = _read_ir(dest_dir)
+            ir_cells, ir_edges, ir_cell_edges = _read_ir(book)
         set_stage("layout")
-        if not (dest_dir / "layout.json").is_file():
+        if not (book / "layout.json").is_file():
             layout = _timed(
                 "layout",
-                lambda: layout_workbook(dest_dir, cells=ir_cells, edges=ir_edges),
+                lambda: layout_workbook(book, cells=ir_cells, edges=ir_edges),
             )
         else:
-            layout = Layout.model_validate_json(
-                (dest_dir / "layout.json").read_text(encoding="utf-8")
-            )
+            layout = Layout.model_validate_json((book / "layout.json").read_text(encoding="utf-8"))
         set_stage("mapping")
+        glossary_path = glossary_file(self.settings.data_dir, self.settings.session_id)
+        cache_path = embedding_cache_file(
+            self.settings.data_dir,
+            model=self.settings.embedding_model or "",
+            taxonomy_digest=taxonomy_digest(load_taxonomy()),
+        )
         mapping = _timed(
             "mapping",
             lambda: mapping_workbook(
@@ -165,19 +197,20 @@ class Pipeline:
                 embed=self.embed,
                 chat=self.chat,
                 slots=self.slots,
-                cache_path=self.settings.data_dir / "taxonomy_embeddings.npz",
+                cache_path=cache_path,
                 slot_timeout_sec=self.settings.llm_slot_wait_sec,
                 embedding_model=self.settings.embedding_model or "",
-                glossary_path=self.settings.data_dir / "glossary.json",
+                glossary_path=glossary_path,
                 concept_index=prefetch,
                 llm_concurrency=self.settings.llm_concurrency,
                 cells=ir_cells,
                 edges=ir_cell_edges,
+                book_dir=book,
             ),
         )
         cells = ir_cells
         edges = ir_edges
-        workbook_meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
+        workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status(mapping, embed=self.embed, chat=self.chat)
         set_stage("graph", status="running")
         # graph.json can outlive ir/graph_edges.parquet (a publisher change drops the parquet).
@@ -195,6 +228,7 @@ class Pipeline:
                     cells=ir_cells,
                     edges=ir_edges,
                     cell_edges=ir_cell_edges,
+                    book_dir=book,
                 ),
             )
         else:
@@ -255,14 +289,17 @@ class Pipeline:
         return doc
 
 
-def run_job_process(data_dir: str, job_id: str, generation: int = 0) -> None:
+def run_job_process(
+    data_dir: str, job_id: str, generation: int = 0, session_id: str = "local"
+) -> None:
     """Entry point for a spawned interpreter. Runs one book on this process's main thread."""
-    settings = Settings(data_dir=Path(data_dir))
+    settings = Settings(data_dir=Path(data_dir), session_id=session_id)
     configure_logging(level=settings.log_level, json_output=settings.log_json)
     _install_stage_pause()
-    dest = settings.data_dir / "jobs" / job_id
+    dest = session_job_dir(settings.data_dir, job_id, settings.session_id)
+    shared = shared_book_dir(settings.data_dir, job_id)
     try:
-        Pipeline(settings).run(dest, job_id=job_id, generation=generation)
+        Pipeline(settings).run(dest, job_id=job_id, generation=generation, shared_dir=shared)
     except Exception as exc:
         mark_job_failed(dest, job_id, type(exc).__name__, generation)
         raise
@@ -337,7 +374,11 @@ def _start_taxonomy_prefetch(pipeline: Pipeline) -> TaxonomyPrefetch | None:
     return TaxonomyPrefetch(
         pipeline.embed,
         load_taxonomy(),
-        cache_path=pipeline.settings.data_dir / "taxonomy_embeddings.npz",
+        cache_path=embedding_cache_file(
+            pipeline.settings.data_dir,
+            model=pipeline.settings.embedding_model or "",
+            taxonomy_digest=taxonomy_digest(load_taxonomy()),
+        ),
         model=pipeline.settings.embedding_model or "",
     )
 

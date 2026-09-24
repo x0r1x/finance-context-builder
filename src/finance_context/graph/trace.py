@@ -13,13 +13,15 @@ def trace_graph(
     origin: str,
     direction: str = "precedents",
     depth: int = 8,
+    book_dir: Path | None = None,
 ) -> TraceDocument:
     if direction not in {"precedents", "dependents"}:
         direction = "precedents"
     depth = max(1, min(int(depth), 32))
+    book = book_dir or dest_dir
     cells = {
         f"{c['sheet']}!{c['addr']}": c
-        for c in read_parquet(dest_dir / "ir" / "cells.parquet")
+        for c in read_parquet(book / "ir" / "cells.parquet")
     }
     index_path = dest_dir / "ir" / "graph_index.parquet"
     if index_path.is_file():
@@ -30,7 +32,7 @@ def trace_graph(
     if not edges_path.is_file():
         # Enriched edges are written with the graph. A job that only kept the
         # formula cell edges still has the precedents (PF Model!AA172 → Z172).
-        edges_path = dest_dir / "ir" / "cell_edges.parquet"
+        edges_path = book / "ir" / "cell_edges.parquet"
     edges = read_parquet(edges_path) if edges_path.is_file() else []
 
     fwd: dict[str, list[dict]] = defaultdict(list)

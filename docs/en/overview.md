@@ -21,7 +21,7 @@ How to run, Docker, and the API: [README](../../README.md). The layer snapshot i
 
 The input is a workbook whose formulas are already calculated. `.xls`, `.xlsb`, and encrypted files are rejected.
 
-A job writes:
+A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{sha256}/` and are the same for every session. `mapping.json`, context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{sha256}/`: they follow that session's glossary.
 
 | Artifact | Contents |
 | --- | --- |
@@ -35,7 +35,7 @@ A job writes:
 
 The answering LLM gets one observation sliced from these artifacts, not a second job JSON: [llm.md](llm.md).
 
-Across jobs: `$DATA_DIR/glossary.json` (learned high-confidence pairs) and `taxonomy_embeddings.npz` (concept embedding cache).
+Across jobs in one session: `$DATA_DIR/sessions/{session}/glossary.json` (learned high-confidence pairs). The concept embedding cache is shared: `$DATA_DIR/shared/embeddings/`. Formula IR and layout for the same workbook are shared too: `$DATA_DIR/shared/books/{sha256}/`.
 
 ## Pipeline
 
@@ -68,4 +68,4 @@ Do not mix the two report metrics: **content completeness** must be 100% (block 
 1. **Taxonomy** (`src/finance_context/ontology/taxonomy.yaml`) — a dictionary of meanings, not a solver. Edit it when a **new** financial value appears.
 2. **Signal cascade** — features (label, section, neighbors, formula shape, graph). A new kind of match is a new `Signal`, not a wide `anti_labels` and not a branch “if the sheet is Cash_Receipts”.
 
-The learned glossary does not replace yaml: it remembers pairs that were already confident, `(label, parent) → concept_id`, for later books.
+The learned glossary does not replace yaml: it remembers pairs that were already confident, `(label, parent) → concept_id`, for later books in the same session. A key that is already stored is not replaced. Another session does not read the file.

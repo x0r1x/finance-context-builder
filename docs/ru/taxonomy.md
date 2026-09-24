@@ -156,6 +156,6 @@ Structure на `SUM` ищет общий id детей, общий `broader` и�
 - Подстрока в `_semantic_ratio` (`ratio` внутри `generation`).
 - Копирование P&L-id на Cashflow Statement через structure alias без crosswalk (`pnl.tax` вместо `cf.tax_paid`).
 - `statement=cf` на весь лист Cashflow, из-за которого `Cash in hand` / share premium уезжают с `bs.*`.
-- Ручная запись в `glossary.json` вместо yaml: glossary перезапишется со следующих high-confidence джобов и не попадёт в git.
+- Ручная запись в `sessions/{session}/glossary.json` вместо yaml. Это память одной сессии, не общий словарь и не файл в git. Уже записанный ключ следующий джоб не сменяет; новый ключ дописывается.
 - Exclude для «непонятной» бизнес-строки.
 - Дублирование id с разным регистром или синонимы `cf.receipts` / `cf.inflows` без `broader`.

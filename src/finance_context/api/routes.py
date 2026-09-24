@@ -118,8 +118,10 @@ async def post_job(
     digest = await asyncio.to_thread(sha256_bytes, data)
     job_id = job_id_for(digest)
     dest = ctx.store.dest_dir(job_id)
+    shared = ctx.store.shared_dir(job_id)
     dest.mkdir(parents=True, exist_ok=True)
-    source = dest / "source.xlsx"
+    shared.mkdir(parents=True, exist_ok=True)
+    source = shared / "source.xlsx"
     if not source.exists():
         atomic_write_bytes(source, data)
     owner_path = dest / "owner.json"
@@ -171,7 +173,9 @@ async def post_job(
         if not ctx.processes.try_acquire(job_id):
             raise ApiError(429, "too_many_jobs")
         try:
-            clear_downstream_artifacts(dest, stale_from=stale_from_meta(_load_meta(dest)))
+            clear_downstream_artifacts(
+                dest, stale_from=stale_from_meta(_load_meta(dest)), shared=shared
+            )
             log_event(
                 _LOGGER,
                 logging.INFO,
@@ -388,7 +392,12 @@ async def get_graph_trace(
     from finance_context.graph.trace import trace_graph
 
     doc = await asyncio.to_thread(
-        trace_graph, dest, origin=origin, direction=direction, depth=depth
+        trace_graph,
+        dest,
+        origin=origin,
+        direction=direction,
+        depth=depth,
+        book_dir=_ctx(request).store.shared_dir(job_id),
     )
     return JSONResponse(doc.model_dump(mode="json"))
 
@@ -416,7 +425,12 @@ async def get_graph_trace_md(
     from finance_context.render.graph import render_trace_markdown
 
     doc = await asyncio.to_thread(
-        trace_graph, dest, origin=origin, direction=direction, depth=depth
+        trace_graph,
+        dest,
+        origin=origin,
+        direction=direction,
+        depth=depth,
+        book_dir=_ctx(request).store.shared_dir(job_id),
     )
     body = await asyncio.to_thread(render_trace_markdown, doc)
     return PlainTextResponse(body, media_type="text/markdown")

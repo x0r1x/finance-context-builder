@@ -45,14 +45,16 @@ def build_formula_graph(
     cells: list[dict] | None = None,
     edges: list[dict] | None = None,
     cell_edges: list[dict] | None = None,
+    book_dir: Path | None = None,
 ) -> GraphPointer:
+    book = book_dir or dest_dir
     if cells is None:
-        cells = read_parquet(dest_dir / "ir" / "cells.parquet")
+        cells = read_parquet(book / "ir" / "cells.parquet")
     if edges is None:
-        edges_path = dest_dir / "ir" / "edges.parquet"
+        edges_path = book / "ir" / "edges.parquet"
         edges = read_parquet(edges_path) if edges_path.is_file() else []
     if cell_edges is None:
-        cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
+        cell_edges_path = book / "ir" / "cell_edges.parquet"
         cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
 
     row_meta = _row_meta(layout, mapping)
@@ -96,7 +98,7 @@ def build_formula_graph(
 
     cycles = attach_cycle_breakers(classify_cycles(enriched), mapping)
     hints = circularity_hints(mapping, layout, index_rows, cycles)
-    iterate = _workbook_iterate(dest_dir)
+    iterate = _workbook_iterate(book)
     doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
     doc.links = _formula_links(cells, edges, row_meta, period_by_cell, enriched)
     write_json(dest_dir / "graph.json", doc.model_dump(mode="json", by_alias=True))

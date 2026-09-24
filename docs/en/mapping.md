@@ -36,9 +36,9 @@ Order in `map_layout`:
 6. A final `structure`-only pass (pull in what opened up after embed/chat).
 7. Assemble `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` for the cascade). This is **not** the full cell graph: dependency completeness is in `ir/cell_edges.parquet`, `graph.json` `links`, and trace, not in `context.blocks[].relations`.
 
-An empty embed or chat list logs INFO `model_skip`: `reason=resolved` when no unresolved rows remain, and `reason=unconfigured` when the port is unset and rows remain. A hit on `taxonomy_embeddings.npz` logs INFO `embed_cache` with `reason=cache` and does not call the model.
+An empty embed or chat list logs INFO `model_skip`: `reason=resolved` when no unresolved rows remain, and `reason=unconfigured` when the port is unset and rows remain. A hit on `shared/embeddings/{model}-{taxhash}.npz` logs INFO `embed_cache` with `reason=cache` and does not call the model.
 
-Each HTTP book runs in its own process, with its own chat and embedding clients. There is no shared mapping lock. A miss on `taxonomy_embeddings.npz` does not wait for someone else's embed: the lock covers only the write, and only when the file is still empty or stale. `glossary.json` is still appended under its own lock.
+Each HTTP book runs in its own process, with its own chat and embedding clients. There is no shared mapping lock. A miss on the embedding file does not wait for someone else's embed: the lock covers only the write, and only when the file is still empty or stale. `sessions/{session}/glossary.json` is appended under its own lock and is not visible to another session.
 
 A repeat POST of a finished book (`context.json`, `context.md`, `graph.json`, `graph.md`, and a terminal `meta.json` whose `publisher` matches this code) returns the snapshot and does not delete files. A repeat POST while that book's process is alive does not start a second process. A live process is stopped only when the stored `publisher` stamp is present and differs. A missing stamp, or a stamp with no `stages` map, rebuilds from layout downward and keeps `raw/` and formula IR. `meta.stages` selects the tail: `compile` drops `raw/` and formula IR and everything after them; `layout` drops layout, mapping, graph, and context; `mapping` drops mapping, graph, and context; `graph` drops graph and context; `publish` drops only `context.json` and `context.md`. Formula IR is written again when `ir/compile.json` does not match the column schema. `ir/graph_edges.parquet` is deleted with `graph.json` when the graph stage or an earlier stage is stale. The CLI prints `reused` only when the published documents and the same `publisher` are already on disk. If one of them is missing, stages still skip from their own artifacts (`raw/workbook.json`, the `ir/compile.json` stamp, `layout.json`, `mapping.json`, `graph.json`). Deleting only `context.json` does not rebuild mapping.
 
@@ -155,7 +155,7 @@ Top-3 `candidates` are written on abstain too: if prune emptied the fused list, 
 
 ## Glossary
 
-File `$DATA_DIR/glossary.json`, key `(normalized_label, normalized_parent)`. Before the cascade, `reconcile_glossary` rewrites entries whose label now belongs to another concept (otherwise a split duration would stay on the old id). After the job, `learn_from_rows` appends only rows with `confidence = high` and `source` in `{glossary, rule, structure, lexical}`. Chat and embed are **not** stored.
+File `$DATA_DIR/sessions/{session}/glossary.json`, key `(normalized_label, normalized_parent)`. It is not shared with another session. Before the cascade, `reconcile_glossary` rewrites entries whose label now belongs to another concept (otherwise a split duration would stay on the old id). After the job, `learn_from_rows` appends only rows with `confidence = high` and `source` in `{glossary, rule, structure, lexical}`. Chat and embed are **not** stored.
 
 A key with the section class (`section_class`) is also stored, so the same label in a similar section of another book is picked up.
 

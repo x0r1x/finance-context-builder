@@ -21,14 +21,19 @@ _FORMULA_IR = ("cells.parquet", "edges.parquet", "cell_edges.parquet", "compile.
 _RAW = ("cells.parquet", "cell_presence.parquet", "workbook.json")
 
 
-def clear_downstream_artifacts(dest: Path, stale_from: str | None = "layout") -> None:
+def clear_downstream_artifacts(
+    dest: Path, stale_from: str | None = "layout", *, shared: Path | None = None
+) -> None:
     """Drop artifacts from the first stale stage downward. Parse bytes in source.xlsx stay.
 
-    ``stale_from=None`` leaves the directory alone. A missing stage map uses ``layout``,
-    which keeps formula IR. ``compile`` also drops the parsed raw sheets.
+    ``dest`` holds the session publication. ``shared`` holds source, raw, formula IR, and
+    layout. When ``shared`` is omitted both live in ``dest``. ``stale_from=None`` leaves
+    the directories alone. A missing stage map uses ``layout``, which keeps formula IR.
+    ``compile`` also drops the parsed raw sheets.
     """
     if stale_from is None:
         return
+    book = shared or dest
     if stale_from not in STAGE_ORDER:
         stale_from = "layout"
     rank = STAGE_ORDER.index(stale_from)
@@ -48,14 +53,14 @@ def clear_downstream_artifacts(dest: Path, stale_from: str | None = "layout") ->
     if reached("mapping"):
         (dest / "mapping.json").unlink(missing_ok=True)
     if reached("layout"):
-        (dest / "layout.json").unlink(missing_ok=True)
+        (book / "layout.json").unlink(missing_ok=True)
     (dest / "meta.json").unlink(missing_ok=True)
-    ir = dest / "ir"
-    drop_formula = reached("compile") or not (dest / "source.xlsx").is_file()
+    ir = book / "ir"
+    drop_formula = reached("compile") or not (book / "source.xlsx").is_file()
     if drop_formula:
         for name in _FORMULA_IR:
             (ir / name).unlink(missing_ok=True)
     if reached("compile"):
-        raw = dest / "raw"
+        raw = book / "raw"
         for name in _RAW:
             (raw / name).unlink(missing_ok=True)
