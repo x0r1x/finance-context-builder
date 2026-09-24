@@ -236,13 +236,17 @@ def _expanded_targets(edge: Edge) -> list[tuple[str, bool, bool]]:
 
 
 def build_csr(
-    edges: list[Edge], extra_nodes: list[str] | None = None
+    edges: list[Edge],
+    extra_nodes: list[str] | None = None,
+    *,
+    expanded: list[CellEdge] | None = None,
 ) -> CsrGraph:
     nodes: set[str] = set(extra_nodes or [])
     pairs: list[tuple[str, str]] = []
     truncated_sources: set[str] = set()
-    known = set(nodes)
-    for edge in expand_cell_edges(edges, known):
+    if expanded is None:
+        expanded = expand_cell_edges(edges, set(nodes))
+    for edge in expanded:
         source, target, kind = edge.source, edge.target, edge.kind
         unresolved, truncated = edge.unresolved, edge.truncated
         nodes.add(source)

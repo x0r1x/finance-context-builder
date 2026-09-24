@@ -106,10 +106,10 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         for item in (meta.get("sheets") or [])
     }
     presence = _presence_index(dest_dir)
-    csr = build_csr(edges, extra_nodes=extra_nodes)
     cell_edges = expand_cell_edges(
         edges, known, known_sheets=sheets, presence=presence
     )
+    csr = build_csr(edges, extra_nodes=extra_nodes, expanded=cell_edges)
     edge_rows = [(e.source, e.kind, e.target, e.unresolved, e.truncated) for e in edges]
     cell_edge_rows = [
         (
