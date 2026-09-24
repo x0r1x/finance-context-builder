@@ -11,6 +11,7 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx, write_zip
 
 from finance_context.api.app import create_app
 from finance_context.app.ids import job_id_for, sha256_bytes
+from finance_context.app.publisher import publisher_fingerprint
 from finance_context.settings import Settings
 
 
@@ -386,7 +387,13 @@ def test_ready_post_logs_job_reuse_and_does_not_launch(tmp_path: Path, caplog) -
     for name in ("context.json", "context.md", "graph.json", "graph.md"):
         (dest / name).write_text("{}\n", encoding="utf-8")
     (dest / "meta.json").write_text(
-        json.dumps({"status": "succeeded", "stage": "done"}),
+        json.dumps(
+            {
+                "status": "succeeded",
+                "stage": "done",
+                "publisher": publisher_fingerprint(),
+            }
+        ),
         encoding="utf-8",
     )
     caplog.set_level(logging.INFO, logger="finance_context")
