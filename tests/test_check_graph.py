@@ -274,6 +274,63 @@ def test_axis_periods_must_be_contiguous_dates(tmp_path: Path) -> None:
     assert "gap before 2026" in result.stderr
 
 
+def test_shifted_sheet_total_is_not_a_period_of_the_shared_axis(tmp_path: Path) -> None:
+    axis = {
+        "id": "TBA!r2",
+        "sheet": "TBA",
+        "grain": "model_year",
+        "header_row": 2,
+        "periods": [
+            {"col": 4, "period_key": "Y1"},
+            {"col": 5, "period_key": "Y2"},
+        ],
+    }
+    payload = _ok_context(axes=[axis])
+    payload["blocks"] = [
+        {
+            "block_id": "Operation!r2",
+            "sheet": "Operation",
+            "axis_ids": ["TBA!r2"],
+            "periods": [
+                {"col": 5, "period_key": "Y1"},
+                {"col": 6, "period_key": "Y2"},
+            ],
+            "rows": [
+                {
+                    "row_key": "Operation|5|Operation!r2",
+                    "sheet": "Operation",
+                    "row": 5,
+                    "label": "Amount",
+                    "concept_id": "pnl.revenue",
+                    "formula": "=1",
+                    "cells": [{"col": 4, "role": "total", "cached_value": "9"}],
+                    "values": ["1", "2"],
+                    "value_statuses": ["cached", "cached"],
+                    "normalized_values": ["1", "2"],
+                    "scale_factor": 1,
+                    "period_position": None,
+                    "aggregation": None,
+                }
+            ],
+        }
+    ]
+    context = _write(tmp_path / "context.json", payload)
+    graph = _write(tmp_path / "graph.json", _ok_graph(links=[]))
+    result = _run(str(context), str(graph))
+    assert result.returncode == 0, result.stderr
+
+    context_md = tmp_path / "context.md"
+    context_md.write_text(
+        "\n| TBA!r2 | Y1 | Y2 |\n\n"
+        "Operation!r2\nAmount\nOperation\\|5\\|Operation!r2\n"
+        "pnl.revenue\n=1\nD total: 9\n[Operation!E5] [Operation!F5]\n",
+        encoding="utf-8",
+    )
+    result = _run(str(context), str(graph), "--context-md", str(context_md))
+    assert result.returncode == 0, result.stderr
+    assert "Operation!D5" not in context_md.read_text(encoding="utf-8")
+
+
 def test_axis_must_not_publish_a_total_column(tmp_path: Path) -> None:
     axis = _dated_axis(
         (12, "2023", "2023-01-01", "2023-12-31"),

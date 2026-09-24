@@ -53,25 +53,34 @@ def test_shifted_model_years_share_one_published_timeline() -> None:
         layout=layout,
         mapping=MappingDocument(),
     )
-    assert [axis.id for axis in doc.axes] == [canonical]
-    assert [period.period_key for period in doc.axes[0].periods] == ["Y1", "Y2", "Y3", "Y4"]
-    assert [period.phase for period in doc.axes[0].periods] == [
+    by_axis = {axis.id: axis for axis in doc.axes}
+    local = build.axes[0].id
+    assert set(by_axis) == {canonical, local}
+    assert by_axis[canonical].timeline_id == canonical
+    assert by_axis[local].timeline_id == canonical
+    assert [period.period_key for period in by_axis[canonical].periods] == ["Y1", "Y2", "Y3", "Y4"]
+    assert [period.phase for period in by_axis[canonical].periods] == [
         "construction",
         "construction",
         "operation",
         "operation",
     ]
+    assert not any(period.phase for period in by_axis[local].periods)
     build_block = next(block for block in doc.blocks if block.sheet == "Build")
-    assert build_block.axis_ids == [canonical]
+    assert build_block.axis_ids == [local]
     assert [item["col"] for item in build_block.periods] == [5, 6, 7, 8]
     amount = next(row for row in build_block.rows if row.label == "Amount")
     assert amount.series[0].values[0] == "10"
-    assert amount.series[0].axis_id == canonical
+    assert amount.series[0].axis_id == local
 
     rendered = render_markdown(doc)
-    assert rendered.count("### `") == 1
-    assert f"### `{canonical}`" in rendered
-    assert "Axes: `" + canonical + "`" in rendered
+    assert "### `" not in rendered
+    assert "| Axis | Y1 | Y2 | Y3 | Y4 |" in rendered
+    assert f"| {canonical} | D | E | F | G |" in rendered
+    assert f"| {local} | E | F | G | H |" in rendered
+    assert "| Phase | construction | construction | operation | operation |" in rendered
+    assert f"Axis: `{local}`" in rendered
+    assert f"Timeline: `{canonical}`" in rendered
     assert "Y1 (E)" in rendered
     assert "Build!E5" in rendered
     again = render_markdown(doc.model_validate(doc.model_dump(mode="json")))

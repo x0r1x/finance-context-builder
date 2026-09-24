@@ -20,7 +20,7 @@ def clear_downstream_artifacts(dest: Path) -> None:
     ):
         (dest / name).unlink(missing_ok=True)
     ir = dest / "ir"
-    # Formula IR depends only on the workbook bytes. A remap of the same source keeps it.
+    # Formula IR depends only on the workbook bytes. A publisher change keeps it.
     if not (dest / "source.xlsx").is_file():
         for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet"):
             (ir / name).unlink(missing_ok=True)

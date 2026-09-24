@@ -16,6 +16,7 @@ from finance_context.api.errors import ApiError
 from finance_context.api.schemas import ErrorBody, HealthBody, JobBody, ReadyBody
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
+from finance_context.app.publisher import publisher_changed, publisher_matches
 from finance_context.errors import ContextError
 from finance_context.excel.zip_guard import open_xlsx_zip
 from finance_context.graph.models import GraphDocument, TraceDocument
@@ -106,15 +107,6 @@ def _data_dir_writable(path: Path) -> bool:
 async def post_job(
     request: Request,
     file: Annotated[UploadFile | None, File()] = None,
-    remap: Annotated[
-        str | None,
-        Query(
-            description=(
-                "Rebuild layout, mapping, and context when the value is 1, true, or yes. "
-                "A live process for this book is stopped first."
-            ),
-        ),
-    ] = None,
 ) -> JSONResponse:
     ctx = _ctx(request)
     if file is None:
@@ -135,46 +127,46 @@ async def post_job(
             owner_path,
             {"content_sha256": digest, "source_filename": filename},
         )
-    do_remap = _remap_on(remap)
-    if ctx.processes.is_alive(job_id) and not do_remap:
-        return JSONResponse(_running_body(job_id, dest), status_code=202)
-    if do_remap and ctx.processes.is_alive(job_id):
+    if _stop_for_publisher_change(ctx, job_id, dest):
         ctx.processes.stop(job_id)
+    elif ctx.processes.is_alive(job_id):
+        return JSONResponse(_running_body(job_id, dest), status_code=202)
     with file_lock(dest / ".lock", blocking=False) as acquired:
         if not acquired:
             return JSONResponse(_running_body(job_id, dest), status_code=202)
         live = ctx.bus.get(job_id)
-        if not do_remap and live is not None and live.status in {"queued", "running"}:
-            if ctx.processes.is_alive(job_id):
+        if live is not None and live.status in {"queued", "running"}:
+            if _stop_for_publisher_change(ctx, job_id, dest):
+                ctx.processes.stop(job_id)
+            elif ctx.processes.is_alive(job_id):
                 return JSONResponse(
                     {"job_id": job_id, "status": live.status, "stage": live.stage},
                     status_code=202,
                 )
-            if not ctx.bus.abandon(job_id, live.generation, "process_lost"):
+            elif not ctx.bus.abandon(job_id, live.generation, "process_lost"):
                 return JSONResponse(
                     {"job_id": job_id, "status": live.status, "stage": live.stage},
                     status_code=202,
                 )
-        if not do_remap:
-            ready = _ready_meta(dest)
-            if ready is not None:
-                log_event(
-                    _LOGGER,
-                    logging.INFO,
-                    "job_reuse",
-                    "finished job reused",
-                    job_id=job_id,
-                    status=ready.get("status"),
-                    stage=ready.get("stage"),
-                )
-                return JSONResponse(
-                    {
-                        "job_id": job_id,
-                        "status": ready.get("status"),
-                        "stage": ready.get("stage"),
-                    },
-                    status_code=202,
-                )
+        ready = _ready_meta(dest)
+        if ready is not None:
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "job_reuse",
+                "finished job reused",
+                job_id=job_id,
+                status=ready.get("status"),
+                stage=ready.get("stage"),
+            )
+            return JSONResponse(
+                {
+                    "job_id": job_id,
+                    "status": ready.get("status"),
+                    "stage": ready.get("stage"),
+                },
+                status_code=202,
+            )
         if not ctx.processes.try_acquire(job_id):
             raise ApiError(429, "too_many_jobs")
         try:
@@ -182,7 +174,7 @@ async def post_job(
             log_event(
                 _LOGGER,
                 logging.INFO,
-                "job_remap",
+                "snapshot_invalidated",
                 "layout and mapping artifacts invalidated",
                 job_id=job_id,
             )
@@ -226,8 +218,21 @@ def _running_body(job_id: str, dest: Path) -> dict[str, object]:
     return {"job_id": job_id, "status": "running", "stage": "running"}
 
 
-def _remap_on(raw: str | None) -> bool:
-    return (raw or "").strip().lower() in {"1", "true", "yes"}
+def _load_meta(dest: Path) -> dict | None:
+    meta_path = dest / "meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    return meta
+
+
+def _stop_for_publisher_change(ctx: AppContext, job_id: str, dest: Path) -> bool:
+    return ctx.processes.is_alive(job_id) and publisher_changed(_load_meta(dest))
 
 
 def _ready_meta(dest: Path) -> dict | None:
@@ -241,6 +246,8 @@ def _ready_meta(dest: Path) -> dict | None:
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(meta, dict) or meta.get("status") in {"queued", "running", None}:
+        return None
+    if not publisher_matches(meta):
         return None
     return meta
 

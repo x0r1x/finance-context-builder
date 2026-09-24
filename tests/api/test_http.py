@@ -259,18 +259,22 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
         }
 
         job_dir = tmp_path / "data" / "jobs" / job_id
-        sentinel = job_dir / "raw" / "keep-on-remap"
+        sentinel = job_dir / "raw" / "keep-on-publisher-change"
         sentinel.write_text("keep", encoding="utf-8")
         mapping_path = job_dir / "mapping.json"
         mapping_path.write_text("not valid json", encoding="utf-8")
         (job_dir / "layout.json").write_text("{}", encoding="utf-8")
+        meta_path = job_dir / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["publisher"] = "stale"
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
         ir_bytes = {
             name: (job_dir / "ir" / name).read_bytes()
             for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet")
         }
 
         (job_dir / "ir" / "graph_edges.parquet").write_bytes(b"stale-graph-edges")
-        repeated = client.post("/v1/context-jobs?remap=1", files=files)
+        repeated = client.post("/v1/context-jobs", files=files)
         assert repeated.status_code == 202
         assert _wait_for_terminal(client, job_id)["status"] in {
             "succeeded",

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from finance_context.adapters.slots import AlwaysGrant
+from finance_context.app.publisher import publisher_stamp
 from finance_context.context.build import build_context
 from finance_context.errors import ContextError, PortError
 from finance_context.excel.stage import parse_workbook
@@ -179,7 +180,7 @@ class Pipeline:
         workbook_meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status(mapping, embed=self.embed, chat=self.chat)
         set_stage("graph", status="running")
-        # graph.json can outlive ir/graph_edges.parquet (a remap drops the parquet).
+        # graph.json can outlive ir/graph_edges.parquet (a publisher change drops the parquet).
         # Trace walks that file, so a missing parquet has to be rebuilt.
         if not (dest_dir / "graph.json").is_file() or not (
             dest_dir / "ir" / "graph_edges.parquet"
@@ -399,6 +400,7 @@ def _write_meta(dest_dir: Path, **fields: object) -> None:
         error=fields.get("error"),  # type: ignore[arg-type]
     ).model_dump(mode="json")
     meta["generation"] = generation
+    meta["publisher"] = publisher_stamp()
 
     def mutate(current: dict) -> dict:
         seen = _stored_generation(current)

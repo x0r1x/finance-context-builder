@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -10,6 +11,7 @@ from finance_context.adapters.disk_store import DiskStore
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.pipeline import Pipeline
+from finance_context.app.publisher import publisher_matches
 from finance_context.observability import configure_logging
 from finance_context.settings import _DEFAULT_DATA_DIR, Settings
 from finance_context.store.fs import atomic_write_bytes, write_json
@@ -17,12 +19,22 @@ from finance_context.store.fs import atomic_write_bytes, write_json
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 
+def _same_publisher(dest: Path) -> bool:
+    meta_path = dest / "meta.json"
+    if not meta_path.is_file():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return publisher_matches(meta if isinstance(meta, dict) else None)
+
+
 @app.command()
 def build(
     source: Path,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     data_dir: Annotated[Path, typer.Option("--data-dir")] = _DEFAULT_DATA_DIR,
-    remap: Annotated[bool, typer.Option("--remap")] = False,
 ) -> None:
     """Parse an Excel workbook and write context and graph as JSON and Markdown."""
     settings = Settings(data_dir=data_dir)
@@ -43,13 +55,12 @@ def build(
         dest / "graph.json",
         dest / "graph.md",
     )
-    if not remap and published[0].is_file() and published[1].is_file():
+    if all(path.is_file() for path in published) and _same_publisher(dest):
         for path in published:
             typer.echo(path)
         typer.echo("reused")
         return
-    if remap:
-        clear_downstream_artifacts(dest)
+    clear_downstream_artifacts(dest)
     doc = Pipeline(settings).run(
         dest,
         job_id=job_id,

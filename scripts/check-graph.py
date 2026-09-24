@@ -136,10 +136,12 @@ def check_axes(context: dict[str, Any]) -> list[str]:
     """Axis periods are unique, ordered, contiguous in time, and never a total column."""
     errors: list[str] = []
     axes = [axis for axis in context.get("axes") or [] if isinstance(axis, dict)]
-    totals: dict[str, set[int]] = {}
+    totals: dict[tuple[str, str | None], set[int]] = {}
     for block in context.get("blocks") or []:
         if not isinstance(block, dict):
             continue
+        sheet = block.get("sheet")
+        sheet_key = sheet if isinstance(sheet, str) and sheet else None
         cols = {
             int(cell["col"])
             for row in block.get("rows") or []
@@ -148,14 +150,23 @@ def check_axes(context: dict[str, Any]) -> list[str]:
             if isinstance(cell, dict) and cell.get("role") == "total" and "col" in cell
         }
         for axis_id in block.get("axis_ids") or []:
-            totals.setdefault(str(axis_id), set()).update(cols)
+            totals.setdefault((str(axis_id), sheet_key), set()).update(cols)
     for axis in axes:
         axis_id = str(axis.get("id") or "")
+        axis_sheet = axis.get("sheet")
+        axis_sheet = axis_sheet if isinstance(axis_sheet, str) and axis_sheet else None
         periods = [p for p in axis.get("periods") or [] if isinstance(p, dict)]
         keys = [str(p.get("period_key")) for p in periods]
         if len(set(keys)) != len(keys):
             errors.append(f"context.json axis {axis_id} repeats a period key")
-        overlap = {int(p["col"]) for p in periods if "col" in p} & totals.get(axis_id, set())
+        total_cols: set[int] = set()
+        for (owner_id, sheet_key), cols in totals.items():
+            if owner_id != axis_id:
+                continue
+            if sheet_key is not None and axis_sheet is not None and sheet_key != axis_sheet:
+                continue
+            total_cols.update(cols)
+        overlap = {int(p["col"]) for p in periods if "col" in p} & total_cols
         if overlap:
             errors.append(f"context.json axis {axis_id} publishes a total column as a period")
         previous_end: date | None = None
@@ -300,17 +311,59 @@ def check_link_identity(context: dict[str, Any], graph: dict[str, Any]) -> list[
     return errors
 
 
-def _check_axes_markdown(context: dict[str, Any], markdown: str) -> list[str]:
+def _timeline_groups(context: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
     for axis in context.get("axes") or []:
         if not isinstance(axis, dict) or not axis.get("id"):
             continue
+        key = str(axis.get("timeline_id") or axis["id"])
+        groups.setdefault(key, []).append(axis)
+    return groups
+
+
+def _check_axes_markdown(context: dict[str, Any], markdown: str) -> list[str]:
+    for members in _timeline_groups(context).values():
+        if len(members) < 2:
+            errors = _axis_period_grid(members[0], markdown)
+            if errors:
+                return errors
+            continue
+        key = str(members[0].get("timeline_id") or members[0].get("id"))
+        owner = next((item for item in members if str(item.get("id")) == key), members[0])
+        errors = _shared_axis_table(members, owner, markdown)
+        if errors:
+            return errors
+    return []
+
+
+def _shared_axis_table(
+    members: list[dict[str, Any]], owner: dict[str, Any], markdown: str
+) -> list[str]:
+    periods = [p for p in owner.get("periods") or [] if isinstance(p, dict)]
+    keys = [str(p.get("period_key")) for p in periods if p.get("period_key")]
+    header = f"\n| Axis | {keys[0]} |" if keys else "\n| Axis |"
+    if header not in markdown:
+        return ["context.md shared axes must be one table headed by the period keys"]
+    for axis in members:
         axis_id = str(axis["id"]).replace("|", "\\|")
         if f"\n| {axis_id} |" not in markdown:
-            return [f"context.md axis {axis['id']} must head a table with periods as columns"]
-        periods = [p for p in axis.get("periods") or [] if isinstance(p, dict)]
-        for attribute, key in (("Start", "start_date"), ("End", "end_date")):
-            if any(p.get(key) for p in periods) and f"\n| {attribute} |" not in markdown:
-                return [f"context.md axis {axis['id']} missing {attribute} row"]
+            return [f"context.md axis {axis['id']} missing from the timeline table"]
+    for attribute, key in (("Start", "start_date"), ("End", "end_date")):
+        if any(p.get(key) for p in periods) and f"\n| {attribute} |" not in markdown:
+            return [f"context.md axis {owner['id']} missing {attribute} row"]
+    return []
+
+
+def _axis_period_grid(axis: dict[str, Any], markdown: str) -> list[str]:
+    axis_id = str(axis["id"]).replace("|", "\\|")
+    periods = [p for p in axis.get("periods") or [] if isinstance(p, dict)]
+    keys = [str(p.get("period_key")) for p in periods if p.get("period_key")]
+    header = f"\n| {axis_id} | {keys[0]} |" if keys else f"\n| {axis_id} |"
+    if header not in markdown:
+        return [f"context.md axis {axis['id']} must head a table with periods as columns"]
+    for attribute, key in (("Start", "start_date"), ("End", "end_date")):
+        if any(p.get(key) for p in periods) and f"\n| {attribute} |" not in markdown:
+            return [f"context.md axis {axis['id']} missing {attribute} row"]
     return []
 
 
@@ -360,7 +413,14 @@ def _column_letter(col: object) -> str:
 
 
 def _block_periods(context: dict[str, Any], block: dict[str, Any]) -> list[dict[str, Any]]:
-    """Periods the block table prints. Role cells are not periods."""
+    """Periods the block table prints. Role cells are not periods.
+
+    A shared axis keeps the canonical sheet's columns. Another sheet stores its
+    own columns on ``block.periods``.
+    """
+    local = [item for item in block.get("periods") or [] if isinstance(item, dict)]
+    if local:
+        return local
     axis_ids = [str(item) for item in block.get("axis_ids") or [] if item]
     if axis_ids:
         by_id = {

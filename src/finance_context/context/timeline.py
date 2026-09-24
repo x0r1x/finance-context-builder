@@ -23,6 +23,7 @@ def build_axes(
 ) -> tuple[list[ContextAxis], list[str]]:
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
     published = _published_axis_ids(layout)
+    timeline_of = _timeline_of(layout)
     axes: list[ContextAxis] = []
     phased: list[ContextAxis] = []
     for sheet in layout.sheets:
@@ -33,6 +34,7 @@ def build_axes(
             built = _annotate_axis(sheet.name, axis, flags, by_addr, date1904)
             if built is None:
                 continue
+            built.timeline_id = timeline_of.get(built.id, built.id)
             axes.append(built)
             if any(item.phase for item in built.periods):
                 phased.append(built)
@@ -44,15 +46,30 @@ def build_axes(
 
 
 def _published_axis_ids(layout: Layout) -> set[str]:
+    """Every local axis stays in the document. Sharing does not drop its id."""
     ids: set[str] = set()
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            chosen = block.timeline_ids or block.axis_ids
-            if chosen:
-                ids.update(chosen)
+            if block.axis_ids:
+                ids.update(block.axis_ids)
             elif block.axis is not None:
                 ids.add(block.axis.id)
     return ids
+
+
+def _timeline_of(layout: Layout) -> dict[str, str]:
+    links: dict[str, str] = {}
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            local = list(block.axis_ids)
+            shared = list(block.timeline_ids)
+            if len(shared) != len(local):
+                shared = local
+            for axis_id, timeline_id in zip(local, shared, strict=False):
+                links[axis_id] = timeline_id
+            if not local and block.axis is not None:
+                links.setdefault(block.axis.id, block.axis.id)
+    return links
 
 
 def _sheet_axes(sheet) -> list[TimeAxis]:

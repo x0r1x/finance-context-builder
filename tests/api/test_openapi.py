@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from finance_context.api.app import create_app
-from finance_context.api.routes import _remap_on
 from finance_context.settings import Settings
 
 _PATHS = (
@@ -41,15 +40,6 @@ def _schema_ref(operation: dict, status: str) -> str:
     return content["schema"]["$ref"]
 
 
-def test_remap_query_keeps_the_same_words() -> None:
-    assert _remap_on("1")
-    assert _remap_on("true")
-    assert _remap_on(" YES ")
-    assert not _remap_on("on")
-    assert not _remap_on(None)
-    assert not _remap_on("")
-
-
 def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     spec = _spec(tmp_path)
     assert set(_PATHS) <= set(spec["paths"])
@@ -58,7 +48,6 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
         assert name in schemas
 
     post = spec["paths"]["/v1/context-jobs"]["post"]
-    assert "remap" in _query_names(post)
     assert _schema_ref(post, "202").endswith("/JobBody")
     for code in ("400", "413", "422"):
         assert _schema_ref(post, code).endswith("/ErrorBody")
