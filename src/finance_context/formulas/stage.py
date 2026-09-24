@@ -6,8 +6,8 @@ from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.formulas.csr import build_csr, expand_cell_edges
-from finance_context.formulas.engine import FormulaEngine
-from finance_context.formulas.models import CompileResult, Edge
+from finance_context.formulas.engine import FormulaEngine, shift_parsed
+from finance_context.formulas.models import CompileResult, Edge, ParsedFormula
 from finance_context.store.fs import read_parquet, write_json, write_parquet
 
 COMPILE_FILES = ("cells.parquet", "edges.parquet", "cell_edges.parquet")
@@ -72,14 +72,13 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
     ir_rows: list[tuple[object, ...]] = []
     edges: list[Edge] = []
     extra_nodes: list[str] = []
-    for row in raw_rows:
+    parsed_rows = _parse_rows(engine, raw_rows)
+    for row, parsed in zip(raw_rows, parsed_rows, strict=True):
         extra_nodes.append(canonical_node_id(str(row["sheet"]), str(row["addr"])))
-        formula = row.get("formula_raw")
         template = None
         unparsed = False
         ast_json = None
-        if formula:
-            parsed = engine.parse(str(formula), sheet=row["sheet"], addr=row["addr"])
+        if parsed is not None:
             template = parsed.template
             unparsed = parsed.unparsed
             if parsed.ast is not None:
@@ -107,10 +106,10 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         for item in (meta.get("sheets") or [])
     }
     presence = _presence_index(dest_dir)
-    csr = build_csr(edges, extra_nodes=extra_nodes)
     cell_edges = expand_cell_edges(
         edges, known, known_sheets=sheets, presence=presence
     )
+    csr = build_csr(edges, extra_nodes=extra_nodes, expanded=cell_edges)
     edge_rows = [(e.source, e.kind, e.target, e.unresolved, e.truncated) for e in edges]
     cell_edge_rows = [
         (
@@ -148,6 +147,59 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         edges=_as_dicts(IR_EDGE_COLUMNS, edge_rows),
         cell_edges=_as_dicts(IR_CELL_EDGE_COLUMNS, cell_edge_rows),
     )
+
+
+def _parse_rows(engine: FormulaEngine, raw_rows: list[dict]) -> list[ParsedFormula | None]:
+    """Parse each shared-formula master once and shift that AST onto the group."""
+    parsed: list[ParsedFormula | None] = [None] * len(raw_rows)
+    groups: dict[tuple[str, int], list[int]] = {}
+    masters: dict[tuple[str, int], int] = {}
+    for index, row in enumerate(raw_rows):
+        si = row.get("shared_si")
+        if si is None or not row.get("formula_raw"):
+            continue
+        key = (str(row["sheet"]), int(si))
+        groups.setdefault(key, []).append(index)
+        if row.get("shared_master") and key not in masters:
+            masters[key] = index
+    claimed: set[int] = set()
+    for key, indexes in groups.items():
+        master_i = masters.get(key)
+        if master_i is None:
+            continue
+        master = raw_rows[master_i]
+        master_parsed = engine.parse(
+            str(master["formula_raw"]),
+            sheet=str(master["sheet"]),
+            addr=str(master["addr"]),
+        )
+        parsed[master_i] = master_parsed
+        claimed.add(master_i)
+        for index in indexes:
+            if index == master_i:
+                continue
+            row = raw_rows[index]
+            parsed[index] = shift_parsed(
+                master_parsed,
+                sheet=str(row["sheet"]),
+                from_col=int(master["col"]),
+                from_row=int(master["row"]),
+                to_col=int(row["col"]),
+                to_row=int(row["row"]),
+                sep=engine.sep,
+                decimal=engine.decimal,
+            )
+            claimed.add(index)
+    for index, row in enumerate(raw_rows):
+        if index in claimed:
+            continue
+        formula = row.get("formula_raw")
+        if not formula:
+            continue
+        parsed[index] = engine.parse(
+            str(formula), sheet=str(row["sheet"]), addr=str(row["addr"])
+        )
+    return parsed
 
 
 def _as_dicts(

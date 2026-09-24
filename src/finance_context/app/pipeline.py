@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from finance_context.adapters.slots import AlwaysGrant
-from finance_context.app.publisher import publisher_stamp
+from finance_context.app.publisher import publisher_stamp, stamped_stages
 from finance_context.context.build import build_context
 from finance_context.errors import ContextError, PortError
 from finance_context.excel.stage import parse_workbook
@@ -401,6 +401,7 @@ def _write_meta(dest_dir: Path, **fields: object) -> None:
     ).model_dump(mode="json")
     meta["generation"] = generation
     meta["publisher"] = publisher_stamp()
+    meta["stages"] = stamped_stages()
 
     def mutate(current: dict) -> dict:
         seen = _stored_generation(current)

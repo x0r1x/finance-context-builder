@@ -21,6 +21,8 @@ _CELL_COLUMNS = (
     "hidden",
     "number_format",
     "comment",
+    "shared_si",
+    "shared_master",
 )
 
 
@@ -118,6 +120,8 @@ def write_cells_parquet(path: Path, rows: list[dict[str, Any]]) -> None:
         ("hidden", "BOOLEAN"),
         ("number_format", "VARCHAR"),
         ("comment", "VARCHAR"),
+        ("shared_si", "INTEGER"),
+        ("shared_master", "BOOLEAN"),
     ]
     write_parquet(
         path,

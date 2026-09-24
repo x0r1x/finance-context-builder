@@ -11,7 +11,7 @@ from finance_context.adapters.disk_store import DiskStore
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.pipeline import Pipeline
-from finance_context.app.publisher import publisher_matches
+from finance_context.app.publisher import publisher_matches, stale_from_meta
 from finance_context.observability import configure_logging
 from finance_context.settings import _DEFAULT_DATA_DIR, Settings
 from finance_context.store.fs import atomic_write_bytes, write_json
@@ -19,15 +19,19 @@ from finance_context.store.fs import atomic_write_bytes, write_json
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 
-def _same_publisher(dest: Path) -> bool:
+def _read_meta(dest: Path) -> dict | None:
     meta_path = dest / "meta.json"
     if not meta_path.is_file():
-        return False
+        return None
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
-    return publisher_matches(meta if isinstance(meta, dict) else None)
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def _same_publisher(dest: Path) -> bool:
+    return publisher_matches(_read_meta(dest))
 
 
 @app.command()
@@ -60,7 +64,7 @@ def build(
             typer.echo(path)
         typer.echo("reused")
         return
-    clear_downstream_artifacts(dest)
+    clear_downstream_artifacts(dest, stale_from=stale_from_meta(_read_meta(dest)))
     doc = Pipeline(settings).run(
         dest,
         job_id=job_id,

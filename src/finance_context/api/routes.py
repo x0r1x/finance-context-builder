@@ -16,7 +16,8 @@ from finance_context.api.errors import ApiError
 from finance_context.api.schemas import ErrorBody, HealthBody, JobBody, ReadyBody
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
-from finance_context.app.publisher import publisher_changed, publisher_matches
+from finance_context.app.pipeline import mark_job_failed
+from finance_context.app.publisher import publisher_changed, publisher_matches, stale_from_meta
 from finance_context.errors import ContextError
 from finance_context.excel.zip_guard import open_xlsx_zip
 from finance_context.graph.models import GraphDocument, TraceDocument
@@ -113,8 +114,8 @@ async def post_job(
         raise ContextError("empty_file")
     filename = Path(file.filename or "upload.xlsx").name
     data = await file.read()
-    _validate_upload(filename, data, ctx.max_upload_bytes)
-    digest = sha256_bytes(data)
+    await asyncio.to_thread(_validate_upload, filename, data, ctx.max_upload_bytes)
+    digest = await asyncio.to_thread(sha256_bytes, data)
     job_id = job_id_for(digest)
     dest = ctx.store.dest_dir(job_id)
     dest.mkdir(parents=True, exist_ok=True)
@@ -170,7 +171,7 @@ async def post_job(
         if not ctx.processes.try_acquire(job_id):
             raise ApiError(429, "too_many_jobs")
         try:
-            clear_downstream_artifacts(dest)
+            clear_downstream_artifacts(dest, stale_from=stale_from_meta(_load_meta(dest)))
             log_event(
                 _LOGGER,
                 logging.INFO,
@@ -216,6 +217,12 @@ def _running_body(job_id: str, dest: Path) -> dict[str, object]:
                 "stage": meta.get("stage"),
             }
     return {"job_id": job_id, "status": "running", "stage": "running"}
+
+
+def _orphan_running(meta: dict, *, live: object, alive: bool) -> bool:
+    if meta.get("status") not in {"queued", "running"} or alive:
+        return False
+    return getattr(live, "status", None) not in {"queued", "running"}
 
 
 def _load_meta(dest: Path) -> dict | None:
@@ -268,6 +275,17 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     meta_path = dest / "meta.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if isinstance(meta, dict) and _orphan_running(
+            meta, live=live, alive=ctx.processes.is_alive(job_id)
+        ):
+            try:
+                generation = int(meta.get("generation") or 0)
+            except (TypeError, ValueError):
+                generation = 0
+            mark_job_failed(dest, job_id, "process_lost", generation)
+            reloaded = _load_meta(dest)
+            if reloaded is not None:
+                meta = reloaded
         artifacts_ready = (dest / "context.json").exists() and (dest / "context.md").exists() and (
             dest / "graph.json"
         ).exists() and (dest / "graph.md").exists()

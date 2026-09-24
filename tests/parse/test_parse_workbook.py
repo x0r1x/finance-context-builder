@@ -43,7 +43,11 @@ def test_raw_cell_schema_formula_and_cached_value(tmp_path: Path, dest: Path) ->
         "hidden",
         "number_format",
         "comment",
+        "shared_si",
+        "shared_master",
     }
+    assert cells[0]["shared_si"] is None
+    assert cells[0]["shared_master"] is False
     by = _by_addr(cells)
     label = by[("P&L", "A1")]
     assert label["row"] == 1

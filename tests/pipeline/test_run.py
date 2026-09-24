@@ -66,6 +66,7 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     assert "generation" not in document["meta"]
     meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
     assert meta["generation"] == 0
+    assert set(meta["stages"]) == {"compile", "layout", "mapping", "graph", "publish"}
 
 
 def test_run_job_process_emits_stage_done_on_stdout(tmp_path: Path, capsys, monkeypatch) -> None:

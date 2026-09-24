@@ -29,7 +29,9 @@ def _targets(edge: dict) -> list[str]:
     target = str(edge.get("target") or "")
     if not target:
         return []
-    if edge.get("kind") == "range" and not edge.get("unresolved"):
+    # Cell edges already name one target. Only a formula-level range still expands.
+    body = target.rsplit("!", 1)[-1]
+    if edge.get("kind") == "range" and not edge.get("unresolved") and ":" in body:
         try:
             cells, _trunc = expand_range(target)
         except ValueError:
