@@ -22,10 +22,13 @@ def build_axes(
     date1904: bool = False,
 ) -> tuple[list[ContextAxis], list[str]]:
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+    published = _published_axis_ids(layout)
     axes: list[ContextAxis] = []
     phased: list[ContextAxis] = []
     for sheet in layout.sheets:
         for axis in _sheet_axes(sheet):
+            if axis.id not in published:
+                continue
             flags = _flag_rows(sheet, axis)
             built = _annotate_axis(sheet.name, axis, flags, by_addr, date1904)
             if built is None:
@@ -38,6 +41,18 @@ def build_axes(
         master = max(phased, key=lambda item: sum(1 for period in item.periods if period.phase))
         warnings.extend(_duration_warnings(layout, master.periods, by_addr, date1904))
     return axes, warnings
+
+
+def _published_axis_ids(layout: Layout) -> set[str]:
+    ids: set[str] = set()
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            chosen = block.timeline_ids or block.axis_ids
+            if chosen:
+                ids.update(chosen)
+            elif block.axis is not None:
+                ids.add(block.axis.id)
+    return ids
 
 
 def _sheet_axes(sheet) -> list[TimeAxis]:

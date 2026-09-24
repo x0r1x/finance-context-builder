@@ -84,6 +84,8 @@ class Block(BaseModel):
     label_col: int
     axis: Axis | None = None
     axis_ids: list[str] = Field(default_factory=list)
+    # Published timeline ids, parallel to axis_ids. Local columns stay on axis_ids.
+    timeline_ids: list[str] = Field(default_factory=list)
     rows: list[LayoutRow]
     kind: BlockKind = "timeline"
 
