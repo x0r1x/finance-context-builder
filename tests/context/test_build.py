@@ -435,3 +435,77 @@ def test_build_exports_role_cells_not_graph_samples() -> None:
     assert any(cell.role == "value" and cell.addr == "C26" for cell in series.cells)
     assert len(series.candidates) == 3
     assert series.values == ["50"]
+
+
+def test_axis_inputs_do_not_inherit_the_stub_check_formula() -> None:
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="PF",
+                blocks=[
+                    Block(
+                        block_id="PF!r7",
+                        label_col=4,
+                        axis=Axis(
+                            id="PF!r7",
+                            row=7,
+                            headers=[
+                                AxisHeader(
+                                    col=13, text="2024", role="forecast", period_key="2024"
+                                ),
+                                AxisHeader(
+                                    col=14, text="2025", role="forecast", period_key="2025"
+                                ),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(
+                                row=179,
+                                label="Full-wrap EPC",
+                                cells=[RowCell(col=7, role="value", header="Check")],
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "PF",
+            "row": 179,
+            "col": 13,
+            "addr": "M179",
+            "cached_value": "0.2",
+        },
+        {
+            "sheet": "PF",
+            "row": 179,
+            "col": 14,
+            "addr": "N179",
+            "cached_value": "0.8",
+        },
+        {
+            "sheet": "PF",
+            "row": 179,
+            "col": 7,
+            "addr": "G179",
+            "cached_value": "0",
+            "formula_raw": "=IF(AND(H179>0,L179<>1),1,0)",
+            "formula_template": "=IF(AND(R[0]C[1]>0,R[0]C[5]<>1),1,0)",
+        },
+    ]
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "PF"}]},
+        cells=cells,
+        layout=layout,
+        mapping=MappingDocument(rows=[]),
+    )
+    row = doc.blocks[0].rows[0]
+    assert row.formula is None
+    assert row.series[0].formula is None
+    assert row.values == ["0.2", "0.8"]
+    check = next(cell for cell in row.cells if cell.addr == "G179")
+    assert check.cached_value == "0"
+    assert check.role == "value"
