@@ -549,6 +549,19 @@ def _collect_edges(
         return
     if suppress:
         return
+    if op == "name":
+        token = str(node.get("value") or "")
+        if token:
+            edges.append(
+                Edge(
+                    kind="ref",
+                    source=source,
+                    target=token,
+                    unresolved=True,
+                    named=True,
+                )
+            )
+        return
     if op == "ref":
         edges.append(_ref_edge(node, current_sheet, source))
         return

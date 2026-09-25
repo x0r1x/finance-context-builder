@@ -103,6 +103,66 @@ def test_absolute_and_range_anchors_are_kept() -> None:
     assert all(row.abs_col_end is False and row.abs_row_end is False for row in members)
 
 
+def test_defined_name_resolves_to_its_cell() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+    from finance_context.formulas.names import resolve_defined_name_edges
+
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=A1/Thousand", sheet="PF Model", addr="B1")
+    name = next(edge for edge in parsed.edges if edge.named)
+    assert name.target == "Thousand"
+    assert name.unresolved is True
+    resolve_defined_name_edges(
+        parsed.edges,
+        [{"name": "Thousand", "formula": "'PF Model'!$H$32"}],
+    )
+    assert name.kind == "ref"
+    assert name.target == "PF Model!H32"
+    assert name.unresolved is False
+    assert name.named is True
+    cell = next(edge for edge in parsed.edges if edge.target == "PF Model!A1")
+    assert cell.named is False
+
+
+def test_broken_defined_name_stays_unresolved() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+    from finance_context.formulas.names import resolve_defined_name_edges
+
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=Days_year", sheet="PF Model", addr="B1")
+    resolve_defined_name_edges(
+        parsed.edges,
+        [{"name": "Days_year", "formula": "'PF Model'!#REF!"}],
+    )
+    edge = parsed.edges[0]
+    assert edge.kind == "ref"
+    assert edge.target == "Days_year"
+    assert edge.unresolved is True
+    rows = expand_cell_edges(
+        parsed.edges,
+        {"PF Model!B1"},
+        known_sheets={"PF Model"},
+    )
+    assert rows[0].target == "Days_year"
+    assert rows[0].dangling_reason != "empty_ref"
+
+
+def test_external_defined_name_is_not_unresolved() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+    from finance_context.formulas.names import resolve_defined_name_edges
+
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=Capital_structure_delta", sheet="PF Model", addr="B1")
+    resolve_defined_name_edges(
+        parsed.edges,
+        [{"name": "Capital_structure_delta", "formula": "[1]Macro!$G$26"}],
+    )
+    edge = parsed.edges[0]
+    assert edge.kind == "external"
+    assert edge.target == "[1]Macro!$G$26"
+    assert edge.unresolved is False
+
+
 def test_ppmt_and_if_refs_expand_to_cell_edges() -> None:
     from finance_context.formulas.engine import FormulaEngine
 
