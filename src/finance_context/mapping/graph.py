@@ -48,6 +48,8 @@ def row_adjacency(
     precedents: dict[tuple[str, int], list[str]] = defaultdict(list)
     dependents: dict[tuple[str, int], list[str]] = defaultdict(list)
     for edge in edges:
+        if edge.get("named"):
+            continue
         source = cell_ref_row(str(edge.get("source") or ""))
         if source is None:
             continue

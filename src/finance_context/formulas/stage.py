@@ -34,6 +34,7 @@ IR_EDGE_COLUMNS = (
     ("target", "VARCHAR"),
     ("unresolved", "BOOLEAN"),
     ("truncated", "BOOLEAN"),
+    ("named", "BOOLEAN"),
 )
 
 IR_CELL_EDGE_COLUMNS = (
@@ -112,7 +113,9 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         edges, known, known_sheets=sheets, presence=presence
     )
     csr = build_csr(edges, extra_nodes=extra_nodes, expanded=cell_edges)
-    edge_rows = [(e.source, e.kind, e.target, e.unresolved, e.truncated) for e in edges]
+    edge_rows = [
+        (e.source, e.kind, e.target, e.unresolved, e.truncated, e.named) for e in edges
+    ]
     cell_edge_rows = [
         (
             edge.source,

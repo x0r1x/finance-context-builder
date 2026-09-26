@@ -72,6 +72,7 @@ def test_compile_resolves_a_defined_name_into_the_edge(tmp_path: Path, dest: Pat
         edge["source"] == "Inputs!B1"
         and edge["target"] == "Inputs!H32"
         and edge["unresolved"] is False
+        and edge["named"] is True
         for edge in edges
     )
     assert not any(edge["target"] == "Thousand" for edge in edges)

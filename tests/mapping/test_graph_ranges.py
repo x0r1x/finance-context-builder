@@ -17,6 +17,28 @@ def test_cell_edge_is_not_expanded_again() -> None:
     assert precedents[("Sheet1", 1)] == ["Sheet1!2"]
 
 
+def test_named_edge_does_not_feed_mapping_adjacency() -> None:
+    named = {
+        "source": "PF Model!AA367",
+        "target": "PF Model!H32",
+        "kind": "ref",
+        "unresolved": False,
+        "named": True,
+    }
+    direct = {
+        "source": "PF Model!AA367",
+        "target": "PF Model!H32",
+        "kind": "ref",
+        "unresolved": False,
+        "named": False,
+    }
+    _precedents, named_deps = row_adjacency([named], limit=0)
+    assert named_deps == {}
+    precedents, direct_deps = row_adjacency([direct], limit=0)
+    assert "PF Model!367" in direct_deps[("PF Model", 32)]
+    assert precedents[("PF Model", 367)] == ["PF Model!32"]
+
+
 def test_row_adjacency_expands_sum_range() -> None:
     edges = [
         {
