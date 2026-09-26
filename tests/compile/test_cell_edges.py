@@ -124,6 +124,22 @@ def test_defined_name_resolves_to_its_cell() -> None:
     assert cell.named is False
 
 
+def test_defined_name_range_resolves_to_one_range() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+    from finance_context.formulas.names import resolve_defined_name_edges
+
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=SUMIF(List_merchant,A1)", sheet="PF Model", addr="M189")
+    resolve_defined_name_edges(
+        parsed.edges,
+        [{"name": "List_merchant", "formula": "'PF Model'!$D$186:$D$188"}],
+    )
+    edge = next(item for item in parsed.edges if item.named)
+    assert edge.kind == "range"
+    assert edge.target == "PF Model!D186:D188"
+    assert edge.unresolved is False
+
+
 def test_broken_defined_name_stays_unresolved() -> None:
     from finance_context.formulas.engine import FormulaEngine
     from finance_context.formulas.names import resolve_defined_name_edges

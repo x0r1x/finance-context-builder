@@ -12,10 +12,10 @@ from finance_context.formulas.models import Edge
 def resolve_defined_name_edges(
     edges: list[Edge], defined_names: list[Any] | None
 ) -> None:
-    """Point a name edge at its local cell, or mark an external / broken name.
+    """Point a name edge at its local cell or range, or mark an external / broken name.
 
-    The formula text is left unchanged. A local range, another name, or a
-    formula that is not one cell stays an unresolved name token.
+    The formula text is left unchanged. Another name, a column-only range, or a
+    formula that is not one cell or one range stays an unresolved name token.
     """
     table = _name_table(defined_names)
     if not table:
@@ -32,7 +32,7 @@ def resolve_defined_name_edges(
             edge.target = formula[1:] if formula.startswith("=") else formula
             edge.unresolved = False
             continue
-        _resolve_local_cell(edge, formula, engine)
+        _resolve_local(edge, formula, engine)
 
 
 def _name_table(defined_names: list[Any] | None) -> dict[str, str]:
@@ -61,20 +61,40 @@ def _is_open_name(edge: Edge) -> bool:
     )
 
 
-def _resolve_local_cell(edge: Edge, formula: str, engine: FormulaEngine) -> None:
+def _resolve_local(edge: Edge, formula: str, engine: FormulaEngine) -> None:
     text = formula if formula.startswith("=") else f"={formula}"
     parsed = engine.parse(text, sheet="_", addr="A1")
     ast = parsed.ast
+    if parsed.unparsed or not isinstance(ast, dict) or ast.get("external"):
+        return
+    if ast.get("op") == "ref" and ast.get("sheet"):
+        edge.kind = "ref"
+        edge.target = f"{ast['sheet']}!{format_addr(int(ast['col']), int(ast['row']))}"
+        edge.unresolved = False
+        edge.abs_col = bool(ast.get("abs_col"))
+        edge.abs_row = bool(ast.get("abs_row"))
+        return
+    if ast.get("op") != "range" or ast.get("named") or not ast.get("sheet"):
+        return
+    start = ast.get("start")
+    end = ast.get("end")
     if (
-        parsed.unparsed
-        or not isinstance(ast, dict)
-        or ast.get("op") != "ref"
-        or ast.get("external")
-        or not ast.get("sheet")
+        not isinstance(start, dict)
+        or not isinstance(end, dict)
+        or "col" not in start
+        or "row" not in start
+        or "col" not in end
+        or "row" not in end
     ):
         return
-    edge.kind = "ref"
-    edge.target = f"{ast['sheet']}!{format_addr(int(ast['col']), int(ast['row']))}"
+    edge.kind = "range"
+    edge.target = (
+        f"{ast['sheet']}!{format_addr(int(start['col']), int(start['row']))}"
+        f":{format_addr(int(end['col']), int(end['row']))}"
+    )
     edge.unresolved = False
-    edge.abs_col = bool(ast.get("abs_col"))
-    edge.abs_row = bool(ast.get("abs_row"))
+    edge.named = True
+    edge.abs_col = bool(start.get("abs_col"))
+    edge.abs_row = bool(start.get("abs_row"))
+    edge.abs_col_end = bool(end.get("abs_col"))
+    edge.abs_row_end = bool(end.get("abs_row"))
