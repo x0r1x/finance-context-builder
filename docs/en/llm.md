@@ -104,7 +104,7 @@ An architecture example. The `observation` object is not written into the job JS
 - On a timeline, years live in `axes[]`. An empty `block.periods` on that block is normal. On params, columns live in `block.periods`.
 - The row hierarchy is `label_path`. `parent_label` may name a coarser section.
 - An empty `row.formula` means the row's columns have no formula. Take a year's formula from the link with the same `row_key` and `period_id`, or from trace. No such link means the value is an input.
-- Look up a name in the formula text in `refs` and in `workbook.defined_names`. A name formula that contains `[` or `#REF!` points outside this workbook.
+- Look up a name in the formula text in `refs` and in `workbook.defined_names`. A local cell and a local range are already replaced by an address in `refs`. A token with no `!` means the name is not one cell and not one range in this workbook. A name formula that contains `[` or `#REF!` points outside this workbook.
 - `dangling` of 0 does not mean every name resolved. Read `unresolved.count` and `external.count`. `ids` holds at most 32 entries; the full number is `count`.
 - `concept_id` is not a metric key. A question such as "DSCR in 2030" finds the row by label and `row_key`, then the period. If `semantic_identity.concept_id` differs, name both.
 - A year on the axis with no `phase` is not an operating year.
