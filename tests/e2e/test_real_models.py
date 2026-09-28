@@ -33,7 +33,8 @@ def test_real_models_produce_context(tmp_path: Path, workbook: Path) -> None:
     assert (dest / "graph.json").is_file()
     assert (dest / "graph.md").is_file()
     assert doc.workbook.cell_count > 0
-    assert doc.meta.status in {"succeeded", "degraded", "needs_input"}
+    assert doc.meta.status == "succeeded"
+    assert doc.meta.questions == []
     rows = [row for block in doc.blocks for row in block.rows]
     assert rows
     assert all(row.sheet for row in rows)

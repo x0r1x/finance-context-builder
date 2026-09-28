@@ -216,7 +216,7 @@ def test_upload_and_download(tmp_path: Path) -> None:
             time.sleep(0.1)
         assert status is not None
         body = status.json()
-        assert body["status"] in {"succeeded", "degraded", "needs_input"}
+        assert body["status"] == "succeeded"
         json_doc = client.get(f"/v1/context-jobs/{job_id}/context.json")
         md_doc = client.get(f"/v1/context-jobs/{job_id}/context.md")
         assert json_doc.status_code == 200
@@ -261,11 +261,7 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
         created = client.post("/v1/context-jobs", files=files)
         assert created.status_code == 202
         job_id = created.json()["job_id"]
-        assert _wait_for_terminal(client, job_id)["status"] in {
-            "succeeded",
-            "degraded",
-            "needs_input",
-        }
+        assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
 
         job_dir = _job_dir(tmp_path, job_id)
         book_dir = _book_dir(tmp_path, job_id)
@@ -286,11 +282,7 @@ def test_repeated_upload_reuses_parse_and_compile(tmp_path: Path) -> None:
         (job_dir / "ir" / "graph_edges.parquet").write_bytes(b"stale-graph-edges")
         repeated = client.post("/v1/context-jobs", files=files)
         assert repeated.status_code == 202
-        assert _wait_for_terminal(client, job_id)["status"] in {
-            "succeeded",
-            "degraded",
-            "needs_input",
-        }
+        assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
 
         assert sentinel.read_text(encoding="utf-8") == "keep"
         assert (book_dir / "source.xlsx").is_file()
@@ -311,11 +303,7 @@ def test_repeat_post_keeps_ready_snapshot(tmp_path: Path) -> None:
     with _app(tmp_path) as client:
         created = _upload(client, source)
         job_id = created.json()["job_id"]
-        assert _wait_for_terminal(client, job_id)["status"] in {
-            "succeeded",
-            "degraded",
-            "needs_input",
-        }
+        assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
         job_dir = _job_dir(tmp_path, job_id)
         context = (job_dir / "context.json").read_bytes()
         sentinel = job_dir / "graph-edges.json"
@@ -567,11 +555,7 @@ def test_second_job_waits_behind_the_process_cap(tmp_path: Path, monkeypatch) ->
             assert blocked.status_code == 429
             assert blocked.json()["error"] == "too_many_jobs"
             pause.unlink()
-            assert _wait_for_terminal(client, job_id)["status"] in {
-                "succeeded",
-                "degraded",
-                "needs_input",
-            }
+            assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 if client.app.state.ctx.processes.alive_count() == 0:

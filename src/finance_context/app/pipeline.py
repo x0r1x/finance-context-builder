@@ -283,7 +283,7 @@ class Pipeline:
             source_filename=source_filename,
             content_sha256=content_sha256,
             warnings=doc.warnings,
-            questions=[q.model_dump(mode="json") for q in mapping.questions],
+            questions=[],
             generation=generation,
         )
         return doc
@@ -392,10 +392,8 @@ def _raise_if_cancelled(progress: object | None) -> None:
 
 
 def _final_status(mapping: MappingDocument, *, embed: object, chat: object) -> str:
-    if mapping.questions:
-        if embed is None and chat is None:
-            return "degraded"
-        return "needs_input"
+    # A published book is succeeded. An unmapped fact stays on the row.
+    del mapping, embed, chat
     return "succeeded"
 
 

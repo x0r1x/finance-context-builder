@@ -312,8 +312,6 @@ def build_context(
             f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
         )
     warnings.extend(timeline_warnings)
-    if mapping.questions:
-        warnings.append(f"{len(mapping.questions)} row(s) need mapping review")
     in_phase_missing = [addr for addr in missing_addrs if addr not in out_of_phase]
     if in_phase_missing:
         sample = ", ".join(in_phase_missing[:3])
@@ -351,7 +349,7 @@ def build_context(
         source_filename=source_filename,
         content_sha256=content_sha256,
         warnings=warnings[:50],
-        questions=[q.model_dump(mode="json") for q in mapping.questions],
+        questions=[],
     )
     counts = inventory_coverage_counts(document_rows)
     unmapped_series = sum(

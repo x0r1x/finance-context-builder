@@ -56,12 +56,10 @@ HTTP поднимает на каждую новую книгу отдельны
 | Статус | Смысл |
 | --- | --- |
 | `queued` / `running` | Ещё считается |
-| `succeeded` | Нет открытых mapping-вопросов |
-| `needs_input` | Контекст готов; часть fact-строк осталась `unknown` |
-| `degraded` | Как `needs_input`, но LLM и embeddings не настроены |
+| `succeeded` | Документы готовы. Fact без концепта остаётся на строке со статусом `abstained`. |
 | `failed` | Ошибка пайплайна или процесс книги остановлен по серверному `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`). Usable context нет |
 
-`needs_input` — не падение: `context.json`, `context.md`, `graph.json` и `graph.md` всё равно отдаются.
+Старые снимки могут ещё говорить `needs_input` или `degraded`. Такая джоба уже закончена, те же четыре документа отдаются.
 
 ## Два рычага покрытия
 

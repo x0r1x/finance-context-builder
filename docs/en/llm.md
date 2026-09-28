@@ -108,7 +108,7 @@ An architecture example. The `observation` object is not written into the job JS
 - `dangling` of 0 does not mean every name resolved. Read `unresolved.count` and `external.count`. `ids` holds at most 32 entries; the full number is `count`.
 - `concept_id` is not a metric key. A question such as "DSCR in 2030" finds the row by label and `row_key`, then the period. If `semantic_identity.concept_id` differs, name both.
 - A year on the axis with no `phase` is not an operating year.
-- `cell_refs` on a mapping question starts with the series cell, then the label cell. A repeated address is omitted. On a timeline that cell is the first period column; on params it is the row's first cell with role `value`. The question carries that row's `row_key`.
+- Mapping questions are not published. A row without a concept is `disposition=abstained`; the count is `mapping_stats.abstained`.
 - The warning counts formula cells missing a cache inside the phase. `workbook.missing_cached_values` counts every such formula, including years outside the phase.
 - Do not put `graph.json`, `graph.md`, or a wide block table into the prompt. When `numeric_summary.constant` is true, quote one value and the addresses of the first and last periods. Do not compress the exact `values` in JSON.
 - Do not recalculate. The Excel cache remains the source of the number.

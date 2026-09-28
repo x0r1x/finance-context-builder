@@ -77,12 +77,10 @@ Submit a workbook. `POST` returns **202** and the API starts a process for that 
 | status | Meaning |
 | --- | --- |
 | `queued` / `running` | Still working |
-| `succeeded` | Mapped without open questions |
-| `needs_input` | Context is ready; some fact rows were left `unknown` (review questions) |
-| `degraded` | Same as `needs_input`, but LLM/embeddings were not configured |
+| `succeeded` | Documents are ready. A fact without a concept stays `abstained` on the row. |
 | `failed` | Pipeline error, the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`), or the API restarted while the job was still `queued` or `running` (`error` is `process_lost`). Submit the workbook again. |
 
-`needs_input` is not a crash. `context.json`, `context.md`, `graph.json`, and `graph.md` are still served.
+Older snapshots may still say `needs_input` or `degraded`. Those jobs are finished, and the same four documents are served.
 
 ```bash
 JOB=$(curl -sS -F "file=@path/to/model.xlsx" http://127.0.0.1:8080/v1/context-jobs)
@@ -127,7 +125,7 @@ HTTP `error` codes:
 
 Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503.
 
-Learned high-confidence mappings persist in `$DATA_DIR/sessions/{session}/glossary.json` and are reused on later jobs in that session only. Another session does not read them. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows are excluded from review questions; they stay in the block with `disposition=excluded`. Unmapped business rows stay `unknown` with candidates instead of taking a nearest guess.
+Learned high-confidence mappings persist in `$DATA_DIR/sessions/{session}/glossary.json` and are reused on later jobs in that session only. Another session does not read them. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows stay in the block with `disposition=excluded`. Unmapped business rows stay `abstained` with candidates instead of taking a nearest guess.
 
 ## Docker
 
