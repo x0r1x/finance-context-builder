@@ -2,20 +2,19 @@
 
 [Русский](README.ru.md) · **English**
 
-Read-only service that turns Excel cash-flow workbooks (`.xlsx` / `.xlsm`) into versioned JSON and Markdown context. Formulas are preserved; values come from Excel cached results and are not recalculated.
+An Excel document parser. This read-only service reads a cash-flow workbook (`.xlsx` or `.xlsm`) and transforms it into JSON and Markdown: `context.json`, `context.md`, `graph.json`, and `graph.md`. Formulas are kept. Numbers come from the Excel cache and are not recalculated.
 
-Every layout row is kept once inside its block in `context.json` (schema `1.13.0`), including assumption tables without a period axis (`params`) and left-of-timeline scalars with roles (`value` / `unit` / `total` / `stub`) and a column `header` (Start, Live Case, Min). A period may carry `start_date` and `end_date`. Scalars and params rows use `period_position=instant` and `aggregation=none`. `context.md` adds `Path` and `Cells` columns and `Start` / `End` rows under `## Axes`. A total or stub column is not a period (`period_id` is null on its graph link). A row carries flat `values`, aligned `value_statuses` and `normalized_values`, plus `scale_factor`, `period_position`, and `aggregation`. `context.md` repeats the same blocks, rows, `row_key`, time profile, and values; an empty cell is `empty` and a period outside the line's phase is `n/a`. Period headers include the period key and column letter. Cells, formula AST, and the dependency graph stay in `raw/` and `ir/` — they are not merged into one JSON or one Markdown file. The accepted `concept_id` is the reporting slot; `semantic_identity`, `reporting_roles`, and `cash_semantics` keep economic meaning, layout role, and accrual versus cash apart. Sheet axes are published once on `axes` (grain, periods, `group_key`, and construction/operation phases from the flag rows on that axis). A timeline block stores `axis_ids` and one value series per axis; phase is not copied onto the block. A repeated year banner over months is `group_key`, not a second axis. Side-by-side year and month columns that share a header band stay one table. `mapping_stats.concept_coverage` is the share of annotatable rows with an accepted concept. `mapping_stats.mapping_quality` scores label, semantic, unit, temporal, and formula checks; a coverage of 1.0 does not mean those checks passed. An empty `unmapped.json` is not “every block row has a concept”. A small taxonomy may annotate a line with `concept_id`, or abstain: a wrong tag is worse than `unknown`. Structure (formula graph and neighbors) first, then labels, then embeddings, then an optional LLM rerank. Unknown rows still carry hints, neighbors, one formula, role-tagged cells, and top-3 candidates. `graph.json` and `graph.md` (schema `1.7.0`) publish summary counts and formula-level links with `formula_class`, `row_key`, and `period_id`. The Class column in `graph.md` repeats `formula_class`. AST and the expanded cell graph stay in `ir/*.parquet` — [graph](docs/en/graph.md).
+`context` holds block rows, periods, and values. `graph` holds formula links. A trace of one cell reads that graph. A row's concept comes from the cascade: structure, labels, embeddings, then an optional model call. A row without a concept stays `abstained`.
 
 Guides: [overview](docs/en/overview.md), [layout](docs/en/layout.md), [mapping](docs/en/mapping.md), [taxonomy](docs/en/taxonomy.md), [graph](docs/en/graph.md), [LLM slice](docs/en/llm.md), [unmapped review](docs/en/review.md), [architecture](docs/en/architecture.md).
 
-## Limits (MVP)
-
-- `.xls`, `.xlsb`, and encrypted workbooks are rejected
-- Cached formula values must already be in the file
-- LLM/embeddings are optional: mapping falls back to structure + labels, then `unknown`
-- Each new workbook runs in its own process, at most `MAX_CONCURRENT_JOBS` at once (default 2). Formula IR and layout for a workbook live under `data/shared/books/{sha256}/` and are the same for every session. Mapping, context, graph, and that session's `glossary.json` live under `data/sessions/{session}/jobs/{sha256}/` (`session` defaults to `local`). Inside one run, stages pass row lists and do not reread a file they just wrote. PyArrow reads and writes those files. `finance-context serve` starts one worker: several API replicas on one data directory are not supported.
-
 Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). See `NOTICE`.
+
+## Input
+
+- `.xlsx` and `.xlsm` are accepted.
+- `.xls`, `.xlsb`, and encrypted workbooks are rejected.
+- Cached formula values must already be in the file.
 
 ## Environment setup
 
@@ -126,6 +125,12 @@ HTTP `error` codes:
 Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503.
 
 Learned high-confidence mappings persist in `$DATA_DIR/sessions/{session}/glossary.json` and are reused on later jobs in that session only. Another session does not read them. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows stay in the block with `disposition=excluded`. Unmapped business rows stay `abstained` with candidates instead of taking a nearest guess.
+
+## Data
+
+`data/shared/books/{sha256}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. `data/sessions/{session}/jobs/{sha256}/` holds mapping, context, graph, and that session's `glossary.json`. The session defaults to `local`.
+
+At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2. `finance-context serve` starts one worker. Several API replicas on one data directory are not supported.
 
 ## Docker
 

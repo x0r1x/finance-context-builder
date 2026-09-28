@@ -2,20 +2,19 @@
 
 **Русский** · [English](README.md)
 
-Read-only сервис: Excel-модели cash-flow (`.xlsx` / `.xlsm`) превращаются в версионированный JSON и Markdown. Формулы сохраняются; значения берутся из кэша Excel и не пересчитываются.
+Парсер документов Excel. Read-only сервис читает книгу cash-flow `.xlsx` или `.xlsm` и преобразует её в JSON и Markdown: `context.json`, `context.md`, `graph.json` и `graph.md`. Формулы сохраняются. Числа берутся из кэша Excel и не пересчитываются.
 
-Каждая строка layout хранится один раз внутри своего блока в `context.json` (схема `1.13.0`), включая таблицы допущений без оси периодов (`params`) и скаляры слева от таймлайна с ролями (`value` / `unit` / `total` / `stub`) и `header` колонки (Start, Live Case, Min). У периода могут быть `start_date` и `end_date`. Скаляры и строки params используют `period_position=instant` и `aggregation=none`. В `context.md` есть колонки `Path` и `Cells` и строки `Start` / `End` под `## Axes`. Колонка total или stub — не период (`period_id` у её link в графе равен null). У строки плоский `values`, выровненные `value_statuses` и `normalized_values`, плюс `scale_factor`, `period_position` и `aggregation`. `context.md` повторяет те же блоки, строки, `row_key`, профиль времени и значения; пустая ячейка — `empty`, период вне фазы строки — `n/a`. В заголовке периода — ключ периода и буква колонки. Ячейки, AST формул и граф зависимостей остаются в `raw/` и `ir/`: они не сливаются в один JSON или один Markdown. Принятый `concept_id` — отчётный слот; `semantic_identity`, `reporting_roles` и `cash_semantics` разделяют экономический смысл, роль в layout и начисление против денег. Оси листа публикуются один раз в `axes` (зерно, периоды, `group_key` и фазы construction/operation из flag-строк этой оси). Timeline-блок хранит `axis_ids` и одну серию значений на ось; фаза на блок не копируется. Повторённый год над месяцами — `group_key`, не вторая ось. Год и месяц рядом под одной полосой заголовков остаются одной таблицей. `mapping_stats.concept_coverage` — доля строк, которые можно аннотировать и у которых принят концепт. `mapping_stats.mapping_quality` оценивает лейбл, семантику, единицы, время и формулу; coverage 1.0 не значит, что эти проверки прошли. Пустой `unmapped.json` — не «у каждой строки блока есть концепт». Маленькая таксономия может поставить строке `concept_id` или воздержаться: неверный тег хуже `unknown`. Сначала structure (граф формул и соседи), затем лейблы, затем эмбеддинги, затем необязательный LLM rerank. У unknown остаются hints, соседи, одна формула, role-ячейки и top-3 кандидатов. `graph.json` и `graph.md` (схема `1.7.0`) публикуют сводные счётчики и links уровня формулы с `formula_class`, `row_key` и `period_id`. Колонка Class в `graph.md` повторяет `formula_class`. AST и развёрнутый cell-граф остаются в `ir/*.parquet` — [граф](docs/ru/graph.md).
+`context` хранит строки блоков, периоды и значения. `graph` хранит связи формул. Trace одной ячейки читает этот граф. Концепт строки ставит каскад: structure, лейблы, эмбеддинги, затем необязательный вызов модели. Строка без концепта остаётся `abstained`.
 
 Гайды: [обзор](docs/ru/overview.md), [layout](docs/ru/layout.md), [маппинг](docs/ru/mapping.md), [таксономия](docs/ru/taxonomy.md), [граф](docs/ru/graph.md), [срез для LLM](docs/ru/llm.md), [разбор unmapped](docs/ru/review.md), [архитектура](docs/ru/architecture.md).
 
-## Ограничения (MVP)
-
-- `.xls`, `.xlsb` и зашифрованные книги отклоняются
-- Кэш формул уже должен быть в файле
-- LLM и эмбеддинги необязательны: маппинг откатывается к structure + labels, затем `unknown`
-- Каждая новая книга считается в своём процессе, одновременно не больше `MAX_CONCURRENT_JOBS` (по умолчанию 2). Formula IR и layout книги лежат в `data/shared/books/{sha256}/` и одинаковы для любой сессии. Mapping, context, graph и `glossary.json` этой сессии лежат в `data/sessions/{session}/jobs/{sha256}/` (`session` по умолчанию `local`). Внутри одного прогона стадии передают списки строк и не перечитывают файл, который только что записали. Читает и пишет эти файлы PyArrow. `finance-context serve` запускает один worker: несколько реплик API на одном каталоге не поддерживаются.
-
 Адаптировано из [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). См. `NOTICE`.
+
+## Вход
+
+- Принимаются `.xlsx` и `.xlsm`.
+- `.xls`, `.xlsb` и зашифрованная книга отклоняются.
+- Кэш формул уже должен лежать в файле.
 
 ## Окружение
 
@@ -119,6 +118,12 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 Окружение: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (если не задан, дефолт процесса `qwen3.6-27b-fp8`), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, на книгу), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (серверный дефолт 3600). См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503.
 
 Выученные high-confidence пары лежат в `$DATA_DIR/sessions/{session}/glossary.json` и используются на следующих джобах только этой сессии. Другая сессия их не читает. Таксономия — `src/finance_context/ontology/taxonomy.yaml`. Как добавить концепт или alias и как каскад использует эти поля: [docs/ru/taxonomy.md](docs/ru/taxonomy.md) и [docs/ru/mapping.md](docs/ru/mapping.md). Строки check/helper/flag остаются в блоке с `disposition=excluded`. Несмапленные бизнес-строки остаются `abstained` с кандидатами, а не берут ближайший тег.
+
+## Данные
+
+`data/shared/books/{sha256}/` хранит книгу, raw, formula IR и layout. Они общие для всех сессий. `data/sessions/{session}/jobs/{sha256}/` хранит mapping, context, graph и `glossary.json` этой сессии. Сессия по умолчанию `local`.
+
+Одновременно считается не больше `MAX_CONCURRENT_JOBS` книг, по умолчанию 2. `finance-context serve` запускает один worker. Несколько реплик API на одном каталоге не поддерживаются.
 
 ## Docker
 
