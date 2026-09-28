@@ -2,7 +2,7 @@
 
 [Русский](README.ru.md) · **English**
 
-Read-only service. An Excel cash-flow workbook (`.xlsx` or `.xlsm`) becomes four documents: `context.json`, `context.md`, `graph.json`, and `graph.md`. Formulas are kept. Numbers come from the Excel cache and are not recalculated.
+An Excel document parser. This read-only service reads a cash-flow workbook (`.xlsx` or `.xlsm`) and transforms it into JSON and Markdown: `context.json`, `context.md`, `graph.json`, and `graph.md`. Formulas are kept. Numbers come from the Excel cache and are not recalculated.
 
 `context` holds block rows, periods, and values. `graph` holds formula links. A trace of one cell reads that graph. A row's concept comes from the cascade: structure, labels, embeddings, then an optional model call. A row without a concept stays `abstained`.
 
