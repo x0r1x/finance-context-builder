@@ -8,6 +8,7 @@ from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.formulas.csr import build_csr, expand_cell_edges
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
 from finance_context.formulas.models import CompileResult, Edge, ParsedFormula
+from finance_context.formulas.names import resolve_defined_name_edges
 from finance_context.store.fs import read_parquet, write_json, write_parquet
 
 COMPILE_FILES = ("cells.parquet", "edges.parquet", "cell_edges.parquet")
@@ -33,6 +34,7 @@ IR_EDGE_COLUMNS = (
     ("target", "VARCHAR"),
     ("unresolved", "BOOLEAN"),
     ("truncated", "BOOLEAN"),
+    ("named", "BOOLEAN"),
 )
 
 IR_CELL_EDGE_COLUMNS = (
@@ -100,6 +102,7 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
                 ast_json,
             )
         )
+    resolve_defined_name_edges(edges, meta.get("defined_names"))
     known = set(extra_nodes)
     sheets = {
         str(item["name"] if isinstance(item, dict) else item.name)
@@ -110,7 +113,9 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         edges, known, known_sheets=sheets, presence=presence
     )
     csr = build_csr(edges, extra_nodes=extra_nodes, expanded=cell_edges)
-    edge_rows = [(e.source, e.kind, e.target, e.unresolved, e.truncated) for e in edges]
+    edge_rows = [
+        (e.source, e.kind, e.target, e.unresolved, e.truncated, e.named) for e in edges
+    ]
     cell_edge_rows = [
         (
             edge.source,
@@ -215,7 +220,8 @@ def compile_schema_id() -> str:
         for columns in (IR_CELL_COLUMNS, IR_EDGE_COLUMNS, IR_CELL_EDGE_COLUMNS)
         for name, _dtype in columns
     ]
-    return hashlib.sha256("\n".join(names).encode()).hexdigest()
+    payload = "\n".join([*names, "name-edges-1"])
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def ir_is_current(dest_dir: Path) -> bool:

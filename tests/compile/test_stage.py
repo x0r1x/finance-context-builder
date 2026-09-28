@@ -49,6 +49,35 @@ def test_compile_writes_ir_artifacts_and_templates(tmp_path: Path, dest: Path) -
     assert stamp["files"] == ["cells.parquet", "edges.parquet", "cell_edges.parquet"]
 
 
+def test_compile_resolves_a_defined_name_into_the_edge(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "names.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="Inputs",
+                cells=[
+                    CellSpec(addr="A1", value="1"),
+                    CellSpec(addr="H32", value="1000"),
+                    CellSpec(addr="B1", value="1", formula="A1/Thousand"),
+                ],
+            )
+        ],
+        defined_names=[("Thousand", "Inputs!$H$32")],
+    )
+    parse_workbook(source, dest)
+    compile_workbook(dest)
+    edges = load_parquet(dest / "ir" / "edges.parquet")
+    assert any(
+        edge["source"] == "Inputs!B1"
+        and edge["target"] == "Inputs!H32"
+        and edge["unresolved"] is False
+        and edge["named"] is True
+        for edge in edges
+    )
+    assert not any(edge["target"] == "Thousand" for edge in edges)
+
+
 def test_compile_template_roundtrips_through_parquet(tmp_path: Path, dest: Path) -> None:
     source = tmp_path / "ok.xlsx"
     build_xlsx(

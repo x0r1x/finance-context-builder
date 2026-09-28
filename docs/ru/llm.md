@@ -82,7 +82,7 @@
 | `scenario` | заголовок value/scenario-колонки params (`cells[].header`) | `Live` или `Case N`. У timeline-строки ключ отсутствует |
 | `timeline.start_date`, `end_date` | `axes[].periods[]` | ISO, если ось собрана из полосы Start/End. Иначе ключи отсутствуют |
 | `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` — токен `unit` / `k` / `m` / `bn`. Множитель — отдельный `scale_factor`. Без `kind` ставка выглядит как деньги |
-| `formula.text` | `row.formula` | Один fingerprint на строку. Отличия ячеек — `formula_exceptions`, не второй текст по умолчанию |
+| `formula.text` | `row.formula` | Один fingerprint с ячеек ряда. `null` — на колонках ряда нет формулы; формула stub сюда не подставляется. Отличия ячеек ряда — `formula_exceptions` |
 | `formula.class` | `links[].formula_class` | Один класс на ячейку формулы. AST не копируется |
 | `formula.precedents` | `graph.links[]` или `GET .../graph/trace` | Короткий список `row_key`, `concept_id`, `period_id`. AST не копируется |
 | `source.sheet`, `source.cell` | Строка + колонка периода; у формулы ещё `links[].cell` | Цитата. В `context.json` per-cell `source` нет |
@@ -97,3 +97,18 @@
 - Подмены `value` множителем или JSON-числом. Кэш остаётся строкой; множитель и базовая величина — отдельные поля.
 - AST. Он остаётся в `ir/cells.parquet` и попадает в разговор только отдельным запросом, не в обычный промпт.
 - Второго JSON джобы. Срез живёт в промпте отвечающей модели.
+
+## Как читать context и graph
+
+- `values[i]` склеивается с `periods[i]`. `period.index` начинается с 1 и индексом массива не является.
+- У timeline годы лежат в `axes[]`. Пустой `block.periods` у такого блока — норма. У params колонки лежат в `block.periods`.
+- Иерархия строки — `label_path`. `parent_label` может указывать на более крупную секцию.
+- `row.formula` пустой — на колонках ряда нет формулы. Формулу года брать из link с тем же `row_key` и `period_id` или из trace. Нет такого link — значение ввод.
+- Имя в тексте формулы искать в `refs` и в `workbook.defined_names`. Локальная ячейка и локальный диапазон уже заменены адресом в `refs`. Токен без `!` значит, что имя не одна ячейка и не один диапазон этой книги. Формула имени с `[` или `#REF!` — ссылка вне книги.
+- `dangling` равен 0 не значит, что имена резолвятся. Смотреть `unresolved.count` и `external.count`. Поле `ids` — не больше 32 записей, полное число в `count`.
+- `concept_id` не ключ метрики. Вопрос «DSCR в 2030» ищется по подписи и `row_key`, затем по периоду. Если `semantic_identity.concept_id` другой, называть оба.
+- Год оси без `phase` не операционный.
+- `cell_refs` у вопроса маппинга начинается с ячейки ряда, затем идёт колонка подписи; повтор адреса не пишется. У timeline это первая колонка периодов, у params — первая ячейка строки с ролью `value`. У вопроса есть `row_key` этой строки.
+- Предупреждение считает формулы без кэша внутри фазы. `workbook.missing_cached_values` считает все такие формулы, включая годы вне фазы.
+- В промпт не класть `graph.json`, `graph.md` и широкую таблицу блока. Если `numeric_summary.constant`, цитировать одно значение и адреса первого и последнего периода. Точные `values` в JSON не сжимать.
+- Числа не пересчитывать. Кэш Excel остаётся источником значения.

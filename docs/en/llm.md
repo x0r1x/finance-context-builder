@@ -82,7 +82,7 @@ An architecture example. The `observation` object is not written into the job JS
 | `scenario` | header of a params value/scenario column (`cells[].header`) | `Live` or `Case N`. Absent on a timeline row |
 | `timeline.start_date`, `end_date` | `axes[].periods[]` | ISO when the axis was built from a Start/End band. Otherwise the keys are absent |
 | `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` is the token `unit` / `k` / `m` / `bn`. The multiplier is the separate `scale_factor`. Without `kind` a rate looks like money |
-| `formula.text` | `row.formula` | One fingerprint per row. Cell differences are `formula_exceptions`, not a second text by default |
+| `formula.text` | `row.formula` | One fingerprint taken from the row's own cells. `null` means those cells have no formula; a stub formula is not substituted. Differences among the row's cells are `formula_exceptions` |
 | `formula.class` | `links[].formula_class` | One class per formula cell. AST is not copied |
 | `formula.precedents` | `graph.links[]` or `GET .../graph/trace` | A short list of `row_key`, `concept_id`, `period_id`. AST is not copied |
 | `source.sheet`, `source.cell` | The row plus the period column; a formula also has `links[].cell` | A citation. `context.json` has no per-cell `source` |
@@ -97,3 +97,18 @@ An architecture example. The `observation` object is not written into the job JS
 - Replacing `value` with the multiplier or a JSON number. The cache stays a string; the multiplier and the base amount are separate fields.
 - AST. It stays in `ir/cells.parquet` and enters a conversation only as a separate request, not in the ordinary prompt.
 - A second job JSON. The slice lives in the answering model's prompt.
+
+## How to read context and graph
+
+- Join `values[i]` to `periods[i]`. `period.index` starts at 1 and is not an array index.
+- On a timeline, years live in `axes[]`. An empty `block.periods` on that block is normal. On params, columns live in `block.periods`.
+- The row hierarchy is `label_path`. `parent_label` may name a coarser section.
+- An empty `row.formula` means the row's columns have no formula. Take a year's formula from the link with the same `row_key` and `period_id`, or from trace. No such link means the value is an input.
+- Look up a name in the formula text in `refs` and in `workbook.defined_names`. A local cell and a local range are already replaced by an address in `refs`. A token with no `!` means the name is not one cell and not one range in this workbook. A name formula that contains `[` or `#REF!` points outside this workbook.
+- `dangling` of 0 does not mean every name resolved. Read `unresolved.count` and `external.count`. `ids` holds at most 32 entries; the full number is `count`.
+- `concept_id` is not a metric key. A question such as "DSCR in 2030" finds the row by label and `row_key`, then the period. If `semantic_identity.concept_id` differs, name both.
+- A year on the axis with no `phase` is not an operating year.
+- `cell_refs` on a mapping question starts with the series cell, then the label cell. A repeated address is omitted. On a timeline that cell is the first period column; on params it is the row's first cell with role `value`. The question carries that row's `row_key`.
+- The warning counts formula cells missing a cache inside the phase. `workbook.missing_cached_values` counts every such formula, including years outside the phase.
+- Do not put `graph.json`, `graph.md`, or a wide block table into the prompt. When `numeric_summary.constant` is true, quote one value and the addresses of the first and last periods. Do not compress the exact `values` in JSON.
+- Do not recalculate. The Excel cache remains the source of the number.

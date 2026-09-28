@@ -131,16 +131,19 @@ def build_row_context(
         next(item for item in book.layout.sheets if item.name == sheet),
         block,
     )
+    anchor_col: int | None = None
+    grain: str | None = None
+    headers: list[str] = []
     if getattr(block, "kind", "timeline") == "params":
-        grain = None
-        headers: list[str] = []
-    elif not block_axes:
-        grain = None
-        headers = []
-    else:
+        value_cols = [cell.col for cell in layout_row.cells if cell.role == "value"]
+        if value_cols:
+            anchor_col = min(value_cols)
+    elif block_axes:
         primary = max(block_axes, key=lambda axis: len(axis.periods))
         grain = primary.grain
         headers = [period.text for period in primary.periods[:12]]
+        if primary.periods:
+            anchor_col = min(period.col for period in primary.periods)
     value_kind = _value_kind(book, sheet, layout_row.row, block, pattern)
     unit_kind = _unit_from_row_cells(book, sheet, layout_row)
     if unit_kind and not (unit_kind == "money" and value_kind == "rate"):
@@ -186,6 +189,7 @@ def build_row_context(
         ),
         query_text=query,
         label_col=layout_row.label_col or block.label_col,
+        anchor_col=anchor_col,
         prev_labels=prev_labels,
         next_labels=next_labels,
     )
