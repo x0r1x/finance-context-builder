@@ -70,12 +70,10 @@ curl -s http://127.0.0.1:8080/readyz
 | status | Смысл |
 | --- | --- |
 | `queued` / `running` | Ещё считается |
-| `succeeded` | Замаплено без открытых вопросов |
-| `needs_input` | Контекст готов; часть fact-строк осталась `unknown` (вопросы на разбор) |
-| `degraded` | Как `needs_input`, но LLM и эмбеддинги не настроены |
+| `succeeded` | Документы готовы. Fact без концепта остаётся на строке со статусом `abstained`. |
 | `failed` | Ошибка пайплайна, процесс книги остановлен по серверному `JOB_TIMEOUT_SEC` (`error` — `TimeoutError`), или API перезапустился, пока книга была в `queued` или `running` (`error` — `process_lost`). Отправьте книгу снова. |
 
-`needs_input` — не падение. `context.json`, `context.md`, `graph.json` и `graph.md` всё равно отдаются.
+Старые снимки могут ещё говорить `needs_input` или `degraded`. Такая джоба уже закончена, те же четыре документа отдаются.
 
 ```bash
 JOB=$(curl -sS -F "file=@path/to/model.xlsx" http://127.0.0.1:8080/v1/context-jobs)
@@ -120,7 +118,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 
 Окружение: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (если не задан, дефолт процесса `qwen3.6-27b-fp8`), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, на книгу), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (серверный дефолт 3600). См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503.
 
-Выученные high-confidence пары лежат в `$DATA_DIR/sessions/{session}/glossary.json` и используются на следующих джобах только этой сессии. Другая сессия их не читает. Таксономия — `src/finance_context/ontology/taxonomy.yaml`. Как добавить концепт или alias и как каскад использует эти поля: [docs/ru/taxonomy.md](docs/ru/taxonomy.md) и [docs/ru/mapping.md](docs/ru/mapping.md). Строки check/helper/flag в вопросы на разбор не входят; они остаются в блоке с `disposition=excluded`. Несмапленные бизнес-строки остаются `unknown` с кандидатами, а не берут ближайший тег.
+Выученные high-confidence пары лежат в `$DATA_DIR/sessions/{session}/glossary.json` и используются на следующих джобах только этой сессии. Другая сессия их не читает. Таксономия — `src/finance_context/ontology/taxonomy.yaml`. Как добавить концепт или alias и как каскад использует эти поля: [docs/ru/taxonomy.md](docs/ru/taxonomy.md) и [docs/ru/mapping.md](docs/ru/mapping.md). Строки check/helper/flag остаются в блоке с `disposition=excluded`. Несмапленные бизнес-строки остаются `abstained` с кандидатами, а не берут ближайший тег.
 
 ## Docker
 

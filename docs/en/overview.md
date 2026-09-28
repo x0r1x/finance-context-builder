@@ -56,12 +56,10 @@ Do not mix the two report metrics: **content completeness** must be 100% (block 
 | Status | Meaning |
 | --- | --- |
 | `queued` / `running` | Still working |
-| `succeeded` | No open mapping questions |
-| `needs_input` | Context is ready; some fact rows stayed `unknown` |
-| `degraded` | Same as `needs_input`, but LLM and embeddings were not configured |
+| `succeeded` | Documents are ready. A fact without a concept stays `abstained` on the row. |
 | `failed` | Pipeline error, or the book's process was stopped by the server `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`). No usable context |
 
-`needs_input` is not a crash: `context.json`, `context.md`, `graph.json`, and `graph.md` are still served.
+Older snapshots may still say `needs_input` or `degraded`. Those jobs are finished, and the same four documents are served.
 
 ## Two levers for coverage
 

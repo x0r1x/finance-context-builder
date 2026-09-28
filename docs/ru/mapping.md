@@ -22,19 +22,19 @@ Layout помечает тело блока видами строк. Каска�
 
 Лейблы из `is_noise_label` (`Dashboard`, `Assumptions`, `* chart`, `* bridge`, …) **не создают** строк в `mapping.json`, но остаются строкой блока (без периодного ряда).
 
-`needs_input` считается только по вопросам на fact-строках.
+Опубликованная джоба получает `succeeded` и тогда, когда не у каждой fact есть концепт. Строка без концепта остаётся `abstained`.
 
 ## Каскад
 
 Порядок в `map_layout`:
 
 1. По layout, IR cells и рёбрам строится `BookView`: сначала `ir/cell_edges.parquet`, если его нет — `ir/edges.parquet`. Дальше паттерны формул (`analyze_structure`), row-adjacency, контекст строки (`RowContext`: лейбл, родитель, секция, лист, зерно, `value_kind`, шаблоны формул, `prev_labels` / `next_labels` ±2, `time_semantics`).
-2. **Исключение.** Если `exclusion_reason(ctx)` не пустой — строка не резолвится, disposition = `excluded`, вопроса нет.
+2. **Исключение.** Если `exclusion_reason(ctx)` не пустой — строка не резолвится, disposition = `excluded`.
 3. До **четырёх** проходов сигналов `glossary + lexical + structure`. Нужно, чтобы alias/SUM подтянули концепт, когда соседняя строка замапилась на предыдущей итерации (structure fixpoint).
 4. Нерезолвнутые fact + включённый EmbedPort → dense retrieve по лейблам концептов, затем снова fuse/decide вместе с lexical/glossary/structure.
 5. Оставшиеся + ChatPort → rerank короткого списка. Может вернуть `unknown`. **Не имеет права изобрести id** вне таксономии.
 6. Финальный проход только `structure` (подтянуть то, что открылось после embed/chat).
-7. Сборка `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph.json` `links` и trace, не в `context.blocks[].relations`.
+7. Сборка `MappingDocument`: `rows` и structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). `questions` остаётся пустым. Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph.json` `links` и trace, не в `context.blocks[].relations`.
 
 Пустой список на embed или chat пишет INFO `model_skip`: `reason=resolved`, если нерезолвнутых строк нет, и `reason=unconfigured`, если порт не задан, а строки остались. Попадание в `shared/embeddings/{model}-{taxhash}.npz` пишет INFO `embed_cache` с `reason=cache` и модель не вызывает.
 
@@ -119,7 +119,7 @@ Prune отбрасывает:
 | `noise` | `is_noise_label` (если строка всё же попала в контекст) |
 | `technical_bridge` | в лейбле `from mf` / `circular` / `helper`, кроме `pre-revolver` |
 
-Excluded: `concept_id = null`, `source = rule`, вопросов нет, `disposition=excluded` на той же строке блока. В `unmapped.json` **не** попадают.
+Excluded: `concept_id = null`, `source = rule`, `disposition=excluded` на той же строке блока. В `unmapped.json` **не** попадают.
 
 KPI и расчётные бизнес-строки (`article_role = calculation`) — обычные fact: их нужно мапить или честно abstain, не exclude.
 
@@ -129,7 +129,7 @@ KPI и расчётные бизнес-строки (`article_role = calculation
 | --- | --- | --- |
 | `mapped` | задан | нет |
 | `excluded` | null | нет |
-| `abstained` | null | вопрос; в MD Concept = `unknown`; candidates и hints сохраняются |
+| `abstained` | null | концепта нет; в MD Concept = `unknown`; candidates и hints сохраняются |
 
 У `abstract` на строке блока стоит `disposition=header` (это не отказ маппинга и не abstain).
 

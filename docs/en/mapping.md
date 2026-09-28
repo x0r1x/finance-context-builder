@@ -22,19 +22,19 @@ Layout marks the block body with row kinds. The cascade resolves **`fact` / `fla
 
 Labels from `is_noise_label` (`Dashboard`, `Assumptions`, `* chart`, `* bridge`, …) do **not** create rows in `mapping.json`, but they remain a block row (without a period series).
 
-`needs_input` is counted only from questions on fact rows.
+A published job is `succeeded` whether or not every fact received a concept. An unmapped fact stays `abstained`.
 
 ## Cascade
 
 Order in `map_layout`:
 
 1. `BookView` is built from layout, IR cells, and edges: `ir/cell_edges.parquet` first, otherwise `ir/edges.parquet`. Then formula patterns (`analyze_structure`), row adjacency, and row context (`RowContext`: label, parent, section, sheet, grain, `value_kind`, formula templates, `prev_labels` / `next_labels` ±2, `time_semantics`).
-2. **Exclusion.** If `exclusion_reason(ctx)` is non-empty, the row is not resolved, disposition is `excluded`, and there is no question.
+2. **Exclusion.** If `exclusion_reason(ctx)` is non-empty, the row is not resolved and disposition is `excluded`.
 3. Up to **four** passes of `glossary + lexical + structure`. Alias/SUM need a neighbor that was mapped on the previous iteration (structure fixpoint).
 4. Unresolved facts plus an enabled EmbedPort → dense retrieve over concept labels, then fuse/decide again together with lexical/glossary/structure.
 5. What remains plus ChatPort → rerank of a short list. It may return `unknown`. It **must not invent an id** outside the taxonomy.
 6. A final `structure`-only pass (pull in what opened up after embed/chat).
-7. Assemble `MappingDocument`: `rows` + `questions` + structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` for the cascade). This is **not** the full cell graph: dependency completeness is in `ir/cell_edges.parquet`, `graph.json` `links`, and trace, not in `context.blocks[].relations`.
+7. Assemble `MappingDocument`: `rows` and structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` for the cascade). `questions` stays empty. This is **not** the full cell graph: dependency completeness is in `ir/cell_edges.parquet`, `graph.json` `links`, and trace, not in `context.blocks[].relations`.
 
 An empty embed or chat list logs INFO `model_skip`: `reason=resolved` when no unresolved rows remain, and `reason=unconfigured` when the port is unset and rows remain. A hit on `shared/embeddings/{model}-{taxhash}.npz` logs INFO `embed_cache` with `reason=cache` and does not call the model.
 
@@ -119,7 +119,7 @@ Thresholds are not lowered to “close coverage”. A nearby wrong tag is worse 
 | `noise` | `is_noise_label` (if the row still reached context) |
 | `technical_bridge` | the label contains `from mf` / `circular` / `helper`, except `pre-revolver` |
 
-Excluded: `concept_id = null`, `source = rule`, no question, `disposition=excluded` on the same block row. They do **not** enter `unmapped.json`.
+Excluded: `concept_id = null`, `source = rule`, `disposition=excluded` on the same block row. They do **not** enter `unmapped.json`.
 
 KPIs and calculated business rows (`article_role = calculation`) are ordinary facts: map them or abstain honestly. Do not exclude them.
 
@@ -129,7 +129,7 @@ KPIs and calculated business rows (`article_role = calculation`) are ordinary fa
 | --- | --- | --- |
 | `mapped` | set | no |
 | `excluded` | null | no |
-| `abstained` | null | a question; in MD Concept = `unknown`; candidates and hints are kept |
+| `abstained` | null | no concept; in MD Concept = `unknown`; candidates and hints are kept |
 
 An `abstract` block row has `disposition=header` (that is not a mapping refusal and not an abstain).
 

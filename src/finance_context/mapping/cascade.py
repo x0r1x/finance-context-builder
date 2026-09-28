@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from finance_context.errors import PortError
-from finance_context.excel.a1 import format_addr
 from finance_context.layout.models import Layout, LayoutRow
 from finance_context.mapping.exclusion import exclusion_reason
 from finance_context.mapping.facets import prune_candidates
@@ -148,7 +147,6 @@ def map_layout(
 
     questions: list[MappingQuestion] = []
     mapped = []
-    qn = 1
     for ctx in pending:
         concept_id = book.concepts.get(ctx.row_key)
         ranked = ctx.extras.get("ranked") or ctx.extras.get("proposals") or []
@@ -171,8 +169,6 @@ def map_layout(
             continue
         if concept_id is None:
             source = "question"
-            questions.append(_question(ctx, ranked, qn))
-            qn += 1
         mapped.append(
             to_mapped(
                 ctx,
@@ -590,26 +586,6 @@ def _calculation_compatible(
                 return True
         return False
     return True
-
-
-def _question(ctx: RowContext, ranked: list[Candidate], qn: int) -> MappingQuestion:
-    options = [c.concept_id for c in ranked[:TOP_K]]
-    if "unknown" not in options:
-        options = [*options, "unknown"]
-    label = f"{ctx.sheet}!{format_addr(ctx.label_col, ctx.row)}"
-    refs = [label]
-    if ctx.anchor_col is not None:
-        anchor = f"{ctx.sheet}!{format_addr(ctx.anchor_col, ctx.row)}"
-        if anchor != label:
-            refs = [anchor, label]
-    hint = options[0] if options else "unknown"
-    return MappingQuestion(
-        id=f"q_{qn:03d}",
-        row_key=ctx.row_key,
-        prompt=f"Строка «{ctx.label}» — это {hint}?",
-        cell_refs=refs,
-        options=options,
-    )
 
 
 def _acquire(slots: SlotGate | None, kind: Any, timeout_sec: float) -> bool:
