@@ -596,12 +596,18 @@ def _question(ctx: RowContext, ranked: list[Candidate], qn: int) -> MappingQuest
     options = [c.concept_id for c in ranked[:TOP_K]]
     if "unknown" not in options:
         options = [*options, "unknown"]
-    addr = format_addr(ctx.label_col, ctx.row)
+    label = f"{ctx.sheet}!{format_addr(ctx.label_col, ctx.row)}"
+    refs = [label]
+    if ctx.anchor_col is not None:
+        anchor = f"{ctx.sheet}!{format_addr(ctx.anchor_col, ctx.row)}"
+        if anchor != label:
+            refs = [anchor, label]
     hint = options[0] if options else "unknown"
     return MappingQuestion(
         id=f"q_{qn:03d}",
+        row_key=ctx.row_key,
         prompt=f"Строка «{ctx.label}» — это {hint}?",
-        cell_refs=[f"{ctx.sheet}!{addr}"],
+        cell_refs=refs,
         options=options,
     )
 

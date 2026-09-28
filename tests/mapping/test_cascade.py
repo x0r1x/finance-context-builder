@@ -5,7 +5,15 @@ import logging
 from tests.helpers.ports import CapBudget, DenySlots, FakeChat, FakeEmbed, GrantSlots
 
 from finance_context.errors import PortError
-from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
+from finance_context.layout.models import (
+    Axis,
+    AxisHeader,
+    Block,
+    Layout,
+    LayoutRow,
+    RowCell,
+    SheetLayout,
+)
 from finance_context.mapping.cascade import map_layout
 from finance_context.mapping.models import (
     Concept,
@@ -235,8 +243,88 @@ def test_ambiguous_without_chat_emits_question() -> None:
     assert doc.rows[0].concept_id is None
     assert doc.rows[0].source == "question"
     assert doc.questions
-    assert doc.questions[0].kind == "mapping"
-    assert "unknown" in doc.questions[0].options
+    question = doc.questions[0]
+    assert question.kind == "mapping"
+    assert question.row_key == "P&L|2|P&L!r1"
+    assert question.cell_refs == ["P&L!B2", "P&L!A2"]
+    assert "unknown" in question.options
+
+
+def test_timeline_question_skips_the_stub_value_cell() -> None:
+    layout = _layout(
+        LayoutRow(
+            row=179,
+            label="Full-wrap EPC",
+            label_col=4,
+            cells=[
+                RowCell(col=7, role="value", header="Check"),
+                RowCell(col=12, role="total"),
+            ],
+        )
+    )
+    doc = map_layout(
+        layout,
+        taxonomy=TAXONOMY,
+        glossary={},
+        embed=FakeEmbed(VECS),
+        chat=None,
+        slots=GrantSlots(),
+    )
+    assert doc.questions[0].row_key == "P&L|179|P&L!r1"
+    assert doc.questions[0].cell_refs == ["P&L!B179", "P&L!D179"]
+
+
+def test_params_question_cites_the_row_value_cell() -> None:
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="PF Model",
+                blocks=[
+                    Block(
+                        block_id="PF Model!r11",
+                        label_col=4,
+                        kind="params",
+                        axis=Axis(
+                            id="PF Model!r11",
+                            row=11,
+                            headers=[
+                                AxisHeader(
+                                    col=5,
+                                    text="Reference",
+                                    role="value",
+                                    period_key="value-e",
+                                ),
+                                AxisHeader(
+                                    col=8,
+                                    text="H",
+                                    role="value",
+                                    period_key="value-h",
+                                ),
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(
+                                row=31,
+                                label="Months per year",
+                                label_col=4,
+                                cells=[RowCell(col=8, role="value")],
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    doc = map_layout(
+        layout,
+        taxonomy=TAXONOMY,
+        glossary={},
+        embed=FakeEmbed(VECS),
+        chat=None,
+        slots=GrantSlots(),
+    )
+    assert doc.questions[0].row_key == "PF Model|31|PF Model!r11"
+    assert doc.questions[0].cell_refs == ["PF Model!H31", "PF Model!D31"]
 
 
 def test_no_slot_does_not_call_embed_or_chat(caplog) -> None:

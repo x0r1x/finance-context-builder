@@ -179,6 +179,7 @@ class MappedRow(BaseModel):
 
 class MappingQuestion(BaseModel):
     id: str
+    row_key: str
     kind: Literal["mapping", "identity_gap", "explain"] = "mapping"
     prompt: str
     cell_refs: list[str]
@@ -222,6 +223,7 @@ class RowContext(BaseModel):
     article_role: ArticleRole = "database_like"
     query_text: str = ""
     label_col: int = 1
+    anchor_col: int | None = None
     inferred_facets: InferredFacets = Field(default_factory=InferredFacets)
     prev_labels: list[str] = Field(default_factory=list)
     next_labels: list[str] = Field(default_factory=list)
