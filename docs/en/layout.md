@@ -85,7 +85,7 @@ Those rows do not stay in the timeline block. Scenario columns are not part of t
 
 ## Non-period cells on a timeline
 
-Columns between the label zone and `min(period_col)` get roles on `LayoutRow.cells`: `SUM` over the period columns → `total`; unit text (`k£`, `EUR'000`, `EUR/MWh`, `%`, `x`, `years`) → `unit`; a column with only an end date and no start → `stub`; any other number/formula → `value`. A role cell has `header` — the nearest label in the same column inside the section (`Start`, `End`, `Live Case`, `Min`, `Avg`). `total` and `stub` are not periods of the axis; the graph link for that cell has `period_id=null`. These are scalars such as `Construction!C22`, not a dump of every cell on the sheet.
+Columns between the label zone and `min(period_col)` get roles on `LayoutRow.cells`: `SUM` over the period columns → `total`; unit text (`k£`, `EUR'000`, `EUR/MWh`, `%`, `x`, `years`, a whole cell `Index`, `MWh p.a.`, `#`, `№`) → `unit`. A column title `Index` stays a header. `Base Index` is not a unit. A trailing `p.a.` is a period marker on the caption (`MWh p.a.` is count, `EUR p.a.` is money, `% p.a.` is rate); a column with only an end date and no start → `stub`; any other number/formula → `value`. A role cell has `header` — the nearest label in the same column inside the section (`Start`, `End`, `Live Case`, `Min`, `Avg`). `total` and `stub` are not periods of the axis; the graph link for that cell has `period_id=null`. These are scalars such as `Construction!C22`, not a dump of every cell on the sheet.
 
 ## What to check when mapping is empty
 

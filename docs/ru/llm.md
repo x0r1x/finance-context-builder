@@ -78,7 +78,7 @@
 | `value_status` | `row.value_statuses[i]` | `cached`, `empty`, `zero_explicit` или `not_applicable`. Пустую ячейку не подменяют нулём |
 | `normalized_value` | `row.normalized_values[i]` | Строка в базовых единицах или `null`, если число не разобрать. Не замена `value` |
 | `scale_factor` | `row.scale_factor` | Целый множитель `1` / `1000` / `1000000` / `1000000000` или `null` |
-| `period_position`, `aggregation` | поля строки | Например `during_period` и `sum`. Скаляр и строка params — `instant` / `none`. Рядом с `hints.time_semantics` |
+| `period_position`, `aggregation` | поля строки | Колонка Time в Markdown склеивает их с `hints.time_semantics`: `flow/during_period/sum` у заполненного денежного года, `rate/during_period/average` у заполненной годовой ставки. Точка — `instant/instant/none` (позиция `instant`, агрегирование `none`, ряд не суммируется). Статическая ставка — `rate/instant/none`. Колонки сценария — альтернативы и сохраняют агрегирование `none` |
 | `scenario` | заголовок value/scenario-колонки params (`cells[].header`) | `Live` или `Case N`. У timeline-строки ключ отсутствует |
 | `timeline.start_date`, `end_date` | `axes[].periods[]` | ISO, если ось собрана из полосы Start/End. Иначе ключи отсутствуют |
 | `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` — токен `unit` / `k` / `m` / `bn`. Множитель — отдельный `scale_factor`. Без `kind` ставка выглядит как деньги |

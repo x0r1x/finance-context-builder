@@ -4,7 +4,7 @@
 
 The cascade reads `$DATA_DIR/shared/taxonomy.json`. An empty file is filled once from [`src/finance_context/ontology/taxonomy.yaml`](../../src/finance_context/ontology/taxonomy.yaml) (`load_taxonomy` → `validate_taxonomy` → `enrich_concept`, facet inheritance). A file that already exists is not copied from yaml again. After that, yaml is not filled by hand.
 
-The taxonomy is not a synonym list for one Excel book. A new id appears in the shared store when a row has no nearby concept (nearest cosine below 0.5) and the row is not a parameter (`Months per year`, `Thousand`, `On`, `Off`, a bare `Total`). The id is the statement prefix plus the normalized label of the first sighting, and it is not renamed later. The new concept's `broader` is a seeded id and its facets are copied from that concept. A chat model, when configured, only answers extend or skip and does not choose the id. `taxonomy.json` is not edited by hand. Shared memory stores that label with the narrowest section and the unit (`money`, `rate`, `years`, or empty), so P&L and CFS do not merge. A new label of a known value goes into `shared/label_memory.json`, not into a new id.
+The taxonomy is not a synonym list for one Excel book. A new id is appended only for an abstained row whose nearest alternative has a score below 0.5. The parent is a seeded concept whose inherited unit equals the row memory unit; an empty memory unit leaves every shown seed eligible. Without chat the parent is that nearest compatible seed. With chat the model answers `extend` or `skip` and may name one shown id as `broader`. Skip, an error, or an id outside the list leaves the row abstained. The new id is the statement prefix plus the normalized label of the first sighting, and it is not renamed later. Facets are copied from the parent. `Months per year`, `Thousand`, `On`, `Off`, and a bare `Total` stay without an id. `taxonomy.json` is not edited by hand. Shared memory stores that label with the narrowest section and the unit (`money`, `rate`, `years`, or empty), so P&L and CFS do not merge. A new label of a known value goes into `shared/label_memory.json`, not into a new id.
 
 Line-item axes come from the [FAST Standard 3.01](https://www.fast-standard.org/) and are concept attributes, like `periodType` / `balance` in XBRL, not parts of a composite key.
 
@@ -23,7 +23,7 @@ concepts:
     broader: cf.receipts
     facets: {direction: inflow}   # the rest is inherited
     definition: ...               # optional
-    exact_labels: [GMV]           # optional, forced on an exact label
+    exact_labels: [GMV]           # optional; forced when the memory unit agrees
     deprecated: false
     replaced_by: null
     match: {}                     # reserved for an IFRS/US-GAAP crosswalk
@@ -43,7 +43,7 @@ calculations:
 | `statements` | Compatibility; filled from `facets.statement` when empty |
 | `section_hints` | Lexical fires only when the hint is visible in the row context |
 | `anti_labels` | Hard guard: a substring in the label **drops** this concept. Not a score, and not a place for wide phrases (`cash in`, `lease`) |
-| `exact_labels` | If the row label matches, the concept is forced |
+| `exact_labels` | An exact label forces the concept when the memory unit is empty or compatible. A years caption stays on a count concept. An incompatible unit leaves the label unforced |
 | `definition` | Text for people and for the embed query |
 | `deprecated` / `replaced_by` | Retire a concept without renaming the id |
 | `role` | Reserved; it does not affect the cascade |
@@ -77,6 +77,8 @@ The `Other Income` collision is two concepts with a different `basis` (accrual v
 - an empty `definition` → `"{id}: {labels}"`.
 
 Set `facets.unit` / `facets.statement` explicitly when the prefix default lies (a liquidity KPI, `debt.scheduled_payment` as a cash flow).
+
+The quality check reads the unit written before this money stamp. Prefixes `pnl`, `cf`, `bs`, and `debt` still expect money when no unit was declared. Any other undeclared unit expects nothing, so a date on `ops.model_start` passes. A concept id ending in `_rate` does not by itself expect a rate.
 
 Load checks unique ids, that `broader` exists, cycles, and `deprecated` without `replaced_by`.
 
