@@ -117,11 +117,11 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 
 Окружение: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (если не задан, дефолт процесса `qwen3.6-27b-fp8`), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, на книгу), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (серверный дефолт 3600). См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503.
 
-Выученные high-confidence пары лежат в `$DATA_DIR/sessions/{session}/glossary.json` и используются на следующих джобах только этой сессии. Другая сессия их не читает. Таксономия — `src/finance_context/ontology/taxonomy.yaml`. Как добавить концепт или alias и как каскад использует эти поля: [docs/ru/taxonomy.md](docs/ru/taxonomy.md) и [docs/ru/mapping.md](docs/ru/mapping.md). Строки check/helper/flag остаются в блоке с `disposition=excluded`. Несмапленные бизнес-строки остаются `abstained` с кандидатами, а не берут ближайший тег.
+Принятые строки лежат в `$DATA_DIR/shared/label_memory.json` и читаются всеми сессиями. Ключ — нормализованный лейбл, ближайшая секция (`section_path[-1]`, иначе родитель) и единица (`money`, `rate`, `years` или пусто). Балл строго выше заменяет концепт. Равный балл оставляет прежнюю запись. Эмбеддинг с уверенностью high пишется туда, ответ модели не пишется. Второй концепт или воздержавшаяся строка на том же ключе стирает запись. Ключ `section_class` в этот файл не пишется. Старый `sessions/{session}/glossary.json` ещё читается как пара лейбла и родителя. Каскад берёт таксономию из `$DATA_DIR/shared/taxonomy.json`: пустой файл один раз наполняется из `src/finance_context/ontology/taxonomy.yaml`. Новый id появляется, только если рядом нет концепта и строка не параметр вроде Months per year. Как устроены поля и каскад: [docs/ru/taxonomy.md](docs/ru/taxonomy.md) и [docs/ru/mapping.md](docs/ru/mapping.md). Строки check/helper/flag остаются в блоке с `disposition=excluded`. Несмапленные бизнес-строки остаются `abstained` с кандидатами, а не берут ближайший тег.
 
 ## Данные
 
-`data/shared/books/{sha256}/` хранит книгу, raw, formula IR и layout. Они общие для всех сессий. `data/sessions/{session}/jobs/{sha256}/` хранит mapping, context, graph и `glossary.json` этой сессии. Сессия по умолчанию `local`.
+`data/shared/books/{sha256}/` хранит книгу, raw, formula IR и layout. Они общие для всех сессий. Рядом, в `data/shared/`, лежат `taxonomy.json`, `label_memory.json` и кэш эмбеддингов `embeddings/`. `data/sessions/{session}/jobs/{sha256}/` хранит mapping, context и graph этой сессии. Старый `glossary.json` сессии ещё читается, новые пары в него не пишутся. Сессия по умолчанию `local`.
 
 Одновременно считается не больше `MAX_CONCURRENT_JOBS` книг, по умолчанию 2. `finance-context serve` запускает один worker. Несколько реплик API на одном каталоге не поддерживаются.
 
@@ -132,7 +132,7 @@ cp .env.example .env   # необязательно; LLM и эмбеддинги
 docker compose up --build
 ```
 
-Оставьте Compose запущенным. API опубликован только на `127.0.0.1:8080`. Общий кэш книг и glossary, mapping и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`: таксономия и код маппинга — те, что запечены в образ. После правок онтологии пересоберите образ.
+Оставьте Compose запущенным. API опубликован только на `127.0.0.1:8080`. Общий кэш книг, таксономия, память лейблов и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`. Пустой `data/shared/taxonomy.json` один раз копируется из yaml в образе. Уже существующий файл прогон не перезаписывает из yaml.
 
 Loopback-URL LLM в `.env` (`http://127.0.0.1:1234/v1`) внутри контейнера переписываются на `host.docker.internal`, чтобы LM Studio на хосте оставался доступен. Сервер моделей должен слушать все интерфейсы или gateway хоста, а не только другую изолированную сеть.
 

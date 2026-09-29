@@ -31,14 +31,14 @@ Order in `map_layout`:
 1. `BookView` is built from layout, IR cells, and edges: `ir/cell_edges.parquet` first, otherwise `ir/edges.parquet`. Then formula patterns (`analyze_structure`), row adjacency, and row context (`RowContext`: label, parent, section, sheet, grain, `value_kind`, formula templates, `prev_labels` / `next_labels` ±2, `time_semantics`).
 2. **Exclusion.** If `exclusion_reason(ctx)` is non-empty, the row is not resolved and disposition is `excluded`.
 3. Up to **four** passes of `glossary + lexical + structure`. Alias/SUM need a neighbor that was mapped on the previous iteration (structure fixpoint).
-4. Unresolved facts plus an enabled EmbedPort → dense retrieve over concept labels, then fuse/decide again together with lexical/glossary/structure.
+4. Unresolved facts plus an enabled EmbedPort → dense retrieve over the concept phrases (`labels`, `aliases`, `definition`, and the `broader` label), then fuse/decide again together with lexical/glossary/structure.
 5. What remains plus ChatPort → rerank of a short list. It may return `unknown`. It **must not invent an id** outside the taxonomy.
 6. A final `structure`-only pass (pull in what opened up after embed/chat).
 7. Assemble `MappingDocument`: `rows` and structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` for the cascade). `questions` stays empty. This is **not** the full cell graph: dependency completeness is in `ir/cell_edges.parquet`, `graph.json` `links`, and trace, not in `context.blocks[].relations`.
 
 An empty embed or chat list logs INFO `model_skip`: `reason=resolved` when no unresolved rows remain, and `reason=unconfigured` when the port is unset and rows remain. A hit on `shared/embeddings/{model}-{taxhash}.npz` logs INFO `embed_cache` with `reason=cache` and does not call the model.
 
-Each HTTP book runs in its own process, with its own chat and embedding clients. There is no shared mapping lock. A miss on the embedding file does not wait for someone else's embed: the lock covers only the write, and only when the file is still empty or stale. `sessions/{session}/glossary.json` is appended under its own lock and is not visible to another session.
+Each HTTP book runs in its own process, with its own chat and embedding clients. There is no shared mapping lock. A miss on the embedding file does not wait for someone else's embed: the lock covers only the write, and only when the file is still empty or stale. `shared/label_memory.json` is appended under its own lock and is visible to every session. The lock is not held during embeddings or the model call.
 
 A repeat POST of a finished book (`context.json`, `context.md`, `graph.json`, `graph.md`, and a terminal `meta.json` whose `publisher` matches this code) returns the snapshot and does not delete files. A repeat POST while that book's process is alive does not start a second process. A live process is stopped only when the stored `publisher` stamp is present and differs. A missing stamp, or a stamp with no `stages` map, rebuilds from layout downward and keeps `raw/` and formula IR. `meta.stages` selects the tail: `compile` drops `raw/` and formula IR and everything after them; `layout` drops layout, mapping, graph, and context; `mapping` drops mapping, graph, and context; `graph` drops graph and context; `publish` drops only `context.json` and `context.md`. Formula IR is written again when `ir/compile.json` does not match the column schema. `ir/graph_edges.parquet` is deleted with `graph.json` when the graph stage or an earlier stage is stale. The CLI prints `reused` only when the published documents and the same `publisher` are already on disk. If one of them is missing, stages still skip from their own artifacts (`raw/workbook.json`, the `ir/compile.json` stamp, `layout.json`, `mapping.json`, `graph.json`). Deleting only `context.json` does not rebuild mapping.
 
@@ -48,10 +48,10 @@ A new matching idea is a new `Signal.propose(ctx, book) -> list[Candidate]`, not
 
 | Signal | `source` on the row | Role |
 | --- | --- | --- |
-| `glossary` | `glossary` | Learned pair `(normalize(label), normalize(parent)) → concept_id`. The same `skip_concept` as lexical: on CFS `Gross Revenues` does not stay `pnl.revenue`, and `Equity` in Sources does not stay `bs.equity`. `reconcile_glossary` does not overwrite a live statement pair (`pnl.revenue` ↔ `cf.receipts`, `bs.equity` ↔ `cf.equity_issue`) |
+| `glossary` | `glossary` | Shared memory first: `(normalize(label), narrowest section, unit) → concept_id`, with `unit` one of `money`, `rate`, `years`, or empty. Then the session pair `(normalize(label), normalize(parent))`, including a `section_class` fallback. The same `skip_concept` as lexical: on CFS `Gross Revenues` does not stay `pnl.revenue`, and `Equity` in Sources does not stay `bs.equity`. `reconcile_glossary` does not overwrite a live statement pair (`pnl.revenue` ↔ `cf.receipts`, `bs.equity` ↔ `cf.equity_issue`) |
 | `lexical` | `rule` | Phrases from `labels` / `aliases`, section, `skip_concept`; `anti_labels` is a hard guard, not the main score |
 | `structure` | `structure` | Formula graph, neighbors, priors from dependents |
-| `embed` | `embed` | Cosine to concept-label embeddings |
+| `embed` | `embed` | Cosine to the mean vector of the concept phrases: `labels`, `aliases`, `definition`, and the `broader` label |
 | `chat` | `chat` | Rerank of the pruned list |
 
 Lexical indexes **both** `labels` and `aliases`. Before comparison the label is normalized (`normalize_label`): parentheses are stripped, but metric abbreviations (`EBITDA`, `CFADS`, `DSCR`) inside parentheses are kept; `cashflow` → `cash flow`; `&` → `and`; `/` → space (`Total Cash in/Cash out` is compared with `Total Cash in Cash out`). Weak one-word phrases (`revenue`, `debt`, `total`, `cash`, …) do not match when they are the **entire** label; inside a compound label (`REVENUE - Passenger Car`) they do. For `cash` the weak match is also disabled next to `flow` / `in` / `out` / `total` (`Cash Flow` does not become `bs.cash`), **except** `hand` / `hands` / `balance` (`Cash in hand` → `bs.cash`); for `debt`, next to `fee` / `up-front`. Plurals (`Drawdowns`, `revenues`) reduce to the form in yaml. An anti-label with a slash (`fcfe /`) matches the raw string, so replacing `/` with a space does not block a bare `FCFE`.
@@ -155,11 +155,13 @@ Top-3 `candidates` are written on abstain too: if prune emptied the fused list, 
 
 ## Glossary
 
-File `$DATA_DIR/sessions/{session}/glossary.json`, key `(normalized_label, normalized_parent)`. It is not shared with another session. Before the cascade, `reconcile_glossary` rewrites entries whose label now belongs to another concept (otherwise a split duration would stay on the old id). After the job, `learn_from_rows` appends only rows with `confidence = high` and `source` in `{glossary, rule, structure, lexical}`. Chat and embed are **not** stored.
+Shared file `$DATA_DIR/shared/label_memory.json`. Key `(normalized_label, section, unit)`. `section` is the narrowest heading (`section_path[-1]`, otherwise the parent). `unit` is `money`, `rate`, `years`, or empty. Entry: `concept_id`, `score`, `source`. Every session reads and appends it. An old `$DATA_DIR/sessions/{session}/glossary.json` is still a pair `(label, parent)`, including a `section_class` fallback; a pair with no score counts as 1.0. New pairs are not written to the session file. Before the cascade, `reconcile_glossary` rewrites a session pair whose label now belongs to another concept (otherwise a split duration would stay on the old id). A live statement pair (`pnl.revenue` and `cf.receipts`) stays on its own key. On the shared file those labels stay apart by section and unit.
 
-A key with the section class (`section_class`) is also stored, so the same label in a similar section of another book is picked up.
+After the job, rows with `confidence = high` and `source` in `{glossary, rule, structure, lexical, embed}` go into the shared memory. Rule, structure, lexical, and glossary use score 1.0. Embed uses the cosine, and it is stored only at `high` (cosine at least 0.85). Chat is not stored. A second concept or an abstained sibling on the same triple does not write the key and deletes a stored triple. Under the lock the file is read again: a strictly higher score replaces `concept_id`; an equal or lower score leaves the previous entry. On save, this book also deletes the legacy pairs it touches: `(label, parent)` and `(label, section_class)`.
 
-This is a cache of confident matches, not a place for one model's workarounds. A new value is a concept in yaml.
+A `section_class` key is not written to the shared file. A bare `Total` under a specific section is not looked up in memory.
+
+This is a cache of confident matches, not a place for one model's workarounds. A new meaning with no nearby concept is appended to `shared/taxonomy.json`, not typed into yaml by hand. Parameters `Months per year`, `Thousand`, `On`, `Off`, and a bare `Total` do not get an id.
 
 ## Meaning and role
 

@@ -2,9 +2,9 @@
 
 [Русский](../ru/taxonomy.md) · **English**
 
-Canonical financial meanings live in [`src/finance_context/ontology/taxonomy.yaml`](../../src/finance_context/ontology/taxonomy.yaml). Load path: `load_taxonomy` → `validate_taxonomy` → `enrich_concept` (facet inheritance).
+The cascade reads `$DATA_DIR/shared/taxonomy.json`. An empty file is filled once from [`src/finance_context/ontology/taxonomy.yaml`](../../src/finance_context/ontology/taxonomy.yaml) (`load_taxonomy` → `validate_taxonomy` → `enrich_concept`, facet inheritance). A file that already exists is not copied from yaml again. After that, yaml is not filled by hand.
 
-The taxonomy is not a synonym list for one Excel book. Add a concept when a **new value** appears. A new label of the same value is `labels` or `aliases`. A concept id is stable (SKOS); the document is versioned (`version`), not the key.
+The taxonomy is not a synonym list for one Excel book. A new id appears in the shared store when a row has no nearby concept (nearest cosine below 0.5) and the row is not a parameter (`Months per year`, `Thousand`, `On`, `Off`, a bare `Total`). The id is the statement prefix plus the normalized label of the first sighting, and it is not renamed later. Shared memory stores that label with the narrowest section and the unit (`money`, `rate`, `years`, or empty), so P&L and CFS do not merge. A new label of a known value goes into `shared/label_memory.json`, not into a new id.
 
 Line-item axes come from the [FAST Standard 3.01](https://www.fast-standard.org/) and are concept attributes, like `periodType` / `balance` in XBRL, not parts of a composite key.
 
@@ -35,7 +35,7 @@ calculations:
 | Field | Purpose |
 | --- | --- |
 | `id` | Stable key. The prefix sets default facets |
-| `labels` | Canonical phrases for lexical match and embeddings |
+| `labels` | Canonical phrases for lexical match and embeddings. The concept vector also includes `aliases`, `definition`, and the first label of `broader` |
 | `aliases` | Extra phrases of the same entity (often “as written in the book”) |
 | `broader` | Parent in the hierarchy; a SUM of children may inherit this id |
 | `facets` | FAST/XBRL axes: statement, nature, basis, direction, position, series, unit, period_type |
@@ -156,6 +156,6 @@ If the formula is a division but the label is about coverage, label semantics wi
 - A substring in `_semantic_ratio` (`ratio` inside `generation`).
 - Copying a P&L id onto the Cashflow Statement through a structure alias with no crosswalk (`pnl.tax` instead of `cf.tax_paid`).
 - `statement=cf` on the whole Cashflow sheet, which pulls `Cash in hand` / share premium off `bs.*`.
-- A hand edit of `sessions/{session}/glossary.json` instead of yaml. That file is one session's memory, not a shared dictionary and not a file in git. A later job does not replace a key that is already stored; it only adds a missing key.
+- A hand edit of `sessions/{session}/glossary.json`. New pairs are written to the shared `shared/label_memory.json`. A higher score replaces the concept. An equal score does not. The session file is still read and is not in git.
 - Exclude for a business row that is merely “unclear”.
 - Duplicating an id with different case, or synonyms `cf.receipts` / `cf.inflows` without `broader`.

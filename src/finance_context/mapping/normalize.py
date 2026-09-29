@@ -72,6 +72,43 @@ def _paren_tokens(blob: str) -> list[str]:
     return kept
 
 
+_YEARS_UNIT = re.compile(r"\byears?\b", re.IGNORECASE)
+_PER_YEAR_UNIT = re.compile(r"per year|/year", re.IGNORECASE)
+
+
+def memory_section(section_path: list[str] | None, parent_label: str | None) -> str:
+    """Narrowest heading. An empty path falls back to the parent caption."""
+    if section_path:
+        return normalize_label(section_path[-1])
+    return normalize_label(parent_label)
+
+
+def memory_unit(unit_text: str | None, value_kind: str | None = None) -> str:
+    """Unit token for a memory key: money, rate, years, or empty.
+
+    A copied currency caption does not outrank a percent row. A missing caption
+    stays empty, so a default money kind is not stored as money.
+    """
+    text = str(unit_text or "")
+    blob = text.casefold()
+    if (
+        value_kind == "rate"
+        or "%" in text
+        or "percent" in blob
+        or blob in {"per year", "of margin"}
+        or _PER_YEAR_UNIT.search(blob)
+    ):
+        return "rate"
+    if _YEARS_UNIT.search(text) and not _PER_YEAR_UNIT.search(blob):
+        return "years"
+    if text.strip():
+        from finance_context.context.measure import currency_code_from_text
+
+        if currency_code_from_text(text):
+            return "money"
+    return ""
+
+
 def section_class(
     parent: str | None = None,
     section_path: list[str] | None = None,

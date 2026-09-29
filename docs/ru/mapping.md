@@ -31,14 +31,14 @@ Layout помечает тело блока видами строк. Каска�
 1. По layout, IR cells и рёбрам строится `BookView`: сначала `ir/cell_edges.parquet`, если его нет — `ir/edges.parquet`. Дальше паттерны формул (`analyze_structure`), row-adjacency, контекст строки (`RowContext`: лейбл, родитель, секция, лист, зерно, `value_kind`, шаблоны формул, `prev_labels` / `next_labels` ±2, `time_semantics`).
 2. **Исключение.** Если `exclusion_reason(ctx)` не пустой — строка не резолвится, disposition = `excluded`.
 3. До **четырёх** проходов сигналов `glossary + lexical + structure`. Нужно, чтобы alias/SUM подтянули концепт, когда соседняя строка замапилась на предыдущей итерации (structure fixpoint).
-4. Нерезолвнутые fact + включённый EmbedPort → dense retrieve по лейблам концептов, затем снова fuse/decide вместе с lexical/glossary/structure.
+4. Нерезолвнутые fact + включённый EmbedPort → dense retrieve по фразам концепта (`labels`, `aliases`, `definition` и лейбл `broader`), затем снова fuse/decide вместе с lexical/glossary/structure.
 5. Оставшиеся + ChatPort → rerank короткого списка. Может вернуть `unknown`. **Не имеет права изобрести id** вне таксономии.
 6. Финальный проход только `structure` (подтянуть то, что открылось после embed/chat).
 7. Сборка `MappingDocument`: `rows` и structural `relations` (`alias` / `aggregate` / `difference` / `roll_forward` для каскада). `questions` остаётся пустым. Это **не** полный cell-граф: completeness зависимостей смотреть в `ir/cell_edges.parquet`, `graph.json` `links` и trace, не в `context.blocks[].relations`.
 
 Пустой список на embed или chat пишет INFO `model_skip`: `reason=resolved`, если нерезолвнутых строк нет, и `reason=unconfigured`, если порт не задан, а строки остались. Попадание в `shared/embeddings/{model}-{taxhash}.npz` пишет INFO `embed_cache` с `reason=cache` и модель не вызывает.
 
-Каждая книга по HTTP считается в своём процессе, со своими клиентами чата и эмбеддингов. Общего замка на mapping нет. Промах файла эмбеддингов не ждёт чужой эмбеддинг: замок только на запись, и только если файл всё ещё пуст или протух. `sessions/{session}/glossary.json` дописывается под своим замком и не виден другой сессии.
+Каждая книга по HTTP считается в своём процессе, со своими клиентами чата и эмбеддингов. Общего замка на mapping нет. Промах файла эмбеддингов не ждёт чужой эмбеддинг: замок только на запись, и только если файл всё ещё пуст или протух. `shared/label_memory.json` дописывается под своим замком и виден всем сессиям. Замок не держится во время эмбеддингов и модели.
 
 Повторный POST готовой книги (`context.json`, `context.md`, `graph.json`, `graph.md` и терминальный `meta.json` с тем же `publisher`) отдаёт снимок и файлы не удаляет. Повторный POST, пока процесс этой книги жив, второй процесс не стартует. Живой процесс останавливается, только если штамп `publisher` есть и отличается. Пустой штамп или штамп без карты `stages` пересобирает всё от layout вниз и сохраняет `raw/` и formula IR. `meta.stages` выбирает хвост: `compile` удаляет `raw/`, formula IR и всё после них; `layout` удаляет layout, mapping, graph и context; `mapping` удаляет mapping, graph и context; `graph` удаляет graph и context; `publish` удаляет только `context.json` и `context.md`. Formula IR пишется заново, если `ir/compile.json` не совпал со схемой колонок. `ir/graph_edges.parquet` удаляется вместе с `graph.json`, когда устарела стадия graph или более ранняя. CLI печатает `reused`, только если опубликованные документы и тот же `publisher` уже на диске. Если одного из них нет, стадии всё равно скипаются по своим артефактам (`raw/workbook.json`, штамп `ir/compile.json`, `layout.json`, `mapping.json`, `graph.json`). Удаление только `context.json` не пересобирает mapping.
 
@@ -48,10 +48,10 @@ Layout помечает тело блока видами строк. Каска�
 
 | Сигнал | `source` в строке | Роль |
 | --- | --- | --- |
-| `glossary` | `glossary` | Выученная пара `(normalize(label), normalize(parent)) → concept_id`. Тот же `skip_concept`, что у lexical: на CFS `Gross Revenues` не остаётся `pnl.revenue`, `Equity` в Sources не остаётся `bs.equity`. `reconcile_glossary` не затирает живую пару отчётов (`pnl.revenue` ↔ `cf.receipts`, `bs.equity` ↔ `cf.equity_issue`) |
+| `glossary` | `glossary` | Сначала тройка общей памяти: `(normalize(label), ближайшая секция, единица) → concept_id`, единица — `money`, `rate`, `years` или пусто. Затем сессионная пара `(normalize(label), normalize(parent))`, включая запасной `section_class`. Тот же `skip_concept`, что у lexical: на CFS `Gross Revenues` не остаётся `pnl.revenue`, `Equity` в Sources не остаётся `bs.equity`. `reconcile_glossary` не затирает живую пару отчётов (`pnl.revenue` ↔ `cf.receipts`, `bs.equity` ↔ `cf.equity_issue`) |
 | `lexical` | `rule` | Фразы из `labels` / `aliases`, секция, `skip_concept`; `anti_labels` — жёсткий guard, не основной скоринг |
 | `structure` | `structure` | Граф формул, соседи, priors по dependents |
-| `embed` | `embed` | Косинус к эмбеддингам лейблов концептов |
+| `embed` | `embed` | Косинус к среднему вектору фраз концепта: `labels`, `aliases`, `definition`, лейбл `broader` |
 | `chat` | `chat` | Rerank pruned-списка |
 
 Lexical индексирует **и** `labels`, **и** `aliases`. Перед сравнением лейбл нормализуется (`normalize_label`): скобки снимаются, но аббревиатуры метрик (`EBITDA`, `CFADS`, `DSCR`) из скобок сохраняются; `cashflow` → `cash flow`; `&` → `and`; `/` → пробел (`Total Cash in/Cash out` сравнивается с `Total Cash in Cash out`). Однословные слабые фразы (`revenue`, `debt`, `total`, `cash`, …) не матчятся, если это **всё** содержимое лейбла; в составном лейбле (`REVENUE - Passenger Car`) — да. Для `cash` слабый матч ещё отключается, если рядом `flow` / `in` / `out` / `total` (`Cash Flow` не становится `bs.cash`), **кроме** `hand` / `hands` / `balance` (`Cash in hand` → `bs.cash`); для `debt` — если рядом `fee` / `up-front`. Множественное число (`Drawdowns`, `revenues`) сводится к форме из yaml. Anti-лейбл со слэшем (`fcfe /`) матчится по сырой строке, чтобы после замены `/` на пробел не блокировать голый `FCFE`.
@@ -155,11 +155,13 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 
 ## Glossary
 
-Файл `$DATA_DIR/sessions/{session}/glossary.json`, ключ `(normalized_label, normalized_parent)`. Другая сессия его не читает. Перед каскадом `reconcile_glossary` переписывает записи, чей лейбл теперь принадлежит другому концепту (иначе split duration остался бы на старом id). После джоба `learn_from_rows` дописывает только строки с `confidence = high` и `source` из `{glossary, rule, structure, lexical}`. Chat и embed **не** сохраняются.
+Общий файл `$DATA_DIR/shared/label_memory.json`. Ключ `(normalized_label, section, unit)`. `section` — ближайший заголовок (`section_path[-1]`, иначе родитель). `unit` — `money`, `rate`, `years` или пусто. Запись: `concept_id`, `score`, `source`. Все сессии его читают и дописывают. Старый `$DATA_DIR/sessions/{session}/glossary.json` остаётся парой `(label, parent)`, с запасным `section_class`; пара без балла считается баллом 1.0. Новые пары в файл сессии не пишутся. Перед каскадом `reconcile_glossary` переписывает сессионную пару, чей лейбл теперь принадлежит другому концепту (иначе split duration остался бы на старом id). Живая пара отчётов (`pnl.revenue` и `cf.receipts`) остаётся на своём ключе. В общем файле такие лейблы расходятся секцией и единицей.
 
-Дополнительно кладётся ключ с классом секции (`section_class`), чтобы тот же лейбл в похожей секции другой книги подхватился.
+После джоба в общую память попадают строки с `confidence = high` и `source` из `{glossary, rule, structure, lexical, embed}`. У rule, structure, lexical и glossary балл 1.0. У embed балл — косинус, и он пишется только при `high` (косинус не ниже 0.85). Chat не пишется. Второй концепт или воздержавшаяся строка на той же тройке ключ не пишет и стирает уже лежащую тройку. Под замком файл читается заново: балл строго выше заменяет `concept_id`, равный или более низкий оставляет прежнюю запись. При сохранении книга стирает старые пары, которых сама касается: `(label, parent)` и `(label, section_class)`.
 
-Это кэш уверенных совпадений, не место для костылей одной модели. Новое значение — концепт в yaml.
+Ключ `section_class` в общий файл не пишется. Голый `Total` под конкретной секцией в память не ищется.
+
+Это кэш уверенных совпадений, не место для костылей одной модели. Новый смысл без близкого концепта дописывается в `shared/taxonomy.json`, а не в yaml руками. Параметры `Months per year`, `Thousand`, `On`, `Off` и голый `Total` id не получают.
 
 ## Смысл и роль
 

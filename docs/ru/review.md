@@ -28,7 +28,7 @@ Excluded (check / helper / flag / technical) в `unmapped.json` не входя�
 
 | Класс | Действие |
 | --- | --- |
-| Новое финансовое значение | Концепт в [taxonomy.yaml](taxonomy.md) + gold |
+| Новое финансовое значение | Близкого концепта нет: id дописывается в `shared/taxonomy.json`. Та же фраза пишется в `shared/label_memory.json` с секцией и единицей. См. [taxonomy.md](taxonomy.md) |
 | Тот же смысл, другой лейбл / секция | `labels` / `aliases` / `section_hints` / `skip_concept` / `unless`; не широкий `anti_labels` |
 | Ребёнок под CAPEX/OPEX/Revenue, но это годы / MW / индекс | `unless` на parent-rollup + `facets.unit`, не money-id родителя |
 | Соседи и граф уже намекают (lease рядом с opex) | Это structure-признак; не клеить alias ставки |

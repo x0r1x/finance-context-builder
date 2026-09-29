@@ -21,7 +21,7 @@ How to run, Docker, and the API: [README](../../README.md). The layer snapshot i
 
 The input is a workbook whose formulas are already calculated. `.xls`, `.xlsb`, and encrypted files are rejected.
 
-A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{sha256}/` and are the same for every session. `mapping.json`, context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{sha256}/`: they follow that session's glossary.
+A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{sha256}/` and are the same for every session. `mapping.json`, context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{sha256}/`. Shared `taxonomy.json` and `label_memory.json` live in `shared/` and do not follow a session.
 
 | Artifact | Contents |
 | --- | --- |
@@ -35,7 +35,7 @@ A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `com
 
 The answering LLM gets one observation sliced from these artifacts, not a second job JSON: [llm.md](llm.md).
 
-Across jobs in one session: `$DATA_DIR/sessions/{session}/glossary.json` (learned high-confidence pairs). The concept embedding cache is shared: `$DATA_DIR/shared/embeddings/`. Formula IR and layout for the same workbook are shared too: `$DATA_DIR/shared/books/{sha256}/`.
+Across every session: `$DATA_DIR/shared/label_memory.json` (accepted pairs with a score) and `$DATA_DIR/shared/taxonomy.json` (the concept store). The concept embedding cache is shared: `$DATA_DIR/shared/embeddings/{embedding model name}-{digest}.npz`. That file holds one vector per `concept_id`, the mean of that concept's phrases, not a mean of the workbook. Formula IR and layout for the same workbook are shared too: `$DATA_DIR/shared/books/{sha256}/`. An old `$DATA_DIR/sessions/{session}/glossary.json` is still read.
 
 ## Pipeline
 
@@ -63,7 +63,7 @@ Older snapshots may still say `needs_input` or `degraded`. Those jobs are finish
 
 ## Two levers for coverage
 
-1. **Taxonomy** (`src/finance_context/ontology/taxonomy.yaml`) — a dictionary of meanings, not a solver. Edit it when a **new** financial value appears.
+1. **Taxonomy** — the store `$DATA_DIR/shared/taxonomy.json`. An empty file is filled once from `src/finance_context/ontology/taxonomy.yaml`. After that the cascade reads the store. A new id is appended only when the nearest concept is farther than 0.5 and the row is not a parameter (`Months per year`, `Thousand`, `On`, `Off`, a bare `Total`). The id is the statement prefix plus the normalized label of the first sighting, and it is not renamed later. Shared memory stores the label with the narrowest section and the unit (`money`, `rate`, `years`, or empty), so P&L and CFS do not merge.
 2. **Signal cascade** — features (label, section, neighbors, formula shape, graph). A new kind of match is a new `Signal`, not a wide `anti_labels` and not a branch “if the sheet is Cash_Receipts”.
 
-The learned glossary does not replace yaml: it remembers pairs that were already confident, `(label, parent) → concept_id`, for later books in the same session. A key that is already stored is not replaced. Another session does not read the file.
+The shared label memory remembers triples that were already confident: normalized label, narrowest section, and unit (`money`, `rate`, `years`, or empty) point at `concept_id`, together with a score. A strictly higher score replaces the concept. An equal score does not. A high-confidence embedding is stored. A model answer is not. A second concept or an abstained row on the same triple removes the stored key. A `section_class` key is not stored.

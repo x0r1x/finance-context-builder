@@ -175,6 +175,9 @@ class MappedRow(BaseModel):
     semantic_identity: SemanticIdentity | None = None
     reporting_roles: list[ReportingRole] = Field(default_factory=list)
     cash_semantics: CashSemantics | None = None
+    # Learning context only. Omitted from mapping.json; context and graph do not read it.
+    section_path: list[str] = Field(default_factory=list, exclude=True)
+    memory_unit: str = Field(default="", exclude=True)
 
 
 class MappingQuestion(BaseModel):
@@ -227,3 +230,4 @@ class RowContext(BaseModel):
     inferred_facets: InferredFacets = Field(default_factory=InferredFacets)
     prev_labels: list[str] = Field(default_factory=list)
     next_labels: list[str] = Field(default_factory=list)
+    memory_unit: str = ""

@@ -54,6 +54,7 @@ def map_layout(
     *,
     taxonomy: list[Concept],
     glossary: dict[tuple[str, str], str],
+    label_memory: dict[tuple[str, str, str], str] | None = None,
     embed: EmbedPort | None = None,
     chat: ChatPort | None = None,
     slots: SlotGate | None = None,
@@ -85,7 +86,7 @@ def map_layout(
     resolver = Resolver(taxonomy)
     pending = _collect_contexts(book, templates)
     signals = [
-        GlossarySignal(glossary, merged_patterns),
+        GlossarySignal(glossary, merged_patterns, label_memory),
         LexicalSignal(taxonomy, merged_patterns),
         StructureSignal(),
     ]

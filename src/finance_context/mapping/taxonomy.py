@@ -27,6 +27,29 @@ def load_taxonomy(path: Path | None = None) -> list[Concept]:
     return list(load_taxonomy_document(path).concepts)
 
 
+def ensure_runtime_taxonomy(path: Path) -> list[Concept]:
+    """Seed an empty shared taxonomy once from the packaged yaml, then read that file."""
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        document = load_taxonomy_document()
+        path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
+        register_document(document)
+        return list(document.concepts)
+    raw = path.read_text(encoding="utf-8")
+    document = TaxonomyDocument.model_validate_json(raw)
+    register_document(document)
+    return list(document.concepts)
+
+
+def remember_concept(path: Path, concept: Concept) -> None:
+    document = TaxonomyDocument.model_validate_json(path.read_text(encoding="utf-8"))
+    if any(item.id == concept.id for item in document.concepts):
+        return
+    document.concepts.append(concept)
+    register_document(document)
+    path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
+
+
 def load_taxonomy_document(path: Path | None = None) -> TaxonomyDocument:
     target = path or _DEFAULT
     resolved = str(target.resolve())
