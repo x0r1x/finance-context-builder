@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook
@@ -54,6 +55,9 @@ def test_cashflow_unmapped_rows_follow_gold_dispositions(tmp_path: Path) -> None
         cells=cells,
         embed=None,
         chat=None,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     stats = disposition_metrics(doc.rows)
     assert stats["processed_rate"] == 1.0

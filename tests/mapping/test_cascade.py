@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 from tests.helpers.ports import CapBudget, DenySlots, FakeChat, FakeEmbed, GrantSlots
 
 from finance_context.errors import PortError
@@ -127,6 +128,9 @@ def test_glossary_exact_beats_knn() -> None:
         embed=embed,
         chat=FakeChat("pnl.gmv"),
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id == "pnl.revenue"
     assert doc.rows[0].source == "glossary"
@@ -145,6 +149,9 @@ def test_glossary_hit_logs_model_skip(caplog) -> None:
         embed=embed,
         chat=chat,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert embed.calls == 0
     assert chat.calls == 0
@@ -169,6 +176,9 @@ def test_missing_ports_log_unconfigured(caplog) -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].source == "question"
     skips = [
@@ -191,6 +201,9 @@ def test_gmv_is_not_pnl_revenue() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id != "pnl.revenue"
     assert doc.rows[0].concept_id == "pnl.gmv"
@@ -206,6 +219,9 @@ def test_confident_cosine_maps_without_chat() -> None:
         embed=FakeEmbed(VECS),
         chat=chat,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id == "pnl.revenue"
     assert doc.rows[0].source in {"embed", "rule"}
@@ -223,6 +239,9 @@ def test_embed_maps_when_label_is_not_lexical() -> None:
         embed=FakeEmbed(vecs),
         chat=chat,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id == "pnl.revenue"
     assert doc.rows[0].source == "embed"
@@ -238,6 +257,9 @@ def test_ambiguous_without_chat_abstains() -> None:
         embed=FakeEmbed(VECS),
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id is None
     assert doc.rows[0].source == "question"
@@ -256,6 +278,9 @@ def test_no_slot_does_not_call_embed_or_chat(caplog) -> None:
         embed=embed,
         chat=chat,
         slots=DenySlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert embed.calls == 0
     assert chat.calls == 0
@@ -281,6 +306,9 @@ def test_embed_port_error_logs_port_fallback(caplog) -> None:
         embed=BoomEmbed(),
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].source == "question"
     assert any(
@@ -301,6 +329,9 @@ def test_mapping_row_embed_skipped_when_budget_zero() -> None:
         embed=embed,
         chat=None,
         slots=CapBudget({"embed": 0, "llm": 0}),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert embed.calls == 1
     assert doc.rows[0].source != "embed"
@@ -328,6 +359,9 @@ def test_prompt_contains_ids_not_cached_value() -> None:
         chat=chat,
         slots=GrantSlots(),
         cells=cells,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     blob = str(chat.messages_seen)
     assert chat.calls == 1
@@ -345,6 +379,9 @@ def test_check_row_article_role_is_check() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].article_role == "check"
 
@@ -359,6 +396,9 @@ def test_opening_ar_maps_by_rule() -> None:
         embed=FakeEmbed(VECS),
         chat=chat,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id == "bs.ar"
     assert doc.rows[0].source == "rule"
@@ -393,6 +433,9 @@ def test_receipts_and_disbursements_not_pnl_or_ap() -> None:
                 ),
             )
         ],
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Receipts"] == "cf.receipts"
@@ -414,6 +457,9 @@ def test_section_header_is_skipped() -> None:
         embed=None,
         chat=chat,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert [row.label for row in doc.rows] == ["Revenue"]
     assert chat.calls == 0

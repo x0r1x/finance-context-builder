@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.engine import FormulaEngine
@@ -68,6 +69,9 @@ def test_cashflow_layout_weeks_and_row_kinds(tmp_path: Path) -> None:
         cells=cells,
         embed=None,
         chat=None,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     mapped_labels = {row.label.casefold() for row in doc.rows}
     assert "week #" not in mapped_labels

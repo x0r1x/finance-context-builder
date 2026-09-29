@@ -86,6 +86,7 @@ def build_context(
     cells: list[dict],
     layout: Layout,
     mapping: MappingDocument,
+    concept_accept_min: float,
     source_filename: str | None = None,
     content_sha256: str | None = None,
     status: str = "succeeded",
@@ -372,7 +373,10 @@ def build_context(
         unmapped_series=unmapped_series,
     )
     stats["mapping_quality"] = assess_mapping_quality(
-        document_rows, blocks, concepts=catalog
+        document_rows,
+        blocks,
+        concepts=catalog,
+        concept_accept_min=concept_accept_min,
     )
     return ContextDocument(
         schema_version=SCHEMA_VERSION,

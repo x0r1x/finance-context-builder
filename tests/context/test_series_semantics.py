@@ -1,3 +1,5 @@
+from tests.helpers.policy import accept_min
+
 from finance_context.context.build import build_context
 from finance_context.context.series import normalize_value, phase_gate, value_status
 from finance_context.excel.a1 import parse_addr
@@ -65,6 +67,7 @@ def test_build_marks_scale_and_blank_cells() -> None:
         cells=cells,
         layout=layout,
         mapping=MappingDocument(),
+        concept_accept_min=accept_min(),
     )
     row = doc.blocks[0].rows[0]
     assert row.hints.scale == "k"
@@ -127,6 +130,7 @@ def test_empty_operation_line_outside_phase_is_not_applicable() -> None:
         cells=cells,
         layout=layout,
         mapping=MappingDocument(),
+        concept_accept_min=accept_min(),
     )
     rows = {row.label: row for block in doc.blocks for row in block.rows}
     traffic = rows["PC traffic"]

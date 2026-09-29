@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 from tests.helpers.ports import GrantSlots
 
 from finance_context.layout.models import (
@@ -56,6 +57,9 @@ def test_pf_labels_hit_drawdown_revenue_cfads_ebitda() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Gross revenues"] == "pnl.revenue"
@@ -132,6 +136,9 @@ def test_parent_section_rolls_up_capex_opex_da() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Construction Cost (k£)"] == "cf.capex"
@@ -221,6 +228,9 @@ def test_parent_rollup_skips_lifetime_capacity_inflation_balance() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Operating lifetime"] == "ops.operating_period"
@@ -273,6 +283,9 @@ def test_packt_leftovers_and_cash_not_balance() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Cash Flow"] == "cf.net"
@@ -356,6 +369,9 @@ def test_cash_in_hand_and_injected_equity() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row for row in doc.rows}
     assert by_label["Equity (k£)"].concept_id == "cf.equity_issue"
@@ -405,6 +421,9 @@ def test_total_cash_in_cash_out_is_equity_cashflow() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     row = doc.rows[0]
     assert row.concept_id == "cf.equity_cashflow"
@@ -489,6 +508,9 @@ def test_unit_column_sets_value_kind() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row for row in doc.rows}
     assert by_label["Tax Rate"].concept_id == "pnl.tax_rate"
@@ -501,10 +523,16 @@ def test_income_tax_on_cfs_is_cash_tax_not_pnl() -> None:
     cfs = _layout(LayoutRow(row=2, label="Income Tax"), sheet="CFS")
     pnl = _layout(LayoutRow(row=2, label="Income Tax"), sheet="P&L")
     cfs_doc = map_layout(
-        cfs, taxonomy=taxonomy, glossary={}, embed=None, chat=None, slots=GrantSlots()
+        cfs, taxonomy=taxonomy, glossary={}, embed=None, chat=None, slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     pnl_doc = map_layout(
-        pnl, taxonomy=taxonomy, glossary={}, embed=None, chat=None, slots=GrantSlots()
+        pnl, taxonomy=taxonomy, glossary={}, embed=None, chat=None, slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert cfs_doc.rows[0].concept_id == "cf.tax_paid"
     assert pnl_doc.rows[0].concept_id == "pnl.tax"
@@ -575,6 +603,9 @@ def test_cfs_income_tax_alias_does_not_copy_pnl() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_key = {(row.sheet, row.label): row.concept_id for row in doc.rows}
     assert by_key[("P&L", "Income Tax")] == "pnl.tax"
@@ -596,6 +627,9 @@ def test_dscr_minimum_is_limit_not_observed_dscr() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["DSCR minimum"] == "cov.dscr_limit"
@@ -626,6 +660,9 @@ def test_new_pf_concepts_map() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Cost of capital"] == "val.coc"
@@ -740,6 +777,9 @@ def test_rvi_leftovers_map_dividends_balances_and_rates() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_key = {(row.label, row.parent_label): row.concept_id for row in doc.rows}
     by_label = {row.label: row.concept_id for row in doc.rows}
@@ -825,6 +865,9 @@ def test_money_exact_label_does_not_take_a_count_concept() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_row = {row.row: row.concept_id for row in doc.rows}
     assert by_row[4] != "ops.construction_period"
@@ -886,6 +929,9 @@ def test_concession_and_operations_duration_are_not_the_same_concept() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Concession Duration"] == "ops.concession_duration"
@@ -973,6 +1019,9 @@ def test_inflation_fees_and_cfs_opex_split() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_key = {(row.sheet, row.label): row.concept_id for row in doc.rows}
     assert by_key[("Input Assumptions", "Inflation per year")] == "ops.inflation_revenue"
@@ -1109,6 +1158,9 @@ def test_rvi_section_totals_cpi_and_cash_opex() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_key = {(row.sheet, row.row): row.concept_id for row in doc.rows}
     assert by_key[("PF Model", 4)] == "bs.assets_noncurrent"

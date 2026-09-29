@@ -4,6 +4,7 @@ import threading
 import time
 
 from pydantic import BaseModel
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 from tests.helpers.ports import CapBudget, FakeEmbed
 from tests.mapping.test_cascade import TAXONOMY, VECS, _layout
 
@@ -71,6 +72,8 @@ def test_chat_rows_run_together_and_keep_their_concepts() -> None:
         embed=None,
         chat=chat,
         llm_concurrency=2,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Alpha mystery"] == "pnl.revenue"
@@ -93,6 +96,8 @@ def test_chat_budget_stops_extra_rows_even_with_a_wide_pool() -> None:
         chat=chat,
         slots=CapBudget({"llm": 1}),
         llm_concurrency=4,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
     )
     assert chat.calls == 1
     mapped = [row for row in doc.rows if row.concept_id]
@@ -112,6 +117,8 @@ def test_chat_port_error_does_not_send_the_remaining_row() -> None:
         embed=None,
         chat=chat,
         llm_concurrency=1,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
     )
     assert chat.calls == 1
 
@@ -126,6 +133,9 @@ def test_ready_concept_index_skips_taxonomy_embed() -> None:
         embed=embed,
         chat=None,
         concept_index=ready,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert ready.reads == 1
     assert embed.calls == 1

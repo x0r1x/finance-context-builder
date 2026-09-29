@@ -4,7 +4,7 @@
 
 The cascade reads `$DATA_DIR/shared/taxonomy.json`. An empty file is filled once from [`src/finance_context/ontology/taxonomy.yaml`](../../src/finance_context/ontology/taxonomy.yaml) (`load_taxonomy` → `validate_taxonomy` → `enrich_concept`, facet inheritance). A file that already exists is not copied from yaml again. After that, yaml is not filled by hand.
 
-The taxonomy is not a synonym list for one Excel book. A new id is appended only for an abstained row whose nearest alternative has a score below 0.5. The parent is a seeded concept whose inherited unit equals the row memory unit; an empty memory unit leaves every shown seed eligible. Without chat the parent is that nearest compatible seed. With chat the model answers `extend` or `skip` and may name one shown id as `broader`. Skip, an error, or an id outside the list leaves the row abstained. The new id is the statement prefix plus the normalized label of the first sighting, and it is not renamed later. Facets are copied from the parent. `Months per year`, `Thousand`, `On`, `Off`, and a bare `Total` stay without an id. `taxonomy.json` is not edited by hand. Shared memory stores that label with the narrowest section and the unit (`money`, `rate`, `years`, or empty), so P&L and CFS do not merge. A new label of a known value goes into `shared/label_memory.json`, not into a new id.
+The taxonomy is not a synonym list for one Excel book. A new id is appended only for an abstained row whose nearest alternative has a score below `mint_score_max` ([thresholds](mapping.md#thresholds)). The parent is a seeded concept whose inherited unit equals the row memory unit; an empty memory unit leaves every shown seed eligible. Without chat the parent is that nearest compatible seed. With chat the model answers `extend` or `skip` and may name one shown id as `broader`. Skip, an error, or an id outside the list leaves the row abstained. The new id is the statement prefix plus the normalized label of the first sighting, and it is not renamed later. Facets are copied from the parent. `Months per year`, `Thousand`, `On`, `Off`, and a bare `Total` stay without an id. `taxonomy.json` is not edited by hand. Shared memory stores that label with the narrowest section and the unit (`money`, `rate`, `years`, or empty), so P&L and CFS do not merge. A new label of a known value goes into `shared/label_memory.json`, not into a new id.
 
 Line-item axes come from the [FAST Standard 3.01](https://www.fast-standard.org/) and are concept attributes, like `periodType` / `balance` in XBRL, not parts of a composite key.
 
@@ -147,7 +147,7 @@ If the formula is a division but the label is about coverage, label semantics wi
 4. Collisions are closed by facets; `section_hints` / `anti_labels` only when a facet is not enough.
 5. If there is a parent, `broader` points at an existing id; the child's facets do not argue with the parent.
 6. Gold: “must be” and **negatives** `forbidden_concept_id` in `tests/fixtures/mapping/cashflow_dispositions.yaml` or a corpus fixture.
-7. `uv run pytest`. Do not lower `ACCEPT_MIN` to make a test green. Corpus: `uv run python scripts/fetch-corpus.py`.
+7. `uv run pytest`. Do not lower `concept_accept_min` to make a test green. Corpus: `uv run python scripts/fetch-corpus.py`.
 
 ## Antipatterns
 

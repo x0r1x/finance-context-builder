@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.helpers.policy import embed_floor, mint_ceiling, thresholds
 from tests.helpers.ports import FakeEmbed
 
 from finance_context.mapping.glossary import (
@@ -63,9 +64,9 @@ def test_parameters_and_weak_scores_do_not_mint() -> None:
     assert concept_id_for_label("On", "Flags", "PF Model") is None
     assert concept_id_for_label("Off", "Flags", "PF Model") is None
     assert concept_id_for_label("Total", "Assets", "Balance Sheet") is None
-    assert should_mint(0.6) is False
-    assert should_mint(None) is False
-    assert should_mint(0.2) is True
+    assert should_mint(0.6, mint_score_max=mint_ceiling()) is False
+    assert should_mint(None, mint_score_max=mint_ceiling()) is False
+    assert should_mint(0.2, mint_score_max=mint_ceiling()) is True
 
 
 def _mapped(
@@ -130,7 +131,7 @@ def test_embed_high_is_learned_and_chat_is_not() -> None:
             row=3,
         ),
     ]
-    learned, _drop = learned_hits(rows)
+    learned, _drop = learned_hits(rows, embed_score_min=embed_floor())
     assert "section_path" not in rows[0].model_dump()
     assert "memory_unit" not in rows[0].model_dump()
     assert learned[("sales", "revenue", "")].concept_id == "pnl.revenue"
@@ -178,7 +179,7 @@ def test_cpi_sections_stay_two_pairs() -> None:
             row=2,
         ),
     ]
-    learned, _drop = learned_hits(rows)
+    learned, _drop = learned_hits(rows, embed_score_min=embed_floor())
     assert learned[_key("CPI", ["Inflation profiles (annually)"], "rate")].concept_id == (
         "ops.inflation"
     )
@@ -203,7 +204,7 @@ def test_balance_brought_forward_splits_on_section() -> None:
             row=2,
         ),
     ]
-    learned, _drop = learned_hits(rows)
+    learned, _drop = learned_hits(rows, embed_score_min=embed_floor())
     assert learned[_key("Balance b/f", ["Equity"], "money")].concept_id == "bs.equity"
     assert learned[_key("Balance b/f", ["Debt"], "money")].concept_id == "bs.debt"
 
@@ -227,7 +228,7 @@ def test_upfront_fee_splits_on_unit_inside_one_section() -> None:
             row=2,
         ),
     ]
-    learned, _drop = learned_hits(rows)
+    learned, _drop = learned_hits(rows, embed_score_min=embed_floor())
     assert learned[_key("Up-front fee", section, "rate")].concept_id == "debt.upfront_fee_rate"
     assert learned[_key("Up-front fee", section, "money")].concept_id == "debt.commitment_fee"
 
@@ -253,7 +254,7 @@ def test_full_wrap_epc_money_is_kept_when_the_rate_row_abstains() -> None:
             row=2,
         ),
     ]
-    learned, drop = learned_hits(rows)
+    learned, drop = learned_hits(rows, embed_score_min=embed_floor())
     money = _key(
         "Full-wrap EPC",
         ["Capital Expenditures (Capex)"],
@@ -285,7 +286,7 @@ def test_disputed_triple_is_not_written_and_removes_the_old_record(tmp_path: Pat
         _mapped("Fee", "pnl.opex", parent="Terms", section=["Terms"], unit="money"),
         _mapped("Fee", "cf.opex_paid", parent="Terms", section=["Terms"], unit="money", row=2),
     ]
-    learned, drop = learned_hits(rows)
+    learned, drop = learned_hits(rows, embed_score_min=embed_floor())
     assert disputed not in learned
     save_label_memory(path, learned, drop)
     loaded = load_label_memory(path)
@@ -310,7 +311,7 @@ def test_legacy_parent_key_is_not_loaded_as_a_triple_and_is_dropped(tmp_path: Pa
             unit="rate",
         )
     ]
-    learned, drop = learned_hits(rows)
+    learned, drop = learned_hits(rows, embed_score_min=embed_floor())
     save_label_memory(path, learned, drop)
     loaded = load_label_memory(path)
     assert loaded[_key("CPI", ["Inflation profiles"], "rate")].concept_id == "ops.inflation"
@@ -336,7 +337,7 @@ def test_pnl_and_cfs_sections_stay_different_pairs() -> None:
             row=2,
         ),
     ]
-    learned, _drop = learned_hits(rows)
+    learned, _drop = learned_hits(rows, embed_score_min=embed_floor())
     assert learned[_key("Gross Revenues", ["Revenue"], "money")].concept_id == "pnl.revenue"
     assert learned[_key("Gross Revenues", ["Receipts"], "money")].concept_id == "cf.receipts"
 
@@ -351,7 +352,7 @@ def test_section_class_is_not_stored() -> None:
             unit="money",
         )
     ]
-    learned, drop = learned_hits(rows)
+    learned, drop = learned_hits(rows, embed_score_min=embed_floor())
     assert list(learned) == [
         _key("Other Income", ["CASH INFLOWS (PRORATED FROM MONTHLY COLLECTIONS"], "money")
     ]
@@ -414,8 +415,8 @@ def test_triple_beats_a_coarse_session_pair_and_still_meets_facets() -> None:
     assert proposed[0].score == 1.0
     rate = ctx.model_copy(update={"value_kind": "rate", "memory_unit": "rate"})
     assert signal.propose(rate, book)[0].concept_id == "cf.uses"
-    assert Resolver([concept, uses]).fuse(ctx, proposed) == proposed
-    assert Resolver([concept, uses]).fuse(rate, proposed) == []
+    assert Resolver([concept, uses], thresholds=thresholds()).fuse(ctx, proposed) == proposed
+    assert Resolver([concept, uses], thresholds=thresholds()).fuse(rate, proposed) == []
 
 
 def _key(label: str, section_path: list[str], unit: str) -> tuple[str, str, str]:

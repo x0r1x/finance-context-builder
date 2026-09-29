@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tests.helpers.fast_sheet import SHEET, fast_cells
+from tests.helpers.policy import accept_min, llm_workers, slot_wait, thresholds
 
 from finance_context.context.build import build_context
 from finance_context.layout.detect import detect_layout
@@ -14,7 +15,15 @@ def _context(*, relations: list[RowRelation] | None = None):
     cells = fast_cells()
     layout = detect_layout(cells)
     mapping = map_layout(
-        layout, taxonomy=load_taxonomy(), glossary={}, cells=cells, embed=None, chat=None
+        layout,
+        taxonomy=load_taxonomy(),
+        glossary={},
+        cells=cells,
+        embed=None,
+        chat=None,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     if relations:
         mapping = mapping.model_copy(update={"relations": [*mapping.relations, *relations]})
@@ -24,6 +33,7 @@ def _context(*, relations: list[RowRelation] | None = None):
         cells=cells,
         layout=layout,
         mapping=mapping,
+        concept_accept_min=accept_min(),
     )
 
 

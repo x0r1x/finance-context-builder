@@ -11,10 +11,6 @@ from finance_context.ports.protocols import EmbedPort
 
 _LOGGER = logging.getLogger(__name__)
 
-COSINE_MIN = 0.85
-COSINE_GAP = 0.08
-TOP_K = 5
-
 
 def cosine(a: list[float], b: list[float]) -> float:
     va = np.asarray(a, dtype=float)
