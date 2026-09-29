@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 from tests.helpers.ports import GrantSlots
 
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
@@ -157,6 +158,9 @@ def test_sum_mapped_to_difference_concept_is_abstained() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row for row in doc.rows}
     assert by_label["Total Inflows"].concept_id is None
@@ -252,6 +256,9 @@ def test_irr_cash_flow_keeps_net_despite_aggregate() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row for row in doc.rows}
     assert by_label["Cash Flow"].concept_id == "cf.net"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.helpers.policy import accept_min
+
 from finance_context.context.build import build_context
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
@@ -67,6 +69,7 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
         cells=cells,
         layout=layout,
         mapping=MappingDocument(),
+        concept_accept_min=accept_min(),
     )
     rows = [row for block in doc.blocks for row in block.rows]
     selector = next(row for row in rows if row.label == "Scenario Chosen")

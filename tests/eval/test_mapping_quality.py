@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.helpers.policy import accept_min
+
 from finance_context.context.measure import parse_measure
 from finance_context.mapping.eval import (
     QualityRow,
@@ -118,7 +120,8 @@ def test_quality_passes_for_a_balance_supported_by_its_label() -> None:
                 semantic_identity=_identity("bs.cash", "cash"),
                 cash_semantics=CashSemantics(recognition="stock", cash_movement="none"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert metrics["label_coverage"] == 1.0
     assert metrics["semantic_coverage"] == 1.0
@@ -147,7 +150,8 @@ def test_cfs_revenue_slot_does_not_count_as_semantic_coverage() -> None:
                 cash_semantics=CashSemantics(recognition="accrual", cash_movement="inflow"),
                 score=0.99,
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert metrics["label_coverage"] == 1.0
     assert metrics["semantic_coverage"] == 0.0
@@ -171,7 +175,8 @@ def test_cash_classified_as_flow_fails_semantic_and_temporal_checks() -> None:
                 semantic_identity=_identity("bs.cash", "cash"),
                 cash_semantics=CashSemantics(recognition="stock", cash_movement="none"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert metrics["semantic_coverage"] == 0.0
     assert metrics["temporal_coverage"] == 0.0
@@ -193,7 +198,8 @@ def test_roll_forward_movement_keeps_stock_concept() -> None:
                 semantic_identity=_identity("bs.retained_earnings", "equity"),
                 cash_semantics=CashSemantics(recognition="stock", cash_movement="none"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert metrics["semantic_coverage"] == 1.0
     assert metrics["temporal_coverage"] == 1.0
@@ -217,7 +223,8 @@ def test_repayment_without_outflow_or_debt_stock_fails_semantic_check() -> None:
                 semantic_identity=_identity("cf.repayment"),
                 cash_semantics=CashSemantics(recognition="cash", cash_movement="none"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert metrics["semantic_coverage"] == 0.0
     assert metrics["confidence_threshold_passed"] is False
@@ -256,7 +263,7 @@ def test_repayment_outflow_next_to_debt_stock_passes() -> None:
         semantic_identity=_identity("cf.repayment"),
         cash_semantics=CashSemantics(recognition="cash", cash_movement="outflow"),
     )
-    metrics = mapping_quality_metrics([debt, repayment])
+    metrics = mapping_quality_metrics([debt, repayment], concept_accept_min=accept_min())
     assert metrics["semantic_coverage"] == 1.0
     assert metrics["confidence_threshold_passed"] is True
 
@@ -288,7 +295,8 @@ def test_formula_cell_without_text_fails_formula_coverage() -> None:
                 formula_fingerprint="=RC[1]",
                 values=[type("Cell", (), {"has_formula": True, "formula": None})()],
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert metrics["formula_coverage"] == 0.0
     assert metrics["semantic_coverage"] == 1.0
@@ -364,7 +372,8 @@ def test_ratio_and_instant_periods_keep_their_time() -> None:
                 concept_id="ops.cpi",
                 hints=RowHints(time_semantics="stock", statement="ops", unit="ratio"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     minimum = mapping_quality_metrics(
         [
@@ -373,7 +382,8 @@ def test_ratio_and_instant_periods_keep_their_time() -> None:
                 concept_id="cov.dscr_limit",
                 hints=RowHints(time_semantics="instant", statement="cov", unit="ratio"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     series = mapping_quality_metrics(
         [
@@ -382,7 +392,8 @@ def test_ratio_and_instant_periods_keep_their_time() -> None:
                 concept_id="cov.dscr",
                 hints=RowHints(time_semantics="flow", statement="cov", unit="ratio"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     instant_rate = mapping_quality_metrics(
         [
@@ -391,7 +402,8 @@ def test_ratio_and_instant_periods_keep_their_time() -> None:
                 concept_id="val.coc",
                 hints=RowHints(time_semantics="instant", statement="val", unit="ratio"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert index["temporal_coverage"] == 1.0
     assert minimum["temporal_coverage"] == 1.0
@@ -408,7 +420,8 @@ def test_rate_and_ratio_share_a_unit_family() -> None:
                 concept_id="ops.cpi",
                 hints=RowHints(time_semantics="stock", statement="ops", unit="money"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     percent_on_ratio = mapping_quality_metrics(
         [
@@ -417,7 +430,8 @@ def test_rate_and_ratio_share_a_unit_family() -> None:
                 concept_id="ops.cpi",
                 hints=RowHints(time_semantics="stock", statement="ops", unit="rate"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     blank = mapping_quality_metrics(
         [
@@ -426,7 +440,8 @@ def test_rate_and_ratio_share_a_unit_family() -> None:
                 concept_id="ops.cpi",
                 hints=RowHints(time_semantics="stock", statement="ops", unit=None),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert money_on_ratio["unit_coverage"] == 0.0
     assert percent_on_ratio["unit_coverage"] == 1.0
@@ -441,7 +456,8 @@ def test_rate_without_instant_period_still_needs_rate_time() -> None:
                 concept_id="ops.inflation",
                 hints=RowHints(time_semantics="flow", statement="ops", unit="rate"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert metrics["temporal_coverage"] == 0.0
 
@@ -454,7 +470,8 @@ def test_years_hint_satisfies_count_and_a_bare_date_is_not_money() -> None:
                 concept_id="ops.depreciation_life",
                 hints=RowHints(time_semantics="instant", statement="ops", unit="years"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     started = mapping_quality_metrics(
         [
@@ -463,7 +480,8 @@ def test_years_hint_satisfies_count_and_a_bare_date_is_not_money() -> None:
                 concept_id="ops.model_start",
                 hints=RowHints(time_semantics="instant", statement="ops", unit="date"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     money_on_duration = mapping_quality_metrics(
         [
@@ -472,7 +490,8 @@ def test_years_hint_satisfies_count_and_a_bare_date_is_not_money() -> None:
                 concept_id="ops.construction_period",
                 hints=RowHints(time_semantics="flow", statement="ops", unit="money"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     count_on_duration = mapping_quality_metrics(
         [
@@ -481,7 +500,8 @@ def test_years_hint_satisfies_count_and_a_bare_date_is_not_money() -> None:
                 concept_id="ops.construction_period",
                 hints=RowHints(time_semantics="instant", statement="ops", unit="count"),
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert life["unit_coverage"] == 1.0
     assert started["unit_coverage"] == 1.0
@@ -513,7 +533,8 @@ def test_loose_section_total_stays_unsupported() -> None:
 
 
 def _coverage(**kwargs: object) -> float:
-    return float(mapping_quality_metrics([_row(**kwargs)])["label_coverage"])
+    metrics = mapping_quality_metrics([_row(**kwargs)], concept_accept_min=accept_min())
+    return float(metrics["label_coverage"])
 
 
 def test_score_below_accept_min_fails_confidence_threshold() -> None:
@@ -534,7 +555,8 @@ def test_score_below_accept_min_fails_confidence_threshold() -> None:
                 score=0.5,
                 confidence="high",
             )
-        ]
+        ],
+        concept_accept_min=accept_min(),
     )
     assert metrics["semantic_coverage"] == 1.0
     assert metrics["confidence_threshold_passed"] is False

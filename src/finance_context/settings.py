@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import ValidationInfo, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from finance_context.errors import PortError
 from finance_context.ports.protocols import ChatPort, EmbedPort
+
+if TYPE_CHECKING:
+    from finance_context.mapping.models import MappingThresholds
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _DEFAULT_DATA_DIR = Path("data")
@@ -22,6 +26,13 @@ _POOL_DEFAULTS = {
     "llm_concurrency": _DEFAULT_LLM_CONCURRENCY,
     "max_concurrent_jobs": _DEFAULT_MAX_CONCURRENT_JOBS,
 }
+_THRESHOLD_FIELDS = (
+    "concept_accept_min",
+    "embed_score_min",
+    "embed_score_gap",
+    "embed_top_k",
+    "mint_score_max",
+)
 
 
 def _blank_to_none(value: object) -> object:
@@ -87,6 +98,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
 
+    concept_accept_min: float = Field(default=0.82, gt=0, le=1)
+    embed_score_min: float = Field(default=0.85, gt=0, le=1)
+    embed_score_gap: float = Field(default=0.08, ge=0, le=1)
+    embed_top_k: int = Field(default=5, ge=1, le=32)
+    mint_score_max: float = Field(default=0.5, gt=0, le=1)
+
     @field_validator(
         "llm_base_url",
         "llm_api_key",
@@ -121,12 +138,43 @@ class Settings(BaseSettings):
             return fallback
         return number
 
+    @field_validator(*_THRESHOLD_FIELDS, mode="before")
+    @classmethod
+    def blank_threshold_inherits_default(cls, value: object, info: ValidationInfo) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return cls.model_fields[info.field_name].default
+        return value
+
     @field_validator("llm_base_url", "embedding_base_url", mode="after")
     @classmethod
     def openai_compatible_base(cls, value: str | None) -> str | None:
         if not value:
             return None
         return normalize_openai_base_url(value, rewrite_loopback_to=_loopback_rewrite_host())
+
+    def mapping_thresholds(self) -> MappingThresholds:
+        from finance_context.mapping.models import MappingThresholds
+
+        return MappingThresholds(
+            concept_accept_min=self.concept_accept_min,
+            embed_score_min=self.embed_score_min,
+            embed_score_gap=self.embed_score_gap,
+            embed_top_k=self.embed_top_k,
+            mint_score_max=self.mint_score_max,
+        )
+
+    @classmethod
+    def default_mapping_thresholds(cls) -> MappingThresholds:
+        from finance_context.mapping.models import MappingThresholds
+
+        fields = cls.model_fields
+        return MappingThresholds(
+            concept_accept_min=fields["concept_accept_min"].default,
+            embed_score_min=fields["embed_score_min"].default,
+            embed_score_gap=fields["embed_score_gap"].default,
+            embed_top_k=fields["embed_top_k"].default,
+            mint_score_max=fields["mint_score_max"].default,
+        )
 
     def llm_configured(self) -> bool:
         return bool(self.llm_base_url)

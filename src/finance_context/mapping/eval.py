@@ -7,7 +7,6 @@ from typing import Any
 
 from finance_context.mapping.glossary import _STATEMENT_PAIRS
 from finance_context.mapping.normalize import normalize_label
-from finance_context.mapping.resolver import ACCEPT_MIN
 from finance_context.mapping.statement import is_cashflow_context
 from finance_context.mapping.taxonomy import load_taxonomy, seed_authored_units
 
@@ -255,6 +254,7 @@ def mapping_quality_metrics(
     rows: list[QualityRow],
     *,
     concepts: list | None = None,
+    concept_accept_min: float,
 ) -> dict[str, float | bool]:
     """Real checks on accepted concepts. Empty input scores 1.0 and passes the threshold."""
     catalog = {item.id: item for item in (concepts if concepts is not None else load_taxonomy())}
@@ -281,7 +281,8 @@ def mapping_quality_metrics(
         ),
         "formula_coverage": 1.0 if not formula_rows else _rate(formula_rows, _formula_ok),
         "confidence_threshold_passed": (
-            not semantic_fail and all(_confidence_ok(row) for row in mapped)
+            not semantic_fail
+            and all(_confidence_ok(row, concept_accept_min) for row in mapped)
         ),
     }
 
@@ -291,10 +292,12 @@ def assess_mapping_quality(
     blocks: list | None = None,
     *,
     concepts: list | None = None,
+    concept_accept_min: float,
 ) -> dict[str, float | bool]:
     return mapping_quality_metrics(
         quality_rows_from_context(inventory, blocks),
         concepts=concepts,
+        concept_accept_min=concept_accept_min,
     )
 
 
@@ -706,8 +709,8 @@ def _formula_ok(row: QualityRow) -> bool:
     return all(getattr(value, "formula", None) for value in cells)
 
 
-def _confidence_ok(row: QualityRow) -> bool:
-    return row.confidence == "high" and row.score is not None and row.score >= ACCEPT_MIN
+def _confidence_ok(row: QualityRow, concept_accept_min: float) -> bool:
+    return row.confidence == "high" and row.score is not None and row.score >= concept_accept_min
 
 
 def risk_coverage_curve(

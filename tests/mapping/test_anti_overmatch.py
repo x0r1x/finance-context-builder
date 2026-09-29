@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 from tests.helpers.ports import GrantSlots
 
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
@@ -45,6 +46,9 @@ def test_dscr_does_not_map_to_debt() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id == "cov.dscr"
     assert doc.rows[0].concept_id != "bs.debt"
@@ -62,5 +66,8 @@ def test_leverage_does_not_map_to_revenue() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id != "pnl.revenue"

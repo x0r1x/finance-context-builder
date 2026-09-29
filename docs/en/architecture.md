@@ -52,7 +52,7 @@ On a sheet, a short date pair that sits entirely left of the widest timeline is 
 
 ## Mapping
 
-Details: [mapping.md](mapping.md). Taxonomy fields and how to extend them: [taxonomy.md](taxonomy.md).
+Details: [mapping.md](mapping.md). Field, variable, and value: [Thresholds](mapping.md#thresholds). Taxonomy fields and how to extend them: [taxonomy.md](taxonomy.md).
 
 Mapping is retrieve-and-align, not closed-set classification. Taxonomy is a dictionary; completeness of content does not depend on a hit. A wrong tag is worse than `unknown`.
 
@@ -64,7 +64,7 @@ flowchart TD
   struct --> ctx[RowContext plus neighbors]
   ctx --> signals[Signal providers]
   signals --> resolver[Resolver fuse prune threshold]
-  resolver --> decide{score >= ACCEPT_MIN}
+  resolver --> decide{score >= concept_accept_min}
   decide -->|yes| mapped[concept_id]
   decide -->|no| cand[top-3 candidates kept]
   mapped --> rows
@@ -100,7 +100,7 @@ Quality is two numbers, not one: **content completeness** (block rows vs layout 
 
 ### Learned glossary
 
-High-confidence `glossary` / `rule` / `structure` / `lexical` hits, and an embedding whose cosine is at least 0.85, are written to `DATA_DIR/shared/label_memory.json` after a job. The entry has a score. A strictly higher score replaces the concept. An equal score does not. The next workbook in any session reads that file. Chat guesses are not stored. A new id is appended to `DATA_DIR/shared/taxonomy.json` only for an abstained row whose nearest alternative scores below 0.5. Yaml is only the seed of the first empty store.
+High-confidence `glossary` / `rule` / `structure` / `lexical` hits, and an embedding whose cosine is at least `embed_score_min`, are written to `DATA_DIR/shared/label_memory.json` after a job. The entry has a score. A strictly higher score replaces the concept. An equal score does not. The next workbook in any session reads that file. Chat guesses are not stored. A new id is appended to `DATA_DIR/shared/taxonomy.json` only for an abstained row whose nearest alternative scores below `mint_score_max`. Yaml is only the seed of the first empty store.
 
 ### Status
 

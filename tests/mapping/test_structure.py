@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 from tests.helpers.ports import GrantSlots
 
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
@@ -74,6 +75,9 @@ def test_alias_copies_concept_from_source_row() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row for row in doc.rows}
     assert by_label["Closing cash"].concept_id == "bs.cash"
@@ -132,6 +136,9 @@ def test_sum_of_receipts_is_receipts_not_net() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Collections"] == "cf.receipts"
@@ -194,6 +201,9 @@ def test_partial_sum_does_not_copy_single_child_concept() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row.concept_id for row in doc.rows}
     assert by_label["Insurance"] == "cf.disbursements.insurance"
@@ -246,6 +256,9 @@ def test_weekly_proration_is_money_not_ratio() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id == "cf.receipts.product"
 
@@ -298,6 +311,9 @@ def test_percent_row_does_not_map_to_headcount() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     assert doc.rows[0].concept_id is None
     assert doc.rows[0].source == "question"

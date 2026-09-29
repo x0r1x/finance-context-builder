@@ -87,6 +87,20 @@ Compatibility with declared `calculations`: a match **raises** the score; a mism
 
 Relations (`alias`, `aggregate`, `difference`, `roll_forward`) are mapping's semantic links, not the formula graph. They are written to `mapping.json` and to `context.json` blocks. Cell-level edges are in IR; see [graph.md](graph.md).
 
+<a id="thresholds"></a>
+
+## Thresholds
+
+The five values live on Settings fields. A blank or unset variable keeps the value in the table. A score must be greater than 0 and at most 1, the gap at least 0 and at most 1, and `EMBED_TOP_K` an integer from 1 to 32. A number outside that range stops the process.
+
+| Field | Variable | Value | Meaning |
+| --- | --- | --- | --- |
+| `concept_accept_min` | `CONCEPT_ACCEPT_MIN` | 0.82 | The row gets a concept when the best candidate scores at least this. Below that, the published concept stays `unknown` and the candidates remain. The quality flag `confidence_threshold_passed` requires every accepted row to reach this score. |
+| `embed_score_min` | `EMBED_SCORE_MIN` | 0.85 | An embedding match, the cosine between the row text and a concept, is held to a stricter bar than the other signals. It is chosen when the cosine is at least this, then marked confident and remembered for the next workbook. |
+| `embed_score_gap` | `EMBED_SCORE_GAP` | 0.08 | That embedding is chosen when its cosine leads the next embedding by at least this much. A closer second candidate leaves the row `unknown`. |
+| `embed_top_k` | `EMBED_TOP_K` | 5 | How many closest concepts stay on the row for the embedding search and for the short list the model sees. Published context and Markdown show the first three. |
+| `mint_score_max` | `MINT_SCORE_MAX` | 0.5 | A new taxonomy concept is created for an `unknown` row that already has a closest existing concept, when that concept's score is below this. |
+
 ## Resolver
 
 `Resolver.fuse` gathers candidates with the same `concept_id`: it keeps the best score and a small bonus when several signals agree, then `prune_candidates`.
@@ -101,9 +115,9 @@ Prune drops:
 `decide`:
 
 - an empty list → refuse;
-- best score **&lt; 0.82** (`ACCEPT_MIN`) → refuse;
+- best score **&lt; `concept_accept_min`** → refuse;
 - two leaders closer than **0.02** → take the more specific id (`broader` is set), otherwise refuse (ambiguous);
-- for the `embed` signal, also: score ≥ **0.85** (`COSINE_MIN`) and a gap to the second ≥ **0.08** (`COSINE_GAP`); embedding top-k is 5.
+- for the `embed` signal, also: score ≥ **`embed_score_min`** and a gap to the second ≥ **`embed_score_gap`**. The row keeps `embed_top_k` alternatives.
 
 Thresholds are not lowered to “close coverage”. A nearby wrong tag is worse than `unknown`. Top-3 candidates are stored in `alternatives` / `candidates` even on abstain: if prune emptied the fused list, the raw proposals remain (`no_candidate` no longer means `candidates: []`).
 
@@ -157,11 +171,11 @@ Top-3 `candidates` are written on abstain too: if prune emptied the fused list, 
 
 Shared file `$DATA_DIR/shared/label_memory.json`. Key `(normalized_label, section, unit)`. `section` is the narrowest heading (`section_path[-1]`, otherwise the parent). `unit` is `money`, `rate`, `years`, or empty. Entry: `concept_id`, `score`, `source`. Every session reads and appends it. An old `$DATA_DIR/sessions/{session}/glossary.json` is still a pair `(label, parent)`, including a `section_class` fallback; a pair with no score counts as 1.0. New pairs are not written to the session file. Before the cascade, `reconcile_glossary` rewrites a session pair whose label now belongs to another concept (otherwise a split duration would stay on the old id). A live statement pair (`pnl.revenue` and `cf.receipts`) stays on its own key. On the shared file those labels stay apart by section and unit.
 
-After the job, rows with `confidence = high` and `source` in `{glossary, rule, structure, lexical, embed}` go into the shared memory. Rule, structure, lexical, and glossary use score 1.0. Embed uses the cosine, and it is stored only at `high` (cosine at least 0.85). Chat is not stored. A second concept or an abstained sibling on the same triple does not write the key and deletes a stored triple. Under the lock the file is read again: a strictly higher score replaces `concept_id`; an equal or lower score leaves the previous entry. On save, this book also deletes the legacy pairs it touches: `(label, parent)` and `(label, section_class)`.
+After the job, rows with `confidence = high` and `source` in `{glossary, rule, structure, lexical, embed}` go into the shared memory. Rule, structure, lexical, and glossary use score 1.0. Embed uses the cosine, and it is stored only at `high` (cosine at least `embed_score_min`). Chat is not stored. A second concept or an abstained sibling on the same triple does not write the key and deletes a stored triple. Under the lock the file is read again: a strictly higher score replaces `concept_id`; an equal or lower score leaves the previous entry. On save, this book also deletes the legacy pairs it touches: `(label, parent)` and `(label, section_class)`.
 
 A `section_class` key is not written to the shared file. A bare `Total` under a specific section is not looked up in memory.
 
-This is a cache of confident matches, not a place for one model's workarounds. An abstained row whose nearest alternative scores below 0.5 is appended to `shared/taxonomy.json`. An empty alternative list stays out of that file, and the file is not typed by hand. Parameters `Months per year`, `Thousand`, `On`, `Off`, and a bare `Total` stay without an id.
+This is a cache of confident matches, not a place for one model's workarounds. An abstained row whose nearest alternative scores below `mint_score_max` is appended to `shared/taxonomy.json`. An empty alternative list stays out of that file, and the file is not typed by hand. Parameters `Months per year`, `Thousand`, `On`, `Off`, and a bare `Total` stay without an id.
 
 ## Meaning and role
 
@@ -184,7 +198,7 @@ The section rollup `cf.capex` is not attached to a fee / arrangement: that is no
 | source | confidence |
 | --- | --- |
 | glossary, rule, structure, lexical | `high` |
-| embed | `high` when score ≥ 0.85, otherwise `medium` |
+| embed | `high` when score ≥ `embed_score_min`, otherwise `medium` |
 | chat | `medium` |
 | question (abstain) | `low` |
 
@@ -202,7 +216,7 @@ In `mapping.json` the decision lives in `source` (`glossary`, `rule`, `lexical`,
   - `unit_coverage` — `hints.unit` matches the concept unit. Rate and ratio are one pure family, a years hint satisfies `count`, a cell caption `index` and a trailing `p.a.` are read as that cell's unit, and an empty cell does not pass. The concept id does not assign the expected unit (`pnl.volume` → count, money pnl/cf/bs/debt → money). A concept with no declared unit outside those statements is not scored as money. The expected unit is the facet written before enrich stamps an empty unit as money, so a date on `ops.model_start` passes. Price satisfies money. A concept id ending in `_rate` does not assign the expected unit;
   - `temporal_coverage` — opening is `bop` and closing is `eop`; a balance or `bs.*` is `stock`, `bop`, `eop`, or `instant`, and a roll-forward movement may stay `flow`; `period_type=instant` accepts `instant`, `stock`, `bop`, `eop`, or `rate` before the rate check; a ratio accepts `stock`, `instant`, `bop`, `eop`, `flow`, or `rate`; a rate concept that is not instant requires `time_semantics=rate`;
   - `formula_coverage` — a row with a formula has a fingerprint (`formula`); the value series is the cache, and a separate A1 per cell is not copied into context (no such rows → 1.0). If the period columns have no template, the fingerprint is taken from the scalar left of the axis;
-  - `confidence_threshold_passed` — no semantic-check failures, and every accepted row has `confidence=high` and `score >= 0.82`.
+  - `confidence_threshold_passed` — no semantic-check failures, and every accepted row has `confidence=high` and `score >= concept_accept_min`.
 - **selective risk** — errors among **accepted** mappings (abstain is not in the risk);
 - **abstain rate** and the **risk–coverage** curve — the quality of the right to refuse.
 

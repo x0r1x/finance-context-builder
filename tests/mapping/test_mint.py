@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.helpers.policy import mint_ceiling, slot_wait
 from tests.helpers.ports import FakeChat
 
 from finance_context.mapping.induce import concept_id_for_label
@@ -60,6 +61,18 @@ def _row(
     )
 
 
+def _extend(doc: MappingDocument, path: Path, taxonomy: list[Concept], chat=None) -> None:
+    _mint_unmatched(
+        doc,
+        path,
+        taxonomy,
+        chat=chat,
+        slots=None,
+        slot_timeout_sec=slot_wait(),
+        mint_score_max=mint_ceiling(),
+    )
+
+
 def test_mapped_section_child_is_not_extended(tmp_path: Path) -> None:
     path = tmp_path / "taxonomy.json"
     _write(path, [_opex()])
@@ -69,7 +82,7 @@ def test_mapped_section_child_is_not_extended(tmp_path: Path) -> None:
         concept_id="pnl.opex",
         disposition="mapped",
     )
-    _mint_unmatched(MappingDocument(rows=[row]), path, [_opex()])
+    _extend(MappingDocument(rows=[row]), path, [_opex()])
     assert _ids(path) == ["pnl.opex"]
     assert row.concept_id == "pnl.opex"
 
@@ -79,7 +92,7 @@ def test_high_score_and_empty_alternatives_do_not_mint(tmp_path: Path) -> None:
     _write(path, [_opex()])
     high = _row("Full-wrap EPC", [("cf.uses", 0.86)], unit="rate")
     empty = _row("Months per year", [])
-    _mint_unmatched(MappingDocument(rows=[high, empty]), path, [_opex()])
+    _extend(MappingDocument(rows=[high, empty]), path, [_opex()])
     assert _ids(path) == ["pnl.opex"]
     assert high.disposition == "abstained"
     assert empty.disposition == "abstained"
@@ -91,7 +104,7 @@ def test_weak_seed_neighbour_is_anchored_without_a_model(tmp_path: Path) -> None
     _write(path, [parent])
     live = [parent]
     row = _row("Site insurance", [("pnl.opex", 0.2)])
-    _mint_unmatched(MappingDocument(rows=[row]), path, live)
+    _extend(MappingDocument(rows=[row]), path, live)
     concept_id = concept_id_for_label("Site insurance", "Operating expenses", "PF Model")
     assert concept_id == "ops.site-insurance"
     assert _ids(path) == ["pnl.opex", "ops.site-insurance"]
@@ -118,7 +131,7 @@ def test_chat_extend_stores_one_sentence_on_the_seed_anchor(tmp_path: Path) -> N
             "definition": "Insurance for the site. More than one sentence.",
         }
     )
-    _mint_unmatched(MappingDocument(rows=[row]), path, [_opex()], chat=chat)
+    _extend(MappingDocument(rows=[row]), path, [_opex()], chat=chat)
     stored = TaxonomyDocument.model_validate_json(path.read_text(encoding="utf-8"))
     assert stored.concepts[1].broader == "pnl.opex"
     assert stored.concepts[1].definition == "Insurance for the site."
@@ -131,7 +144,7 @@ def test_nearest_non_seed_is_not_an_anchor(tmp_path: Path) -> None:
     path = tmp_path / "taxonomy.json"
     _write(path, [_opex()])
     row = _row("Site insurance", [("ops.custom-line", 0.2), ("pnl.opex", 0.1)])
-    _mint_unmatched(MappingDocument(rows=[row]), path, [_opex()])
+    _extend(MappingDocument(rows=[row]), path, [_opex()])
     assert _ids(path) == ["pnl.opex"]
     assert row.disposition == "abstained"
 
@@ -142,7 +155,7 @@ def test_chat_skip_writes_nothing(tmp_path: Path) -> None:
     before = path.read_text(encoding="utf-8")
     row = _row("Site insurance", [("pnl.opex", 0.2)])
     chat = FakeChat(payload={"action": "skip"})
-    _mint_unmatched(MappingDocument(rows=[row]), path, [_opex()], chat=chat)
+    _extend(MappingDocument(rows=[row]), path, [_opex()], chat=chat)
     assert path.read_text(encoding="utf-8") == before
     assert row.disposition == "abstained"
     assert row.concept_id is None
@@ -155,7 +168,7 @@ def test_chat_broader_outside_the_shown_ids_writes_nothing(tmp_path: Path) -> No
     before = path.read_text(encoding="utf-8")
     row = _row("Site insurance", [("pnl.opex", 0.2)])
     chat = FakeChat(payload={"action": "extend", "broader": "ops.not-a-seed", "definition": "No."})
-    _mint_unmatched(MappingDocument(rows=[row]), path, [_opex()], chat=chat)
+    _extend(MappingDocument(rows=[row]), path, [_opex()], chat=chat)
     assert path.read_text(encoding="utf-8") == before
     assert row.disposition == "abstained"
 
@@ -168,7 +181,7 @@ def test_chat_cannot_supply_a_concept_id(tmp_path: Path) -> None:
     chat = FakeChat(
         payload={"action": "extend", "broader": "pnl.opex", "concept_id": "evil.invented"}
     )
-    _mint_unmatched(MappingDocument(rows=[row]), path, [_opex()], chat=chat)
+    _extend(MappingDocument(rows=[row]), path, [_opex()], chat=chat)
     assert path.read_text(encoding="utf-8") == before
     assert row.disposition == "abstained"
 
@@ -177,7 +190,7 @@ def test_unit_conflict_does_not_mint(tmp_path: Path) -> None:
     path = tmp_path / "taxonomy.json"
     _write(path, [_opex()])
     row = _row("Site insurance", [("pnl.opex", 0.2)], unit="rate")
-    _mint_unmatched(MappingDocument(rows=[row]), path, [_opex()])
+    _extend(MappingDocument(rows=[row]), path, [_opex()])
     assert _ids(path) == ["pnl.opex"]
     assert row.disposition == "abstained"
 
@@ -193,7 +206,7 @@ def test_existing_id_is_reused(tmp_path: Path) -> None:
     )
     _write(path, [_opex(), existing])
     row = _row("Site insurance", [("pnl.opex", 0.2)])
-    _mint_unmatched(MappingDocument(rows=[row]), path, [_opex(), existing])
+    _extend(MappingDocument(rows=[row]), path, [_opex(), existing])
     assert _ids(path) == ["pnl.opex", "ops.site-insurance"]
     assert row.concept_id == "ops.site-insurance"
     assert row.disposition == "mapped"

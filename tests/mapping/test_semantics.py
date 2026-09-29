@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 from tests.helpers.ports import GrantSlots
 
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
@@ -67,6 +68,9 @@ def test_glossary_cannot_collapse_statement_roles() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row for row in doc.rows}
     revenue = by_label["Gross Revenues"]
@@ -130,6 +134,9 @@ def test_uses_lines_keep_identity_and_record_uses_role() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_label = {row.label: row for row in doc.rows}
     fee = by_label["Arrangement fee (k£)"]

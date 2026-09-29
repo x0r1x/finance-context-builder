@@ -16,7 +16,7 @@ from finance_context.graph.stage import build_formula_graph
 from finance_context.layout.models import Layout
 from finance_context.layout.stage import layout_workbook
 from finance_context.mapping.models import MappingDocument
-from finance_context.mapping.stage import mapping_workbook
+from finance_context.mapping.stage import mapping_cache_current, mapping_workbook
 from finance_context.mapping.taxonomy import ensure_runtime_taxonomy
 from finance_context.mapping.vectors import TaxonomyPrefetch, taxonomy_digest
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
@@ -193,10 +193,18 @@ class Pipeline:
             model=self.settings.embedding_model or "",
             taxonomy_digest=taxonomy_digest(taxonomy),
         )
+        thresholds = self.settings.mapping_thresholds()
+        default_thresholds = Settings.default_mapping_thresholds()
+        if not mapping_cache_current(dest_dir / "mapping.json", thresholds, default_thresholds):
+            graph_json = dest_dir / "graph.json"
+            if graph_json.is_file():
+                graph_json.unlink()
         mapping = _timed(
             "mapping",
             lambda: mapping_workbook(
                 dest_dir,
+                thresholds=thresholds,
+                default_thresholds=default_thresholds,
                 embed=self.embed,
                 chat=self.chat,
                 slots=self.slots,
@@ -269,6 +277,7 @@ class Pipeline:
                 cells=cells,
                 layout=layout,
                 mapping=mapping,
+                concept_accept_min=self.settings.concept_accept_min,
                 source_filename=source_filename,
                 content_sha256=content_sha256,
                 status=status,

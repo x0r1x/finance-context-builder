@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.helpers.policy import accept_min, llm_workers, slot_wait, thresholds
 
 from finance_context.context.build import build_context
 from finance_context.excel.stage import parse_workbook
@@ -153,6 +154,9 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         cells=cells,
         embed=None,
         chat=None,
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     stats = disposition_metrics(doc.rows)
     assert stats["processed_rate"] == 1.0
@@ -166,6 +170,7 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         layout=layout,
         mapping=doc,
         edges=edges,
+        concept_accept_min=accept_min(),
     )
     layout_n = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
     context_rows = [row for block in ctx_doc.blocks for row in block.rows]

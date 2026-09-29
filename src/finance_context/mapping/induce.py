@@ -5,12 +5,11 @@ import re
 from finance_context.mapping.normalize import normalize_label
 
 _SKIP = {"months per year", "thousand", "on", "off", "total"}
-_NEARBY = 0.5
 
 
-def should_mint(best_score: float | None) -> bool:
-    """A weak neighbour is not a new concept. Nothing nearby can be."""
-    return best_score is not None and best_score < _NEARBY
+def should_mint(best_score: float | None, mint_score_max: float) -> bool:
+    """Mint only when a neighbour exists and scores below the passed ceiling."""
+    return best_score is not None and best_score < mint_score_max
 
 
 def statement_prefix(parent: str, sheet: str) -> str:

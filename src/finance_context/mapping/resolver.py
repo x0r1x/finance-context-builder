@@ -3,20 +3,19 @@ from __future__ import annotations
 from collections import defaultdict
 
 from finance_context.mapping.facets import exact_label_respects_unit, prune_candidates
-from finance_context.mapping.knn import COSINE_GAP, COSINE_MIN, TOP_K
 from finance_context.mapping.models import (
     Candidate,
     Concept,
     Disposition,
     ExclusionReason,
     MappedRow,
+    MappingThresholds,
     RowContext,
 )
 from finance_context.mapping.rowroles import infer_row_roles
 from finance_context.mapping.semantics import classify_semantics
 from finance_context.mapping.structure import BookView, Signal
 
-ACCEPT_MIN = 0.82
 SOURCE_BY_SIGNAL = {
     "glossary": "glossary",
     "lexical": "rule",
@@ -27,9 +26,9 @@ SOURCE_BY_SIGNAL = {
 
 
 class Resolver:
-    def __init__(self, taxonomy: list[Concept], *, accept_min: float = ACCEPT_MIN) -> None:
+    def __init__(self, taxonomy: list[Concept], thresholds: MappingThresholds) -> None:
         self.taxonomy = {c.id: c for c in taxonomy}
-        self.accept_min = accept_min
+        self.thresholds = thresholds
 
     def fuse(
         self,
@@ -63,7 +62,7 @@ class Resolver:
         if not ranked:
             return None, None
         top = ranked[0]
-        if top.score < self.accept_min:
+        if top.score < self.thresholds.concept_accept_min:
             return None, None
         if len(ranked) > 1 and ranked[0].score - ranked[1].score < 0.02:
             preferred = _prefer_specific(ranked, ctx, self.taxonomy)
@@ -71,9 +70,9 @@ class Resolver:
                 return None, None
             top = preferred
         if top.signal == "embed":
-            if top.score < COSINE_MIN:
+            if top.score < self.thresholds.embed_score_min:
                 return None, None
-            if len(ranked) > 1 and top.score - ranked[1].score < COSINE_GAP:
+            if len(ranked) > 1 and top.score - ranked[1].score < self.thresholds.embed_score_gap:
                 return None, None
         return top.concept_id, top
 
@@ -96,6 +95,7 @@ def to_mapped(
     picked: Candidate | None,
     ranked: list[Candidate],
     source: str,
+    thresholds: MappingThresholds,
     disposition: Disposition | None = None,
     exclusion_reason: ExclusionReason | None = None,
 ) -> MappedRow:
@@ -103,9 +103,9 @@ def to_mapped(
     if disposition is None:
         disposition = "mapped" if concept_id else "abstained"
     if exclusion_reason is None and disposition == "abstained":
-        exclusion_reason = _abstain_reason(ranked)
+        exclusion_reason = _abstain_reason(ranked, thresholds)
     role, secondary = infer_row_roles(ctx, concept_id)
-    alternatives = [(c.concept_id, c.score) for c in ranked[:TOP_K]]
+    alternatives = [(c.concept_id, c.score) for c in ranked[: thresholds.embed_top_k]]
     identity, reporting_roles, cash = classify_semantics(
         label=ctx.label,
         concept_id=concept_id,
@@ -125,7 +125,7 @@ def to_mapped(
         article_role=ctx.article_role,
         source=source,  # type: ignore[arg-type]
         score=score if concept_id else None,
-        confidence=_confidence(source, score),
+        confidence=_confidence(source, score, thresholds),
         alternatives=alternatives,
         evidence=picked.evidence if picked is not None else None,
         disposition=disposition,
@@ -140,12 +140,12 @@ def to_mapped(
     )
 
 
-def _abstain_reason(ranked: list[Candidate]) -> ExclusionReason:
+def _abstain_reason(ranked: list[Candidate], thresholds: MappingThresholds) -> ExclusionReason:
     if not ranked:
         return "no_candidate"
     if len(ranked) > 1 and ranked[0].score - ranked[1].score < 0.06:
         return "ambiguous"
-    if ranked[0].score < ACCEPT_MIN:
+    if ranked[0].score < thresholds.concept_accept_min:
         return "low_score"
     return "facet_mismatch"
 
@@ -164,11 +164,11 @@ def _prefer_specific(
     return None
 
 
-def _confidence(source: str, score: float | None) -> str | None:
+def _confidence(source: str, score: float | None, thresholds: MappingThresholds) -> str | None:
     if source in {"glossary", "rule", "structure", "lexical"}:
         return "high"
     if source == "embed":
-        return "high" if score is not None and score >= 0.85 else "medium"
+        return "high" if score is not None and score >= thresholds.embed_score_min else "medium"
     if source == "chat":
         return "medium"
     return "low"

@@ -28,11 +28,11 @@ from finance_context.mapping.models import (
     Facets,
     MappedRow,
     MappingDocument,
+    MappingThresholds,
 )
 from finance_context.mapping.taxonomy import TaxonomyDocument, load_taxonomy, remember_concept
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
-from finance_context.settings import _DEFAULT_LLM_CONCURRENCY, _DEFAULT_LLM_SLOT_WAIT_SEC
 from finance_context.store.fs import read_parquet, write_json
 
 _LOGGER = logging.getLogger("finance_context.mapping")
@@ -41,28 +41,31 @@ _LOGGER = logging.getLogger("finance_context.mapping")
 def mapping_workbook(
     dest_dir: Path,
     *,
+    thresholds: MappingThresholds,
+    default_thresholds: MappingThresholds,
+    slot_timeout_sec: float,
+    llm_concurrency: int,
     embed: EmbedPort | None = None,
     chat: ChatPort | None = None,
     slots: SlotGate | None = None,
     glossary: dict[tuple[str, str], str] | None = None,
     taxonomy: list[Concept] | None = None,
     cache_path: Path | None = None,
-    slot_timeout_sec: float = _DEFAULT_LLM_SLOT_WAIT_SEC,
     embedding_model: str = "",
     glossary_path: Path | None = None,
     label_memory_path: Path | None = None,
     runtime_taxonomy_path: Path | None = None,
     concept_index: ConceptIndex | None = None,
-    llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
     cells: list[dict] | None = None,
     edges: list[dict] | None = None,
     book_dir: Path | None = None,
 ) -> MappingDocument:
     book = book_dir or dest_dir
     path = dest_dir / "mapping.json"
-    if path.exists():
+    cached = _cached_mapping(path, thresholds, default_thresholds)
+    if cached is not None:
         log_event(_LOGGER, logging.INFO, "stage_skip", "artifact exists", stage="mapping")
-        return MappingDocument.model_validate_json(path.read_text(encoding="utf-8"))
+        return cached
     t0 = time.monotonic()
     layout = Layout.model_validate(
         json.loads((book / "layout.json").read_text(encoding="utf-8"))
@@ -95,6 +98,7 @@ def mapping_workbook(
         layout,
         taxonomy=tax,
         glossary=merged,
+        thresholds=thresholds,
         label_memory=memory,
         embed=embed,
         chat=chat,
@@ -115,15 +119,17 @@ def mapping_workbook(
             chat=chat,
             slots=slots,
             slot_timeout_sec=slot_timeout_sec,
+            mint_score_max=thresholds.mint_score_max,
         )
     if label_memory_path is not None:
-        hits, drop = learned_hits(doc.rows)
+        hits, drop = learned_hits(doc.rows, embed_score_min=thresholds.embed_score_min)
         save_label_memory(label_memory_path, hits, drop)
     elif glossary_path is not None:
         learned = learn_from_rows(merged, doc.rows)
         delta = {key: concept for key, concept in learned.items() if key not in snapshot}
         if delta:
             save_glossary(glossary_path, delta)
+    doc.thresholds = thresholds
     write_json(path, doc.model_dump(mode="json"))
     log_event(
         _LOGGER,
@@ -136,14 +142,38 @@ def mapping_workbook(
     return doc
 
 
+def mapping_cache_current(
+    path: Path,
+    thresholds: MappingThresholds,
+    default_thresholds: MappingThresholds,
+) -> bool:
+    return _cached_mapping(path, thresholds, default_thresholds) is not None
+
+
+def _cached_mapping(
+    path: Path,
+    thresholds: MappingThresholds,
+    default_thresholds: MappingThresholds,
+) -> MappingDocument | None:
+    if not path.is_file():
+        return None
+    doc = MappingDocument.model_validate_json(path.read_text(encoding="utf-8"))
+    if doc.thresholds == thresholds:
+        return doc
+    if doc.thresholds is None and thresholds == default_thresholds:
+        return doc
+    return None
+
+
 def _mint_unmatched(
     doc: MappingDocument,
     path: Path,
     taxonomy: list[Concept],
     *,
-    chat: ChatPort | None = None,
-    slots: SlotGate | None = None,
-    slot_timeout_sec: float = _DEFAULT_LLM_SLOT_WAIT_SEC,
+    chat: ChatPort | None,
+    slots: SlotGate | None,
+    slot_timeout_sec: float,
+    mint_score_max: float,
 ) -> None:
     if not path.is_file():
         return
@@ -154,7 +184,7 @@ def _mint_unmatched(
         if row.concept_id is not None or row.disposition != "abstained":
             continue
         best = row.alternatives[0][1] if row.alternatives else None
-        if not should_mint(best):
+        if not should_mint(best, mint_score_max):
             continue
         anchors = _seed_anchors(row, by_id, document, seed_ids)
         if not anchors:

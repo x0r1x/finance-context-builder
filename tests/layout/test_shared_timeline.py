@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.helpers.policy import accept_min
 from tests.layout.test_detect import _c
 
 from finance_context.context.build import build_context
@@ -52,6 +53,7 @@ def test_shifted_model_years_share_one_published_timeline() -> None:
         cells=cells,
         layout=layout,
         mapping=MappingDocument(),
+        concept_accept_min=accept_min(),
     )
     by_axis = {axis.id: axis for axis in doc.axes}
     local = build.axes[0].id

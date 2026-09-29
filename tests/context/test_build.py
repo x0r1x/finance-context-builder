@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.helpers.policy import accept_min
+
 from finance_context.context.build import build_context
 from finance_context.layout.models import (
     Axis,
@@ -92,6 +94,7 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
         mapping=mapping,
         source_filename="cashflow.xlsx",
         content_sha256="deadbeef",
+        concept_accept_min=accept_min(),
     )
     metric = doc.blocks[0].rows[0]
     assert metric.concept_id == "bs.cash"
@@ -147,6 +150,7 @@ def test_build_warns_on_missing_graph_targets() -> None:
         layout=_layout(),
         mapping=mapping,
         graph=GraphPointer(dangling=12, empty_range_members=718),
+        concept_accept_min=accept_min(),
     )
     assert "Graph: 12 unresolved formula targets (see graph.json)" in doc.warnings
     assert all("empty range" not in warning for warning in doc.warnings)
@@ -195,6 +199,7 @@ def test_build_decodes_excel_date_serials() -> None:
         cells=cells,
         layout=_layout(),
         mapping=mapping,
+        concept_accept_min=accept_min(),
     )
     assert doc.blocks[0].rows[0].values[0] == "31.12.2023"
 
@@ -278,6 +283,7 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
         cells=cells,
         layout=layout,
         mapping=mapping,
+        concept_accept_min=accept_min(),
     )
     rows = doc.blocks[0].rows
     assert [row.kind for row in rows] == ["abstract", "fact", "helper"]
@@ -374,9 +380,9 @@ def test_passed_catalog_scores_a_minted_label_and_its_facets() -> None:
         layout=layout,
         mapping=mapping,
     )
-    without = build_context(**kwargs)
-    with_direction = build_context(**kwargs, concepts=[directed])
-    with_instant = build_context(**kwargs, concepts=[instant])
+    without = build_context(**kwargs, concept_accept_min=accept_min())
+    with_direction = build_context(**kwargs, concepts=[directed], concept_accept_min=accept_min())
+    with_instant = build_context(**kwargs, concepts=[instant], concept_accept_min=accept_min())
     assert without.mapping_stats.mapping_quality.label_coverage == 0.0
     assert without.blocks[0].rows[0].hints.time_semantics == "flow"
     assert with_direction.mapping_stats.mapping_quality.label_coverage == 1.0
@@ -418,6 +424,7 @@ def test_zero_cached_formula_is_not_missing() -> None:
         cells=cells,
         layout=_layout(),
         mapping=mapping,
+        concept_accept_min=accept_min(),
     )
     assert doc.workbook.missing_cached_values == 2
     assert not any(w.startswith("Formula without cached value at") for w in doc.warnings)
@@ -506,6 +513,7 @@ def test_build_exports_role_cells_not_graph_samples() -> None:
         cells=cells,
         layout=layout,
         mapping=mapping,
+        concept_accept_min=accept_min(),
     )
     series = doc.blocks[0].rows[0]
     assert any(cell.role == "value" and cell.addr == "C26" for cell in series.cells)
@@ -577,6 +585,7 @@ def test_axis_inputs_do_not_inherit_the_stub_check_formula() -> None:
         cells=cells,
         layout=layout,
         mapping=MappingDocument(rows=[]),
+        concept_accept_min=accept_min(),
     )
     row = doc.blocks[0].rows[0]
     assert row.formula is None

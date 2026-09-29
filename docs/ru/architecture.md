@@ -52,7 +52,7 @@ flowchart LR
 
 ## Маппинг
 
-Подробности: [mapping.md](mapping.md). Поля таксономии и как их расширять: [taxonomy.md](taxonomy.md).
+Подробности: [mapping.md](mapping.md). Поле, переменная и значение: [Пороги](mapping.md#thresholds). Поля таксономии и как их расширять: [taxonomy.md](taxonomy.md).
 
 Маппинг — retrieve-and-align, не классификация на закрытом множестве. Таксономия — словарь; полнота контента не зависит от попадания. Неверный тег хуже `unknown`.
 
@@ -64,7 +64,7 @@ flowchart TD
   struct --> ctx[RowContext plus neighbors]
   ctx --> signals[Signal providers]
   signals --> resolver[Resolver fuse prune threshold]
-  resolver --> decide{score >= ACCEPT_MIN}
+  resolver --> decide{score >= concept_accept_min}
   decide -->|yes| mapped[concept_id]
   decide -->|no| cand[top-3 candidates kept]
   mapped --> rows
@@ -100,7 +100,7 @@ Structure — главный сигнал, когда формула одноз�
 
 ### Выученный glossary
 
-High-confidence попадания `glossary` / `rule` / `structure` / `lexical` и embed при косинусе не ниже 0.85 после джоба пишутся в `DATA_DIR/shared/label_memory.json`. У записи есть балл. Балл строго выше заменяет концепт. Равный балл не заменяет. Следующая книга любой сессии читает этот файл. Догадки chat не сохраняются. Новый id дописывается в `DATA_DIR/shared/taxonomy.json` только у воздержавшейся строки, чей ближайший альтернативный балл ниже 0.5. Yaml остаётся только семенем первого пустого склада.
+High-confidence попадания `glossary` / `rule` / `structure` / `lexical` и embed при косинусе не ниже `embed_score_min` после джоба пишутся в `DATA_DIR/shared/label_memory.json`. У записи есть балл. Балл строго выше заменяет концепт. Равный балл не заменяет. Следующая книга любой сессии читает этот файл. Догадки chat не сохраняются. Новый id дописывается в `DATA_DIR/shared/taxonomy.json` только у воздержавшейся строки, чей ближайший альтернативный балл ниже `mint_score_max`. Yaml остаётся только семенем первого пустого склада.
 
 ### Статус
 

@@ -10,7 +10,7 @@ from finance_context.layout.models import Layout, LayoutRow
 from finance_context.mapping.exclusion import exclusion_reason
 from finance_context.mapping.facets import prune_candidates
 from finance_context.mapping.glossary import GlossarySignal, reconcile_glossary
-from finance_context.mapping.knn import TOP_K, rank_concepts
+from finance_context.mapping.knn import rank_concepts
 from finance_context.mapping.lexical import LexicalSignal
 from finance_context.mapping.models import (
     Calculation,
@@ -20,10 +20,10 @@ from finance_context.mapping.models import (
     LexicalPattern,
     MappingDocument,
     MappingQuestion,
+    MappingThresholds,
     RowContext,
 )
 from finance_context.mapping.resolver import (
-    ACCEPT_MIN,
     SOURCE_BY_SIGNAL,
     Resolver,
     collect_proposals,
@@ -40,7 +40,6 @@ from finance_context.mapping.taxonomy import attached_document, implicit_calcula
 from finance_context.mapping.vectors import load_concept_vectors
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
-from finance_context.settings import _DEFAULT_LLM_CONCURRENCY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,16 +53,17 @@ def map_layout(
     *,
     taxonomy: list[Concept],
     glossary: dict[tuple[str, str], str],
+    thresholds: MappingThresholds,
+    slot_timeout_sec: float,
+    llm_concurrency: int,
     label_memory: dict[tuple[str, str, str], str] | None = None,
     embed: EmbedPort | None = None,
     chat: ChatPort | None = None,
     slots: SlotGate | None = None,
     cells: list[dict] | None = None,
-    slot_timeout_sec: float = 0.0,
     cache_path: Path | None = None,
     embedding_model: str = "",
     concept_index: ConceptIndex | None = None,
-    llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
     patterns: list[LexicalPattern] | None = None,
     calculations: list[Calculation] | None = None,
     edges: list[dict] | None = None,
@@ -83,7 +83,7 @@ def map_layout(
     )
     analyze_structure(book)
     templates = _templates_by_row(cells or [])
-    resolver = Resolver(taxonomy)
+    resolver = Resolver(taxonomy, thresholds)
     pending = _collect_contexts(book, templates)
     signals = [
         GlossarySignal(glossary, merged_patterns, label_memory),
@@ -144,7 +144,7 @@ def map_layout(
     for ctx in pending:
         if ctx.row_key not in book.concepts and not exclusion_reason(ctx):
             _resolve_row(ctx, book, [StructureSignal()], resolver)
-    _apply_calculation_checks(pending, book)
+    _apply_calculation_checks(pending, book, thresholds)
 
     questions: list[MappingQuestion] = []
     mapped = []
@@ -163,6 +163,7 @@ def map_layout(
                     picked=None,
                     ranked=[],
                     source="rule",
+                    thresholds=thresholds,
                     disposition="excluded",
                     exclusion_reason=reason,
                 )
@@ -177,6 +178,7 @@ def map_layout(
                 picked=picked,
                 ranked=ranked,
                 source=source,
+                thresholds=thresholds,
                 exclusion_reason=conflict if concept_id is None else None,
             )
         )
@@ -247,7 +249,10 @@ def _resolve_row(
 ) -> None:
     proposals = collect_proposals(pending.ctx, book, signals)
     ranked = resolver.fuse(pending.ctx, proposals)
-    pending.extras["proposals"] = sorted(proposals, key=lambda item: item.score, reverse=True)[:5]
+    top_k = resolver.thresholds.embed_top_k
+    pending.extras["proposals"] = sorted(proposals, key=lambda item: item.score, reverse=True)[
+        :top_k
+    ]
     pending.extras["ranked"] = ranked or list(pending.extras["proposals"])
     concept_id, picked = resolver.decide(pending.ctx, ranked)
     if concept_id and picked:
@@ -302,13 +307,13 @@ def _embed_pass(
                     signal="embed",
                     evidence=f"cosine={score:.3f}",
                 )
-                for cid, score in scored[:TOP_K]
+                for cid, score in scored[: resolver.thresholds.embed_top_k]
             ]
             proposals = collect_proposals(row.ctx, book, signals) + embed_cands
             ranked = resolver.fuse(row.ctx, proposals)
-            row.extras["proposals"] = sorted(
-                proposals, key=lambda item: item.score, reverse=True
-            )[:5]
+            row.extras["proposals"] = sorted(proposals, key=lambda item: item.score, reverse=True)[
+                : resolver.thresholds.embed_top_k
+            ]
             row.extras["ranked"] = ranked or list(row.extras["proposals"])
             concept_id, picked = resolver.decide(row.ctx, ranked)
             if concept_id and picked:
@@ -341,7 +346,7 @@ def _chat_pass(
     slot_timeout_sec: float,
     resolver: Resolver,
     index: dict[str, list[float]],
-    llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
+    llm_concurrency: int,
 ) -> None:
     if not _acquire(slots, "llm", slot_timeout_sec):
         log_event(
@@ -377,7 +382,14 @@ def _chat_pass(
                         row.ctx,
                         book.taxonomy,
                     )
-                    future = pool.submit(_ask_chat, chat, row.ctx, taxonomy, options)
+                    future = pool.submit(
+                        _ask_chat,
+                        chat,
+                        row.ctx,
+                        taxonomy,
+                        options,
+                        resolver.thresholds.embed_top_k,
+                    )
                     in_flight[future] = (next_i, row)
                     next_i += 1
 
@@ -449,6 +461,7 @@ def _ask_chat(
     ctx: RowContext,
     taxonomy: list[Concept],
     options: list[Candidate],
+    embed_top_k: int,
 ) -> str | None:
     allowed = {c.id for c in taxonomy}
     by_id = {c.id: c for c in taxonomy}
@@ -456,7 +469,7 @@ def _ask_chat(
         c.concept_id
         for c in options
         if c.concept_id in allowed and c.score >= 0.2
-    ][:TOP_K]
+    ][:embed_top_k]
     defs = []
     for cid in choices:
         concept = by_id.get(cid)
@@ -498,7 +511,11 @@ def _ask_chat(
     return str(concept_id)
 
 
-def _apply_calculation_checks(pending: list[_Pending], book: BookView) -> None:
+def _apply_calculation_checks(
+    pending: list[_Pending],
+    book: BookView,
+    thresholds: MappingThresholds,
+) -> None:
     for row in pending:
         concept_id = book.concepts.get(row.row_key)
         pattern = book.patterns.get(row.row_key)
@@ -530,7 +547,7 @@ def _apply_calculation_checks(pending: list[_Pending], book: BookView) -> None:
             picked = row.extras.get("picked")
             if picked is not None:
                 picked.score = max(0.0, picked.score - 0.08)
-                if picked.score >= ACCEPT_MIN:
+                if picked.score >= thresholds.concept_accept_min:
                     continue
         book.concepts.pop(row.row_key, None)
         row.extras["picked"] = None

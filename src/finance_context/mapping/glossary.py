@@ -125,7 +125,11 @@ def reconcile_label_memory(
     return out
 
 
-def learned_hits(rows: list) -> tuple[dict[MemoryKey, LabelHit], set[MemoryKey | LegacyKey]]:
+def learned_hits(
+    rows: list,
+    *,
+    embed_score_min: float,
+) -> tuple[dict[MemoryKey, LabelHit], set[MemoryKey | LegacyKey]]:
     """Agreeing triples, plus every coarse key this book must not leave behind.
 
     A second concept or an abstained fact row on the same triple omits it.
@@ -154,7 +158,9 @@ def learned_hits(rows: list) -> tuple[dict[MemoryKey, LabelHit], set[MemoryKey |
         if _group_abstained(grouped) or len(concepts) != 1:
             drop.add(key)
             continue
-        learnable = [hit for row in grouped if (hit := _learnable_hit(row)) is not None]
+        learnable = [
+            hit for row in grouped if (hit := _learnable_hit(row, embed_score_min)) is not None
+        ]
         learnable = [hit for hit in learnable if hit.concept_id == next(iter(concepts))]
         if not learnable:
             continue
@@ -291,13 +297,21 @@ def _group_abstained(rows: list) -> bool:
     return any(_abstained(row) for row in rows)
 
 
-def _learnable_hit(row: object) -> LabelHit | None:
+def _learnable_hit(row: object, embed_score_min: float) -> LabelHit | None:
     if _abstained(row):
         return None
     source = getattr(row, "source", None)
     if source not in _LEARN_SOURCES or getattr(row, "confidence", None) != "high":
         return None
-    score = 1.0 if source != "embed" else float(getattr(row, "score", None) or 0.85)
+    if source == "embed":
+        raw = getattr(row, "score", None)
+        if raw is None:
+            return None
+        score = float(raw)
+        if score < embed_score_min:
+            return None
+    else:
+        score = 1.0
     return LabelHit(str(row.concept_id), score, str(source))
 
 

@@ -207,10 +207,23 @@ class RowRelation(BaseModel):
     evidence: str | None = None
 
 
+class MappingThresholds(BaseModel):
+    """Cascade thresholds already read from Settings. This model has no defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    concept_accept_min: float
+    embed_score_min: float
+    embed_score_gap: float
+    embed_top_k: int
+    mint_score_max: float
+
+
 class MappingDocument(BaseModel):
     rows: list[MappedRow] = Field(default_factory=list)
     questions: list[MappingQuestion] = Field(default_factory=list)
     relations: list[RowRelation] = Field(default_factory=list)
+    thresholds: MappingThresholds | None = None
 
 
 class Candidate(BaseModel):

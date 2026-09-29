@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 from tests.helpers.ports import GrantSlots
 
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
@@ -65,6 +66,9 @@ def test_cfs_alias_crosswalks_pnl_revenue_to_receipts() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_key = {(row.sheet, row.label): row.concept_id for row in doc.rows}
     assert by_key[("P&L", "Gross revenues")] == "pnl.revenue"
@@ -125,6 +129,9 @@ def test_sources_equity_does_not_keep_bs_alias() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     by_key = {(row.sheet, row.label): row.concept_id for row in doc.rows}
     assert by_key[("Balance Sheet", "Equity")] == "bs.equity"
@@ -162,6 +169,9 @@ def test_construction_cost_under_uses_has_secondary_uses() -> None:
         embed=None,
         chat=None,
         slots=GrantSlots(),
+        thresholds=thresholds(),
+        slot_timeout_sec=slot_wait(),
+        llm_concurrency=llm_workers(),
     )
     row = doc.rows[0]
     assert row.concept_id == "cf.capex"
