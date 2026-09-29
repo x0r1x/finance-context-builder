@@ -9,12 +9,17 @@ from finance_context.layout.models import Layout
 from finance_context.mapping.cascade import ConceptIndex, map_layout
 from finance_context.mapping.glossary import (
     learn_from_rows,
+    learned_hits,
     load_glossary,
+    load_label_memory,
     reconcile_glossary,
+    reconcile_label_memory,
     save_glossary,
+    save_label_memory,
 )
+from finance_context.mapping.induce import concept_id_for_label, should_mint
 from finance_context.mapping.models import Concept, MappingDocument
-from finance_context.mapping.taxonomy import load_taxonomy
+from finance_context.mapping.taxonomy import load_taxonomy, remember_concept
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 from finance_context.settings import _DEFAULT_LLM_CONCURRENCY, _DEFAULT_LLM_SLOT_WAIT_SEC
@@ -35,6 +40,8 @@ def mapping_workbook(
     slot_timeout_sec: float = _DEFAULT_LLM_SLOT_WAIT_SEC,
     embedding_model: str = "",
     glossary_path: Path | None = None,
+    label_memory_path: Path | None = None,
+    runtime_taxonomy_path: Path | None = None,
     concept_index: ConceptIndex | None = None,
     llm_concurrency: int = _DEFAULT_LLM_CONCURRENCY,
     cells: list[dict] | None = None,
@@ -63,14 +70,22 @@ def mapping_workbook(
         else:
             edges = []
     tax = taxonomy or load_taxonomy()
-    snapshot = dict(load_glossary(glossary_path))
+    session = dict(load_glossary(glossary_path))
+    snapshot = dict(session)
     merged = dict(snapshot)
     merged.update(glossary or {})
     merged = reconcile_glossary(merged, tax)
+    memory = {
+        key: hit.concept_id
+        for key, hit in reconcile_label_memory(
+            load_label_memory(label_memory_path), tax
+        ).items()
+    }
     doc = map_layout(
         layout,
         taxonomy=tax,
         glossary=merged,
+        label_memory=memory,
         embed=embed,
         chat=chat,
         slots=slots,
@@ -82,7 +97,12 @@ def mapping_workbook(
         llm_concurrency=llm_concurrency,
         edges=edges,
     )
-    if glossary_path is not None:
+    if embed is not None and runtime_taxonomy_path is not None:
+        _mint_unmatched(doc, runtime_taxonomy_path)
+    if label_memory_path is not None:
+        hits, drop = learned_hits(doc.rows)
+        save_label_memory(label_memory_path, hits, drop)
+    elif glossary_path is not None:
         learned = learn_from_rows(merged, doc.rows)
         delta = {key: concept for key, concept in learned.items() if key not in snapshot}
         if delta:
@@ -97,3 +117,27 @@ def mapping_workbook(
         duration_ms=int((time.monotonic() - t0) * 1000),
     )
     return doc
+
+
+def _mint_unmatched(doc: MappingDocument, path: Path) -> None:
+    if not path.is_file():
+        return
+    for row in doc.rows:
+        if row.concept_id is not None or row.disposition != "abstained":
+            continue
+        best = row.alternatives[0][1] if row.alternatives else None
+        if not should_mint(best):
+            continue
+        concept_id = concept_id_for_label(row.label, row.parent_label or "", row.sheet)
+        if concept_id is None:
+            continue
+        prefix = concept_id.split(".", 1)[0]
+        remember_concept(
+            path,
+            Concept(id=concept_id, labels=[row.label], statements=[prefix]),
+        )
+        row.concept_id = concept_id
+        row.source = "embed"
+        row.confidence = "high"
+        row.score = 1.0
+        row.disposition = "mapped"

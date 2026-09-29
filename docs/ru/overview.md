@@ -21,7 +21,7 @@
 
 На вход — рабочая книга с уже посчитанными формулами. Отклоняются `.xls`, `.xlsb` и зашифрованные файлы.
 
-На выход джоба. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и `layout.json` лежат в `shared/books/{sha256}/` и одинаковы для любой сессии. `mapping.json`, context, graph, `meta.json`, `ir/graph_edges.parquet` и `ir/graph_index.parquet` лежат в `sessions/{session}/jobs/{sha256}/`: они зависят от glossary этой сессии.
+На выход джоба. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и `layout.json` лежат в `shared/books/{sha256}/` и одинаковы для любой сессии. `mapping.json`, context, graph, `meta.json`, `ir/graph_edges.parquet` и `ir/graph_index.parquet` лежат в `sessions/{session}/jobs/{sha256}/`. Общие `taxonomy.json` и `label_memory.json` лежат в `shared/` и не зависят от сессии.
 
 | Артефакт | Содержание |
 | --- | --- |
@@ -35,7 +35,7 @@
 
 Отвечающей LLM отдают срез одного наблюдения из этих артефактов, а не второй JSON джобы: [llm.md](llm.md).
 
-Между джобами одной сессии: `$DATA_DIR/sessions/{session}/glossary.json` (выученные high-confidence пары). Кэш эмбеддингов концептов общий: `$DATA_DIR/shared/embeddings/`. Formula IR и layout той же книги тоже общие: `$DATA_DIR/shared/books/{sha256}/`.
+Между всеми сессиями: `$DATA_DIR/shared/label_memory.json` (принятые пары с баллом) и `$DATA_DIR/shared/taxonomy.json` (склад концептов). Кэш эмбеддингов концептов общий: `$DATA_DIR/shared/embeddings/{имя модели эмбеддингов}-{отпечаток}.npz`. Это один вектор на `concept_id`, среднее фраз концепта, не средний вектор книги. Formula IR и layout той же книги тоже общие: `$DATA_DIR/shared/books/{sha256}/`. Старый `$DATA_DIR/sessions/{session}/glossary.json` ещё читается.
 
 ## Пайплайн
 
@@ -63,7 +63,7 @@ HTTP поднимает на каждую новую книгу отдельны
 
 ## Два рычага покрытия
 
-1. **Таксономия** (`src/finance_context/ontology/taxonomy.yaml`) — словарь смыслов, не решатель. Правится, когда появляется **новое** финансовое значение.
+1. **Таксономия** — склад `$DATA_DIR/shared/taxonomy.json`. Пустой файл один раз наполняется из `src/finance_context/ontology/taxonomy.yaml`. Дальше каскад читает склад. Новый id дописывается, только если ближайший концепт дальше 0.5 и строка не параметр (`Months per year`, `Thousand`, `On`, `Off`, голый `Total`). Id — префикс отчёта и нормализованный лейбл первого появления, и дальше он не переименовывается. Общая память хранит лейбл с ближайшей секцией и единицей (`money`, `rate`, `years` или пусто), поэтому P&L и CFS не склеиваются.
 2. **Каскад сигналов** — признаки (лейбл, секция, соседи, форма формулы, граф). Новый тип совпадения — новый `Signal`, не широкий `anti_labels` и не ветка «если лист = Cash_Receipts».
 
-Выученный glossary не заменяет yaml: он запоминает уже уверенные пары `(лейбл, родитель) → concept_id` для следующих книг той же сессии. Уже записанный ключ не сменяется. Другая сессия этот файл не читает.
+Общая память лейблов запоминает уже уверенные тройки: нормализованный лейбл, ближайшая секция и единица (`money`, `rate`, `years` или пусто) указывают на `concept_id` вместе с баллом. Балл строго выше заменяет концепт. Равный балл не заменяет. Эмбеддинг с `high` пишется, ответ модели не пишется. Второй концепт или воздержавшаяся строка на той же тройке стирает записанный ключ. Ключ `section_class` не пишется.

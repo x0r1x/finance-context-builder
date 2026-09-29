@@ -26,12 +26,24 @@ def cosine(a: list[float], b: list[float]) -> float:
     return float(np.dot(va, vb) / (na * nb))
 
 
+def _concept_phrases(concept: Concept, by_id: dict[str, Concept]) -> list[str]:
+    phrases = [label for label in concept.labels if label]
+    phrases.extend(alias for alias in concept.aliases if alias)
+    if concept.definition:
+        phrases.append(concept.definition)
+    parent = by_id.get(concept.broader or "")
+    if parent is not None and parent.labels:
+        phrases.append(parent.labels[0])
+    return phrases
+
+
 def concept_vectors(embed: EmbedPort, taxonomy: list[Concept]) -> dict[str, list[float]]:
+    by_id = {concept.id: concept for concept in taxonomy}
     labels: list[str] = []
     owners: list[str] = []
     for concept in taxonomy:
-        for label in concept.labels:
-            labels.append(label)
+        for phrase in _concept_phrases(concept, by_id):
+            labels.append(phrase)
             owners.append(concept.id)
     if not labels:
         return {}

@@ -17,7 +17,7 @@ from finance_context.layout.models import Layout
 from finance_context.layout.stage import layout_workbook
 from finance_context.mapping.models import MappingDocument
 from finance_context.mapping.stage import mapping_workbook
-from finance_context.mapping.taxonomy import load_taxonomy
+from finance_context.mapping.taxonomy import ensure_runtime_taxonomy
 from finance_context.mapping.vectors import TaxonomyPrefetch, taxonomy_digest
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
 from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
@@ -28,6 +28,8 @@ from finance_context.store.fs import file_lock, read_parquet, update_json
 from finance_context.store.paths import (
     embedding_cache_file,
     glossary_file,
+    label_memory_file,
+    runtime_taxonomy_file,
     session_job_dir,
     shared_book_dir,
 )
@@ -185,10 +187,11 @@ class Pipeline:
             layout = Layout.model_validate_json((book / "layout.json").read_text(encoding="utf-8"))
         set_stage("mapping")
         glossary_path = glossary_file(self.settings.data_dir, self.settings.session_id)
+        taxonomy = ensure_runtime_taxonomy(runtime_taxonomy_file(self.settings.data_dir))
         cache_path = embedding_cache_file(
             self.settings.data_dir,
             model=self.settings.embedding_model or "",
-            taxonomy_digest=taxonomy_digest(load_taxonomy()),
+            taxonomy_digest=taxonomy_digest(taxonomy),
         )
         mapping = _timed(
             "mapping",
@@ -197,10 +200,13 @@ class Pipeline:
                 embed=self.embed,
                 chat=self.chat,
                 slots=self.slots,
+                taxonomy=taxonomy,
                 cache_path=cache_path,
                 slot_timeout_sec=self.settings.llm_slot_wait_sec,
                 embedding_model=self.settings.embedding_model or "",
                 glossary_path=glossary_path,
+                label_memory_path=label_memory_file(self.settings.data_dir),
+                runtime_taxonomy_path=runtime_taxonomy_file(self.settings.data_dir),
                 concept_index=prefetch,
                 llm_concurrency=self.settings.llm_concurrency,
                 cells=ir_cells,
@@ -371,13 +377,14 @@ def _read_ir(dest_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
 def _start_taxonomy_prefetch(pipeline: Pipeline) -> TaxonomyPrefetch | None:
     if pipeline.embed is None:
         return None
+    taxonomy = ensure_runtime_taxonomy(runtime_taxonomy_file(pipeline.settings.data_dir))
     return TaxonomyPrefetch(
         pipeline.embed,
-        load_taxonomy(),
+        taxonomy,
         cache_path=embedding_cache_file(
             pipeline.settings.data_dir,
             model=pipeline.settings.embedding_model or "",
-            taxonomy_digest=taxonomy_digest(load_taxonomy()),
+            taxonomy_digest=taxonomy_digest(taxonomy),
         ),
         model=pipeline.settings.embedding_model or "",
     )

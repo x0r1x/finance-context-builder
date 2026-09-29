@@ -124,11 +124,11 @@ HTTP `error` codes:
 
 Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503.
 
-Learned high-confidence mappings persist in `$DATA_DIR/sessions/{session}/glossary.json` and are reused on later jobs in that session only. Another session does not read them. Taxonomy lives in `src/finance_context/ontology/taxonomy.yaml`. How to add a concept versus an alias, and how the cascade uses those fields: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows stay in the block with `disposition=excluded`. Unmapped business rows stay `abstained` with candidates instead of taking a nearest guess.
+Accepted rows live in `$DATA_DIR/shared/label_memory.json` and every session reads them. The key is the normalized label, the narrowest section (`section_path[-1]`, otherwise the parent), and the unit (`money`, `rate`, `years`, or empty). A strictly higher score replaces the concept. An equal score leaves the previous entry. A high-confidence embedding is stored there. A model answer is not. A second concept, or an abstained row on the same key, removes that entry. A `section_class` key is not stored. An old `sessions/{session}/glossary.json` is still read as a label-and-parent pair. The cascade loads taxonomy from `$DATA_DIR/shared/taxonomy.json`: an empty file is filled once from `src/finance_context/ontology/taxonomy.yaml`. A new id appears only when no concept is nearby and the row is not a parameter such as Months per year. How the fields and the cascade work: [docs/en/taxonomy.md](docs/en/taxonomy.md) and [docs/en/mapping.md](docs/en/mapping.md). Check/helper/flag rows stay in the block with `disposition=excluded`. Unmapped business rows stay `abstained` with candidates instead of taking a nearest guess.
 
 ## Data
 
-`data/shared/books/{sha256}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. `data/sessions/{session}/jobs/{sha256}/` holds mapping, context, graph, and that session's `glossary.json`. The session defaults to `local`.
+`data/shared/books/{sha256}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. Next to that, `data/shared/` holds `taxonomy.json`, `label_memory.json`, and the concept embedding cache `embeddings/`. `data/sessions/{session}/jobs/{sha256}/` holds that session's mapping, context, and graph. An old session `glossary.json` is still read. New pairs are not written there. The session defaults to `local`.
 
 At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2. `finance-context serve` starts one worker. Several API replicas on one data directory are not supported.
 
@@ -139,7 +139,7 @@ cp .env.example .env   # optional; LLM/embeddings may stay unset
 docker compose up --build
 ```
 
-Leave Compose running. The API is published only on `127.0.0.1:8080`. Shared book cache and per-session glossary, mapping, and publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`: taxonomy and mapping code are whatever was baked into the image — rebuild after ontology changes.
+Leave Compose running. The API is published only on `127.0.0.1:8080`. The shared book cache, taxonomy, label memory, and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`. An empty `data/shared/taxonomy.json` is copied once from the yaml in the image. A file that already exists is not overwritten from yaml.
 
 Loopback LLM URLs in `.env` (`http://127.0.0.1:1234/v1`) are rewritten to `host.docker.internal` inside the container so LM Studio on the host stays reachable. Keep the model server listening on all interfaces or on the host gateway, not only inside another isolated network.
 

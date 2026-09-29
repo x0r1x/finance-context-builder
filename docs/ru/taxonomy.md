@@ -2,9 +2,9 @@
 
 **Русский** · [English](../en/taxonomy.md)
 
-Канонические финансовые смыслы живут в [`src/finance_context/ontology/taxonomy.yaml`](../../src/finance_context/ontology/taxonomy.yaml). Загрузка: `load_taxonomy` → `validate_taxonomy` → `enrich_concept` (наследование фасетов).
+Каскад читает `$DATA_DIR/shared/taxonomy.json`. Пустой файл один раз наполняется из [`src/finance_context/ontology/taxonomy.yaml`](../../src/finance_context/ontology/taxonomy.yaml) (`load_taxonomy` → `validate_taxonomy` → `enrich_concept`, наследование фасетов). Уже существующий файл из yaml заново не копируется. Руками yaml после этого не пополняют.
 
-Таксономия — не словарь синонимов одной Excel-книги. Концепт добавляют, когда появляется **новое значение**. Новый лейбл того же значения — `labels` или `aliases`. Id концепта стабилен (SKOS); версионируется документ (`version`), а не ключ.
+Таксономия — не словарь синонимов одной Excel-книги. Новый id появляется в общем складе, когда у строки нет близкого концепта (ближайший косинус ниже 0.5) и это не параметр (`Months per year`, `Thousand`, `On`, `Off`, голый `Total`). Id — префикс отчёта и нормализованный лейбл первого появления, дальше не переименовывается. В общей памяти тот же лейбл хранится с ближайшей секцией и единицей (`money`, `rate`, `years` или пусто), поэтому P&L и CFS не склеиваются. Новый лейбл уже известного значения попадает в `shared/label_memory.json`, а не в новый id.
 
 Оси line item взяты из [FAST Standard 3.01](https://www.fast-standard.org/) и оформлены как атрибуты концепта, как `periodType` / `balance` в XBRL, а не как части составного ключа.
 
@@ -35,7 +35,7 @@ calculations:
 | Поле | Назначение |
 | --- | --- |
 | `id` | Стабильный ключ. Префикс задаёт default-фасеты |
-| `labels` | Канонические фразы для lexical и эмбеддингов |
+| `labels` | Канонические фразы для lexical и эмбеддингов. В вектор концепта входят также `aliases`, `definition` и первый лейбл `broader` |
 | `aliases` | Дополнительные фразы той же сущности (часто «как в книге») |
 | `broader` | Родитель в иерархии; SUM детей может унаследовать этот id |
 | `facets` | Оси FAST/XBRL: statement, nature, basis, direction, position, series, unit, period_type |
@@ -156,6 +156,6 @@ Structure на `SUM` ищет общий id детей, общий `broader` и�
 - Подстрока в `_semantic_ratio` (`ratio` внутри `generation`).
 - Копирование P&L-id на Cashflow Statement через structure alias без crosswalk (`pnl.tax` вместо `cf.tax_paid`).
 - `statement=cf` на весь лист Cashflow, из-за которого `Cash in hand` / share premium уезжают с `bs.*`.
-- Ручная запись в `sessions/{session}/glossary.json` вместо yaml. Это память одной сессии, не общий словарь и не файл в git. Уже записанный ключ следующий джоб не сменяет; новый ключ дописывается.
+- Ручная запись в `sessions/{session}/glossary.json`. Новые пары пишутся в общий `shared/label_memory.json`. Более высокий балл заменяет концепт, равный не заменяет. Файл сессии ещё читается и в git не входит.
 - Exclude для «непонятной» бизнес-строки.
 - Дублирование id с разным регистром или синонимы `cf.receipts` / `cf.inflows` без `broader`.

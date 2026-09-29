@@ -21,7 +21,15 @@ _LOGGER = logging.getLogger(__name__)
 
 def taxonomy_digest(taxonomy: list[Concept]) -> str:
     payload = json.dumps(
-        [{"id": c.id, "labels": list(c.labels), "definition": c.definition} for c in taxonomy],
+        [
+            {
+                "id": c.id,
+                "labels": list(c.labels),
+                "aliases": list(c.aliases),
+                "definition": c.definition,
+            }
+            for c in taxonomy
+        ],
         ensure_ascii=False,
         separators=(",", ":"),
     )

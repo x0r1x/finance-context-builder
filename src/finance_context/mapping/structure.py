@@ -18,7 +18,7 @@ from finance_context.mapping.models import (
     RowRelation,
     ValueKind,
 )
-from finance_context.mapping.normalize import normalize_label
+from finance_context.mapping.normalize import memory_unit, normalize_label
 from finance_context.mapping.patterns import pattern_matches
 from finance_context.mapping.roles import article_role
 from finance_context.mapping.rowfacets import infer_row_facets
@@ -156,6 +156,7 @@ def build_row_context(
             value_kind = "count"
         if _lease_rate_input(layout_row.label, book, sheet, layout_row.row, block, value_kind):
             value_kind = "rate"
+    row_memory_unit = memory_unit(_unit_text(book, sheet, layout_row), value_kind)
     section = " / ".join(layout_row.section_path)
     query = " | ".join(
         part
@@ -192,6 +193,7 @@ def build_row_context(
         anchor_col=anchor_col,
         prev_labels=prev_labels,
         next_labels=next_labels,
+        memory_unit=row_memory_unit,
     )
     ctx.inferred_facets = infer_row_facets(ctx, pattern_kind=pattern.kind)
     return ctx
@@ -226,6 +228,17 @@ def _value_kind(
     if percents and percents >= max(1, numbers // 2):
         return "rate"
     return "money"
+
+
+def _unit_text(book: BookView, sheet: str, layout_row: LayoutRow) -> str | None:
+    for item in layout_row.cells:
+        if item.role != "unit":
+            continue
+        cell = book.cells.get((sheet, layout_row.row, item.col))
+        text = "" if cell is None else str(cell.get("cached_value") or "")
+        if text.strip():
+            return text
+    return None
 
 
 def _unit_from_row_cells(book: BookView, sheet: str, layout_row: LayoutRow) -> ValueKind | None:

@@ -28,7 +28,7 @@ Excluded rows (check / helper / flag / technical) are not in `unmapped.json`. Th
 
 | Class | Action |
 | --- | --- |
-| New financial value | A concept in [taxonomy.yaml](taxonomy.md) + gold |
+| New financial value | No nearby concept: the id is appended to `shared/taxonomy.json`. The same phrase is stored in `shared/label_memory.json` with its section and unit. See [taxonomy.md](taxonomy.md) |
 | Same meaning, different label / section | `labels` / `aliases` / `section_hints` / `skip_concept` / `unless`; not a wide `anti_labels` |
 | Child under CAPEX/OPEX/Revenue, but it is years / MW / an index | `unless` on the parent rollup + `facets.unit`, not the parent's money id |
 | Neighbors and the graph already hint (lease next to opex) | That is a structure feature; do not glue on a rate alias |

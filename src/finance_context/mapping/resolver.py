@@ -135,6 +135,8 @@ def to_mapped(
         semantic_identity=identity,
         reporting_roles=reporting_roles,
         cash_semantics=cash,
+        section_path=list(ctx.section_path),
+        memory_unit=ctx.memory_unit if ctx.memory_unit in {"money", "rate", "years"} else "",
     )
 
 

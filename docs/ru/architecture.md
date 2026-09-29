@@ -78,7 +78,7 @@ flowchart TD
 
 | Сигнал | Роль |
 | --- | --- |
-| `glossary` | Выученная пара `(normalized_label, parent) → concept_id` из `data/sessions/{session}/glossary.json`. |
+| `glossary` | Тройка `(normalized_label, section, unit) → concept_id` из общего `data/shared/label_memory.json`. `section` — ближайшая секция, `unit` — `money`, `rate`, `years` или пусто. Старый файл сессии ещё читается как пара. |
 | `structure` | Граф формул: alias-копия между листами, `SUM` дочерних строк, когда замаплен **каждый** член (общий id или `broader`), поступления минус выплаты, roll-forward, proration против настоящего ratio. Также лейблы соседей ±2 и dependents уровня строки из `ir/cell_edges.parquet`, с запасным `ir/edges.parquet` (строка, которая питает уже замапленные `pnl.opex` / `cf.uses`, получает prior категории). |
 | `lexical` | Лейблы таксономии и устойчивые фразы. |
 | `embed` | Dense retrieve по лейблам и определениям концептов; принятие только при cosine gap. |
@@ -100,7 +100,7 @@ Structure — главный сигнал, когда формула одноз�
 
 ### Выученный glossary
 
-High-confidence попадания `glossary` / `rule` / `structure` / `lexical` после джоба дописываются в `DATA_DIR/sessions/{session}/glossary.json`. Следующая книга этой сессии их переиспользует. Другая сессия — нет. Догадки chat не сохраняются. Таксономию правят, когда появляется **новый смысл** (`bs.nwc`), а не на каждый новый лейбл.
+High-confidence попадания `glossary` / `rule` / `structure` / `lexical` и embed при косинусе не ниже 0.85 после джоба пишутся в `DATA_DIR/shared/label_memory.json`. У записи есть балл. Балл строго выше заменяет концепт. Равный балл не заменяет. Следующая книга любой сессии читает этот файл. Догадки chat не сохраняются. Новый id дописывается в `DATA_DIR/shared/taxonomy.json`, когда рядом нет концепта. Yaml остаётся только семенем первого пустого склада.
 
 ### Статус
 
@@ -110,7 +110,7 @@ High-confidence попадания `glossary` / `rule` / `structure` / `lexical`
 
 ## Хранение
 
-`data/shared/books/{job_id}/` хранит source, raw, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и layout. `data/sessions/{session}/jobs/{job_id}/` хранит mapping, context, graph, meta, а также `ir/graph_edges.parquet` и `ir/graph_index.parquet`, потому что они зависят от mapping. Выученные теги: `data/sessions/{session}/glossary.json`, только для этой сессии. Кэш эмбеддингов таксономии: `data/shared/embeddings/{model}-{taxhash}.npz`. Имя сессии — `SESSION_ID`, по умолчанию `local`. Parquet пишет PyArrow. Прогон держит только что собранные списки строк и читает `ir/*.parquet` снова только в другом процессе, когда `ir/compile.json` всё ещё совпадает. Адаптер хранилища можно заменить на object storage, не меняя пайплайн.
+`data/shared/books/{job_id}/` хранит source, raw, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и layout. `data/sessions/{session}/jobs/{job_id}/` хранит mapping, context, graph, meta, а также `ir/graph_edges.parquet` и `ir/graph_index.parquet`, потому что они зависят от mapping. Выученные теги: `data/shared/label_memory.json`, для всех сессий. Старый `data/sessions/{session}/glossary.json` ещё читается. Склад концептов: `data/shared/taxonomy.json`. Кэш эмбеддингов таксономии: `data/shared/embeddings/{имя модели эмбеддингов}-{taxhash}.npz`, один вектор на `concept_id`. Имя сессии — `SESSION_ID`, по умолчанию `local`. Parquet пишет PyArrow. Прогон держит только что собранные списки строк и читает `ir/*.parquet` снова только в другом процессе, когда `ir/compile.json` всё ещё совпадает. Адаптер хранилища можно заменить на object storage, не меняя пайплайн.
 
 ## API
 
