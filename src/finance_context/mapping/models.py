@@ -154,6 +154,16 @@ class ConceptPick(BaseModel):
     concept_id: str
 
 
+class ExtensionDecision(BaseModel):
+    """Closed mint answer. The model does not choose or invent a concept id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["extend", "skip"]
+    broader: str | None = None
+    definition: str | None = None
+
+
 class MappedRow(BaseModel):
     row_key: str
     sheet: str

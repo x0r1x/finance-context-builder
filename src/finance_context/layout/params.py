@@ -117,10 +117,20 @@ def attach_stub_cells(
 
 
 def is_unit_text(text: str | None) -> bool:
-    blob = (text or "").strip()
-    if not blob:
+    from finance_context.context.measure import unit_caption
+
+    caption = unit_caption(text)
+    if caption is None:
         return False
-    return bool(_UNIT_TEXT.fullmatch(blob) or _UNIT_TOKEN.fullmatch(blob))
+    if caption.casefold() == "index":
+        return True
+    return bool(_UNIT_TEXT.fullmatch(caption) or _UNIT_TOKEN.fullmatch(caption))
+
+
+def _unit_text_hides_title(text: str) -> bool:
+    """A fact unit in a cell is not a value-column title. ``Index`` names the column."""
+    stripped = text.strip()
+    return bool(stripped) and stripped.casefold() != "index" and is_unit_text(stripped)
 
 
 def column_header_text(
@@ -152,7 +162,7 @@ def _caption(cell: dict | None, text: str | None) -> str | None:
     if not text:
         return None
     stripped = text.strip()
-    if _is_number(stripped) or is_unit_text(stripped) or len(stripped) > 24:
+    if _is_number(stripped) or _unit_text_hides_title(stripped) or len(stripped) > 24:
         return None
     if cell is not None and cell.get("formula_raw"):
         return None
@@ -335,7 +345,7 @@ def _scenario_block(
         text = _text(cell, date1904)
         if col <= max(label_col, header_row.label_col or 0) or col >= min(span):
             continue
-        if text and not _is_number(text) and not is_unit_text(text):
+        if text and not _is_number(text) and not _unit_text_hides_title(text):
             headers.append(
                 AxisHeader(col=col, text=text.strip(), role="value", period_key="value")
             )
@@ -362,14 +372,19 @@ def is_scenario_selector_label(text: str | None) -> bool:
 
 
 def unit_kind_from_text(text: str | None) -> str | None:
-    blob = (text or "").strip().casefold()
-    if not blob:
+    from finance_context.context.measure import currency_code_from_text, unit_caption
+
+    caption = unit_caption(text)
+    if caption is None:
         return None
+    blob = caption.casefold()
+    if blob == "index":
+        return "ratio"
+    if blob in {"#", "№"}:
+        return "count"
     if "%" in blob or blob in {"per year", "of margin"}:
         return "rate"
-    from finance_context.context.measure import currency_code_from_text
-
-    if currency_code_from_text(text):
+    if currency_code_from_text(caption):
         return "money"
     if any(token in blob for token in ("year", "month", "day", "veh", "mw", "count")):
         return "count"

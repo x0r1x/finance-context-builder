@@ -89,6 +89,24 @@ def enrich_concept(
     )
 
 
+def exact_label_respects_unit(memory_unit: str, concept: Concept) -> bool:
+    """A detected unit keeps an exact label only inside that data type.
+
+    An empty unit does not block. A years caption stays on a count concept:
+    the mapper already reads year, month, and day as a count.
+    """
+    token = (memory_unit or "").strip()
+    if not token:
+        return True
+    kind = concept.value_kind or concept.facets.unit or "money"
+    if token == "years":
+        return kind in {"count", "years"}
+    allowed = _COMPATIBLE.get(token)  # type: ignore[call-overload]
+    if allowed is None:
+        return True
+    return kind in allowed
+
+
 def prune_candidates(
     candidates: list[Candidate],
     ctx: RowContext,

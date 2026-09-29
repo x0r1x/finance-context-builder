@@ -275,6 +275,7 @@ class Pipeline:
                 stage="done",
                 graph=graph,
                 edges=edges,
+                concepts=taxonomy,
             ),
         )
         _write_sorted_json(dest_dir / "context.json", doc.model_dump(mode="json"))

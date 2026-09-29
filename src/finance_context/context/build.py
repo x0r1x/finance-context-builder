@@ -92,7 +92,10 @@ def build_context(
     stage: str = "done",
     graph: GraphPointer | None = None,
     edges: list[dict] | None = None,
+    concepts: list | None = None,
 ) -> ContextDocument:
+    catalog = list(concepts) if concepts is not None else load_taxonomy()
+    by_concept = {item.id: item for item in catalog}
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
     axes, timeline_warnings = build_axes(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
@@ -182,6 +185,7 @@ def build_context(
                     parent=parent,
                     number_formats=formats,
                     static=static,
+                    concepts=by_concept,
                 )
                 rolled = roll_time.get(row_key)
                 if rolled is not None and not static:
@@ -276,6 +280,7 @@ def build_context(
                     hints=hints,
                     role_cells=role_cells,
                     series_unit=series_unit,
+                    concepts=by_concept,
                     context_role=context_role,
                     secondary_concepts=secondary,
                     semantic_identity=identity,
@@ -366,7 +371,9 @@ def build_context(
         abstract=int(counts["abstract"]),
         unmapped_series=unmapped_series,
     )
-    stats["mapping_quality"] = assess_mapping_quality(document_rows, blocks)
+    stats["mapping_quality"] = assess_mapping_quality(
+        document_rows, blocks, concepts=catalog
+    )
     return ContextDocument(
         schema_version=SCHEMA_VERSION,
         meta=meta,
@@ -522,6 +529,7 @@ def _row_for_layout(
     hints: RowHints,
     role_cells: list[RoleCell],
     series_unit: str | None,
+    concepts: dict | None = None,
     period_phases: dict[str, str | None] | None = None,
     context_role: str | None = None,
     secondary_concepts: list[str] | None = None,
@@ -575,7 +583,7 @@ def _row_for_layout(
         statement=hints.statement,
         nature=hints.nature,
         time_semantics=hints.time_semantics,
-        direction=_concept_direction(concept_id),
+        direction=_concept_direction(concept_id, concepts),
     )
     if hints.unit == "rate":
         measure = Measure(unit="rate", sign=measure.sign)
@@ -772,6 +780,7 @@ def _hints_for(
     parent: str | None = None,
     number_formats: list[str] | None = None,
     static: bool = False,
+    concepts: dict | None = None,
 ) -> RowHints:
     concept_id = mapped.concept_id if mapped else None
     blob, tokens = _hint_blob_and_tokens(layout_row.label or "")
@@ -807,7 +816,7 @@ def _hints_for(
         nature = nature or "balance"
     if time_semantics == "flow" and nature == "balance":
         time_semantics = "stock"
-    if time_semantics == "flow" and _concept_period_type(concept_id) == "instant":
+    if time_semantics == "flow" and _concept_period_type(concept_id, concepts) == "instant":
         time_semantics = "instant" if static else "stock"
     elif static and time_semantics in {None, "flow", "stock"}:
         time_semantics = "instant"
@@ -819,7 +828,7 @@ def _hints_for(
         statement=statement,
         nature=nature,
         time_semantics=time_semantics,
-        direction=_concept_direction(concept_id),
+        direction=_concept_direction(concept_id, concepts),
     )
     if measure.unit == "money" and _percent_formatted(number_formats or []):
         measure = Measure(unit="rate", sign=measure.sign)
@@ -839,13 +848,9 @@ def _hints_for(
     )
 
 
-def _concept_direction(concept_id: str | None) -> str | None:
-    if not concept_id:
-        return None
-    for concept in load_taxonomy():
-        if concept.id == concept_id:
-            return concept.facets.direction
-    return None
+def _concept_direction(concept_id: str | None, concepts: dict | None = None) -> str | None:
+    concept = _concept_from(concept_id, concepts)
+    return None if concept is None else concept.facets.direction
 
 
 def _hint_blob_and_tokens(label: str) -> tuple[str, set[str]]:
@@ -998,10 +1003,17 @@ def _is_index_unit(unit_text: str | None) -> bool:
     return (unit_text or "").strip().casefold() == "index"
 
 
-def _concept_period_type(concept_id: str | None) -> str | None:
+def _concept_period_type(concept_id: str | None, concepts: dict | None = None) -> str | None:
+    concept = _concept_from(concept_id, concepts)
+    return None if concept is None else concept.facets.period_type
+
+
+def _concept_from(concept_id: str | None, concepts: dict | None):
     if not concept_id:
         return None
-    for concept in load_taxonomy():
-        if concept.id == concept_id:
-            return concept.facets.period_type
-    return None
+    if concepts is None:
+        for concept in load_taxonomy():
+            if concept.id == concept_id:
+                return concept
+        return None
+    return concepts.get(concept_id)

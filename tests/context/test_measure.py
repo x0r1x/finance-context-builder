@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from finance_context.context.measure import parse_measure
+from finance_context.layout.params import unit_kind_from_text
 
 
 def test_label_k_pound_is_money_gbp_thousands() -> None:
@@ -148,7 +149,35 @@ def test_currency_per_energy_is_a_price() -> None:
 def test_multiple_and_date_units() -> None:
     assert parse_measure("x").unit == "ratio"
     assert parse_measure("Date").unit == "date"
+    assert parse_measure("#").unit == "count"
+    assert parse_measure("№").unit == "count"
+    assert unit_kind_from_text("#") == "count"
+    assert unit_kind_from_text("№") == "count"
 
 
 def test_months_per_year_is_a_count_not_a_rate() -> None:
     assert parse_measure(None, "Months per year").unit == "count"
+
+
+def test_index_and_per_annum_captions_are_cell_units() -> None:
+    from finance_context.layout.params import is_unit_text
+
+    assert is_unit_text("MWh p.a.")
+    assert is_unit_text("MWh pa")
+    assert is_unit_text("MWh per annum")
+    assert is_unit_text("%p.a.")
+    assert is_unit_text("Index")
+    assert is_unit_text("INDEX")
+    assert not is_unit_text("Base Index")
+    assert not is_unit_text("p.a.")
+    assert parse_measure("MWh p.a.").unit == "count"
+    assert parse_measure("EUR p.a.").unit == "money"
+    assert parse_measure("% p.a.").unit == "rate"
+    assert parse_measure("Index").unit == "ratio"
+    assert parse_measure("Base Index").unit is None
+    assert parse_measure("MWh p.a.", number_formats=["0.00%"]).unit == "count"
+    assert unit_kind_from_text("MWh p.a.") == "count"
+    assert unit_kind_from_text("Index") == "ratio"
+    assert unit_kind_from_text("years") == "count"
+    assert parse_measure("EUR/MWh").unit == "price"
+    assert parse_measure("#").unit == "count"

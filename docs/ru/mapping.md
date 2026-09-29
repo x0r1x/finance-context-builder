@@ -197,10 +197,10 @@ Top-3 `candidates` пишутся и при abstain: если prune опусто
 - **content completeness** — строки блоков / layout rows; должна быть 1.0;
 - **concept coverage** — доля annotatable (mapped + abstained, без excluded) с принятым концептом. Это покрытие слота `concept_id`, не семантическая полнота; при нуле abstain значение равно 1.0;
 - **mapping quality** — проверки принятых строк, объект `mapping_stats.mapping_quality`:
-  - `label_coverage` — непустой лейбл совпадает с `labels` / `aliases` / `exact_labels` концепта или evidence содержит `label matches`;
+  - `label_coverage` — непустой лейбл или заголовок секции совпадает с концептом или его парой отчёта, роль презентации (начало, конец, итог, balance b/f, balance c/f) подтверждена evidence, либо evidence содержит `label matches`;
   - `semantic_coverage` — есть `semantic_identity` и `cash_semantics`; на CFS revenue/opex/tax/interest стоят денежные близнецы, а identity хранит экономический `pnl.*`, если лейбл его называет; `bs.*` — stock и время `stock|bop|eop`; capitalized interest — `noncash`; `cf.repayment` — outflow и stock `bs.debt` в том же блоке; начисление и выплата одного family не схлопываются в один `concept_id`;
-  - `unit_coverage` — `hints.unit` совпадает с единицей концепта (`*_rate` и `facets.unit=rate` → rate, `pnl.volume` → count, денежные pnl/cf/bs → money, длительности → years);
-  - `temporal_coverage` — opening → `bop`, closing → `eop`, balance/`bs.*` не `flow`, rate-концепт → `rate`;
+  - `unit_coverage` — `hints.unit` совпадает с единицей концепта. Ставка и коэффициент — одна семья pure, подсказка years подходит к `count`, подпись ячейки `index` и хвост `p.a.` читаются как единица этой ячейки, пустая ячейка не проходит. Id концепта ожидаемую единицу не назначает (`pnl.volume` → count, денежные pnl/cf/bs/debt → money). Концепт без объявленной единицы вне этих отчётов не считается деньгами;
+  - `temporal_coverage` — opening → `bop`, closing → `eop`, balance/`bs.*` не `flow`; ratio хранит свой период (`stock`, `instant`, `flow`); instant-концепт хранит `instant` или `stock`; rate-концепт без instant → `rate`;
   - `formula_coverage` — у строки с формулой есть fingerprint (`formula`); ряд значений — кэш, отдельный A1 на ячейку в context не копируется (нет таких строк → 1.0). Если по периодным колонкам шаблона нет, fingerprint берётся из скаляра слева от оси;
   - `confidence_threshold_passed` — нет провалов semantic-проверок, у каждой принятой строки `confidence=high` и `score >= 0.82`.
 - **selective risk** — ошибки среди **принятых** маппингов (abstain в риск не входит);

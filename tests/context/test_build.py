@@ -10,7 +10,7 @@ from finance_context.layout.models import (
     RowCell,
     SheetLayout,
 )
-from finance_context.mapping.models import MappedRow, MappingDocument
+from finance_context.mapping.models import Concept, Facets, MappedRow, MappingDocument
 from finance_context.models.context import GraphPointer
 
 
@@ -306,6 +306,82 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert quality.label_coverage == 1.0
     assert quality.semantic_coverage == 1.0
     assert quality.confidence_threshold_passed is True
+
+
+def test_passed_catalog_scores_a_minted_label_and_its_facets() -> None:
+    directed = Concept(
+        id="ops.site-insurance",
+        labels=["Site insurance"],
+        broader="pnl.opex",
+        facets=Facets(statement="pnl", unit="money", direction="outflow"),
+    )
+    instant = directed.model_copy(
+        update={"facets": Facets(statement="pnl", unit="money", period_type="instant")}
+    )
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="CF",
+                blocks=[
+                    Block(
+                        block_id="CF!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="CF!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(
+                                    col=2, text="2023", role="historical", period_key="2023"
+                                )
+                            ],
+                        ),
+                        rows=[LayoutRow(row=2, label="Site insurance", kind="fact")],
+                    )
+                ],
+            )
+        ]
+    )
+    mapping = MappingDocument(
+        rows=[
+            MappedRow(
+                row_key="CF|2|CF!r1",
+                sheet="CF",
+                row=2,
+                block_id="CF!r1",
+                label="Site insurance",
+                concept_id="ops.site-insurance",
+                article_role="calculation",
+                source="embed",
+                confidence="high",
+                score=1.0,
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 2,
+            "addr": "B2",
+            "formula_raw": None,
+            "cached_value": "10",
+        }
+    ]
+    kwargs = dict(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF"}]},
+        cells=cells,
+        layout=layout,
+        mapping=mapping,
+    )
+    without = build_context(**kwargs)
+    with_direction = build_context(**kwargs, concepts=[directed])
+    with_instant = build_context(**kwargs, concepts=[instant])
+    assert without.mapping_stats.mapping_quality.label_coverage == 0.0
+    assert without.blocks[0].rows[0].hints.time_semantics == "flow"
+    assert with_direction.mapping_stats.mapping_quality.label_coverage == 1.0
+    assert with_direction.blocks[0].rows[0].hints.sign == "outflow"
+    assert with_instant.blocks[0].rows[0].hints.time_semantics == "stock"
 
 
 def test_zero_cached_formula_is_not_missing() -> None:

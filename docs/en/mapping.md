@@ -197,10 +197,10 @@ In `mapping.json` the decision lives in `source` (`glossary`, `rule`, `lexical`,
 - **content completeness** — block rows / layout rows; must be 1.0;
 - **concept coverage** — share of annotatable rows (mapped + abstained, excluding excluded) with an accepted concept. This is coverage of the `concept_id` slot, not semantic completeness; with zero abstains the value is 1.0;
 - **mapping quality** — checks of accepted rows, the object `mapping_stats.mapping_quality`:
-  - `label_coverage` — a non-empty label matches the concept's `labels` / `aliases` / `exact_labels`, or evidence contains `label matches`;
+  - `label_coverage` — a non-empty label or a section heading matches the concept or its statement twin, a presentation role (opening, closing, total, balance b/f, balance c/f) is backed by its evidence, or evidence contains `label matches`;
   - `semantic_coverage` — `semantic_identity` and `cash_semantics` are present; on CFS, revenue/opex/tax/interest are the cash twins, and identity keeps the economic `pnl.*` when the label names it; `bs.*` is stock and time `stock|bop|eop`; capitalized interest is `noncash`; `cf.repayment` is an outflow and stock `bs.debt` is in the same block; an accrual and a payment of one family are not collapsed into one `concept_id`;
-  - `unit_coverage` — `hints.unit` matches the concept unit (`*_rate` and `facets.unit=rate` → rate, `pnl.volume` → count, money pnl/cf/bs → money, durations → years);
-  - `temporal_coverage` — opening → `bop`, closing → `eop`, balance/`bs.*` is not `flow`, a rate concept → `rate`;
+  - `unit_coverage` — `hints.unit` matches the concept unit. Rate and ratio are one pure family, a years hint satisfies `count`, a cell caption `index` and a trailing `p.a.` are read as that cell's unit, and an empty cell does not pass. The concept id does not assign the expected unit (`pnl.volume` → count, money pnl/cf/bs/debt → money). A concept with no declared unit outside those statements is not scored as money;
+  - `temporal_coverage` — opening → `bop`, closing → `eop`, balance/`bs.*` is not `flow`; a ratio keeps its period (`stock`, `instant`, `flow`); an instant concept keeps `instant` or `stock`; a rate concept that is not instant → `rate`;
   - `formula_coverage` — a row with a formula has a fingerprint (`formula`); the value series is the cache, and a separate A1 per cell is not copied into context (no such rows → 1.0). If the period columns have no template, the fingerprint is taken from the scalar left of the axis;
   - `confidence_threshold_passed` — no semantic-check failures, and every accepted row has `confidence=high` and `score >= 0.82`.
 - **selective risk** — errors among **accepted** mappings (abstain is not in the risk);

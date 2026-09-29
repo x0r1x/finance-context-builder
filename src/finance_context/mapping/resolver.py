@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from finance_context.mapping.facets import prune_candidates
+from finance_context.mapping.facets import exact_label_respects_unit, prune_candidates
 from finance_context.mapping.knn import COSINE_GAP, COSINE_MIN, TOP_K
 from finance_context.mapping.models import (
     Candidate,
@@ -190,6 +190,9 @@ def _apply_guards(
                 return ranked
             forced_id = concept.id
     if not forced_id:
+        return ranked
+    concept = taxonomy.get(forced_id)
+    if concept is not None and not exact_label_respects_unit(ctx.memory_unit, concept):
         return ranked
     forced = [c for c in ranked if c.concept_id == forced_id]
     if forced:

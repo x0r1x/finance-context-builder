@@ -132,6 +132,47 @@ def test_cpi_index_is_a_level_and_the_rate_stays_a_rate() -> None:
     assert rate_hints.unit == "rate"
 
 
+def test_percent_format_replaces_only_a_money_caption() -> None:
+    generation = LayoutRow(row=351, label="Net generation", kind="fact")
+    mapped_generation = MappedRow(
+        row_key="PF|351|b",
+        sheet="PF Model",
+        row=351,
+        block_id="b",
+        label=generation.label,
+        concept_id="ops.generation",
+        article_role="assumption",
+        source="rule",
+    )
+    energy = _hints_for(
+        mapped_generation,
+        generation,
+        "MWh p.a.",
+        sheet="PF Model",
+        number_formats=["0.00%"],
+    )
+    assert energy.unit == "count"
+    revenue = LayoutRow(row=10, label="Revenue", kind="fact")
+    mapped_revenue = MappedRow(
+        row_key="PL|10|b",
+        sheet="P&L",
+        row=10,
+        block_id="b",
+        label=revenue.label,
+        concept_id="pnl.revenue",
+        article_role="database_like",
+        source="rule",
+    )
+    money = _hints_for(
+        mapped_revenue,
+        revenue,
+        "EUR'000",
+        sheet="P&L",
+        number_formats=["0.00%"],
+    )
+    assert money.unit == "rate"
+
+
 def test_k_pound_in_label_sets_money_gbp() -> None:
     row = LayoutRow(row=10, label="Revenue k£", kind="fact")
     mapped = MappedRow(

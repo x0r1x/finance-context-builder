@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+from finance_context.mapping.glossary import _STATEMENT_PAIRS
 from finance_context.mapping.normalize import normalize_label
 from finance_context.mapping.resolver import ACCEPT_MIN
 from finance_context.mapping.statement import is_cashflow_context
-from finance_context.mapping.taxonomy import load_taxonomy
+from finance_context.mapping.taxonomy import load_taxonomy, seed_authored_units
 
 _PNL_ON_CASHFLOW = {"pnl.revenue", "pnl.opex", "pnl.tax", "pnl.interest"}
 _CASH_TWINS = {
@@ -39,12 +41,8 @@ _FAMILY = {
     "pnl.interest": "interest",
     "cf.interest_paid": "interest",
 }
-_DURATION_IDS = {
-    "ops.lifetime",
-    "ops.concession_duration",
-    "ops.operating_period",
-    "ops.construction_period",
-}
+_STATEMENT_PREFIXES = {"pnl", "cf", "bs", "debt"}
+_PURE_UNITS = frozenset({"rate", "ratio"})
 _STOCK_TIME = {"stock", "bop", "eop", "instant"}
 
 
@@ -274,7 +272,7 @@ def mapping_quality_metrics(
     formula_rows = [row for row in mapped if _formula_cells(row)]
     return {
         "label_coverage": _rate(
-            mapped, lambda row: _label_supported(row, catalog.get(row.concept_id))
+            mapped, lambda row: _label_supported(row, catalog.get(row.concept_id), catalog)
         ),
         "semantic_coverage": _rate(mapped, lambda row: id(row) not in semantic_fail),
         "unit_coverage": _rate(mapped, lambda row: _unit_ok(row, catalog.get(row.concept_id))),
@@ -322,7 +320,29 @@ def _hint(row: QualityRow, name: str) -> Any:
     return getattr(hints, name, None)
 
 
-def _label_supported(row: QualityRow, concept: Any) -> bool:
+_STEM = {
+    "operational": "operating",
+    "operations": "operating",
+    "expenditure": "expense",
+    "expenditures": "expense",
+    "expenses": "expense",
+    "costs": "cost",
+    "revenues": "revenue",
+    "dividends": "dividend",
+}
+_ROLE_LABELS = {
+    "total",
+    "balance b/f",
+    "balance c/f",
+    "brought forward",
+    "carried forward",
+    "opening",
+    "closing",
+    "additions",
+}
+
+
+def _label_supported(row: QualityRow, concept: Any, catalog: dict[str, Any]) -> bool:
     label = (row.label or "").strip()
     if not label:
         return False
@@ -331,19 +351,98 @@ def _label_supported(row: QualityRow, concept: Any) -> bool:
         return True
     if concept is None:
         return False
-    normalized = normalize_label(label)
-    phrases = [
-        *getattr(concept, "labels", []),
-        *getattr(concept, "aliases", []),
-        *getattr(concept, "exact_labels", []),
-    ]
-    for phrase in phrases:
-        if _phrase_matches(normalized, normalize_label(phrase)):
+    if _legacy_phrase_supported(label, concept):
+        return True
+    label_tokens = _support_tokens(label)
+    if any(_phrase_contains(label_tokens, _support_tokens(phrase)) for phrase in _phrases(concept)):
+        return True
+    if _role_supported(label, evidence):
+        return True
+    concept_id = str(getattr(concept, "id", "") or "")
+    if _names_statement_twin(label_tokens, row.label_path, concept_id, catalog):
+        return True
+    foreign = _foreign_standard_id(label_tokens, concept_id, catalog)
+    if foreign and not _statement_pair(concept_id, foreign):
+        return False
+    return any(
+        _heading_supports(_support_tokens(heading), concept)
+        for heading in row.label_path
+        if heading
+    )
+
+
+def _role_supported(label: str, evidence: str) -> bool:
+    key = re.sub(r"\s+", " ", label.casefold().replace("&", " and ")).strip()
+    if key not in _ROLE_LABELS:
+        return False
+    folded = evidence.casefold()
+    if "opening/closing" in folded or "roll-forward" in folded or "total of section" in folded:
+        return True
+    return key == "total" and folded.startswith("sum of")
+
+
+def _names_statement_twin(
+    label_tokens: list[str],
+    label_path: list[str],
+    concept_id: str,
+    catalog: dict[str, Any],
+) -> bool:
+    surfaces = [label_tokens]
+    surfaces.extend(_support_tokens(heading) for heading in label_path if heading)
+    for twin_id in _twin_ids(concept_id):
+        twin = catalog.get(twin_id)
+        if twin is None:
+            continue
+        names = [_support_tokens(phrase) for phrase in _phrases(twin)]
+        if any(surface and surface in names for surface in surfaces):
             return True
     return False
 
 
-def _phrase_matches(label: str, phrase: str) -> bool:
+def _heading_supports(heading: list[str], concept: Any) -> bool:
+    for phrase in _phrases(concept):
+        tokens = _support_tokens(phrase)
+        if _phrase_contains(heading, tokens):
+            return True
+        if len(heading) >= 2 and _phrase_contains(tokens, heading):
+            return True
+    return False
+
+
+def _foreign_standard_id(
+    label_tokens: list[str], concept_id: str, catalog: dict[str, Any]
+) -> str | None:
+    if not label_tokens:
+        return None
+    for other_id, other in catalog.items():
+        if other_id == concept_id:
+            continue
+        if any(_support_tokens(phrase) == label_tokens for phrase in _phrases(other)):
+            return other_id
+    return None
+
+
+def _statement_pair(left: str, right: str) -> bool:
+    return (left, right) in _STATEMENT_PAIRS or (right, left) in _STATEMENT_PAIRS
+
+
+def _twin_ids(concept_id: str) -> set[str]:
+    found: set[str] = set()
+    for left, right in _STATEMENT_PAIRS:
+        if concept_id == left:
+            found.add(right)
+        elif concept_id == right:
+            found.add(left)
+    return found
+
+
+def _legacy_phrase_supported(label: str, concept: Any) -> bool:
+    """`normalize_label` rewrites cashflows. That dictionary pass stays."""
+    normalized = normalize_label(label)
+    return any(_legacy_span(normalized, normalize_label(phrase)) for phrase in _phrases(concept))
+
+
+def _legacy_span(label: str, phrase: str) -> bool:
     if not phrase:
         return False
     if label == phrase:
@@ -359,6 +458,37 @@ def _phrase_matches(label: str, phrase: str) -> bool:
         label_tokens[index : index + width] == phrase_tokens
         for index in range(len(label_tokens) - width + 1)
     )
+
+
+def _phrases(concept: Any) -> list[str]:
+    return [
+        *getattr(concept, "labels", []),
+        *getattr(concept, "aliases", []),
+        *getattr(concept, "exact_labels", []),
+    ]
+
+
+def _support_tokens(text: str) -> list[str]:
+    """Tokens for the label check. Parentheses stay words; memory normalization does not."""
+    raw = str(text or "")
+    raw = raw.replace("&", " and ").replace("−", " ").replace("–", " ").replace("+", " ")
+    raw = raw.replace("/", " ")
+    raw = re.sub(r"[()（）\[\]]", " ", raw)
+    raw = re.sub(r"[^0-9a-zа-яё]+", " ", raw.casefold())
+    return [_STEM.get(token, token) for token in raw.split()]
+
+
+def _phrase_contains(label: list[str], phrase: list[str]) -> bool:
+    if not phrase:
+        return False
+    if label == phrase:
+        return True
+    if len(phrase) == 1 and len(phrase[0]) < 3:
+        return False
+    width = len(phrase)
+    if width > len(label):
+        return False
+    return any(label[index : index + width] == phrase for index in range(len(label) - width + 1))
 
 
 def _semantic_failures(rows: list[QualityRow]) -> set[int]:
@@ -453,27 +583,58 @@ def _block_has_debt_stock(row: QualityRow, rows: list[QualityRow]) -> bool:
     return False
 
 
+_RATIO_TIME = {"stock", "instant", "bop", "eop", "flow", "rate"}
+_INSTANT_TIME = {"instant", "stock", "bop", "eop", "rate"}
+
+
 def _unit_ok(row: QualityRow, concept: Any) -> bool:
     actual = _hint(row, "unit") or getattr(row, "unit", None)
     expected = _expected_unit(row.concept_id, concept)
+    if expected is None:
+        return True
     if actual == "price" and expected == "money":
+        return True
+    if actual == "years" and expected == "count":
+        return True
+    if actual in _PURE_UNITS and expected in _PURE_UNITS:
         return True
     return bool(actual) and actual == expected
 
 
-def _expected_unit(concept_id: str, concept: Any) -> str:
-    if concept_id in _DURATION_IDS:
-        return "years"
-    if concept_id.endswith("_rate"):
-        return "rate"
-    facets = getattr(concept, "facets", None) if concept is not None else None
-    facet_unit = getattr(facets, "unit", None)
-    if facet_unit:
-        return facet_unit
+def _expected_unit(concept_id: str, concept: Any) -> str | None:
+    authored = _authored_unit(concept_id, concept)
+    if authored:
+        return authored
     prefix = concept_id.split(".", 1)[0]
-    if prefix in {"pnl", "cf", "bs", "debt"}:
+    if prefix in _STATEMENT_PREFIXES:
         return "money"
-    return "money"
+    return None
+
+
+def _authored_unit(concept_id: str, concept: Any) -> str | None:
+    """Unit written before enrich fills an empty unit with money.
+
+    Packaged ids use the yaml and its prefix defaults. A minted id keeps money
+    when its parent declares money or belongs to pnl, cf, bs, or debt.
+    """
+    seeds = seed_authored_units()
+    if concept_id in seeds:
+        return seeds[concept_id]
+    stored = _facet_unit(concept)
+    if stored != "money":
+        return stored
+    broader = getattr(concept, "broader", None) if concept is not None else None
+    if not broader:
+        return stored
+    parent_id = str(broader)
+    if parent_id not in seeds:
+        return stored
+    parent_unit = seeds[parent_id]
+    if parent_unit == "money":
+        return "money"
+    if parent_unit is None and parent_id.split(".", 1)[0] in _STATEMENT_PREFIXES:
+        return "money"
+    return None
 
 
 def _temporal_ok(row: QualityRow, concept: Any) -> bool:
@@ -492,6 +653,10 @@ def _temporal_ok(row: QualityRow, concept: Any) -> bool:
     if row.concept_id.startswith("bs.") or nature == "balance":
         if time_semantics not in _STOCK_TIME and not _stock_movement(row):
             return False
+    if _period_type(concept) == "instant":
+        return time_semantics in _INSTANT_TIME
+    if _facet_unit(concept) == "ratio":
+        return time_semantics in _RATIO_TIME
     if _is_rate_concept(row.concept_id, concept) and time_semantics != "rate":
         return False
     return True
@@ -500,6 +665,18 @@ def _temporal_ok(row: QualityRow, concept: Any) -> bool:
 def _stock_movement(row: QualityRow) -> bool:
     """A roll-forward line between b/f and c/f is the period change of a stock."""
     return _hint(row, "time_semantics") == "flow" and _hint(row, "nature") == "flow"
+
+
+def _facet_unit(concept: Any) -> str | None:
+    facets = getattr(concept, "facets", None) if concept is not None else None
+    unit = getattr(facets, "unit", None)
+    return str(unit) if unit else None
+
+
+def _period_type(concept: Any) -> str | None:
+    facets = getattr(concept, "facets", None) if concept is not None else None
+    period = getattr(facets, "period_type", None)
+    return str(period) if period else None
 
 
 def _is_rate_concept(concept_id: str, concept: Any) -> bool:

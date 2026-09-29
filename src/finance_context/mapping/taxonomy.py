@@ -17,6 +17,7 @@ from finance_context.mapping.models import (
 
 _DEFAULT = Path(__file__).resolve().parents[1] / "ontology" / "taxonomy.yaml"
 _DOCS: dict[tuple[str, ...], TaxonomyDocument] = {}
+_AUTHORED: dict[tuple[str, float], dict[str, str | None]] = {}
 
 
 class TaxonomyError(ValueError):
@@ -25,6 +26,15 @@ class TaxonomyError(ValueError):
 
 def load_taxonomy(path: Path | None = None) -> list[Concept]:
     return list(load_taxonomy_document(path).concepts)
+
+
+def seed_authored_units(path: Path | None = None) -> dict[str, str | None]:
+    """Unit each packaged concept declares before enrich fills an empty unit with money."""
+    target = path or _DEFAULT
+    resolved = str(target.resolve())
+    mtime = target.stat().st_mtime
+    load_taxonomy_document(target)
+    return dict(_AUTHORED[(resolved, mtime)])
 
 
 def ensure_runtime_taxonomy(path: Path) -> list[Concept]:
@@ -41,13 +51,30 @@ def ensure_runtime_taxonomy(path: Path) -> list[Concept]:
     return list(document.concepts)
 
 
-def remember_concept(path: Path, concept: Concept) -> None:
+def remember_concept(path: Path, concept: Concept) -> Concept | None:
+    """Append an anchored concept. An existing id is returned unchanged.
+
+    A missing anchor, a cycle, or a facet that contradicts the parent leaves the
+    file untouched and returns None.
+    """
     document = TaxonomyDocument.model_validate_json(path.read_text(encoding="utf-8"))
-    if any(item.id == concept.id for item in document.concepts):
-        return
+    existing = next((item for item in document.concepts if item.id == concept.id), None)
+    if existing is not None:
+        return existing
+    if not concept.broader:
+        return None
+    try:
+        validate_taxonomy(
+            [*document.concepts, concept],
+            defaults=document.facet_defaults,
+            calculations=document.calculations,
+        )
+    except TaxonomyError:
+        return None
     document.concepts.append(concept)
     register_document(document)
     path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
+    return concept
 
 
 def load_taxonomy_document(path: Path | None = None) -> TaxonomyDocument:
@@ -78,6 +105,10 @@ def _load_cached(resolved: str, mtime: float) -> TaxonomyDocument:
     patterns = [LexicalPattern.model_validate(item) for item in raw.get("patterns") or []]
     by_id = {c.id: c for c in concepts}
     validate_taxonomy(concepts, defaults=defaults, calculations=calculations)
+    _AUTHORED[(resolved, mtime)] = {
+        concept.id: inherit_facets(concept, by_id, defaults).unit
+        for concept in concepts
+    }
     enriched = [enrich_concept(c, by_id=by_id, defaults=defaults) for c in concepts]
     doc = TaxonomyDocument(
         version=int(raw.get("version") or 1),
