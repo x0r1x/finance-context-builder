@@ -78,7 +78,7 @@ An architecture example. The `observation` object is not written into the job JS
 | `value_status` | `row.value_statuses[i]` | `cached`, `empty`, `zero_explicit`, or `not_applicable`. An empty cell is not replaced with zero |
 | `normalized_value` | `row.normalized_values[i]` | A string in base units, or `null` if the number cannot be parsed. Not a replacement for `value` |
 | `scale_factor` | `row.scale_factor` | Integer multiplier `1` / `1000` / `1000000` / `1000000000`, or `null` |
-| `period_position`, `aggregation` | row fields | For example `during_period` and `sum`. A scalar and a params row are `instant` / `none`. Next to `hints.time_semantics` |
+| `period_position`, `aggregation` | row fields | Markdown Time joins them with `hints.time_semantics`: `flow/during_period/sum` for a filled money year, `rate/during_period/average` for a filled annual rate. A point is `instant/instant/none` (position `instant`, aggregation `none`, so the series is not summed). A static rate is `rate/instant/none`. Scenario columns are alternatives and keep aggregation `none` |
 | `scenario` | header of a params value/scenario column (`cells[].header`) | `Live` or `Case N`. Absent on a timeline row |
 | `timeline.start_date`, `end_date` | `axes[].periods[]` | ISO when the axis was built from a Start/End band. Otherwise the keys are absent |
 | `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` is the token `unit` / `k` / `m` / `bn`. The multiplier is the separate `scale_factor`. Without `kind` a rate looks like money |

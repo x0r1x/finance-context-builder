@@ -761,6 +761,76 @@ def test_rvi_leftovers_map_dividends_balances_and_rates() -> None:
     assert by_label["Full-wrap EPC"] is None
 
 
+def test_money_exact_label_does_not_take_a_count_concept() -> None:
+    taxonomy = load_taxonomy()
+    money = LayoutRow(
+        row=4,
+        label="Development & Construction",
+        kind="fact",
+        cells=[RowCell(col=4, role="unit")],
+    )
+    years = LayoutRow(
+        row=5,
+        label="Development & Construction",
+        kind="fact",
+        cells=[RowCell(col=4, role="unit")],
+    )
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="PF Model",
+                blocks=[
+                    Block(
+                        block_id="PF Model!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="PF Model!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(
+                                    col=2,
+                                    text="2024",
+                                    role="historical",
+                                    period_key="2024",
+                                ),
+                            ],
+                        ),
+                        rows=[money, years],
+                    )
+                ],
+            )
+        ]
+    )
+    cells = [
+        {
+            "sheet": "PF Model",
+            "row": 4,
+            "col": 4,
+            "addr": "D4",
+            "cached_value": "EUR'000",
+        },
+        {
+            "sheet": "PF Model",
+            "row": 5,
+            "col": 4,
+            "addr": "D5",
+            "cached_value": "years",
+        },
+    ]
+    doc = map_layout(
+        layout,
+        taxonomy=taxonomy,
+        glossary={},
+        cells=cells,
+        embed=None,
+        chat=None,
+        slots=GrantSlots(),
+    )
+    by_row = {row.row: row.concept_id for row in doc.rows}
+    assert by_row[4] != "ops.construction_period"
+    assert by_row[5] == "ops.construction_period"
+
+
 def test_concession_and_operations_duration_are_not_the_same_concept() -> None:
     taxonomy = load_taxonomy()
     rows = [

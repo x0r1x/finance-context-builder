@@ -294,6 +294,228 @@ def test_formula_cell_without_text_fails_formula_coverage() -> None:
     assert metrics["semantic_coverage"] == 1.0
 
 
+def test_section_heading_supports_the_wider_concept() -> None:
+    assert _coverage(
+        label="Commercial Management",
+        concept_id="pnl.opex",
+        label_path=["Operational Expenditures"],
+    ) == 1.0
+
+
+def test_balance_brought_forward_follows_its_section() -> None:
+    assert _coverage(label="Balance b/f", concept_id="bs.equity", label_path=["Equity"]) == 1.0
+    assert _coverage(label="Balance b/f", concept_id="bs.debt", label_path=["Debt"]) == 1.0
+
+
+def test_dividend_stem_matches_the_label() -> None:
+    assert _coverage(label="Dividend distribution", concept_id="cf.dividends") == 1.0
+
+
+def test_total_sum_of_children_is_a_presentation_role() -> None:
+    assert (
+        _coverage(
+            label="Total",
+            concept_id="cf.disbursements",
+            evidence="sum of 3 child rows",
+            label_path=["Senior debt"],
+        )
+        == 1.0
+    )
+
+
+def test_parenthetical_heading_keeps_the_inner_word() -> None:
+    assert (
+        _coverage(
+            label="Charge",
+            concept_id="bs.goodwill",
+            label_path=["No depreciation (goodwill)"],
+        )
+        == 1.0
+    )
+
+
+def test_standard_name_of_another_concept_is_not_supported() -> None:
+    assert (
+        _coverage(label="CPI", concept_id="ops.inflation", label_path=["Inflation profiles"])
+        == 0.0
+    )
+    assert (
+        _coverage(
+            label="Share premium",
+            concept_id="cf.uses",
+            label_path=["Cashflow Uses of funds"],
+        )
+        == 0.0
+    )
+
+
+def test_statement_pair_label_is_supported() -> None:
+    assert (
+        _coverage(label="Equity", concept_id="cf.equity_issue", label_path=["Sources of funds"])
+        == 1.0
+    )
+
+
+def test_ratio_and_instant_periods_keep_their_time() -> None:
+    index = mapping_quality_metrics(
+        [
+            _row(
+                label="CPI",
+                concept_id="ops.cpi",
+                hints=RowHints(time_semantics="stock", statement="ops", unit="ratio"),
+            )
+        ]
+    )
+    minimum = mapping_quality_metrics(
+        [
+            _row(
+                label="DSCR minimum",
+                concept_id="cov.dscr_limit",
+                hints=RowHints(time_semantics="instant", statement="cov", unit="ratio"),
+            )
+        ]
+    )
+    series = mapping_quality_metrics(
+        [
+            _row(
+                label="DSCR",
+                concept_id="cov.dscr",
+                hints=RowHints(time_semantics="flow", statement="cov", unit="ratio"),
+            )
+        ]
+    )
+    instant_rate = mapping_quality_metrics(
+        [
+            _row(
+                label="Cash-on-Cash (CoC)",
+                concept_id="val.coc",
+                hints=RowHints(time_semantics="instant", statement="val", unit="ratio"),
+            )
+        ]
+    )
+    assert index["temporal_coverage"] == 1.0
+    assert minimum["temporal_coverage"] == 1.0
+    assert series["temporal_coverage"] == 1.0
+    assert instant_rate["temporal_coverage"] == 1.0
+    assert instant_rate["unit_coverage"] == 1.0
+
+
+def test_rate_and_ratio_share_a_unit_family() -> None:
+    money_on_ratio = mapping_quality_metrics(
+        [
+            _row(
+                label="CPI",
+                concept_id="ops.cpi",
+                hints=RowHints(time_semantics="stock", statement="ops", unit="money"),
+            )
+        ]
+    )
+    percent_on_ratio = mapping_quality_metrics(
+        [
+            _row(
+                label="CPI",
+                concept_id="ops.cpi",
+                hints=RowHints(time_semantics="stock", statement="ops", unit="rate"),
+            )
+        ]
+    )
+    blank = mapping_quality_metrics(
+        [
+            _row(
+                label="CPI",
+                concept_id="ops.cpi",
+                hints=RowHints(time_semantics="stock", statement="ops", unit=None),
+            )
+        ]
+    )
+    assert money_on_ratio["unit_coverage"] == 0.0
+    assert percent_on_ratio["unit_coverage"] == 1.0
+    assert blank["unit_coverage"] == 0.0
+
+
+def test_rate_without_instant_period_still_needs_rate_time() -> None:
+    metrics = mapping_quality_metrics(
+        [
+            _row(
+                label="Inflation",
+                concept_id="ops.inflation",
+                hints=RowHints(time_semantics="flow", statement="ops", unit="rate"),
+            )
+        ]
+    )
+    assert metrics["temporal_coverage"] == 0.0
+
+
+def test_years_hint_satisfies_count_and_a_bare_date_is_not_money() -> None:
+    life = mapping_quality_metrics(
+        [
+            _row(
+                label="Straight line depreciation",
+                concept_id="ops.depreciation_life",
+                hints=RowHints(time_semantics="instant", statement="ops", unit="years"),
+            )
+        ]
+    )
+    started = mapping_quality_metrics(
+        [
+            _row(
+                label="Model start / Construction start",
+                concept_id="ops.model_start",
+                hints=RowHints(time_semantics="instant", statement="ops", unit="date"),
+            )
+        ]
+    )
+    money_on_duration = mapping_quality_metrics(
+        [
+            _row(
+                label="Development & construction",
+                concept_id="ops.construction_period",
+                hints=RowHints(time_semantics="flow", statement="ops", unit="money"),
+            )
+        ]
+    )
+    count_on_duration = mapping_quality_metrics(
+        [
+            _row(
+                label="Construction Duration",
+                concept_id="ops.construction_period",
+                hints=RowHints(time_semantics="instant", statement="ops", unit="count"),
+            )
+        ]
+    )
+    assert life["unit_coverage"] == 1.0
+    assert started["unit_coverage"] == 1.0
+    assert money_on_duration["unit_coverage"] == 0.0
+    assert count_on_duration["unit_coverage"] == 1.0
+
+
+def test_cashflow_plural_keeps_the_dictionary_pass() -> None:
+    assert (
+        _coverage(
+            label="Total equity cashflows",
+            concept_id="cf.equity_cashflow",
+            evidence="signed equity irr cash line; cosine=0.817",
+        )
+        == 1.0
+    )
+
+
+def test_loose_section_total_stays_unsupported() -> None:
+    assert (
+        _coverage(
+            label="Total",
+            concept_id="cf.capex",
+            label_path=["Construction & Development costs"],
+            evidence="parent capex or uses section",
+        )
+        == 0.0
+    )
+
+
+def _coverage(**kwargs: object) -> float:
+    return float(mapping_quality_metrics([_row(**kwargs)])["label_coverage"])
+
+
 def test_score_below_accept_min_fails_confidence_threshold() -> None:
     metrics = mapping_quality_metrics(
         [

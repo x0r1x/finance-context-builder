@@ -721,6 +721,25 @@ def test_params_block_from_scenario_matrix() -> None:
     assert unit_kind_from_text("долл") == "money"
     assert unit_kind_from_text("years") == "count"
     assert unit_kind_from_text("veh/year") == "count"
+    assert unit_kind_from_text("MWh p.a.") == "count"
+    assert unit_kind_from_text("Index") == "ratio"
+
+
+def test_index_names_a_value_column_and_stays_a_unit_cell() -> None:
+    from finance_context.layout.params import column_header_text, is_unit_text
+
+    assert is_unit_text("Index")
+    assert not is_unit_text("Base Index")
+    titled = {
+        5: [{"col": 7, "cached_value": "Index"}],
+        6: [{"col": 7, "cached_value": "1.02"}],
+    }
+    assert column_header_text(titled, 7, 6, 5, False) == "Index"
+    currency = {
+        5: [{"col": 5, "cached_value": "EUR'000"}],
+        6: [{"col": 5, "cached_value": "10"}],
+    }
+    assert column_header_text(currency, 5, 6, 5, False) is None
 
 
 def test_prose_and_shortcut_sheets_are_rejected() -> None:

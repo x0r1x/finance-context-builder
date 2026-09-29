@@ -74,6 +74,11 @@ _THOUSANDS = re.compile(r"'000(?!')|\b000s\b|\(000\)", re.I)
 _MILLIONS = re.compile(r"'000'000|\bmn\b|\bmm\b", re.I)
 _RATIO_TEXT = re.compile(r"^\s*x\s*$", re.I)
 _DATE_TEXT = re.compile(r"^\s*date\s*$", re.I)
+# A trailing period marker is not a second unit: "MWh p.a." is the same count as "MWh".
+_PER_ANNUM_SUFFIX = re.compile(
+    r"(?:\s+(?:p\.?\s*a\.?|pa|per\s+annum)|(?<=\S)p\.a\.)\s*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -195,6 +200,24 @@ def _parse_format(fmt: str) -> Measure:
     return Measure()
 
 
+def unit_caption(text: str | None) -> str | None:
+    """Unit-cell text with a trailing per-annum marker removed.
+
+    The whole cell ``index`` is kept so callers can read it as a ratio.
+    ``Base Index`` is a heading, not this caption. A cell that is only the
+    period marker is not a unit.
+    """
+    blob = (text or "").strip()
+    if not blob:
+        return None
+    if blob.casefold() == "index":
+        return blob
+    stripped = _PER_ANNUM_SUFFIX.sub("", blob).strip()
+    if not stripped or stripped.casefold() in {"p.a.", "p.a", "pa", "per annum"}:
+        return None
+    return stripped
+
+
 def currency_code_from_text(text: str | None) -> str | None:
     if not text:
         return None
@@ -223,6 +246,14 @@ def _scale_from(text: str) -> str | None:
 
 
 def _unit_from(text: str, currency: str | None) -> str | None:
+    caption = unit_caption(text)
+    if caption is None:
+        return None
+    if caption.casefold() == "index":
+        return "ratio"
+    text = caption
+    if text.strip() in {"#", "№"}:
+        return "count"
     if "%" in text or "percent" in text.casefold():
         return "rate"
     if _RATIO_TEXT.match(text):

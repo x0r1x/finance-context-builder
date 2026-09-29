@@ -156,6 +156,8 @@ def test_memory_unit_keeps_rate_money_years_and_blank() -> None:
     assert memory_unit(None, "money") == ""
     assert memory_unit(None, "rate") == "rate"
     assert memory_unit("EUR'000", "rate") == "rate"
+    assert memory_unit("Index", "ratio") == ""
+    assert memory_unit("MWh p.a.", "count") == ""
 
 
 def test_cpi_sections_stay_two_pairs() -> None:
