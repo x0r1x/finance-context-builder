@@ -32,17 +32,23 @@ class CatalogHints(BaseModel):
 class CatalogPeriod(BaseModel):
     period_key: str
     phase: TimelinePhase | None = None
+    phase_year: int | None = None
     start_date: str | None = None
     end_date: str | None = None
+    group_key: str | None = None
+    flags: dict[str, bool] = Field(default_factory=dict)
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
         if data.get("phase") is None:
             data.pop("phase", None)
-        for key in ("start_date", "end_date"):
+            data.pop("phase_year", None)
+        for key in ("start_date", "end_date", "group_key"):
             if data.get(key) is None:
                 data.pop(key, None)
+        if not data.get("flags"):
+            data.pop("flags", None)
         return data
 
 

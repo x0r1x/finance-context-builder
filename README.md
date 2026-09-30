@@ -105,7 +105,7 @@ Endpoints:
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs?status=&q=` — session jobs from `meta.json` only (`job_id`, `status`, `stage`, `source_filename`, `content_sha256`, context `schema_version`). `q` is a case-insensitive piece of the file name
 - `GET /v1/context-jobs/{id}/summary` — passport of a finished job: coverage, workbook counters, and graph counters (`unresolved`, `external`, `dangling`, cycles). No `links` and no cell cache. It does not replace polling `GET /v1/context-jobs/{id}` while the job is still running
-- `GET /v1/context-jobs/{id}/catalog` — rows and axes without numbers. Filters: `q`, repeatable `concept_id`, `sheet`, `disposition`, `limit`, `offset`
+- `GET /v1/context-jobs/{id}/catalog` — rows and axes without numbers. A period also carries `phase_year`, `flags`, and `group_key`. Filters: `q`, repeatable `concept_id`, `sheet`, `disposition`, `limit`, `offset`
 - `GET /v1/context-jobs/{id}/observations` — the only route that returns a cell cache. Requires repeatable `row_key`, repeatable `concept_id`, or `q`. Without a selector the response is 400 `selector_required`. `limit` defaults to 24 and stops at 48 (`truncated`). `precedent_depth` defaults to 0 and stops at 3
 - `GET /healthz`, `GET /readyz`
 
