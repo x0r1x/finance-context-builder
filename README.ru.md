@@ -96,9 +96,13 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 - `GET /v1/context-jobs/{id}/graph.md`
 - `GET /v1/context-jobs/{id}/graph/trace?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
+- `GET /v1/context-jobs?status=&q=` — книги сессии только из `meta.json` (`job_id`, `status`, `stage`, `source_filename`, `content_sha256`, `schema_version` context). `q` — фрагмент имени файла без регистра
+- `GET /v1/context-jobs/{id}/summary` — паспорт готовой джобы: покрытие, счётчики книги и счётчики графа (`unresolved`, `external`, `dangling`, циклы). Без `links` и без кэша ячеек. Пока джоба считается, статус по-прежнему смотрят через `GET /v1/context-jobs/{id}`
+- `GET /v1/context-jobs/{id}/catalog` — строки и оси без чисел. Фильтры: `q`, повторяемый `concept_id`, `sheet`, `disposition`, `limit`, `offset`
+- `GET /v1/context-jobs/{id}/observations` — единственный роут с кэшем ячеек. Нужен повторяемый `row_key`, повторяемый `concept_id` или `q`. Без селектора ответ 400 `selector_required`. `limit` по умолчанию 24 и не больше 48 (`truncated`). `precedent_depth` по умолчанию 0 и не больше 3
 - `GET /healthz`, `GET /readyz`
 
-Живая схема роутов строится из этих обработчиков: [Swagger UI](http://127.0.0.1:8080/docs), [ReDoc](http://127.0.0.1:8080/redoc) и `GET /openapi.json`. `context.json`, `graph.json` и trace описаны теми же моделями, которыми эти файлы пишутся.
+Живая схема роутов строится из этих обработчиков: [Swagger UI](http://127.0.0.1:8080/docs), [ReDoc](http://127.0.0.1:8080/redoc) и `GET /openapi.json`. `context.json`, `graph.json` и trace описаны теми же моделями, которыми эти файлы пишутся. Каталог, паспорт и наблюдения — модели ответа. На диске таких файлов нет.
 
 Коды `error`:
 
@@ -109,11 +113,12 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 | `file_too_large` | 413 |
 | `encrypted_workbook` | 422 |
 | `zip_rejected` | 422 |
+| `selector_required` | 400 |
 | `not_found` | 404 |
 | `report_not_ready` | 409 |
 | `too_many_jobs` | 429 |
 
-`report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл.
+`report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key`, `concept_id` или `q` — это `selector_required`, а не вся книга.
 
 Окружение: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (если не задан, дефолт процесса `qwen3.6-27b-fp8`), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, на книгу), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (серверный дефолт 3600). См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503.
 

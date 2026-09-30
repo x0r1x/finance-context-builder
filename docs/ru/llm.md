@@ -2,7 +2,7 @@
 
 **Русский** · [English](../en/llm.md)
 
-Канон джобы — `context.json` / `context.md` (schema `1.13.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция промпта, не артефакт и не замена ряда `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
+Канон джобы — `context.json` / `context.md` (schema `1.13.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция этих файлов. Роут отдаёт её в ответе и не пишет вторым JSON. Она не заменяет ряд `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
 
 Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [граф](graph.md).
 
@@ -17,55 +17,75 @@
 
 ## Пример
 
-Архитектурный пример. Объект `observation` не пишется в JSON джобы: его собирают из строки, серии этой оси и `links` / trace.
+Ответ `GET /v1/context-jobs/{id}/observations`. Объект не пишется в JSON джобы: его собирают из строки, серии этой оси и `links` / trace. У timeline-строки нет ключа `scenario`.
 
 ```json
 {
-  "observation": {
-    "row_key": "Operation|10|Operation!r8",
-    "label": "Revenue",
-    "concept_id": "pnl.revenue",
-    "disposition": "mapped",
-    "dimensions": {
-      "segment": "pc"
-    },
-    "period_id": "Y5",
-    "value": "1234.56",
-    "value_status": "cached",
-    "normalized_value": "1234560",
-    "scale_factor": 1000,
-    "period_position": "during_period",
-    "aggregation": "sum",
-    "scenario": null,
-    "unit": {
-      "kind": "money",
-      "currency": "GBP",
-      "scale": "k",
-      "sign": "inflow"
-    },
-    "formula": {
-      "text": "=RC[-1]*(1+Growth)",
-      "class": "cross_period",
-      "precedents": []
-    },
-    "source": {
-      "sheet": "Operation",
-      "cell": "H10"
-    },
-    "timeline": {
-      "axis_id": "Operation!r8",
-      "phase": "operation",
-      "phase_year": 1,
-      "start_date": "2026-01-01",
-      "end_date": "2026-12-31",
-      "group_key": null,
-      "flags": {}
+  "schema_version": "observation-1",
+  "truncated": false,
+  "observations": [
+    {
+      "row_key": "Operation|10|Operation!r8",
+      "label": "Revenue",
+      "concept_id": "pnl.revenue",
+      "disposition": "mapped",
+      "dimensions": {
+        "segment": "pc"
+      },
+      "period_id": "Y5",
+      "value": "1234.56",
+      "value_status": "cached",
+      "normalized_value": "1234560",
+      "scale_factor": 1000,
+      "period_position": "during_period",
+      "aggregation": "sum",
+      "unit": {
+        "kind": "money",
+        "currency": "GBP",
+        "scale": "k",
+        "sign": "inflow"
+      },
+      "formula": {
+        "text": "=RC[-1]*(1+Growth)",
+        "class": "cross_period",
+        "precedents": []
+      },
+      "source": {
+        "sheet": "Operation",
+        "cell": "H10"
+      },
+      "timeline": {
+        "axis_id": "Operation!r8",
+        "phase": "operation",
+        "phase_year": 1,
+        "start_date": "2026-01-01",
+        "end_date": "2026-12-31"
+      }
     }
-  }
+  ]
 }
 ```
 
 `Y5` и `phase_year: 1` — разные часы. Пятый модельный год может быть первым операционным. `dimensions` необязательна: сегодня в неё попадает `hints.segment` (`pc` / `hv`), если он есть. Это не поле `vehicle_type` и не словарь измерений.
+
+## Как запросить срез
+
+`context.json` и `graph.json` в промпт не кладут. Счётчики графа читают из паспорта, числа — из наблюдений.
+
+| Роут | Схема | Что внутри |
+| --- | --- | --- |
+| `GET /v1/context-jobs?status=&q=` | список из `meta.json` | Книги сессии. `context.json` не открывается. `q` — фрагмент имени файла |
+| `GET .../summary` | `summary-1` | Покрытие, счётчики книги и графа: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`. Без `links` и без кэша ячеек |
+| `GET .../catalog` | `catalog-1` | Строки и оси без чисел. Класса формулы нет: у одной строки он разный по периодам |
+| `GET .../observations` | `observation-1` | Единственный ответ с кэшем ячеек |
+
+Пока джоба считается, статус смотрят через `GET /v1/context-jobs/{id}`. Паспорт его не заменяет: без `context.json` или `graph.json` паспорт и наблюдения отвечают 409 `report_not_ready`.
+
+Наблюдения требуют хотя бы один селектор: повторяемый `row_key`, повторяемый `concept_id` или `q`. Нет ни одного — 400 `selector_required`, не вся книга. `period_id` и `phase` селекторами не являются. Неизвестный селектор внутри готовой джобы — 200 и пустой список. Чужой `job_id` — 404.
+
+`limit` по умолчанию 24, максимум 48. Сверх лимита список обрезается и `truncated=true`. `precedent_depth` по умолчанию 0, максимум 3. Глубина 0 не вызывает trace: список прецедентов пуст. Глубина 1–3 вызывает текущий `trace_graph` и кладёт короткий список (`row_key`, `concept_id`, `period_id`, кэш строкой в `value`, адрес в `cell`). Тот же `limit` обрезает прецеденты одного наблюдения и сам по себе `truncated` не ставит. Число вне диапазона — 422.
+
+`ETag` каталога, паспорта и наблюдений сильный: схема, `content_sha256` и stat файла. У паспорта и наблюдений в stat входит и `graph.json`. Повтор того же URL с `If-None-Match` даёт 304 без тела. `HEAD` того же пути возвращает тот же `ETag` и пустое тело. 400 и 409 `ETag` не получают. Адрес ячейки и класс формулы — поля ответа. В `context.json` они по-прежнему не пишутся.
 
 ## Поле среза → текущий артефакт
 
@@ -82,10 +102,10 @@
 | `scenario` | заголовок value/scenario-колонки params (`cells[].header`) | `Live` или `Case N`. У timeline-строки ключ отсутствует |
 | `timeline.start_date`, `end_date` | `axes[].periods[]` | ISO, если ось собрана из полосы Start/End. Иначе ключи отсутствуют |
 | `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` — токен `unit` / `k` / `m` / `bn`. Множитель — отдельный `scale_factor`. Без `kind` ставка выглядит как деньги |
-| `formula.text` | `row.formula` | Один fingerprint с ячеек ряда. `null` — на колонках ряда нет формулы; формула stub сюда не подставляется. Отличия ячеек ряда — `formula_exceptions` |
-| `formula.class` | `links[].formula_class` | Один класс на ячейку формулы. AST не копируется |
-| `formula.precedents` | `graph.links[]` или `GET .../graph/trace` | Короткий список `row_key`, `concept_id`, `period_id`. AST не копируется |
-| `source.sheet`, `source.cell` | Строка + колонка периода; у формулы ещё `links[].cell` | Цитата. В `context.json` per-cell `source` нет |
+| `formula.text` | link с тем же `row_key` и `period_id`, иначе `row.formula` | Текст формулы этого периода. Нет link — fingerprint строки или `null`. Формула stub не подставляется |
+| `formula.class` | `links[].formula_class` | Класс этой ячейки в ответе. В `context.json` его нет. AST не копируется |
+| `formula.precedents` | `trace_graph` при `precedent_depth` 1–3 | `row_key`, `concept_id`, `period_id`, кэш в `value`, адрес в `cell`. При глубине 0 список пуст |
+| `source.sheet`, `source.cell` | лист, номер строки и `period.col` | Адрес считается в ответе. В `context.json` per-cell `source` нет |
 | `timeline.phase`, `phase_year`, `group_key`, `flags` | `axes[].periods[]` с тем же `period_key` на оси серии | Копия в срез, чтобы модель не джойнила. В `blocks[].periods` фазу не дублируют. `group_key` есть у месяца под повторяющимся годом |
 
 `flags` (кейс, covenant, repayment и прочие 0/1) берутся с той оси, в чьих строках лежат флаги: фазы недостаточно, чтобы прочитать число.
@@ -96,7 +116,7 @@
 - `validation_context`. `phase` / `phase_year` — часы таймлайна, не результат проверки.
 - Подмены `value` множителем или JSON-числом. Кэш остаётся строкой; множитель и базовая величина — отдельные поля.
 - AST. Он остаётся в `ir/cells.parquet` и попадает в разговор только отдельным запросом, не в обычный промпт.
-- Второго JSON джобы. Срез живёт в промпте отвечающей модели.
+- Второго JSON на диске. Срез — ответ роута, не файл джобы.
 
 ## Как читать context и graph
 
@@ -105,10 +125,10 @@
 - Иерархия строки — `label_path`. `parent_label` может указывать на более крупную секцию.
 - `row.formula` пустой — на колонках ряда нет формулы. Формулу года брать из link с тем же `row_key` и `period_id` или из trace. Нет такого link — значение ввод.
 - Имя в тексте формулы искать в `refs` и в `workbook.defined_names`. Локальная ячейка и локальный диапазон уже заменены адресом в `refs`. Токен без `!` значит, что имя не одна ячейка и не один диапазон этой книги. Формула имени с `[` или `#REF!` — ссылка вне книги.
-- `dangling` равен 0 не значит, что имена резолвятся. Смотреть `unresolved.count` и `external.count`. Поле `ids` — не больше 32 записей, полное число в `count`.
+- `dangling` равен 0 не значит, что имена резолвятся. Смотреть `unresolved.count` и `external.count` в паспорте `summary`, не в полном `graph.json`. Поле `ids` — не больше 32 записей, полное число в `count`.
 - `concept_id` не ключ метрики. Вопрос «DSCR в 2030» ищется по подписи и `row_key`, затем по периоду. Если `semantic_identity.concept_id` другой, называть оба.
 - Год оси без `phase` не операционный.
 - Список вопросов не публикуется. Строка без концепта видна по `disposition=abstained` и `mapping_stats.abstained`.
 - Предупреждение считает формулы без кэша внутри фазы. `workbook.missing_cached_values` считает все такие формулы, включая годы вне фазы.
-- В промпт не класть `graph.json`, `graph.md` и широкую таблицу блока. Если `numeric_summary.constant`, цитировать одно значение и адреса первого и последнего периода. Точные `values` в JSON не сжимать.
+- В промпт не класть `graph.json`, `graph.md` и широкую таблицу блока. Счётчики графа брать из `summary`. Если `numeric_summary.constant`, цитировать одно значение и адреса первого и последнего периода. Точные `values` в JSON не сжимать.
 - Числа не пересчитывать. Кэш Excel остаётся источником значения.
