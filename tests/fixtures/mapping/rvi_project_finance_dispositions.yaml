@@ -49,7 +49,8 @@ expectations:
   - {label: Straight line depreciation, concept_id: ops.depreciation_life}
   - {label: Dividend payout ratio period 1, concept_id: val.payout_ratio}
   - {label: PPA hedged volume, concept_id: ops.hedge_ratio}
-  - {label: Development & Construction, concept_id: ops.construction_period}
+  # Years under Timing. The EUR'000 addition under Straight line depreciation is another row.
+  - {label: Development & Construction, parent: General, concept_id: ops.construction_period}
   - {label: Model start / Construction start, concept_id: ops.model_start}
   - {label: Balance b/f, parent: Linear repayment, concept_id: bs.debt}
   - {label: Balance c/f, parent: Linear repayment, concept_id: bs.debt}

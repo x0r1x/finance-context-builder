@@ -76,8 +76,10 @@ Do not put `context.json` or `graph.json` in the prompt. Read graph counters fro
 | --- | --- | --- |
 | `GET /v1/context-jobs?status=&q=` | a list from `meta.json` | Session books. `context.json` is not opened. `q` is a piece of the file name |
 | `GET .../summary` | `summary-1` | Coverage, workbook counters, and graph counters: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`. No `links` and no cell cache |
-| `GET .../catalog` | `catalog-1` | Rows and axes without numbers. No formula class: one row has a different class per period |
+| `GET .../catalog` | `catalog-1` | Rows and axes without numbers. A period carries `phase_year`, `flags`, and `group_key`, omitted when empty the same way as the axis in `context.json`. No formula class: one row has a different class per period |
 | `GET .../observations` | `observation-1` | The only response that carries a cell cache |
+
+The first operating year and a period that carries a flag are named from the catalog periods.
 
 While a job is still running, read status from `GET /v1/context-jobs/{id}`. The passport does not replace that poll: without `context.json` or `graph.json`, the passport and observations answer 409 `report_not_ready`.
 

@@ -69,8 +69,11 @@ def _catalog_axis(axis: ContextAxis) -> CatalogAxis:
             CatalogPeriod(
                 period_key=period.period_key,
                 phase=period.phase,
+                phase_year=period.phase_year,
                 start_date=period.start_date,
                 end_date=period.end_date,
+                group_key=period.group_key,
+                flags=dict(period.flags),
             )
             for period in axis.periods
         ],
