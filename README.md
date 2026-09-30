@@ -103,9 +103,13 @@ Endpoints:
 - `GET /v1/context-jobs/{id}/graph.md`
 - `GET /v1/context-jobs/{id}/graph/trace?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
+- `GET /v1/context-jobs?status=&q=` — session jobs from `meta.json` only (`job_id`, `status`, `stage`, `source_filename`, `content_sha256`, context `schema_version`). `q` is a case-insensitive piece of the file name
+- `GET /v1/context-jobs/{id}/summary` — passport of a finished job: coverage, workbook counters, and graph counters (`unresolved`, `external`, `dangling`, cycles). No `links` and no cell cache. It does not replace polling `GET /v1/context-jobs/{id}` while the job is still running
+- `GET /v1/context-jobs/{id}/catalog` — rows and axes without numbers. Filters: `q`, repeatable `concept_id`, `sheet`, `disposition`, `limit`, `offset`
+- `GET /v1/context-jobs/{id}/observations` — the only route that returns a cell cache. Requires repeatable `row_key`, repeatable `concept_id`, or `q`. Without a selector the response is 400 `selector_required`. `limit` defaults to 24 and stops at 48 (`truncated`). `precedent_depth` defaults to 0 and stops at 3
 - `GET /healthz`, `GET /readyz`
 
-The live route schema is generated from these handlers: [Swagger UI](http://127.0.0.1:8080/docs), [ReDoc](http://127.0.0.1:8080/redoc), and `GET /openapi.json`. `context.json`, `graph.json`, and trace use the same models that write those files.
+The live route schema is generated from these handlers: [Swagger UI](http://127.0.0.1:8080/docs), [ReDoc](http://127.0.0.1:8080/redoc), and `GET /openapi.json`. `context.json`, `graph.json`, and trace use the same models that write those files. Catalog, summary, and observations are response models. They are not files on disk.
 
 HTTP `error` codes:
 
@@ -116,11 +120,12 @@ HTTP `error` codes:
 | `file_too_large` | 413 |
 | `encrypted_workbook` | 422 |
 | `zip_rejected` | 422 |
+| `selector_required` | 400 |
 | `not_found` | 404 |
 | `report_not_ready` | 409 |
 | `too_many_jobs` | 429 |
 
-`report_not_ready` is an artifact or trace fetched before the job has written that file.
+`report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key`, `concept_id`, or `q` are `selector_required`, not the whole book.
 
 Environment: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` (process default `qwen3.6-27b-fp8` when unset), `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE` (32), `EMBEDDING_CONCURRENCY` (1), `LLM_CONCURRENCY` (1, per book), `MAX_CONCURRENT_JOBS` (2), `DATA_DIR`, `JOB_TIMEOUT_SEC` (server default 3600). See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503.
 

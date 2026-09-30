@@ -24,6 +24,17 @@ class ErrorBody(BaseModel):
     detail: str | None = None
 
 
+class JobListItem(BaseModel):
+    """One session job, taken from meta.json. Context is not opened."""
+
+    job_id: str
+    status: str | None = None
+    stage: str | None = None
+    source_filename: str | None = None
+    content_sha256: str | None = None
+    schema_version: str | None = None
+
+
 class JobBody(BaseModel):
     """Job status. Document URLs appear once the job is no longer queued or running."""
 

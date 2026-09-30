@@ -9,19 +9,28 @@ from tempfile import NamedTemporaryFile
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 
 from finance_context.api.context import AppContext
 from finance_context.api.errors import ApiError
-from finance_context.api.schemas import ErrorBody, HealthBody, JobBody, ReadyBody
+from finance_context.api.etag import cached_json, etag_matches, not_modified, strong_etag
+from finance_context.api.schemas import ErrorBody, HealthBody, JobBody, JobListItem, ReadyBody
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
+from finance_context.app.jobs import list_session_jobs
 from finance_context.app.pipeline import mark_job_failed
 from finance_context.app.publisher import publisher_changed, publisher_matches, stale_from_meta
+from finance_context.context.catalog import build_catalog
+from finance_context.context.observations import build_observations
+from finance_context.context.summary import build_summary
 from finance_context.errors import ContextError
 from finance_context.excel.zip_guard import open_xlsx_zip
-from finance_context.graph.models import GraphDocument, TraceDocument
-from finance_context.models.context import ContextDocument
+from finance_context.graph.models import FormulaLink, GraphDocument, TraceDocument
+from finance_context.graph.trace import trace_graph
+from finance_context.models.catalog import CatalogDocument
+from finance_context.models.context import ContextDocument, JobStatus, TimelinePhase
+from finance_context.models.observation import ObservationDocument, ObservationPrecedent
+from finance_context.models.summary import SummaryDocument
 from finance_context.observability import log_event
 from finance_context.render.markdown import refresh_context_markdown
 from finance_context.store.fs import atomic_write_bytes, file_lock, write_json
@@ -87,6 +96,31 @@ async def readyz(request: Request) -> JSONResponse:
         "jobs": ctx.processes.alive_count(),
     }
     return JSONResponse(body, status_code=200 if writable else 503)
+
+
+_JobStatusQuery = Annotated[
+    JobStatus | None,
+    Query(description="Keep jobs with this status."),
+]
+_JobQuery = Annotated[
+    str | None,
+    Query(description="Case-insensitive substring of source_filename."),
+]
+
+
+@router.get(
+    "/v1/context-jobs",
+    response_model=list[JobListItem],
+    summary="List session jobs",
+)
+async def list_jobs(
+    request: Request,
+    status: _JobStatusQuery = None,
+    q: _JobQuery = None,
+) -> list[dict[str, str | None]]:
+    store = _ctx(request).store
+    jobs_root = store.dest_dir("_").parent
+    return await asyncio.to_thread(list_session_jobs, jobs_root, status=status, q=q)
 
 
 def _data_dir_writable(path: Path) -> bool:
@@ -434,6 +468,204 @@ async def get_graph_trace_md(
     )
     body = await asyncio.to_thread(render_trace_markdown, doc)
     return PlainTextResponse(body, media_type="text/markdown")
+
+
+_NOT_MODIFIED = {304: {"description": "Not modified"}}
+
+
+@router.get(
+    "/v1/context-jobs/{job_id}/catalog",
+    response_model=CatalogDocument,
+    summary="Row catalog without values",
+    responses={**_NOT_MODIFIED, **_errors(404, 409)},
+)
+async def get_catalog(
+    request: Request,
+    job_id: str,
+    q: Annotated[str | None, Query()] = None,
+    concept_id: Annotated[list[str] | None, Query()] = None,
+    sheet: Annotated[str | None, Query()] = None,
+    disposition: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=10000)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> Response:
+    path = _require_artifact(request, job_id, "context.json")
+    etag = strong_etag(_schema_id(CatalogDocument), _content_sha256(path.parent), path)
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return not_modified(etag)
+    payload = await asyncio.to_thread(_read_json, path)
+    context = ContextDocument.model_validate(payload)
+    doc = await asyncio.to_thread(
+        build_catalog,
+        context,
+        q=q,
+        concept_ids=concept_id,
+        sheet=sheet,
+        disposition=disposition,
+        limit=limit,
+        offset=offset,
+    )
+    return cached_json(doc.model_dump(mode="json", by_alias=True), etag)
+
+
+router.add_api_route(
+    "/v1/context-jobs/{job_id}/catalog",
+    get_catalog,
+    methods=["HEAD"],
+    include_in_schema=False,
+    response_model=CatalogDocument,
+)
+
+
+@router.get(
+    "/v1/context-jobs/{job_id}/summary",
+    response_model=SummaryDocument,
+    summary="Workbook passport without links or cell caches",
+    responses={**_NOT_MODIFIED, **_errors(404, 409)},
+)
+async def get_summary(request: Request, job_id: str) -> Response:
+    context_path = _require_artifact(request, job_id, "context.json")
+    graph_path = _require_artifact(request, job_id, "graph.json")
+    dest = context_path.parent
+    etag = strong_etag(
+        _schema_id(SummaryDocument),
+        _content_sha256(dest),
+        context_path,
+        graph_path,
+    )
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return not_modified(etag)
+    context_payload = await asyncio.to_thread(_read_json, context_path)
+    graph_payload = await asyncio.to_thread(_read_json, graph_path)
+    doc = await asyncio.to_thread(
+        build_summary,
+        context_payload,
+        graph_payload,
+        meta=_load_meta(dest),
+    )
+    return cached_json(doc.model_dump(mode="json", by_alias=True), etag)
+
+
+router.add_api_route(
+    "/v1/context-jobs/{job_id}/summary",
+    get_summary,
+    methods=["HEAD"],
+    include_in_schema=False,
+    response_model=SummaryDocument,
+)
+
+
+@router.get(
+    "/v1/context-jobs/{job_id}/observations",
+    response_model=ObservationDocument,
+    summary="Selected row-period observations",
+    responses={**_NOT_MODIFIED, **_errors(400, 404, 409)},
+)
+async def get_observations(
+    request: Request,
+    job_id: str,
+    row_key: Annotated[list[str] | None, Query()] = None,
+    concept_id: Annotated[list[str] | None, Query()] = None,
+    q: Annotated[str | None, Query()] = None,
+    period_id: Annotated[list[str] | None, Query()] = None,
+    phase: Annotated[list[TimelinePhase] | None, Query()] = None,
+    precedent_depth: Annotated[int, Query(ge=0, le=3)] = 0,
+    limit: Annotated[int, Query(ge=1, le=48)] = 24,
+) -> Response:
+    context_path = _require_artifact(request, job_id, "context.json")
+    graph_path = _require_artifact(request, job_id, "graph.json")
+    if not (row_key or concept_id or (q and q.strip())):
+        raise ApiError(400, "selector_required")
+    dest = context_path.parent
+    etag = strong_etag(
+        _schema_id(ObservationDocument),
+        _content_sha256(dest),
+        context_path,
+        graph_path,
+    )
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return not_modified(etag)
+    context_payload = await asyncio.to_thread(_read_json, context_path)
+    graph_payload = await asyncio.to_thread(_read_json, graph_path)
+    context = ContextDocument.model_validate(context_payload)
+    raw_links = graph_payload.get("links") or []
+    links = [
+        FormulaLink.model_validate(item)
+        for item in raw_links
+        if isinstance(raw_links, list) and isinstance(item, dict)
+    ]
+    lookup = _precedents(dest, _ctx(request).store.shared_dir(job_id))
+    doc = await asyncio.to_thread(
+        build_observations,
+        context,
+        links,
+        row_keys=row_key,
+        concept_ids=concept_id,
+        q=q,
+        period_ids=period_id,
+        phases=phase,
+        precedent_depth=precedent_depth,
+        limit=limit,
+        precedents=lookup if precedent_depth else None,
+    )
+    return cached_json(doc.model_dump(mode="json", by_alias=True), etag)
+
+
+router.add_api_route(
+    "/v1/context-jobs/{job_id}/observations",
+    get_observations,
+    methods=["HEAD"],
+    include_in_schema=False,
+    response_model=ObservationDocument,
+)
+
+
+def _schema_id(model: type) -> str:
+    return str(model.model_fields["schema_version"].default)
+
+
+def _content_sha256(dest: Path) -> str:
+    meta = _load_meta(dest)
+    if meta is not None and isinstance(meta.get("content_sha256"), str):
+        return meta["content_sha256"]
+    return ""
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ApiError(409, "report_not_ready") from exc
+    if not isinstance(loaded, dict):
+        raise ApiError(409, "report_not_ready")
+    return loaded
+
+
+def _precedents(dest: Path, book: Path):
+    def lookup(origin: str, depth: int) -> list[ObservationPrecedent]:
+        try:
+            traced = trace_graph(
+                dest,
+                origin=origin,
+                direction="precedents",
+                depth=depth,
+                book_dir=book,
+            )
+        except FileNotFoundError as exc:
+            raise ApiError(409, "report_not_ready") from exc
+        return [
+            ObservationPrecedent(
+                row_key=node.row_key,
+                concept_id=node.concept_id,
+                period_id=node.period_id,
+                value=node.cached_value,
+                cell=node.addr,
+            )
+            for node in traced.nodes
+            if node.depth >= 1
+        ]
+
+    return lookup
 
 
 def _check_job_id(job_id: str) -> None:

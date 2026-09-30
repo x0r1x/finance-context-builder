@@ -16,6 +16,9 @@ _PATHS = (
     "/v1/context-jobs/{job_id}/graph.md",
     "/v1/context-jobs/{job_id}/graph/trace",
     "/v1/context-jobs/{job_id}/graph/trace.md",
+    "/v1/context-jobs/{job_id}/catalog",
+    "/v1/context-jobs/{job_id}/summary",
+    "/v1/context-jobs/{job_id}/observations",
 )
 
 
@@ -35,6 +38,16 @@ def _query_names(operation: dict) -> set[str]:
     return {item["name"] for item in operation.get("parameters", []) if item["in"] == "query"}
 
 
+def _const(schema: dict, field: str) -> str | None:
+    prop = schema["properties"][field]
+    if "const" in prop:
+        return prop["const"]
+    enum = prop.get("enum")
+    if enum:
+        return enum[0]
+    return None
+
+
 def _schema_ref(operation: dict, status: str) -> str:
     content = operation["responses"][status]["content"]["application/json"]
     return content["schema"]["$ref"]
@@ -44,8 +57,26 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     spec = _spec(tmp_path)
     assert set(_PATHS) <= set(spec["paths"])
     schemas = spec["components"]["schemas"]
-    for name in ("ContextDocument", "GraphDocument", "TraceDocument", "JobBody", "ErrorBody"):
+    for name in (
+        "ContextDocument",
+        "GraphDocument",
+        "TraceDocument",
+        "JobBody",
+        "JobListItem",
+        "ErrorBody",
+        "CatalogDocument",
+        "SummaryDocument",
+        "ObservationDocument",
+    ):
         assert name in schemas
+    assert _const(schemas["CatalogDocument"], "schema_version") == "catalog-1"
+    assert _const(schemas["SummaryDocument"], "schema_version") == "summary-1"
+    assert _const(schemas["ObservationDocument"], "schema_version") == "observation-1"
+
+    listing = spec["paths"]["/v1/context-jobs"]["get"]
+    listed = listing["responses"]["200"]["content"]["application/json"]["schema"]
+    assert listed["items"]["$ref"].endswith("/JobListItem")
+    assert {"status", "q"} <= _query_names(listing)
 
     post = spec["paths"]["/v1/context-jobs"]["post"]
     assert _schema_ref(post, "202").endswith("/JobBody")
@@ -75,3 +106,22 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     assert {"from", "direction", "depth"} <= _query_names(trace)
     direction = next(item for item in trace["parameters"] if item["name"] == "direction")
     assert direction["schema"]["enum"] == ["precedents", "dependents"]
+
+    catalog = spec["paths"]["/v1/context-jobs/{job_id}/catalog"]["get"]
+    assert _schema_ref(catalog, "200").endswith("/CatalogDocument")
+    assert {"q", "concept_id", "sheet", "disposition", "limit", "offset"} <= _query_names(catalog)
+
+    summary = spec["paths"]["/v1/context-jobs/{job_id}/summary"]["get"]
+    assert _schema_ref(summary, "200").endswith("/SummaryDocument")
+
+    observations = spec["paths"]["/v1/context-jobs/{job_id}/observations"]["get"]
+    assert _schema_ref(observations, "200").endswith("/ObservationDocument")
+    assert {
+        "row_key",
+        "concept_id",
+        "q",
+        "period_id",
+        "phase",
+        "precedent_depth",
+        "limit",
+    } <= _query_names(observations)
