@@ -28,6 +28,7 @@ def build_catalog(
     *,
     q: str | None = None,
     concept_ids: list[str] | None = None,
+    labels: list[str] | None = None,
     sheet: str | None = None,
     disposition: str | None = None,
     limit: int | None = None,
@@ -36,6 +37,7 @@ def build_catalog(
     """Rows and axes. Does not copy values, series, or normalized values."""
     needle = (q or "").strip()
     concepts = set(concept_ids or [])
+    exact_labels = {item.strip().casefold() for item in (labels or []) if item.strip()}
     matched: list[CatalogRow] = []
     for block in context.blocks:
         for row in block.rows:
@@ -44,6 +46,8 @@ def build_catalog(
             if disposition is not None and row.disposition != disposition:
                 continue
             if concepts and row.concept_id not in concepts:
+                continue
+            if not _label_exact(row, exact_labels):
                 continue
             if needle and not _label_hit(row, needle):
                 continue
@@ -101,6 +105,12 @@ def _catalog_row(row: BlockRow, axis_ids: list[str]) -> CatalogRow:
             sign=hints.sign,
         ),
     )
+
+
+def _label_exact(row: BlockRow, labels: set[str]) -> bool:
+    if not labels:
+        return True
+    return row.label.casefold() in labels
 
 
 def _label_hit(row: BlockRow, needle: str) -> bool:

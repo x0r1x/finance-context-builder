@@ -76,7 +76,7 @@ Do not put `context.json` or `graph.json` in the prompt. Read graph counters fro
 | --- | --- | --- |
 | `GET /v1/context-jobs?status=&q=` | a list from `meta.json` | Session books. `context.json` is not opened. `q` is a piece of the file name |
 | `GET .../summary` | `summary-1` | Coverage, workbook counters, and graph counters: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`. No `links` and no cell cache |
-| `GET .../catalog` | `catalog-1` | Rows and axes without numbers. A period carries `phase_year`, `flags`, and `group_key`, omitted when empty the same way as the axis in `context.json`. No formula class: one row has a different class per period |
+| `GET .../catalog` | `catalog-1` | Rows and axes without numbers. A period carries `phase_year`, `flags`, and `group_key`, omitted when empty the same way as the axis in `context.json`. No formula class: one row has a different class per period. Repeatable `label` matches the row's own label in full, ignoring case. `q` is a case-insensitive substring of the label or of `label_path`. `label=General` is that row; `q=General` is that row and every row whose path contains General. `label` is not a selector on observations |
 | `GET .../observations` | `observation-1` | The only response that carries a cell cache |
 
 The first operating year and a period that carries a flag are named from the catalog periods.

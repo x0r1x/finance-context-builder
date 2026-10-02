@@ -109,7 +109,12 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
 
     catalog = spec["paths"]["/v1/context-jobs/{job_id}/catalog"]["get"]
     assert _schema_ref(catalog, "200").endswith("/CatalogDocument")
-    assert {"q", "concept_id", "sheet", "disposition", "limit", "offset"} <= _query_names(catalog)
+    assert {"q", "concept_id", "label", "sheet", "disposition", "limit", "offset"} <= _query_names(
+        catalog
+    )
+    described = {item["name"]: item.get("description") for item in catalog["parameters"]}
+    assert described["q"]
+    assert described["label"]
 
     summary = spec["paths"]["/v1/context-jobs/{job_id}/summary"]["get"]
     assert _schema_ref(summary, "200").endswith("/SummaryDocument")
