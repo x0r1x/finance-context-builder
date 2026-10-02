@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from collections import defaultdict, deque
 from pathlib import Path
 
 from finance_context.graph.models import TraceDocument, TraceEdge, TraceNode
+from finance_context.labels import own_label_contains
 from finance_context.store.fs import read_parquet
 
 
@@ -44,7 +46,7 @@ def trace_graph(
         fwd[src].append(edge)
         rev[tgt].append(edge)
 
-    starts = _resolve_origin(origin, index)
+    starts = _resolve_origin(origin, index, context_path=dest_dir / "context.json")
     if not starts and origin.strip() in cells:
         starts = [origin.strip()]
     if not starts:
@@ -127,7 +129,7 @@ def trace_graph(
     )
 
 
-def _resolve_origin(origin: str, index: dict[str, dict]) -> list[str]:
+def _resolve_origin(origin: str, index: dict[str, dict], *, context_path: Path) -> list[str]:
     text = origin.strip()
     if not text:
         return []
@@ -135,8 +137,40 @@ def _resolve_origin(origin: str, index: dict[str, dict]) -> list[str]:
         return [text]
     if "|" in text:
         return sorted(nid for nid, row in index.items() if row.get("row_key") == text)
-    hits = sorted(nid for nid, row in index.items() if row.get("concept_id") == text)
-    return hits
+    keys = _row_keys_for_label(context_path, text)
+    if not keys:
+        return []
+    return sorted(nid for nid, row in index.items() if row.get("row_key") in keys)
+
+
+def _row_keys_for_label(path: Path, needle: str) -> set[str]:
+    """Row keys whose own label contains needle. A bad context file matches nothing."""
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return set()
+    if not isinstance(loaded, dict):
+        return set()
+    blocks = loaded.get("blocks")
+    if not isinstance(blocks, list):
+        return set()
+    keys: set[str] = set()
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        rows = block.get("rows")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            label = row.get("label")
+            key = row.get("row_key")
+            if not isinstance(label, str) or not isinstance(key, str) or not key:
+                continue
+            if own_label_contains(label, needle):
+                keys.add(key)
+    return keys
 
 
 def _node(node_id: str, cell: dict, meta: dict, depth: int) -> TraceNode:

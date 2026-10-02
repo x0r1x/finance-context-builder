@@ -241,6 +241,16 @@ def test_abstained_is_found_by_label_and_not_by_a_foreign_concept() -> None:
     assert missed["truncated"] is False
 
 
+def test_query_does_not_follow_another_rows_path() -> None:
+    context = sample_context()
+    for block in context.blocks:
+        for row in block.rows:
+            if row.row_key == OTHER:
+                row.label_path = ["Operation", "Mystery line", "Other income"]
+    found = _dump(context, q="mystery")
+    assert [item["row_key"] for item in found["observations"]] == [MYSTERY]
+
+
 def test_params_scenario_comes_from_the_value_header() -> None:
     payload = _dump(sample_context(), row_keys=[DISCOUNT])
     observation = payload["observations"][0]

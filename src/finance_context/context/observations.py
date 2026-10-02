@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 
 from finance_context.excel.a1 import format_addr
 from finance_context.graph.models import FormulaLink
+from finance_context.labels import own_label_contains
 from finance_context.models.context import BlockRow, ContextDocument, ContextPeriod, FinancialBlock
 from finance_context.models.observation import (
     Observation,
@@ -108,16 +109,9 @@ def _selected(row: BlockRow, keys: set[str], concepts: set[str], needle: str) ->
         return False
     if concepts and row.concept_id not in concepts:
         return False
-    if needle and not _label_hit(row, needle):
+    if needle and not own_label_contains(row.label, needle):
         return False
     return True
-
-
-def _label_hit(row: BlockRow, needle: str) -> bool:
-    folded = needle.casefold()
-    if folded in row.label.casefold():
-        return True
-    return any(folded in part.casefold() for part in row.label_path)
 
 
 def _links_by_pair(links: Sequence[FormulaLink]) -> dict[tuple[str, str], list[FormulaLink]]:

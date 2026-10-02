@@ -104,44 +104,43 @@ def _row(context, row_key: str):
     raise AssertionError(row_key)
 
 
-def test_exact_label_matches_the_whole_name_ignoring_case() -> None:
+def test_query_reads_the_own_label_and_ignores_case() -> None:
     context = sample_context()
-    assert [row.row_key for row in build_catalog(context, labels=["Revenue"]).rows] == [REVENUE]
-    assert [row.row_key for row in build_catalog(context, labels=["revenue"]).rows] == [REVENUE]
-    assert build_catalog(context, labels=["Rev"]).rows == []
+    assert [row.row_key for row in build_catalog(context, q="revenue").rows] == [REVENUE]
     assert [row.row_key for row in build_catalog(context, q="Rev").rows] == [REVENUE]
 
 
-def test_exact_label_does_not_read_the_path() -> None:
+def test_query_does_not_read_the_path() -> None:
     context = sample_context()
     _row(context, OTHER).label_path = ["Operation", "Revenue", "Other income"]
-    exact = build_catalog(context, labels=["Revenue"])
-    assert [row.row_key for row in exact.rows] == [REVENUE]
-    broad = build_catalog(context, q="Revenue")
-    assert {row.row_key for row in broad.rows} == {REVENUE, OTHER}
+    found = build_catalog(context, q="Revenue")
+    assert [row.row_key for row in found.rows] == [REVENUE]
 
 
-def test_repeated_labels_combine_by_or_and_concept_narrows() -> None:
+def test_query_irr_skips_a_path_only_row_and_keeps_an_empty_concept() -> None:
     context = sample_context()
-    found = build_catalog(context, labels=["Revenue", "Other income"])
-    assert {row.row_key for row in found.rows} == {REVENUE, OTHER}
-    narrowed = build_catalog(
-        context,
-        labels=["Revenue", "Other income"],
-        concept_ids=["pnl.revenue"],
-    )
-    assert [row.row_key for row in narrowed.rows] == [REVENUE]
-
-
-def test_exact_label_finds_an_abstained_row() -> None:
-    found = build_catalog(sample_context(), labels=["Mystery line"])
-    assert found.total == 1
-    assert found.rows[0].row_key == MYSTERY
+    capex = _row(context, OTHER)
+    capex.label = "CAPEX"
+    capex.label_path = ["Project IRR"]
+    capex.concept_id = "val.irr"
+    project = _row(context, REVENUE)
+    project.label = "Project IRR"
+    project.concept_id = None
+    found = build_catalog(context, q="IRR")
+    assert [row.row_key for row in found.rows] == [REVENUE]
     assert found.rows[0].concept_id is None
 
 
-def test_unknown_label_keeps_the_axes() -> None:
-    missed = build_catalog(sample_context(), labels=["No such line"])
+def test_concept_id_narrows_the_label_query() -> None:
+    found = build_catalog(sample_context(), q="income", concept_ids=["pnl.other"])
+    assert [row.row_key for row in found.rows] == [OTHER]
+    missed = build_catalog(sample_context(), q="income", concept_ids=["pnl.revenue"])
+    assert missed.rows == []
+    assert missed.axes
+
+
+def test_unknown_query_keeps_the_axes() -> None:
+    missed = build_catalog(sample_context(), q="No such line")
     assert missed.total == 0
     assert missed.rows == []
     assert missed.axes
@@ -150,15 +149,15 @@ def test_unknown_label_keeps_the_axes() -> None:
 def test_same_label_on_two_sheets_returns_both() -> None:
     context = sample_context()
     _row(context, DISCOUNT).label = "Revenue"
-    both = build_catalog(context, labels=["Revenue"])
+    both = build_catalog(context, q="Revenue")
     assert {row.sheet for row in both.rows} == {"Inputs", "Operation"}
-    one = build_catalog(context, labels=["Revenue"], sheet="Operation")
+    one = build_catalog(context, q="Revenue", sheet="Operation")
     assert [row.row_key for row in one.rows] == [REVENUE]
 
 
-def test_blank_label_filter_adds_no_constraint() -> None:
+def test_blank_query_adds_no_constraint() -> None:
     context = sample_context()
-    assert build_catalog(context, labels=["", "   "]).total == build_catalog(context).total
+    assert build_catalog(context, q="   ").total == build_catalog(context).total
 
 
 def test_catalog_pages_after_the_filter() -> None:
