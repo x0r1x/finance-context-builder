@@ -109,12 +109,17 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
 
     catalog = spec["paths"]["/v1/context-jobs/{job_id}/catalog"]["get"]
     assert _schema_ref(catalog, "200").endswith("/CatalogDocument")
-    assert {"q", "concept_id", "label", "sheet", "disposition", "limit", "offset"} <= _query_names(
-        catalog
-    )
+    catalog_names = _query_names(catalog)
+    assert {"q", "concept_id", "sheet", "disposition", "limit", "offset"} <= catalog_names
+    assert "label" not in catalog_names
     described = {item["name"]: item.get("description") for item in catalog["parameters"]}
     assert described["q"]
-    assert described["label"]
+    assert "label_path" not in described["q"]
+
+    trace_described = {item["name"]: item.get("description") for item in trace["parameters"]}
+    assert trace_described["from"]
+    assert "concept_id" not in trace_described["from"]
+    assert "label_path" not in trace_described["from"]
 
     summary = spec["paths"]["/v1/context-jobs/{job_id}/summary"]["get"]
     assert _schema_ref(summary, "200").endswith("/SummaryDocument")
@@ -130,3 +135,6 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
         "precedent_depth",
         "limit",
     } <= _query_names(observations)
+    observed = {item["name"]: item.get("description") for item in observations["parameters"]}
+    assert observed["q"] == described["q"]
+    assert "label_path" not in observed["q"]

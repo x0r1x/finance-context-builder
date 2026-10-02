@@ -84,7 +84,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph/trace?from=P%26L!C13&d
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph/trace.md?from=P%26L!C13&direction=precedents&depth=8"
 ```
 
-`from` is a cell address (`P&L!J13`), a `row_key` (`P&L|13|P&L!r2`), or a `concept_id` (`pnl.ebitda`). `direction`: `precedents` (toward inputs) or `dependents` (toward results). The response has the address, `row_key`, `concept_id`, period, cache, A1 formula, and refs. No `formula_ast`. A range is one edge; empty `INDEX` members are not nodes. Non-empty `SUM` members are walked so depth reaches the next cells.
+`from` is a cell address (`P&L!J13`), a `row_key` (`P&L|13|P&L!r2`), or a label (`EBITDA`). `direction`: `precedents` (toward inputs) or `dependents` (toward results). The response has the address, `row_key`, `concept_id`, period, cache, A1 formula, and refs. No `formula_ast`. A range is one edge; empty `INDEX` members are not nodes. Non-empty `SUM` members are walked so depth reaches the next cells.
 
 Mapping still uses expanded ranges in IR as an internal structure signal.
 
@@ -93,4 +93,4 @@ Mapping still uses expanded ranges in IR as an internal structure signal.
 - EBITDA `=SUM(J9:J12)` in `links` is one ref to the range. The cell expansion stays in `ir/cell_edges.parquet`.
 - Blank cells inside `INDEX(J8:O8)` are `empty` / `actual_blank_cell` in parquet and a `dangling_classes` counter, not a parser error and not a ref in `links`. A single reference to the same blank cell is `empty_ref`. Trace does not show those blank addresses.
 - `P&L` Gross revenues `=Operation!…` with `C[-1]` gets `period_lag` ≠ `same` in `ir/graph_edges.parquet`. In `ir/cell_edges.parquet` the lag stays empty.
-- From `pnl.ebitda` / `cf.cfads`, trace reaches Input Assumptions (traffic, inflation, rates) when the formulas are linked that way.
+- From the labels `EBITDA` / `CFADS`, trace reaches Input Assumptions (traffic, inflation, rates) when the formulas are linked that way.
