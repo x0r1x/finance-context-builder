@@ -74,10 +74,33 @@ def build_observations(
                 )
     kept = found[:limit]
     if precedent_depth > 0 and precedents is not None:
+        labels = _row_labels(context)
         for item in kept:
             origin = f"{item.source.sheet}!{item.source.cell}"
-            item.formula.precedents = list(precedents(origin, precedent_depth))[:limit]
+            walked = [
+                node for node in precedents(origin, precedent_depth) if node.depth >= 1
+            ]
+            item.formula.precedents_total = len(walked)
+            item.formula.precedents = [_with_label(node, labels) for node in walked]
     return ObservationDocument(truncated=len(found) > limit, observations=kept)
+
+
+def _row_labels(context: ContextDocument) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for block in context.blocks:
+        for row in block.rows:
+            labels.setdefault(row.row_key, row.label)
+    return labels
+
+
+def _with_label(
+    precedent: ObservationPrecedent, labels: dict[str, str]
+) -> ObservationPrecedent:
+    key = precedent.row_key or ""
+    label = labels.get(key) if key else None
+    if precedent.label == label:
+        return precedent
+    return precedent.model_copy(update={"label": label})
 
 
 def _selected(row: BlockRow, keys: set[str], concepts: set[str], needle: str) -> bool:

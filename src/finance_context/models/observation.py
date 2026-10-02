@@ -29,6 +29,8 @@ class ObservationPrecedent(BaseModel):
     period_id: str | None = None
     value: str | None = None
     cell: str | None = None
+    depth: int
+    label: str | None = None
 
 
 class ObservationFormula(BaseModel):
@@ -37,6 +39,7 @@ class ObservationFormula(BaseModel):
     text: str | None = None
     formula_class: FormulaClass | None = Field(default=None, alias="class")
     precedents: list[ObservationPrecedent] = Field(default_factory=list)
+    precedents_total: int = 0
 
 
 class ObservationSource(BaseModel):

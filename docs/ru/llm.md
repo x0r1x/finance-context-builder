@@ -85,7 +85,7 @@
 
 Наблюдения требуют хотя бы один селектор: повторяемый `row_key`, повторяемый `concept_id` или `q`. Нет ни одного — 400 `selector_required`, не вся книга. `period_id` и `phase` селекторами не являются. Неизвестный селектор внутри готовой джобы — 200 и пустой список. Чужой `job_id` — 404.
 
-`limit` по умолчанию 24, максимум 48. Сверх лимита список обрезается и `truncated=true`. `precedent_depth` по умолчанию 0, максимум 3. Глубина 0 не вызывает trace: список прецедентов пуст. Глубина 1–3 вызывает текущий `trace_graph` и кладёт короткий список (`row_key`, `concept_id`, `period_id`, кэш строкой в `value`, адрес в `cell`). Тот же `limit` обрезает прецеденты одного наблюдения и сам по себе `truncated` не ставит. Число вне диапазона — 422.
+`limit` по умолчанию 24, максимум 48. Сверх лимита список наблюдений обрезается и `truncated=true`. `precedent_depth` по умолчанию 0, максимум 3. Глубина 0 не вызывает trace: список прецедентов пуст и `precedents_total` равен 0. Глубина 1–3 вызывает текущий `trace_graph` и вкладывает весь обход этой глубины. `precedents_total` равен длине этого списка. Шире на этом роуте — больший `precedent_depth`. Выше 3 ответ 422. Дальше этой глубины обход читают через `graph/trace`. В элементе есть `depth` и `label` строки с тем же `row_key`. Нет `row_key` — `label` пустой. Число вне диапазона — 422.
 
 `ETag` каталога, паспорта и наблюдений сильный: схема, `content_sha256` и stat файла. У паспорта и наблюдений в stat входит и `graph.json`. Повтор того же URL с `If-None-Match` даёт 304 без тела. `HEAD` того же пути возвращает тот же `ETag` и пустое тело. 400 и 409 `ETag` не получают. Адрес ячейки и класс формулы — поля ответа. В `context.json` они по-прежнему не пишутся.
 
@@ -106,7 +106,7 @@
 | `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` — токен `unit` / `k` / `m` / `bn`. Множитель — отдельный `scale_factor`. Без `kind` ставка выглядит как деньги |
 | `formula.text` | link с тем же `row_key` и `period_id`, иначе `row.formula` | Текст формулы этого периода. Нет link — fingerprint строки или `null`. Формула stub не подставляется |
 | `formula.class` | `links[].formula_class` | Класс этой ячейки в ответе. В `context.json` его нет. AST не копируется |
-| `formula.precedents` | `trace_graph` при `precedent_depth` 1–3 | `row_key`, `concept_id`, `period_id`, кэш в `value`, адрес в `cell`. При глубине 0 список пуст |
+| `formula.precedents` | `trace_graph` при `precedent_depth` 1–3 | `depth`, `label`, `row_key`, `concept_id`, `period_id`, кэш в `value`, адрес в `cell`. `depth` 1 — прямой вход. `label` берётся из строки контекста с тем же `row_key`. Список — весь обход запрошенной глубины, `precedents_total` равен его длине. При глубине 0 список пуст, `precedents_total` равен 0. Шире — больший `precedent_depth` или `graph/trace` |
 | `source.sheet`, `source.cell` | лист, номер строки и `period.col` | Адрес считается в ответе. В `context.json` per-cell `source` нет |
 | `timeline.phase`, `phase_year`, `group_key`, `flags` | `axes[].periods[]` с тем же `period_key` на оси серии | Копия в срез, чтобы модель не джойнила. В `blocks[].periods` фазу не дублируют. `group_key` есть у месяца под повторяющимся годом |
 
