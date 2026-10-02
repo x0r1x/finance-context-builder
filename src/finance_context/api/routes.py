@@ -482,8 +482,15 @@ _NOT_MODIFIED = {304: {"description": "Not modified"}}
 async def get_catalog(
     request: Request,
     job_id: str,
-    q: Annotated[str | None, Query()] = None,
+    q: Annotated[
+        str | None,
+        Query(description="Case-insensitive substring of the label or label_path."),
+    ] = None,
     concept_id: Annotated[list[str] | None, Query()] = None,
+    label: Annotated[
+        list[str] | None,
+        Query(description="Repeatable case-insensitive exact match of the row label."),
+    ] = None,
     sheet: Annotated[str | None, Query()] = None,
     disposition: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=10000)] = None,
@@ -500,6 +507,7 @@ async def get_catalog(
         context,
         q=q,
         concept_ids=concept_id,
+        labels=label,
         sheet=sheet,
         disposition=disposition,
         limit=limit,

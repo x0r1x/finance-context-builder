@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.helpers.slice_book import MYSTERY, sample_context
+from tests.helpers.slice_book import DISCOUNT, MYSTERY, OTHER, REVENUE, sample_context
 
 from finance_context.context.catalog import build_catalog
 from finance_context.models.context import ContextPeriod
@@ -94,6 +94,71 @@ def test_catalog_finds_abstained_by_label_not_by_concept() -> None:
     assert missed.total == 0
     assert missed.rows == []
     assert missed.axes
+
+
+def _row(context, row_key: str):
+    for block in context.blocks:
+        for row in block.rows:
+            if row.row_key == row_key:
+                return row
+    raise AssertionError(row_key)
+
+
+def test_exact_label_matches_the_whole_name_ignoring_case() -> None:
+    context = sample_context()
+    assert [row.row_key for row in build_catalog(context, labels=["Revenue"]).rows] == [REVENUE]
+    assert [row.row_key for row in build_catalog(context, labels=["revenue"]).rows] == [REVENUE]
+    assert build_catalog(context, labels=["Rev"]).rows == []
+    assert [row.row_key for row in build_catalog(context, q="Rev").rows] == [REVENUE]
+
+
+def test_exact_label_does_not_read_the_path() -> None:
+    context = sample_context()
+    _row(context, OTHER).label_path = ["Operation", "Revenue", "Other income"]
+    exact = build_catalog(context, labels=["Revenue"])
+    assert [row.row_key for row in exact.rows] == [REVENUE]
+    broad = build_catalog(context, q="Revenue")
+    assert {row.row_key for row in broad.rows} == {REVENUE, OTHER}
+
+
+def test_repeated_labels_combine_by_or_and_concept_narrows() -> None:
+    context = sample_context()
+    found = build_catalog(context, labels=["Revenue", "Other income"])
+    assert {row.row_key for row in found.rows} == {REVENUE, OTHER}
+    narrowed = build_catalog(
+        context,
+        labels=["Revenue", "Other income"],
+        concept_ids=["pnl.revenue"],
+    )
+    assert [row.row_key for row in narrowed.rows] == [REVENUE]
+
+
+def test_exact_label_finds_an_abstained_row() -> None:
+    found = build_catalog(sample_context(), labels=["Mystery line"])
+    assert found.total == 1
+    assert found.rows[0].row_key == MYSTERY
+    assert found.rows[0].concept_id is None
+
+
+def test_unknown_label_keeps_the_axes() -> None:
+    missed = build_catalog(sample_context(), labels=["No such line"])
+    assert missed.total == 0
+    assert missed.rows == []
+    assert missed.axes
+
+
+def test_same_label_on_two_sheets_returns_both() -> None:
+    context = sample_context()
+    _row(context, DISCOUNT).label = "Revenue"
+    both = build_catalog(context, labels=["Revenue"])
+    assert {row.sheet for row in both.rows} == {"Inputs", "Operation"}
+    one = build_catalog(context, labels=["Revenue"], sheet="Operation")
+    assert [row.row_key for row in one.rows] == [REVENUE]
+
+
+def test_blank_label_filter_adds_no_constraint() -> None:
+    context = sample_context()
+    assert build_catalog(context, labels=["", "   "]).total == build_catalog(context).total
 
 
 def test_catalog_pages_after_the_filter() -> None:

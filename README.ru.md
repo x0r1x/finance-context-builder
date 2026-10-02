@@ -98,7 +98,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs?status=&q=` — книги сессии только из `meta.json` (`job_id`, `status`, `stage`, `source_filename`, `content_sha256`, `schema_version` context). `q` — фрагмент имени файла без регистра
 - `GET /v1/context-jobs/{id}/summary` — паспорт готовой джобы: покрытие, счётчики книги и счётчики графа (`unresolved`, `external`, `dangling`, циклы). Без `links` и без кэша ячеек. Пока джоба считается, статус по-прежнему смотрят через `GET /v1/context-jobs/{id}`
-- `GET /v1/context-jobs/{id}/catalog` — строки и оси без чисел. У периода также есть `phase_year`, `flags` и `group_key`. Фильтры: `q`, повторяемый `concept_id`, `sheet`, `disposition`, `limit`, `offset`
+- `GET /v1/context-jobs/{id}/catalog` — строки и оси без чисел. У периода также есть `phase_year`, `flags` и `group_key`. Фильтры: `q` (подстрока подписи или `label_path` без регистра), повторяемый `label` (полное совпадение собственной подписи без регистра), повторяемый `concept_id`, `sheet`, `disposition`, `limit`, `offset`
 - `GET /v1/context-jobs/{id}/observations` — единственный роут с кэшем ячеек. Нужен повторяемый `row_key`, повторяемый `concept_id` или `q`. Без селектора ответ 400 `selector_required`. `limit` по умолчанию 24 и не больше 48 (`truncated`). Прецеденты не режутся лимитом строк. Полнота видна по `precedents_total`. `precedent_depth` по умолчанию 0 и не больше 3
 - `GET /healthz`, `GET /readyz`
 
