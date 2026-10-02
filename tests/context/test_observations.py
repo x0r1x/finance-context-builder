@@ -50,6 +50,7 @@ def test_revenue_observation_matches_the_slice_fields() -> None:
                 "text": "=RC[-1]*(1+Growth)",
                 "class": "cross_period",
                 "precedents": [],
+                "precedents_total": 0,
             },
             "source": {"sheet": "Operation", "cell": "H10"},
             "timeline": {
@@ -74,6 +75,7 @@ def test_sum_precedents_include_child_rows() -> None:
                 period_id="Y5",
                 value="1234.56",
                 cell="H10",
+                depth=1,
             ),
             ObservationPrecedent(
                 row_key=OTHER,
@@ -81,6 +83,7 @@ def test_sum_precedents_include_child_rows() -> None:
                 period_id="Y5",
                 value="765.44",
                 cell="H11",
+                depth=1,
             ),
         ]
 
@@ -92,7 +95,12 @@ def test_sum_precedents_include_child_rows() -> None:
     )
     precedents = payload["observations"][0]["formula"]["precedents"]
     assert [item["row_key"] for item in precedents] == [REVENUE, OTHER]
+    assert [item["label"] for item in precedents] == ["Revenue", "Other income"]
+    assert [item["depth"] for item in precedents] == [1, 1]
     assert payload["observations"][0]["formula"]["class"] == "aggregation"
+    formula = payload["observations"][0]["formula"]
+    assert formula["precedents_total"] == len(precedents) == 2
+    assert "precedents_truncated" not in formula
     assert all(item["row_key"] for item in precedents)
 
 
@@ -106,13 +114,21 @@ def test_depth_zero_does_not_call_trace() -> None:
         precedent_depth=0,
         precedents=lookup,
     )
-    assert payload["observations"][0]["formula"]["precedents"] == []
+    formula = payload["observations"][0]["formula"]
+    assert formula["precedents"] == []
+    assert formula["precedents_total"] == 0
+    assert "precedents_truncated" not in formula
 
 
-def test_precedent_limit_does_not_truncate_the_observation() -> None:
+def test_observation_limit_does_not_cut_precedents() -> None:
     def lookup(origin: str, depth: int) -> list[ObservationPrecedent]:
         return [
-            ObservationPrecedent(row_key=f"child-{index}", value="1", cell=f"A{index}")
+            ObservationPrecedent(
+                row_key=f"child-{index}",
+                value="1",
+                cell=f"A{index}",
+                depth=1,
+            )
             for index in range(5)
         ]
 
@@ -123,8 +139,96 @@ def test_precedent_limit_does_not_truncate_the_observation() -> None:
         limit=2,
         precedents=lookup,
     )
+    formula = payload["observations"][0]["formula"]
     assert payload["truncated"] is False
-    assert len(payload["observations"][0]["formula"]["precedents"]) == 2
+    assert len(formula["precedents"]) == 5
+    assert formula["precedents_total"] == 5
+
+
+def test_direct_inputs_stay_past_the_old_page_size() -> None:
+    def lookup(origin: str, depth: int) -> list[ObservationPrecedent]:
+        return [
+            ObservationPrecedent(row_key=f"child-{index}", value="1", cell="A1", depth=1)
+            for index in range(25)
+        ]
+
+    payload = _dump(
+        sample_context(),
+        row_keys=[TOTAL],
+        precedent_depth=1,
+        precedents=lookup,
+    )
+    formula = payload["observations"][0]["formula"]
+    assert payload["truncated"] is False
+    assert len(formula["precedents"]) == 25
+    assert formula["precedents_total"] == 25
+
+
+def test_a_wide_formula_keeps_every_direct_input() -> None:
+    def lookup(origin: str, depth: int) -> list[ObservationPrecedent]:
+        direct = [
+            ObservationPrecedent(row_key=f"in-{index}", value="1", cell="A1", depth=1)
+            for index in range(130)
+        ]
+        deeper = [ObservationPrecedent(row_key="deep-0", value="1", cell="B1", depth=2)]
+        return [*direct, *deeper]
+
+    payload = _dump(
+        sample_context(),
+        row_keys=[TOTAL],
+        precedent_depth=2,
+        precedents=lookup,
+    )
+    formula = payload["observations"][0]["formula"]
+    assert payload["truncated"] is False
+    assert formula["precedents_total"] == 131
+    assert [item["row_key"] for item in formula["precedents"]] == [
+        *[f"in-{index}" for index in range(130)],
+        "deep-0",
+    ]
+
+
+def test_deeper_precedents_fill_the_page_budget() -> None:
+    def lookup(origin: str, depth: int) -> list[ObservationPrecedent]:
+        direct = [
+            ObservationPrecedent(row_key=f"in-{index}", value="1", cell="A1", depth=1)
+            for index in range(10)
+        ]
+        deeper = [
+            ObservationPrecedent(row_key=f"deep-{index}", value="1", cell="B1", depth=2)
+            for index in range(130)
+        ]
+        return [*direct, *deeper]
+
+    payload = _dump(
+        sample_context(),
+        row_keys=[TOTAL],
+        precedent_depth=2,
+        precedents=lookup,
+    )
+    formula = payload["observations"][0]["formula"]
+    embedded = formula["precedents"]
+    assert payload["truncated"] is False
+    assert formula["precedents_total"] == 140
+    assert len(embedded) == 140
+    assert [item["row_key"] for item in embedded[:10]] == [f"in-{index}" for index in range(10)]
+    assert [item["row_key"] for item in embedded[10:]] == [f"deep-{index}" for index in range(130)]
+
+
+def test_precedent_outside_the_layout_keeps_an_empty_label() -> None:
+    def lookup(origin: str, depth: int) -> list[ObservationPrecedent]:
+        return [ObservationPrecedent(value="1", cell="Z9", depth=2)]
+
+    payload = _dump(
+        sample_context(),
+        row_keys=[TOTAL],
+        precedent_depth=1,
+        precedents=lookup,
+    )
+    precedent = payload["observations"][0]["formula"]["precedents"][0]
+    assert precedent["row_key"] is None
+    assert precedent["label"] is None
+    assert precedent["depth"] == 2
 
 
 def test_abstained_is_found_by_label_and_not_by_a_foreign_concept() -> None:

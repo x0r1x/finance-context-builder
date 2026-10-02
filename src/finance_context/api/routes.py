@@ -660,6 +660,7 @@ def _precedents(dest: Path, book: Path):
                 period_id=node.period_id,
                 value=node.cached_value,
                 cell=node.addr,
+                depth=node.depth,
             )
             for node in traced.nodes
             if node.depth >= 1
