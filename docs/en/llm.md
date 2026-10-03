@@ -76,14 +76,14 @@ Do not put `context.json` or `graph.json` in the prompt. Read graph counters fro
 | --- | --- | --- |
 | `GET /v1/context-jobs?status=&q=` | a list from `meta.json` | Session books. `context.json` is not opened. `q` is a piece of the file name |
 | `GET .../summary` | `summary-1` | Coverage, workbook counters, and graph counters: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`. No `links` and no cell cache |
-| `GET .../catalog` | `catalog-1` | Rows and axes without numbers. A period carries `phase_year`, `flags`, and `group_key`, omitted when empty the same way as the axis in `context.json`. No formula class: one row has a different class per period. Repeatable `label` matches the row's own label in full, ignoring case. `q` is a case-insensitive substring of the label or of `label_path`. `label=General` is that row; `q=General` is that row and every row whose path contains General. `label` is not a selector on observations |
+| `GET .../catalog` | `catalog-1` | Rows and axes without numbers. A period carries `phase_year`, `flags`, and `group_key`, omitted when empty the same way as the axis in `context.json`. No formula class: one row has a different class per period. `q` is a case-insensitive substring of the row's own label. `q=General` matches a label that contains General. A child with another label does not enter. The path is not searched |
 | `GET .../observations` | `observation-1` | The only response that carries a cell cache |
 
 The first operating year and a period that carries a flag are named from the catalog periods.
 
 While a job is still running, read status from `GET /v1/context-jobs/{id}`. The passport does not replace that poll: without `context.json` or `graph.json`, the passport and observations answer 409 `report_not_ready`.
 
-Observations require at least one selector: repeatable `row_key`, repeatable `concept_id`, or `q`. A request with none of them returns 400 `selector_required`. The route does not send the whole book. `period_id` and `phase` are not selectors. An unknown selector inside a finished job is 200 and an empty list. A foreign `job_id` is 404.
+Observations require at least one selector: repeatable `row_key`, repeatable `concept_id`, or `q`. `q` is the same case-insensitive substring of the row's own label as the catalog. The path is not searched. A request with none of them returns 400 `selector_required`. The route does not send the whole book. `period_id` and `phase` are not selectors. An unknown selector inside a finished job is 200 and an empty list. A foreign `job_id` is 404.
 
 `limit` defaults to 24 and stops at 48. Past the limit the observation list is cut and `truncated=true`. `precedent_depth` defaults to 0 and stops at 3. Depth 0 does not call trace: the precedent list is empty and `precedents_total` is 0. Depth 1–3 calls the current `trace_graph` and embeds the whole walk at that depth. `precedents_total` is the length of that list. A wider walk on this route is a higher `precedent_depth`. Above 3 the response is 422. Beyond that depth, read `graph/trace`. Each item carries `depth` and the `label` of the context row with the same `row_key`. With no `row_key`, `label` is null. A number outside the range is 422.
 

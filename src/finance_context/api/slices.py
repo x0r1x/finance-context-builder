@@ -30,6 +30,7 @@ from finance_context.models.summary import SummaryDocument
 router = APIRouter()
 
 _NOT_MODIFIED = {304: {"description": "Not modified"}}
+_OWN_LABEL = "Case-insensitive substring of the row's own label."
 
 @router.get(
     "/v1/context-jobs/{job_id}/catalog",
@@ -40,15 +41,8 @@ _NOT_MODIFIED = {304: {"description": "Not modified"}}
 async def get_catalog(
     request: Request,
     job_id: str,
-    q: Annotated[
-        str | None,
-        Query(description="Case-insensitive substring of the label or label_path."),
-    ] = None,
+    q: Annotated[str | None, Query(description=_OWN_LABEL)] = None,
     concept_id: Annotated[list[str] | None, Query()] = None,
-    label: Annotated[
-        list[str] | None,
-        Query(description="Repeatable case-insensitive exact match of the row label."),
-    ] = None,
     sheet: Annotated[str | None, Query()] = None,
     disposition: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=10000)] = None,
@@ -65,7 +59,6 @@ async def get_catalog(
         context,
         q=q,
         concept_ids=concept_id,
-        labels=label,
         sheet=sheet,
         disposition=disposition,
         limit=limit,
@@ -132,7 +125,7 @@ async def get_observations(
     job_id: str,
     row_key: Annotated[list[str] | None, Query()] = None,
     concept_id: Annotated[list[str] | None, Query()] = None,
-    q: Annotated[str | None, Query()] = None,
+    q: Annotated[str | None, Query(description=_OWN_LABEL)] = None,
     period_id: Annotated[list[str] | None, Query()] = None,
     phase: Annotated[list[TimelinePhase] | None, Query()] = None,
     precedent_depth: Annotated[int, Query(ge=0, le=3)] = 0,

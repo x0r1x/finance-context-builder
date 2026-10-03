@@ -17,7 +17,7 @@ router = APIRouter()
 
 _From = Annotated[
     str,
-    Query(alias="from", description="Cell address, row_key, or concept_id."),
+    Query(alias="from", description="Cell address, row_key, or label."),
 ]
 _Direction = Annotated[
     Literal["precedents", "dependents"],

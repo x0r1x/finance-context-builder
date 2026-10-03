@@ -84,7 +84,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph/trace?from=P%26L!C13&d
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph/trace.md?from=P%26L!C13&direction=precedents&depth=8"
 ```
 
-`from` — адрес ячейки (`P&L!J13`), `row_key` (`P&L|13|P&L!r2`) или `concept_id` (`pnl.ebitda`). `direction`: `precedents` (к входам) или `dependents` (к результатам). Ответ: адрес, `row_key`, `concept_id`, период, кэш, A1-формула и refs. Без `formula_ast`. Диапазон — одно ребро; пустые члены `INDEX` в узлы не входят. Непустые члены `SUM` обходятся, чтобы глубина доходила до следующих ячеек.
+`from` — адрес ячейки (`P&L!J13`), `row_key` (`P&L|13|P&L!r2`) или подпись (`EBITDA`). `direction`: `precedents` (к входам) или `dependents` (к результатам). Ответ: адрес, `row_key`, `concept_id`, период, кэш, A1-формула и refs. Без `formula_ast`. Диапазон — одно ребро; пустые члены `INDEX` в узлы не входят. Непустые члены `SUM` обходятся, чтобы глубина доходила до следующих ячеек.
 
 Mapping по-прежнему использует развёрнутые ranges в IR как внутренний сигнал structure.
 
@@ -93,4 +93,4 @@ Mapping по-прежнему использует развёрнутые ranges
 - EBITDA `=SUM(J9:J12)` в `links` — один ref на диапазон. Развёртка по ячейкам остаётся в `ir/cell_edges.parquet`.
 - Пустые клетки внутри `INDEX(J8:O8)` — `empty` / `actual_blank_cell` в parquet и счётчик `dangling_classes`, не ошибка парсера и не ref в `links`. Одиночная ссылка на такую же пустую ячейку — `empty_ref`. Trace эти пустые адреса не показывает.
 - `P&L` Gross revenues `=Operation!…` с `C[-1]` получает `period_lag` ≠ `same` в `ir/graph_edges.parquet`. В `ir/cell_edges.parquet` лаг остаётся пустым.
-- От `pnl.ebitda` / `cf.cfads` trace доходит до Input Assumptions (traffic, inflation, rates), если формулы так связаны.
+- От подписей `EBITDA` / `CFADS` trace доходит до Input Assumptions (traffic, inflation, rates), если формулы так связаны.
