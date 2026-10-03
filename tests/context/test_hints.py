@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from finance_context.context.build import (
+from finance_context.context.assemble import (
     _escalation_hint,
     _hint_blob_and_tokens,
     _hints_for,

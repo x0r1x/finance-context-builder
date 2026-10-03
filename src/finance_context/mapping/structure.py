@@ -3,95 +3,30 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from typing import Any, Protocol
+from typing import Any
 
 from finance_context.formulas.engine import FormulaEngine
-from finance_context.layout.models import Block, Layout, LayoutRow
-from finance_context.layout.resolve import axes_for, period_headers
-from finance_context.mapping.graph import row_adjacency
+from finance_context.layout.resolve import period_headers
+from finance_context.mapping.book import BookView, RowPattern, _block_id, _concept_at
+from finance_context.mapping.book import Signal as Signal
+from finance_context.mapping.book import build_row_context as build_row_context
 from finance_context.mapping.models import (
-    Calculation,
     Candidate,
-    Concept,
-    LexicalPattern,
     RowContext,
     RowRelation,
-    ValueKind,
 )
-from finance_context.mapping.normalize import memory_unit, normalize_label
+from finance_context.mapping.normalize import normalize_label
 from finance_context.mapping.patterns import pattern_matches
-from finance_context.mapping.roles import article_role
-from finance_context.mapping.rowfacets import infer_row_facets
+from finance_context.mapping.priors import _graph_priors, _neighbor_priors
+from finance_context.mapping.relations import (
+    _diff_parent,
+    _equity_cashflow_sum,
+    _relation_from_pattern,
+    _shared_concept,
+)
 from finance_context.mapping.statement import remap_alias_concept
 
 _ENGINE = FormulaEngine(locale_hint="en")
-
-
-class RowPattern:
-    __slots__ = (
-        "kind",
-        "alias_sheet",
-        "alias_row",
-        "aggregate_rows",
-        "diff_rows",
-        "roll_from_row",
-        "is_ratio",
-        "is_total",
-        "template",
-    )
-
-    def __init__(self) -> None:
-        self.kind = "value"
-        self.alias_sheet: str | None = None
-        self.alias_row: int | None = None
-        self.aggregate_rows: list[int] = []
-        self.diff_rows: tuple[int, int] | None = None
-        self.roll_from_row: int | None = None
-        self.is_ratio = False
-        self.is_total = False
-        self.template: str | None = None
-
-
-class BookView:
-    def __init__(
-        self,
-        layout: Layout,
-        cells: list[dict],
-        taxonomy: list[Concept],
-        *,
-        calculations: list[Calculation] | None = None,
-        patterns: list[LexicalPattern] | None = None,
-        edges: list[dict] | None = None,
-    ) -> None:
-        self.layout = layout
-        self.taxonomy = {c.id: c for c in taxonomy}
-        self.calculations = list(calculations or [])
-        self.lexical_patterns = list(patterns or [])
-        self.cells: dict[tuple[str, int, int], dict] = {
-            (str(c["sheet"]), int(c["row"]), int(c["col"])): c for c in cells
-        }
-        self.by_row: dict[tuple[str, int], list[dict]] = {}
-        for cell in cells:
-            key = (str(cell["sheet"]), int(cell["row"]))
-            self.by_row.setdefault(key, []).append(cell)
-        self.row_index: dict[tuple[str, int], tuple[Block, LayoutRow]] = {}
-        for sheet in layout.sheets:
-            for block in sheet.blocks:
-                for row in block.rows:
-                    self.row_index[(sheet.name, row.row)] = (block, row)
-        self.patterns: dict[str, RowPattern] = {}
-        self.concepts: dict[str, str] = {}
-        self.relations: list[RowRelation] = []
-        self.precedents, self.dependents = row_adjacency(edges or [])
-
-    def row_key(self, sheet: str, row: int, block_id: str) -> str:
-        return f"{sheet}|{row}|{block_id}"
-
-
-class Signal(Protocol):
-    name: str
-
-    def propose(self, ctx: RowContext, book: BookView) -> list[Candidate]: ...
 
 
 def analyze_structure(book: BookView) -> dict[str, RowPattern]:
@@ -115,144 +50,6 @@ def analyze_structure(book: BookView) -> dict[str, RowPattern]:
     book.patterns = patterns
     book.relations = relations
     return patterns
-
-
-def build_row_context(
-    book: BookView,
-    sheet: str,
-    block: Block,
-    layout_row: LayoutRow,
-    parent_label: str | None,
-    templates: list[str | None],
-) -> RowContext:
-    key = book.row_key(sheet, layout_row.row, block.block_id)
-    pattern = book.patterns.get(key) or RowPattern()
-    block_axes = axes_for(
-        next(item for item in book.layout.sheets if item.name == sheet),
-        block,
-    )
-    anchor_col: int | None = None
-    grain: str | None = None
-    headers: list[str] = []
-    if getattr(block, "kind", "timeline") == "params":
-        value_cols = [cell.col for cell in layout_row.cells if cell.role == "value"]
-        if value_cols:
-            anchor_col = min(value_cols)
-    elif block_axes:
-        primary = max(block_axes, key=lambda axis: len(axis.periods))
-        grain = primary.grain
-        headers = [period.text for period in primary.periods[:12]]
-        if primary.periods:
-            anchor_col = min(period.col for period in primary.periods)
-    value_kind = _value_kind(book, sheet, layout_row.row, block, pattern)
-    unit_kind = _unit_from_row_cells(book, sheet, layout_row)
-    if unit_kind and not (unit_kind == "money" and value_kind == "rate"):
-        # A percent format on the values outranks a copied `EUR'000` caption.
-        value_kind = unit_kind
-    else:
-        if _semantic_ratio(layout_row.label, value_kind):
-            value_kind = "ratio"
-        elif _semantic_count(layout_row.label):
-            value_kind = "count"
-        if _lease_rate_input(layout_row.label, book, sheet, layout_row.row, block, value_kind):
-            value_kind = "rate"
-    row_memory_unit = memory_unit(_unit_text(book, sheet, layout_row), value_kind)
-    section = " / ".join(layout_row.section_path)
-    query = " | ".join(
-        part
-        for part in (
-            layout_row.label,
-            parent_label or "",
-            section,
-            sheet,
-            value_kind,
-        )
-        if part
-    )
-    prev_labels, next_labels = _neighbor_labels(block, layout_row.row)
-    ctx = RowContext(
-        row_key=key,
-        sheet=sheet,
-        row=layout_row.row,
-        block_id=block.block_id,
-        label=layout_row.label,
-        parent_label=parent_label,
-        section_path=list(layout_row.section_path),
-        kind=layout_row.kind,
-        value_kind=value_kind,
-        is_total=pattern.is_total or bool(pattern.aggregate_rows),
-        period_grain=grain,
-        period_headers=headers,
-        article_role=article_role(
-            layout_row,
-            templates,
-            block_kind=getattr(block, "kind", "timeline"),
-        ),
-        query_text=query,
-        label_col=layout_row.label_col or block.label_col,
-        anchor_col=anchor_col,
-        prev_labels=prev_labels,
-        next_labels=next_labels,
-        memory_unit=row_memory_unit,
-    )
-    ctx.inferred_facets = infer_row_facets(ctx, pattern_kind=pattern.kind)
-    return ctx
-
-
-def _value_kind(
-    book: BookView,
-    sheet: str,
-    row: int,
-    block: Block,
-    pattern: RowPattern,
-) -> ValueKind:
-    if pattern.kind == "prorate":
-        return "money"
-    if pattern.is_ratio:
-        return "ratio"
-    percents = 0
-    numbers = 0
-    for header in period_headers(
-        next(item for item in book.layout.sheets if item.name == sheet),
-        block,
-    ):
-        cell = book.cells.get((sheet, row, header.col))
-        if cell is None:
-            continue
-        fmt = str(cell.get("number_format") or "")
-        if "%" in fmt:
-            percents += 1
-        text = cell.get("cached_value")
-        if text not in (None, ""):
-            numbers += 1
-    if percents and percents >= max(1, numbers // 2):
-        return "rate"
-    return "money"
-
-
-def _unit_text(book: BookView, sheet: str, layout_row: LayoutRow) -> str | None:
-    for item in layout_row.cells:
-        if item.role != "unit":
-            continue
-        cell = book.cells.get((sheet, layout_row.row, item.col))
-        text = "" if cell is None else str(cell.get("cached_value") or "")
-        if text.strip():
-            return text
-    return None
-
-
-def _unit_from_row_cells(book: BookView, sheet: str, layout_row: LayoutRow) -> ValueKind | None:
-    from finance_context.layout.params import unit_kind_from_text
-
-    for item in layout_row.cells:
-        if item.role != "unit":
-            continue
-        cell = book.cells.get((sheet, layout_row.row, item.col))
-        text = None if cell is None else str(cell.get("cached_value") or "")
-        kind = unit_kind_from_text(text)
-        if kind in {"money", "rate", "ratio", "count"}:
-            return kind  # type: ignore[return-value]
-    return None
 
 
 def _pattern_for_row(
@@ -371,70 +168,6 @@ def _range_rows(node: dict[str, Any], col: int) -> list[int]:
     return list(range(lo, hi + 1))
 
 
-def _relation_from_pattern(
-    book: BookView,
-    sheet: str,
-    block: Block,
-    layout_row: LayoutRow,
-    pattern: RowPattern,
-) -> RowRelation | None:
-    source = book.row_key(sheet, layout_row.row, block.block_id)
-    if pattern.kind == "alias" and pattern.alias_row is not None:
-        target_block = _block_id(book, pattern.alias_sheet or sheet, pattern.alias_row)
-        if target_block is None:
-            return None
-        return RowRelation(
-            kind="alias",
-            source_row_key=source,
-            target_row_key=book.row_key(
-                pattern.alias_sheet or sheet, pattern.alias_row, target_block
-            ),
-            evidence=pattern.template,
-        )
-    if pattern.kind == "aggregate" and pattern.aggregate_rows:
-        members = []
-        for row_n in pattern.aggregate_rows:
-            block_id = _block_id(book, sheet, row_n)
-            if block_id:
-                members.append(book.row_key(sheet, row_n, block_id))
-        return RowRelation(
-            kind="aggregate",
-            source_row_key=source,
-            member_row_keys=members,
-            evidence=pattern.template,
-        )
-    if pattern.kind == "diff" and pattern.diff_rows:
-        members = []
-        for row_n in pattern.diff_rows:
-            block_id = _block_id(book, sheet, row_n)
-            if block_id:
-                members.append(book.row_key(sheet, row_n, block_id))
-        return RowRelation(
-            kind="difference",
-            source_row_key=source,
-            member_row_keys=members,
-            evidence=pattern.template,
-        )
-    if pattern.kind == "roll" and pattern.roll_from_row is not None:
-        block_id = _block_id(book, sheet, pattern.roll_from_row)
-        if block_id is None:
-            return None
-        return RowRelation(
-            kind="roll_forward",
-            source_row_key=source,
-            target_row_key=book.row_key(sheet, pattern.roll_from_row, block_id),
-            evidence=pattern.template,
-        )
-    return None
-
-
-def _block_id(book: BookView, sheet: str, row: int) -> str | None:
-    found = book.row_index.get((sheet, row))
-    if found is None:
-        return None
-    return found[0].block_id
-
-
 class StructureSignal:
     name = "structure"
 
@@ -543,90 +276,6 @@ def _skipped_concept(ctx: RowContext, book: BookView, concept_id: str) -> bool:
     return False
 
 
-def _concept_at(book: BookView, sheet: str, row: int) -> str | None:
-    block_id = _block_id(book, sheet, row)
-    if block_id is None:
-        return None
-    return book.concepts.get(book.row_key(sheet, row, block_id))
-
-
-def _shared_concept(
-    child_ids: list[str],
-    book: BookView,
-    *,
-    mapped: int,
-    members: int,
-) -> str | None:
-    if members <= 0 or mapped < members:
-        return None
-    unique = list(dict.fromkeys(child_ids))
-    if len(unique) == 1:
-        return unique[0]
-    calc_parent = _aggregate_parent(unique, book)
-    if calc_parent:
-        return calc_parent
-    broaders: list[str] = []
-    prefixes: list[str] = []
-    for cid in unique:
-        concept = book.taxonomy.get(cid)
-        if concept and concept.broader:
-            broaders.append(concept.broader)
-        parts = cid.split(".")
-        if len(parts) >= 2:
-            prefixes.append(".".join(parts[:2]))
-    if broaders and len(set(broaders)) == 1:
-        shared = broaders[0]
-        if shared in book.taxonomy:
-            return shared
-    if prefixes and len(set(prefixes)) == 1:
-        shared = prefixes[0]
-        if shared in book.taxonomy:
-            return shared
-    return None
-
-
-def _equity_cashflow_sum(ctx: RowContext, child_ids: list[str], book: BookView) -> str | None:
-    if "cf.equity_cashflow" not in book.taxonomy:
-        return None
-    blob = normalize_label(
-        " ".join([ctx.label, ctx.parent_label or "", *ctx.section_path, ctx.sheet])
-    )
-    if "irr" not in blob and "equity" not in blob:
-        return None
-    kinds = set(child_ids)
-    if "cf.equity_issue" in kinds and kinds & {"cf.dividends", "cf.disbursements", "bs.cash"}:
-        return "cf.equity_cashflow"
-    return None
-
-
-def _diff_parent(left_id: str | None, right_id: str | None, book: BookView) -> str | None:
-    if not left_id or not right_id or left_id == right_id:
-        return None
-    observed = {left_id, right_id}
-    for calc in book.calculations:
-        if len(calc.terms) != 2:
-            continue
-        weights = {term.concept: term.weight for term in calc.terms}
-        if set(weights) != observed:
-            continue
-        if weights[left_id] * weights[right_id] < 0 and calc.parent in book.taxonomy:
-            return calc.parent
-    return None
-
-
-def _aggregate_parent(child_ids: list[str], book: BookView) -> str | None:
-    observed = set(child_ids)
-    for calc in book.calculations:
-        if any(term.weight < 0 for term in calc.terms):
-            continue
-        terms = {term.concept for term in calc.terms}
-        if not terms:
-            continue
-        if observed == terms and calc.parent in book.taxonomy:
-            return calc.parent
-    return None
-
-
 def _is_proration(ast: dict[str, Any]) -> bool:
     right = ast.get("right") or {}
     op = right.get("op")
@@ -635,157 +284,6 @@ def _is_proration(ast: dict[str, Any]) -> bool:
     if op == "bin":
         return _is_proration({"right": right.get("right") or {}})
     return False
-
-
-def _semantic_ratio(label: str | None, value_kind: ValueKind | None = None) -> bool:
-    n = normalize_label(label)
-    raw = (label or "").casefold()
-    tokens = set(n.split())
-    if "fcfe" in tokens and "equity" in tokens and ("/" in raw or "ratio" in tokens):
-        return True
-    if "cost of capital" in n:
-        return True
-    if "availability" in tokens and "generation" not in tokens:
-        return True
-    if "lease" in tokens:
-        return value_kind in {"rate", "ratio"}
-    return bool(
-        tokens
-        & {
-            "wacc",
-            "coc",
-            "dscr",
-            "llcr",
-            "plcr",
-            "coverage",
-            "conversion",
-            "leverage",
-            "runway",
-            "ratio",
-            "cpi",
-            "inflation",
-            "escalation",
-            "payout",
-            "hedge",
-            "hedged",
-            "uncertainty",
-        }
-    )
-
-
-def _lease_rate_input(
-    label: str | None,
-    book: BookView,
-    sheet: str,
-    row: int,
-    block: Block,
-    value_kind: ValueKind,
-) -> bool:
-    if normalize_label(label) != "variable land lease":
-        return False
-    if value_kind in {"rate", "ratio"}:
-        return True
-    numbers = 0
-    percents = 0
-    for header in period_headers(
-        next(item for item in book.layout.sheets if item.name == sheet),
-        block,
-    ):
-        cell = book.cells.get((sheet, row, header.col))
-        if cell is None:
-            continue
-        if "%" in str(cell.get("number_format") or ""):
-            percents += 1
-        if cell.get("cached_value") not in (None, ""):
-            numbers += 1
-    return percents > 0 or numbers == 0
-
-
-def _neighbor_labels(block: Block, row: int, span: int = 2) -> tuple[list[str], list[str]]:
-    ordered = [item for item in block.rows if item.label]
-    index = next((i for i, item in enumerate(ordered) if item.row == row), None)
-    if index is None:
-        return [], []
-    prev_labels = [item.label for item in ordered[max(0, index - span) : index]]
-    next_labels = [item.label for item in ordered[index + 1 : index + 1 + span]]
-    return prev_labels, next_labels
-
-
-_GRAPH_SINKS = {
-    "cf.uses",
-    "cf.sources",
-    "cf.capex",
-    "pnl.opex",
-    "pnl.revenue",
-}
-_GRAPH_SKIP_LABELS = ("cfads", "fcfe", "fcf", "ebitda", "dscr", "irr")
-
-
-def _graph_priors(ctx: RowContext, book: BookView) -> list[Candidate]:
-    label = normalize_label(ctx.label)
-    if any(token in label for token in (*_GRAPH_SKIP_LABELS, "duration", "toll")):
-        return []
-    out: list[Candidate] = []
-    for dep in book.dependents.get((ctx.sheet, ctx.row), []):
-        sheet, _, row_text = dep.partition("!")
-        try:
-            row_n = int(row_text)
-        except ValueError:
-            continue
-        concept_id = _concept_at(book, sheet, row_n)
-        if concept_id in _GRAPH_SINKS:
-            out.append(
-                Candidate(
-                    concept_id=concept_id,
-                    score=0.86,
-                    signal="structure",
-                    evidence=f"feeds mapped {concept_id} at {dep}",
-                )
-            )
-    return out
-
-
-def _neighbor_priors(ctx: RowContext, book: BookView) -> list[Candidate]:
-    blob = normalize_label(" ".join([*ctx.prev_labels, *ctx.next_labels, *ctx.section_path]))
-    label = normalize_label(ctx.label)
-    out: list[Candidate] = []
-    if "lease" in label and ctx.value_kind == "money" and "pnl.opex" in book.taxonomy:
-        if any(token in blob for token in ("opex", "operating", "cost", "cashflow", "lease")):
-            out.append(
-                Candidate(
-                    concept_id="pnl.opex",
-                    score=0.9,
-                    signal="structure",
-                    evidence="lease cash line next to opex neighbors",
-                )
-            )
-    if label in {"equity", "equity k"} or label.startswith("equity "):
-        if any(token in blob for token in ("source", "construction", "irr", "injected")):
-            if "cf.equity_issue" in book.taxonomy and "balance" not in blob:
-                out.append(
-                    Candidate(
-                        concept_id="cf.equity_issue",
-                        score=0.93,
-                        signal="structure",
-                        evidence="equity funding line in sources/construction",
-                    )
-                )
-    return out
-
-
-def _semantic_count(label: str | None) -> bool:
-    n = normalize_label(label)
-    tokens = set(n.split())
-    if "week #" in n or n.endswith("week") or "trough cash week" in n:
-        return True
-    if any(
-        part in n
-        for part in ("lifetime", "turbine", "traffic", "vehicles", "generation", "mwh")
-    ):
-        return True
-    if n in {"development and construction", "straight line depreciation"}:
-        return True
-    return "capacity" in n or "mw" in tokens
 
 
 def section_tokens(ctx: RowContext) -> set[str]:

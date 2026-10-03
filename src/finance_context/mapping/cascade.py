@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from finance_context.errors import PortError
 from finance_context.layout.models import Layout, LayoutRow
+from finance_context.mapping.book import BookView, build_row_context
 from finance_context.mapping.exclusion import exclusion_reason
 from finance_context.mapping.facets import prune_candidates
 from finance_context.mapping.glossary import GlossarySignal, reconcile_glossary
@@ -31,12 +32,7 @@ from finance_context.mapping.resolver import (
 )
 from finance_context.mapping.rules import is_noise_label
 from finance_context.mapping.slots import acquire_slot, charge_slot, release_slot
-from finance_context.mapping.structure import (
-    BookView,
-    StructureSignal,
-    analyze_structure,
-    build_row_context,
-)
+from finance_context.mapping.structure import StructureSignal, analyze_structure
 from finance_context.mapping.taxonomy import attached_document, implicit_calculations
 from finance_context.mapping.vectors import load_concept_vectors
 from finance_context.observability import log_event
