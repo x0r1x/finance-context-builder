@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tests.helpers.policy import accept_min
-from tests.layout.test_detect import _c
+from tests.layout.test_detect_axes import _c
 
 from finance_context.context.build import build_context
 from finance_context.graph.stage import _period_maps

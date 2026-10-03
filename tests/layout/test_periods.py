@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from finance_context.layout.periods import (
     apply_grain,
     classify_atom,
@@ -9,18 +11,21 @@ from finance_context.layout.periods import (
 )
 
 
-def test_year_without_suffix_is_historical() -> None:
-    hit = classify_header("2023")
+@pytest.mark.parametrize(
+    ("text", "role", "period_key"),
+    [
+        ("2023", "historical", "2023"),
+        ("2025E", "forecast", "2025"),
+        ("янв.25", "historical", "2025-01"),
+        ("2025-01", "historical", "2025-01"),
+        ("01.07.2022", "historical", "2022-07-01"),
+    ],
+)
+def test_header_carries_role_and_period_key(text: str, role: str, period_key: str) -> None:
+    hit = classify_header(text)
     assert hit is not None
-    assert hit.role == "historical"
-    assert hit.period_key == "2023"
-
-
-def test_year_with_e_is_forecast() -> None:
-    hit = classify_header("2025E")
-    assert hit is not None
-    assert hit.role == "forecast"
-    assert hit.period_key == "2025"
+    assert hit.role == role
+    assert hit.period_key == period_key
 
 
 def test_year_fact_plan_share_calendar_key() -> None:
@@ -41,10 +46,20 @@ def test_month_fact_plan_share_calendar_key() -> None:
     assert plan.role == "forecast"
 
 
-def test_russian_quarter_is_period() -> None:
-    hit = classify_header("1 кв. 2025")
+@pytest.mark.parametrize(
+    ("text", "period_key"),
+    [
+        ("1 кв. 2025", "2025Q1"),
+        ("янв-25", "2025-01"),
+        ("Jan-25", "2025-01"),
+        ("2 023", "2023"),
+        ("2022-07-01", "2022-07-01"),
+    ],
+)
+def test_header_period_key(text: str, period_key: str) -> None:
+    hit = classify_header(text)
     assert hit is not None
-    assert hit.period_key == "2025Q1"
+    assert hit.period_key == period_key
 
 
 def test_fact_plan_keywords() -> None:
@@ -64,54 +79,9 @@ def test_line_item_is_not_a_period() -> None:
     assert classify_header("GMV") is None
 
 
-def test_russian_month_dot_yy_is_period() -> None:
-    hit = classify_header("янв.25")
-    assert hit is not None
-    assert hit.period_key == "2025-01"
-    assert hit.role == "historical"
-
-
-def test_russian_month_dash_yy() -> None:
-    hit = classify_header("янв-25")
-    assert hit is not None
-    assert hit.period_key == "2025-01"
-
-
-def test_english_month_dash_yy() -> None:
-    hit = classify_header("Jan-25")
-    assert hit is not None
-    assert hit.period_key == "2025-01"
-
-
-def test_iso_year_month() -> None:
-    hit = classify_header("2025-01")
-    assert hit is not None
-    assert hit.period_key == "2025-01"
-    assert hit.role == "historical"
-
-
 def test_december_maps_to_12() -> None:
     assert classify_header("дек.25").period_key == "2025-12"  # type: ignore[union-attr]
     assert classify_header("Dec-25").period_key == "2025-12"  # type: ignore[union-attr]
-
-
-def test_dmy_date_is_period() -> None:
-    hit = classify_header("01.07.2022")
-    assert hit is not None
-    assert hit.period_key == "2022-07-01"
-    assert hit.role == "historical"
-
-
-def test_iso_date_is_period() -> None:
-    hit = classify_header("2022-07-01")
-    assert hit is not None
-    assert hit.period_key == "2022-07-01"
-
-
-def test_spaced_year_is_period() -> None:
-    hit = classify_header("2 023")
-    assert hit is not None
-    assert hit.period_key == "2023"
 
 
 def test_quarter_token_without_year() -> None:
@@ -168,4 +138,3 @@ def test_model_year_keys_infer_relative_grain() -> None:
     assert infer_grain(["M1", "M2", "M3"]) == "model_month"
     assert infer_grain(["P0", "P1", "P2"]) == "model_period"
     assert apply_grain("Y1", "model_year") == "Y1"
-
