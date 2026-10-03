@@ -10,10 +10,10 @@ from fastapi import FastAPI, Request
 
 from finance_context.adapters.disk_store import DiskStore
 from finance_context.adapters.memory_bus import MemoryJobBus
-from finance_context.api.context import AppContext
 from finance_context.api.errors import ApiError, api_error_handler, context_error_handler
 from finance_context.api.processes import JobProcesses
 from finance_context.api.routes import router
+from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline, mark_job_failed
 from finance_context.errors import ContextError
 from finance_context.observability import configure_logging, log_event

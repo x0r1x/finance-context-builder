@@ -10,7 +10,6 @@ from typing import Annotated
 from fastapi import APIRouter, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from finance_context.api.context import AppContext
 from finance_context.api.errors import ApiError
 from finance_context.api.http import (
     _ALLOWED,
@@ -21,6 +20,7 @@ from finance_context.api.http import (
     _errors,
 )
 from finance_context.api.schemas import HealthBody, JobBody, JobListItem, ReadyBody
+from finance_context.api.state import AppContext
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.jobs import list_session_jobs

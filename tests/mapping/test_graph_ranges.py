@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from finance_context.mapping.graph import row_adjacency
+from finance_context.mapping.adjacency import row_adjacency
 
 
 def test_cell_edge_is_not_expanded_again() -> None:
