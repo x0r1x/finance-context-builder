@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 from pydantic import BaseModel
 
-from finance_context.adapters.routes import CHAT_SUFFIX, openai_path, wrap_sync_transport
+from finance_context.adapters.openai_paths import CHAT_SUFFIX, openai_path, wrap_sync_transport
 from finance_context.adapters.tls import log_host
 from finance_context.errors import PortError
 from finance_context.observability import debug_port_io, log_event
