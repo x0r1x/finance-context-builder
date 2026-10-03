@@ -6,6 +6,8 @@ from collections import Counter, defaultdict
 from finance_context.excel.a1 import index_to_col, parse_addr
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text
+from finance_context.layout.units import is_unit_text
+from finance_context.layout.units import unit_kind_from_text as unit_kind_from_text
 
 _HEADER_ROLES: dict[str, str] = {
     "parameter": "label",
@@ -24,21 +26,6 @@ _HEADER_ROLES: dict[str, str] = {
     "note": "note",
     "notes": "note",
 }
-_UNIT_TEXT = re.compile(
-    r"^(k?[£$€₽]|gbp|usd|eur|euro|pound|руб\.?|долл\.?|евро|"
-    r"%|years?|year|months?|month|days?|day|"
-    r"veh/?year|per year|of margin|mw|mwh|£/year|\$/year|€/year|"
-    r"text|date|1/2/3|k£)$",
-    re.IGNORECASE,
-)
-_UNIT_TOKEN = re.compile(
-    r"^(?:(?:k|m|mn|bn)\s*)?(?:eur|usd|gbp|rub|chf|[£$€₽])\s*"
-    r"(?:'?000|k|m|mn|bn|thousands?|millions?)?"
-    r"(?:\s*/\s*(?:mwh|mw|mwp|kwh|kw|year|yr|month|unit|veh))?(?:\s*p\.?\s*a\.?)?$"
-    r"|^%(?:\s*p\.?\s*a\.?)?$|^x$|^#$"
-    r"|^(?:mwh|mw|mwp|kwh|kw|gwh)(?:\s*/\s*(?:mw|mwp|kw|year|yr))?$",
-    re.IGNORECASE,
-)
 _SCENARIO_HEADER = re.compile(r"\b(case|scenario)s?\b", re.IGNORECASE)
 _PROSE_MIN = 80
 _MIN_VALUE_ROWS = 3
@@ -114,17 +101,6 @@ def attach_stub_cells(
     if tagged:
         row.cells = tagged
     return row
-
-
-def is_unit_text(text: str | None) -> bool:
-    from finance_context.context.measure import unit_caption
-
-    caption = unit_caption(text)
-    if caption is None:
-        return False
-    if caption.casefold() == "index":
-        return True
-    return bool(_UNIT_TEXT.fullmatch(caption) or _UNIT_TOKEN.fullmatch(caption))
 
 
 def _unit_text_hides_title(text: str) -> bool:
@@ -369,30 +345,6 @@ def _scenario_block(
 def is_scenario_selector_label(text: str | None) -> bool:
     blob = re.sub(r"[^a-z0-9]+", " ", (text or "").casefold()).strip()
     return bool(blob and _SELECTOR_LABEL.search(blob))
-
-
-def unit_kind_from_text(text: str | None) -> str | None:
-    from finance_context.context.measure import currency_code_from_text, unit_caption
-
-    caption = unit_caption(text)
-    if caption is None:
-        return None
-    blob = caption.casefold()
-    if blob == "index":
-        return "ratio"
-    if blob in {"#", "№"}:
-        return "count"
-    if "%" in blob or blob in {"per year", "of margin"}:
-        return "rate"
-    if currency_code_from_text(caption):
-        return "money"
-    if any(token in blob for token in ("year", "month", "day", "veh", "mw", "count")):
-        return "count"
-    if blob in {"text", "date"}:
-        return None
-    if _UNIT_TEXT.fullmatch(blob):
-        return "count"
-    return None
 
 
 def _looks_like_grid(by_row: dict[int, list[dict]], date1904: bool) -> bool:

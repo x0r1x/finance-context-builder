@@ -20,6 +20,22 @@ _PATHS = (
     "/v1/context-jobs/{job_id}/summary",
     "/v1/context-jobs/{job_id}/observations",
 )
+_HTTP = {"get", "post", "put", "delete", "patch", "head", "options", "trace"}
+_METHODS = {
+    "/healthz": {"get"},
+    "/readyz": {"get"},
+    "/v1/context-jobs": {"get", "post"},
+    "/v1/context-jobs/{job_id}": {"get"},
+    "/v1/context-jobs/{job_id}/context.json": {"get"},
+    "/v1/context-jobs/{job_id}/context.md": {"get"},
+    "/v1/context-jobs/{job_id}/graph.json": {"get"},
+    "/v1/context-jobs/{job_id}/graph.md": {"get"},
+    "/v1/context-jobs/{job_id}/graph/trace": {"get"},
+    "/v1/context-jobs/{job_id}/graph/trace.md": {"get"},
+    "/v1/context-jobs/{job_id}/catalog": {"get"},
+    "/v1/context-jobs/{job_id}/summary": {"get"},
+    "/v1/context-jobs/{job_id}/observations": {"get"},
+}
 
 
 def _spec(tmp_path: Path) -> dict:
@@ -29,6 +45,7 @@ def _spec(tmp_path: Path) -> dict:
             llm_base_url=None,
             embedding_base_url=None,
             embedding_model=None,
+            _env_file=None,
         )
     )
     return app.openapi()
@@ -53,9 +70,18 @@ def _schema_ref(operation: dict, status: str) -> str:
     return content["schema"]["$ref"]
 
 
+def test_openapi_paths_and_methods_are_exact(tmp_path: Path) -> None:
+    spec = _spec(tmp_path)
+    found = {
+        path: {key for key in item if key in _HTTP}
+        for path, item in spec["paths"].items()
+    }
+    assert found == _METHODS
+
+
 def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     spec = _spec(tmp_path)
-    assert set(_PATHS) <= set(spec["paths"])
+    assert set(spec["paths"]) == set(_PATHS)
     schemas = spec["components"]["schemas"]
     for name in (
         "ContextDocument",
@@ -76,7 +102,7 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     listing = spec["paths"]["/v1/context-jobs"]["get"]
     listed = listing["responses"]["200"]["content"]["application/json"]["schema"]
     assert listed["items"]["$ref"].endswith("/JobListItem")
-    assert {"status", "q"} <= _query_names(listing)
+    assert _query_names(listing) == {"status", "q"}
 
     post = spec["paths"]["/v1/context-jobs"]["post"]
     assert _schema_ref(post, "202").endswith("/JobBody")
@@ -103,15 +129,20 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
 
     trace = spec["paths"]["/v1/context-jobs/{job_id}/graph/trace"]["get"]
     assert _schema_ref(trace, "200").endswith("/TraceDocument")
-    assert {"from", "direction", "depth"} <= _query_names(trace)
+    assert _query_names(trace) == {"from", "direction", "depth"}
     direction = next(item for item in trace["parameters"] if item["name"] == "direction")
     assert direction["schema"]["enum"] == ["precedents", "dependents"]
 
     catalog = spec["paths"]["/v1/context-jobs/{job_id}/catalog"]["get"]
     assert _schema_ref(catalog, "200").endswith("/CatalogDocument")
-    catalog_names = _query_names(catalog)
-    assert {"q", "concept_id", "sheet", "disposition", "limit", "offset"} <= catalog_names
-    assert "label" not in catalog_names
+    assert _query_names(catalog) == {
+        "q",
+        "concept_id",
+        "sheet",
+        "disposition",
+        "limit",
+        "offset",
+    }
     described = {item["name"]: item.get("description") for item in catalog["parameters"]}
     assert described["q"]
     assert "label_path" not in described["q"]
@@ -126,7 +157,7 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
 
     observations = spec["paths"]["/v1/context-jobs/{job_id}/observations"]["get"]
     assert _schema_ref(observations, "200").endswith("/ObservationDocument")
-    assert {
+    assert _query_names(observations) == {
         "row_key",
         "concept_id",
         "q",
@@ -134,7 +165,7 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
         "phase",
         "precedent_depth",
         "limit",
-    } <= _query_names(observations)
+    }
     observed = {item["name"]: item.get("description") for item in observations["parameters"]}
     assert observed["q"] == described["q"]
     assert "label_path" not in observed["q"]

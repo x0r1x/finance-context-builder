@@ -86,7 +86,7 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
     (dest / "source.xlsx").write_bytes(source.read_bytes())
-    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None), embed=None, chat=None)
     doc = pipeline.run(dest, job_id="graph-job", source_filename="model.xlsx")
     assert (dest / "graph.json").is_file()
     assert (dest / "ir" / "cell_edges.parquet").is_file()
@@ -174,7 +174,7 @@ def test_pipeline_classifies_index_range_holes(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
     (dest / "source.xlsx").write_bytes(source.read_bytes())
-    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None), embed=None, chat=None)
     doc = pipeline.run(dest, job_id="index-job", source_filename="index.xlsx")
     edges = read_parquet(dest / "ir" / "cell_edges.parquet")
     holes = [
@@ -262,7 +262,7 @@ def test_pipeline_traces_blank_ref_and_styled_blank(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
     (dest / "source.xlsx").write_bytes(source.read_bytes())
-    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None), embed=None, chat=None)
     doc = pipeline.run(dest, job_id="blank-job", source_filename="blanks.xlsx")
     edges = read_parquet(dest / "ir" / "cell_edges.parquet")
     by_target = {str(edge["target"]): edge for edge in edges}
@@ -287,7 +287,7 @@ def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
     (dest / "source.xlsx").write_bytes(source.read_bytes())
-    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None), embed=None, chat=None)
     doc = pipeline.run(dest, job_id="cycle-job", source_filename="circular.xlsx")
     assert doc.workbook.iterate is True
     assert doc.graph.iterate is True
@@ -316,7 +316,7 @@ def test_graph_does_not_rewrite_cell_edges(tmp_path: Path, monkeypatch) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
     (dest / "source.xlsx").write_bytes(source.read_bytes())
-    Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None).run(
+    Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None), embed=None, chat=None).run(
         dest, job_id="bytes-job", source_filename="model.xlsx"
     )
     assert seen["before"]
@@ -327,7 +327,7 @@ def test_bad_schema_id_recompiles(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
     (dest / "source.xlsx").write_bytes(source.read_bytes())
-    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None), embed=None, chat=None)
     pipeline.run(dest, job_id="stamp-job", source_filename="model.xlsx")
     (dest / "ir" / "cells.parquet").write_bytes(b"broken")
     write_json(

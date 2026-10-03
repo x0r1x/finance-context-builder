@@ -4,8 +4,12 @@ from finance_context.mapping.models import MappingThresholds
 from finance_context.settings import Settings
 
 
+def isolated_settings(**overrides: object) -> Settings:
+    return Settings(_env_file=None, **overrides)
+
+
 def _settings() -> Settings:
-    return Settings(_env_file=None)
+    return isolated_settings()
 
 
 def thresholds() -> MappingThresholds:

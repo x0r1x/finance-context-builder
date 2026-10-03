@@ -13,7 +13,7 @@ from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.pipeline import Pipeline
 from finance_context.app.publisher import publisher_matches, stale_from_meta
 from finance_context.observability import configure_logging
-from finance_context.settings import _DEFAULT_DATA_DIR, Settings
+from finance_context.settings import DEFAULT_DATA_DIR, Settings
 from finance_context.store.fs import atomic_write_bytes, write_json
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -38,7 +38,7 @@ def _same_publisher(dest: Path) -> bool:
 def build(
     source: Path,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
-    data_dir: Annotated[Path, typer.Option("--data-dir")] = _DEFAULT_DATA_DIR,
+    data_dir: Annotated[Path, typer.Option("--data-dir")] = DEFAULT_DATA_DIR,
 ) -> None:
     """Parse an Excel workbook and write context and graph as JSON and Markdown."""
     settings = Settings(data_dir=data_dir)

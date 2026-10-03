@@ -44,7 +44,7 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     (dest / "source.xlsx").write_bytes(source.read_bytes())
     embed = FakeEmbed(VECS)
     pipeline = Pipeline(
-        Settings(data_dir=tmp_path / "data"),
+        Settings(data_dir=tmp_path / "data", _env_file=None),
         embed=embed,
         chat=FakeChat("pnl.revenue"),
         slots=GrantSlots(),

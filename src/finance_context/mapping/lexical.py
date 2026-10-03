@@ -61,7 +61,7 @@ class LexicalSignal:
                     signal=self.name,
                     evidence=f"label matches {phrase!r}",
                 )
-        if not hits and n in _GENERIC_TOTALS:
+        if not hits and n in GENERIC_TOTALS:
             hits.update(self._section_total(ctx, skipped))
         return list(hits.values())
 
@@ -90,7 +90,7 @@ class LexicalSignal:
         return {}
 
 
-_GENERIC_TOTALS = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
+GENERIC_TOTALS = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
 
 
 def skipped_concept_ids(ctx: RowContext, patterns: list[LexicalPattern]) -> set[str]:

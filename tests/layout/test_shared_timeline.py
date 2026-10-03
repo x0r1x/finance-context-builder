@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tests.helpers.policy import accept_min
-from tests.layout.test_detect import _c
+from tests.layout.test_detect_axes import _c
 
 from finance_context.context.build import build_context
 from finance_context.graph.stage import _period_maps
@@ -168,9 +168,9 @@ def test_dated_calendar_wins_over_an_undated_copy() -> None:
             ),
         ]
     )
-    from finance_context.layout.detect import _link_workbook_timelines
+    from finance_context.layout.timelines import link_workbook_timelines
 
-    _link_workbook_timelines(layout, [], False)
+    link_workbook_timelines(layout, [], False)
     assert layout.sheets[0].blocks[0].timeline_ids == ["Model!r7"]
     assert layout.sheets[1].blocks[0].timeline_ids == ["Model!r7"]
     assert [period.col for period in layout.sheets[0].axes[0].periods] == [6, 7, 8]

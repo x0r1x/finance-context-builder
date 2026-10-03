@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from finance_context.errors import PortError
 from finance_context.layout.models import Layout
-from finance_context.mapping.cascade import ConceptIndex, _acquire, _charge, _release, map_layout
+from finance_context.mapping.cascade import ConceptIndex, map_layout
 from finance_context.mapping.facets import inherit_facets
 from finance_context.mapping.glossary import (
     learn_from_rows,
@@ -30,6 +30,7 @@ from finance_context.mapping.models import (
     MappingDocument,
     MappingThresholds,
 )
+from finance_context.mapping.slots import acquire_slot, charge_slot, release_slot
 from finance_context.mapping.taxonomy import TaxonomyDocument, load_taxonomy, remember_concept
 from finance_context.observability import log_event
 from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
@@ -262,10 +263,10 @@ def _ask_extension(
     slots: SlotGate | None,
     slot_timeout_sec: float,
 ) -> ExtensionDecision | None:
-    if not _acquire(slots, "llm", slot_timeout_sec):
+    if not acquire_slot(slots, "llm", slot_timeout_sec):
         return None
     try:
-        if not _charge(slots, "llm"):
+        if not charge_slot(slots, "llm"):
             return None
         shown = ", ".join(parent.id for parent, _facets in anchors)
         definitions = "; ".join(
@@ -297,7 +298,7 @@ def _ask_extension(
     except (PortError, ValidationError):
         return None
     finally:
-        _release(slots, "llm")
+        release_slot(slots, "llm")
 
 
 def _one_sentence(text: str | None) -> str | None:

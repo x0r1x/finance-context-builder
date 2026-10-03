@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from finance_context.errors import PortError
 from finance_context.layout.models import Layout, LayoutRow
+from finance_context.mapping.book import BookView, build_row_context
 from finance_context.mapping.exclusion import exclusion_reason
 from finance_context.mapping.facets import prune_candidates
 from finance_context.mapping.glossary import GlossarySignal, reconcile_glossary
@@ -30,12 +31,8 @@ from finance_context.mapping.resolver import (
     to_mapped,
 )
 from finance_context.mapping.rules import is_noise_label
-from finance_context.mapping.structure import (
-    BookView,
-    StructureSignal,
-    analyze_structure,
-    build_row_context,
-)
+from finance_context.mapping.slots import acquire_slot, charge_slot, release_slot
+from finance_context.mapping.structure import StructureSignal, analyze_structure
 from finance_context.mapping.taxonomy import attached_document, implicit_calculations
 from finance_context.mapping.vectors import load_concept_vectors
 from finance_context.observability import log_event
@@ -275,7 +272,7 @@ def _embed_pass(
     concept_index: ConceptIndex | None = None,
 ) -> dict[str, list[float]]:
     index: dict[str, list[float]] = {}
-    if not _acquire(slots, "embed", slot_timeout_sec):
+    if not acquire_slot(slots, "embed", slot_timeout_sec):
         log_event(
             _LOGGER,
             logging.WARNING,
@@ -295,7 +292,7 @@ def _embed_pass(
                 cache_path=cache_path,
                 model=embedding_model,
             )
-        if not index or not _charge(slots, "embed"):
+        if not index or not charge_slot(slots, "embed"):
             return index
         queries = embed.embed([row.ctx.query_text or row.ctx.label for row in need_knn])
         for row, vec in zip(need_knn, queries, strict=True):
@@ -333,7 +330,7 @@ def _embed_pass(
             reason="port_error",
         )
     finally:
-        _release(slots, "embed")
+        release_slot(slots, "embed")
     return index
 
 
@@ -348,7 +345,7 @@ def _chat_pass(
     index: dict[str, list[float]],
     llm_concurrency: int,
 ) -> None:
-    if not _acquire(slots, "llm", slot_timeout_sec):
+    if not acquire_slot(slots, "llm", slot_timeout_sec):
         log_event(
             _LOGGER,
             logging.WARNING,
@@ -361,7 +358,7 @@ def _chat_pass(
     try:
         charged: list[_Pending] = []
         for row in need_chat:
-            if not _charge(slots, "llm"):
+            if not charge_slot(slots, "llm"):
                 break
             charged.append(row)
         if not charged:
@@ -422,7 +419,7 @@ def _chat_pass(
         for _index_n, row, picked_id in sorted(done, key=lambda item: item[0]):
             _apply_chat_pick(row, picked_id, book, resolver)
     finally:
-        _release(slots, "llm")
+        release_slot(slots, "llm")
 
 
 def _apply_chat_pick(
@@ -604,24 +601,3 @@ def _calculation_compatible(
                 return True
         return False
     return True
-
-
-def _acquire(slots: SlotGate | None, kind: Any, timeout_sec: float) -> bool:
-    if slots is None:
-        return True
-    return slots.acquire(kind, timeout_sec)
-
-
-def _release(slots: SlotGate | None, kind: Any) -> None:
-    if slots is None:
-        return
-    slots.release(kind)
-
-
-def _charge(slots: SlotGate | None, kind: Any) -> bool:
-    if slots is None:
-        return True
-    charge = getattr(slots, "charge", None)
-    if charge is None:
-        return True
-    return bool(charge(kind))
