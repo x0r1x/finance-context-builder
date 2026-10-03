@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 _PARENS = re.compile(r"\([^)]*\)|（[^）]*）")
 _UNCLOSED = re.compile(r"\([^)]*$|（[^）]*$")
@@ -36,12 +37,17 @@ _METRIC_ACRONYMS = {
 }
 _ACRONYM = re.compile(r"\b[A-Za-z]{2,10}\b")
 _CASHFLOW = re.compile(r"\bcashflows?\b")
+_SPACE = re.compile(r"\s+")
 
 
 def normalize_label(label: str | None) -> str:
     if not label:
         return ""
-    text = str(label)
+    return _normalize_label(str(label))
+
+
+@lru_cache(maxsize=8192)
+def _normalize_label(text: str) -> str:
     text = text.replace("&", " and ").replace("−", " ").replace("–", " ").replace("+", " ")
     text = text.replace("/", " ")
     extras: list[str] = []
@@ -52,10 +58,10 @@ def normalize_label(label: str | None) -> str:
     if unclosed:
         extras.extend(_paren_tokens(unclosed.group(0)))
         text = _UNCLOSED.sub(" ", text)
-    normalized = re.sub(r"\s+", " ", text).strip().casefold()
+    normalized = _SPACE.sub(" ", text).strip().casefold()
     normalized = _CASHFLOW.sub("cash flow", normalized)
     if extras:
-        normalized = re.sub(r"\s+", " ", f"{normalized} {' '.join(extras)}").strip()
+        normalized = _SPACE.sub(" ", f"{normalized} {' '.join(extras)}").strip()
     return normalized
 
 

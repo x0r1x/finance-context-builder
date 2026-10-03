@@ -85,6 +85,7 @@ def main() -> None:
                 llm_base_url=None,
                 embedding_base_url=None,
                 embedding_model=None,
+                _env_file=None,
             )
             before = _rss_kb()
             started = time.perf_counter()
