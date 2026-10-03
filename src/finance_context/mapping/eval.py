@@ -5,7 +5,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
-from finance_context.mapping.glossary import _STATEMENT_PAIRS
+from finance_context.mapping.glossary import STATEMENT_PAIRS
 from finance_context.mapping.normalize import normalize_label
 from finance_context.mapping.statement import is_cashflow_context
 from finance_context.mapping.taxonomy import load_taxonomy, seed_authored_units
@@ -426,12 +426,12 @@ def _foreign_standard_id(
 
 
 def _statement_pair(left: str, right: str) -> bool:
-    return (left, right) in _STATEMENT_PAIRS or (right, left) in _STATEMENT_PAIRS
+    return (left, right) in STATEMENT_PAIRS or (right, left) in STATEMENT_PAIRS
 
 
 def _twin_ids(concept_id: str) -> set[str]:
     found: set[str] = set()
-    for left, right in _STATEMENT_PAIRS:
+    for left, right in STATEMENT_PAIRS:
         if concept_id == left:
             found.add(right)
         elif concept_id == right:

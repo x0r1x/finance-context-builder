@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from finance_context.mapping.lexical import _GENERIC_TOTALS, skipped_concept_ids
+from finance_context.mapping.lexical import GENERIC_TOTALS, skipped_concept_ids
 from finance_context.mapping.models import Candidate, LexicalPattern, RowContext
 from finance_context.mapping.normalize import memory_section, normalize_label, section_class
 from finance_context.mapping.structure import BookView
@@ -18,6 +18,7 @@ _STATEMENT_PAIRS = {
     ("pnl.interest", "cf.interest_paid"),
     ("bs.equity", "cf.equity_issue"),
 }
+STATEMENT_PAIRS = _STATEMENT_PAIRS
 
 
 def load_glossary(path: Path | None) -> dict[tuple[str, str], str]:
@@ -435,7 +436,7 @@ def _specific_section(ctx: RowContext) -> bool:
 
 
 def _statement_pair(left: str, right: str) -> bool:
-    return (left, right) in _STATEMENT_PAIRS or (right, left) in _STATEMENT_PAIRS
+    return (left, right) in STATEMENT_PAIRS or (right, left) in STATEMENT_PAIRS
 
 
 class GlossarySignal:
@@ -463,7 +464,7 @@ class GlossarySignal:
         label = normalize_label(ctx.label)
         # `Total` under Current assets and under Non-current assets share the
         # sheet parent. A learned pair must not paint both with one concept.
-        if label in _GENERIC_TOTALS and _specific_section(ctx):
+        if label in GENERIC_TOTALS and _specific_section(ctx):
             return []
         concept_id = self.memory.get(
             (

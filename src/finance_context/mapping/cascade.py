@@ -30,6 +30,7 @@ from finance_context.mapping.resolver import (
     to_mapped,
 )
 from finance_context.mapping.rules import is_noise_label
+from finance_context.mapping.slots import acquire_slot, charge_slot, release_slot
 from finance_context.mapping.structure import (
     BookView,
     StructureSignal,
@@ -606,22 +607,6 @@ def _calculation_compatible(
     return True
 
 
-def _acquire(slots: SlotGate | None, kind: Any, timeout_sec: float) -> bool:
-    if slots is None:
-        return True
-    return slots.acquire(kind, timeout_sec)
-
-
-def _release(slots: SlotGate | None, kind: Any) -> None:
-    if slots is None:
-        return
-    slots.release(kind)
-
-
-def _charge(slots: SlotGate | None, kind: Any) -> bool:
-    if slots is None:
-        return True
-    charge = getattr(slots, "charge", None)
-    if charge is None:
-        return True
-    return bool(charge(kind))
+_acquire = acquire_slot
+_charge = charge_slot
+_release = release_slot
