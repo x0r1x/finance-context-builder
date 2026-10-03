@@ -42,7 +42,7 @@ def _schema_id(model: type) -> str:
 
 
 def _content_sha256(dest: Path) -> str:
-    from finance_context.api.jobs import _load_meta
+    from finance_context.api.routes.jobs import _load_meta
 
     meta = _load_meta(dest)
     if meta is not None and isinstance(meta.get("content_sha256"), str):

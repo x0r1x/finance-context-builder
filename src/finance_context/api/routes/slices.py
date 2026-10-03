@@ -16,8 +16,8 @@ from finance_context.api.http import (
     _require_artifact,
     _schema_id,
 )
-from finance_context.api.jobs import _load_meta
-from finance_context.api.trace_routes import _precedents
+from finance_context.api.routes.jobs import _load_meta
+from finance_context.api.routes.trace import _precedents
 from finance_context.context.catalog import build_catalog
 from finance_context.context.observations import build_observations
 from finance_context.context.summary import build_summary
