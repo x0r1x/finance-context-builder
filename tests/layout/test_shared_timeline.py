@@ -168,7 +168,7 @@ def test_dated_calendar_wins_over_an_undated_copy() -> None:
             ),
         ]
     )
-    from finance_context.layout.detect import _link_workbook_timelines
+    from finance_context.layout.timelines import _link_workbook_timelines
 
     _link_workbook_timelines(layout, [], False)
     assert layout.sheets[0].blocks[0].timeline_ids == ["Model!r7"]
