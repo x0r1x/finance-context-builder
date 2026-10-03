@@ -25,7 +25,11 @@ def test_real_models_produce_context(tmp_path: Path, workbook: Path) -> None:
     dest = tmp_path / workbook.stem
     dest.mkdir()
     (dest / "source.xlsx").write_bytes(workbook.read_bytes())
-    pipeline = Pipeline(Settings(data_dir=tmp_path / "data"), embed=None, chat=None)
+    pipeline = Pipeline(
+        Settings(data_dir=tmp_path / "data", _env_file=None),
+        embed=None,
+        chat=None,
+    )
     doc = pipeline.run(dest, job_id=workbook.stem, source_filename=workbook.name)
     assert (dest / "raw" / "workbook.json").is_file()
     assert (dest / "context.json").is_file()

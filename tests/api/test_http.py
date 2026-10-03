@@ -22,6 +22,7 @@ def _app(tmp_path: Path) -> TestClient:
         llm_base_url=None,
         embedding_base_url=None,
         embedding_model=None,
+        _env_file=None,
     )
     return TestClient(create_app(settings))
 
@@ -184,7 +185,11 @@ def test_rejects_encrypted(tmp_path: Path) -> None:
 
 
 def test_rejects_oversize(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path / "data", max_upload_bytes=8)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        max_upload_bytes=8,
+        _env_file=None,
+    )
     with TestClient(create_app(settings)) as client:
         response = client.post(
             "/v1/context-jobs",

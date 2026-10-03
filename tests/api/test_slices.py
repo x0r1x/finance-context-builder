@@ -20,6 +20,7 @@ def _client(tmp_path: Path) -> TestClient:
         llm_base_url=None,
         embedding_base_url=None,
         embedding_model=None,
+        _env_file=None,
     )
     return TestClient(create_app(settings))
 

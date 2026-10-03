@@ -7,14 +7,15 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from finance_context.errors import PortError
 from finance_context.ports.protocols import ChatPort, EmbedPort
+from finance_context.settings_ports import build_chat, build_embed
 
 if TYPE_CHECKING:
     from finance_context.mapping.models import MappingThresholds
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
-_DEFAULT_DATA_DIR = Path("data")
+DEFAULT_DATA_DIR = Path("data")
+_DEFAULT_DATA_DIR = DEFAULT_DATA_DIR
 _DEFAULT_LLM_SLOT_WAIT_SEC = 120.0
 _DEFAULT_EMBEDDING_BATCH_SIZE = 32
 _DEFAULT_EMBEDDING_CONCURRENCY = 1
@@ -73,7 +74,7 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    data_dir: Path = _DEFAULT_DATA_DIR
+    data_dir: Path = DEFAULT_DATA_DIR
     session_id: str = "local"
     max_upload_bytes: int = 50 * 1024 * 1024
 
@@ -183,36 +184,7 @@ class Settings(BaseSettings):
         return bool(self.embedding_base_url and self.embedding_model)
 
     def chat(self) -> ChatPort | None:
-        if not self.llm_configured():
-            return None
-        from finance_context.adapters.openai_chat import OpenAIChat
-
-        try:
-            return OpenAIChat(
-                base_url=self.llm_base_url,
-                api_key=self.llm_api_key,
-                model=self.llm_model,
-                ca_file=self.llm_tls_ca_file,
-                chat_path=self.llm_chat_path,
-                concurrency=self.llm_concurrency,
-            )
-        except PortError:
-            return None
+        return build_chat(self)
 
     def embed(self) -> EmbedPort | None:
-        if not self.embed_configured():
-            return None
-        from finance_context.adapters.openai_embed import OpenAIEmbed
-
-        try:
-            return OpenAIEmbed(
-                base_url=self.embedding_base_url,
-                api_key=self.embedding_api_key,
-                model=self.embedding_model,
-                ca_file=self.embedding_tls_ca_file,
-                embed_path=self.embedding_path,
-                batch_size=self.embedding_batch_size,
-                concurrency=self.embedding_concurrency,
-            )
-        except PortError:
-            return None
+        return build_embed(self)

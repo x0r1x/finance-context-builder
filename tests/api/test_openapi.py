@@ -45,6 +45,7 @@ def _spec(tmp_path: Path) -> dict:
             llm_base_url=None,
             embedding_base_url=None,
             embedding_model=None,
+            _env_file=None,
         )
     )
     return app.openapi()
