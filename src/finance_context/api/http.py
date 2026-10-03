@@ -7,9 +7,9 @@ from pathlib import Path
 
 from fastapi import Request
 
-from finance_context.api.context import AppContext
 from finance_context.api.errors import ApiError
 from finance_context.api.schemas import ErrorBody
+from finance_context.api.state import AppContext
 
 _LOGGER = logging.getLogger("finance_context.api")
 _ALLOWED = {".xlsx", ".xlsm"}
