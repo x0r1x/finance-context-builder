@@ -48,7 +48,7 @@ Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If those docu
 To extract rows that the mapping stage left without a concept, run:
 
 ```bash
-uv run python scripts/extract-unmapped.py data/<job-id>/mapping.json
+uv run python scripts/extract-unmapped.py data/sessions/local/jobs/<job-id>/mapping.json
 ```
 
 The script also accepts a generated `context.json` and reads `disposition=abstained` from `blocks[].rows`. By default it writes `unmapped.json`

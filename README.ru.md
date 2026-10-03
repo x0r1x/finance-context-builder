@@ -44,7 +44,7 @@ uv run finance-context build path/to/model.xlsx -o ./out
 Строки, которым маппинг не нашёл концепт:
 
 ```bash
-uv run python scripts/extract-unmapped.py data/<job-id>/mapping.json
+uv run python scripts/extract-unmapped.py data/sessions/local/jobs/<job-id>/mapping.json
 ```
 
 Скрипт принимает и готовый `context.json` и читает `disposition=abstained` из `blocks[].rows`. По умолчанию пишет `unmapped.json` рядом с входным файлом. Другой путь — `-o path/to/file.json`. Форма ответа: `{"count": <number>, "rows": [<атрибуты без значений периодов>]}`. Excluded-строки и ряды `values` опускаются.
