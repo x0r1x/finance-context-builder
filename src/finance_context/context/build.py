@@ -22,12 +22,12 @@ from finance_context.layout.models import AxisHeader, Layout, LayoutRow
 from finance_context.layout.params import is_scenario_selector_label
 from finance_context.layout.periods import display_cell_text
 from finance_context.layout.resolve import axes_for
+from finance_context.mapping.adjacency import cell_ref_row, row_adjacency, row_key_ref
 from finance_context.mapping.eval import (
     assess_mapping_quality,
     context_report_metrics,
     inventory_coverage_counts,
 )
-from finance_context.mapping.graph import cell_ref_row, row_adjacency, row_key_ref
 from finance_context.mapping.models import (
     MappedRow,
     MappingDocument,

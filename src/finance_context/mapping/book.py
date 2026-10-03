@@ -4,7 +4,7 @@ from typing import Protocol
 
 from finance_context.layout.models import Block, Layout, LayoutRow
 from finance_context.layout.resolve import axes_for, period_headers
-from finance_context.mapping.graph import row_adjacency
+from finance_context.mapping.adjacency import row_adjacency
 from finance_context.mapping.models import (
     Calculation,
     Candidate,
