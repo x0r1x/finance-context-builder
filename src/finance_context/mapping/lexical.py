@@ -90,8 +90,7 @@ class LexicalSignal:
         return {}
 
 
-_GENERIC_TOTALS = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
-GENERIC_TOTALS = _GENERIC_TOTALS
+GENERIC_TOTALS = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
 
 
 def skipped_concept_ids(ctx: RowContext, patterns: list[LexicalPattern]) -> set[str]:

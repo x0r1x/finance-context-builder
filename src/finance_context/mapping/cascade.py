@@ -272,7 +272,7 @@ def _embed_pass(
     concept_index: ConceptIndex | None = None,
 ) -> dict[str, list[float]]:
     index: dict[str, list[float]] = {}
-    if not _acquire(slots, "embed", slot_timeout_sec):
+    if not acquire_slot(slots, "embed", slot_timeout_sec):
         log_event(
             _LOGGER,
             logging.WARNING,
@@ -292,7 +292,7 @@ def _embed_pass(
                 cache_path=cache_path,
                 model=embedding_model,
             )
-        if not index or not _charge(slots, "embed"):
+        if not index or not charge_slot(slots, "embed"):
             return index
         queries = embed.embed([row.ctx.query_text or row.ctx.label for row in need_knn])
         for row, vec in zip(need_knn, queries, strict=True):
@@ -330,7 +330,7 @@ def _embed_pass(
             reason="port_error",
         )
     finally:
-        _release(slots, "embed")
+        release_slot(slots, "embed")
     return index
 
 
@@ -345,7 +345,7 @@ def _chat_pass(
     index: dict[str, list[float]],
     llm_concurrency: int,
 ) -> None:
-    if not _acquire(slots, "llm", slot_timeout_sec):
+    if not acquire_slot(slots, "llm", slot_timeout_sec):
         log_event(
             _LOGGER,
             logging.WARNING,
@@ -358,7 +358,7 @@ def _chat_pass(
     try:
         charged: list[_Pending] = []
         for row in need_chat:
-            if not _charge(slots, "llm"):
+            if not charge_slot(slots, "llm"):
                 break
             charged.append(row)
         if not charged:
@@ -419,7 +419,7 @@ def _chat_pass(
         for _index_n, row, picked_id in sorted(done, key=lambda item: item[0]):
             _apply_chat_pick(row, picked_id, book, resolver)
     finally:
-        _release(slots, "llm")
+        release_slot(slots, "llm")
 
 
 def _apply_chat_pick(
@@ -601,8 +601,3 @@ def _calculation_compatible(
                 return True
         return False
     return True
-
-
-_acquire = acquire_slot
-_charge = charge_slot
-_release = release_slot

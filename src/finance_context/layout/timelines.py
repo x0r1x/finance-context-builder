@@ -14,7 +14,7 @@ from finance_context.layout.resolve import project_axis
 _SHARE_GRAINS = frozenset({"model_year", "year"})
 
 
-def _link_workbook_timelines(layout: Layout, cells: list[dict], date1904: bool) -> None:
+def link_workbook_timelines(layout: Layout, cells: list[dict], date1904: bool) -> None:
     """Same period-key sequence shares one published axis. Columns stay local."""
     by_addr = {
         (str(cell["sheet"]), int(cell["row"]), int(cell["col"])): cell for cell in cells
@@ -275,6 +275,3 @@ def _share_repeated_axes(
         elif len(seen) != 1:
             block.axis = None
     return blocks, kept
-
-
-link_workbook_timelines = _link_workbook_timelines

@@ -103,6 +103,3 @@ def _blocks_for_sheet(
         if extra is not None:
             blocks.append(extra)
     return blocks, axes
-
-
-_link_workbook_timelines = link_workbook_timelines

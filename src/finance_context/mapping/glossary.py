@@ -17,14 +17,13 @@ from finance_context.mapping.structure import BookView
 from finance_context.store.fs import update_json
 
 # Same label, two live concepts: accrual/stock identity versus the statement projection.
-_STATEMENT_PAIRS = {
+STATEMENT_PAIRS = {
     ("pnl.revenue", "cf.receipts"),
     ("pnl.opex", "cf.opex_paid"),
     ("pnl.tax", "cf.tax_paid"),
     ("pnl.interest", "cf.interest_paid"),
     ("bs.equity", "cf.equity_issue"),
 }
-STATEMENT_PAIRS = _STATEMENT_PAIRS
 
 
 def load_glossary(path: Path | None) -> dict[tuple[str, str], str]:
