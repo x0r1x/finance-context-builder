@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tests.helpers.fast_sheet import SHEET, fast_cells
-from tests.helpers.policy import accept_min, llm_workers, slot_wait, thresholds
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 
 from finance_context.context.build import build_context
 from finance_context.layout.detect import detect_layout
@@ -25,15 +25,15 @@ def _context(*, relations: list[RowRelation] | None = None):
         slot_timeout_sec=slot_wait(),
         llm_concurrency=llm_workers(),
     )
+    found = list(mapping.relations)
     if relations:
-        mapping = mapping.model_copy(update={"relations": [*mapping.relations, *relations]})
+        found.extend(relations)
     return build_context(
         job_id="fast",
         workbook_meta={"sheets": [{"name": SHEET}]},
         cells=cells,
         layout=layout,
-        mapping=mapping,
-        concept_accept_min=accept_min(),
+        relations=found,
     )
 
 
@@ -81,24 +81,24 @@ def test_price_unit_keeps_the_denominator() -> None:
     assert price.hints.currency == "EUR"
 
 
-def test_sources_and_uses_follow_the_section() -> None:
+def test_value_rows_keep_flow_time_without_a_concept() -> None:
     rows = _rows(_context())
-    assert rows[201].concept_id == "cf.drawdown"
+    assert rows[201].concept_id is None
     assert rows[201].hints.time_semantics == "flow"
-    assert rows[196].concept_id == "cf.uses"
-    assert rows[294].concept_id == "bs.debt"
-    assert rows[186].concept_id == "pnl.price"
+    assert rows[196].concept_id is None
+    assert rows[186].hints.unit == "price"
 
 
-def test_generic_total_takes_the_section_concept() -> None:
+def test_total_row_is_not_assigned_a_concept() -> None:
     rows = _rows(_context())
-    assert rows[285].concept_id == "bs.assets_noncurrent"
+    assert rows[285].concept_id is None
+    assert rows[285].label
 
 
-def test_scalar_kpi_left_of_the_ruler_is_mapped_as_an_instant() -> None:
+def test_scalar_kpi_left_of_the_ruler_is_an_instant() -> None:
     irr = _rows(_context())[560]
     assert irr.kind == "fact"
-    assert irr.concept_id == "val.irr"
+    assert irr.concept_id is None
     assert irr.period_position == "instant"
 
 

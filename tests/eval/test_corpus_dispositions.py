@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from tests.helpers.policy import accept_min, llm_workers, slot_wait, thresholds
+from tests.helpers.policy import llm_workers, slot_wait, thresholds
 
 from finance_context.context.build import build_context
 from finance_context.excel.stage import parse_workbook
@@ -168,9 +168,8 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         workbook_meta={"sheets": [{"name": sheet.name} for sheet in layout.sheets]},
         cells=cells,
         layout=layout,
-        mapping=doc,
+        relations=list(doc.relations),
         edges=edges,
-        concept_accept_min=accept_min(),
     )
     layout_n = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
     context_rows = [row for block in ctx_doc.blocks for row in block.rows]
@@ -195,7 +194,6 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert selector is not None
         assert selector.kind == "flag"
         assert selector.row == 3
-        assert selector.context_role == "scenario_selector"
         assert selector.disposition == "excluded"
         assert any(
             cell.role == "value" and str(cell.cached_value) == "1" for cell in selector.cells
@@ -260,15 +258,6 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         flag_mapped = [row for row in doc.rows if row.exclusion_reason == "flag"]
         assert flag_mapped
         assert all(row.concept_id is None for row in flag_mapped)
-        quality = ctx_doc.mapping_stats.mapping_quality
-        for rate in (
-            quality.label_coverage,
-            quality.semantic_coverage,
-            quality.unit_coverage,
-            quality.temporal_coverage,
-            quality.formula_coverage,
-        ):
-            assert 0.0 <= rate <= 1.0
         repayments = [
             row
             for row in context_rows
@@ -276,37 +265,27 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
             and normalize_label(row.parent_label or "") == "debt repayment schedule"
         ]
         assert repayments
-        assert all(
-            row.hints.sign == "outflow" and row.concept_id == "cf.repayment" for row in repayments
-        )
-        for row in repayments:
-            assert any(
-                other.concept_id == "bs.debt" and other.label_path == row.label_path
-                for other in context_rows
-            )
+        assert all(row.hints.sign == "outflow" and row.concept_id is None for row in repayments)
         revenues = [
             row
             for row in context_rows
             if row.sheet == "CFS" and row.label == "Gross Revenues"
         ]
         assert revenues
-        assert all(row.concept_id == "cf.receipts" for row in revenues)
+        assert all(row.concept_id is None for row in revenues)
         totals = [
             row
             for row in context_rows
             if row.sheet == "Balance Sheet" and row.label == "Total"
         ]
         assert len(totals) == 2
-        assert all(row.disposition == "abstained" and row.concept_id is None for row in totals)
+        assert all(row.disposition is None and row.concept_id is None for row in totals)
         check = next(
             row for row in context_rows if row.sheet == "Balance Sheet" and row.label == "CHECK"
         )
         assert check.kind == "helper"
         assert check.disposition == "excluded"
         assert check.formula
-        assert ctx_doc.mapping_stats.concept_coverage == 94 / 96
-        assert quality.semantic_coverage < 1.0
-        assert quality.confidence_threshold_passed is False
     if filename == "rvi-project-finance.xlsx":
         axis = ctx_doc.axes[0]
         phases = [period.phase for period in axis.periods]
@@ -323,21 +302,22 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
         assert "1000000" not in (thousand.normalized_values or [])
         cpi_rate = next(row for row in model_rows if row.row == 165 and row.label == "CPI")
         cpi_index = next(row for row in model_rows if row.row == 172 and row.label == "CPI")
-        assert cpi_rate.concept_id == "ops.inflation"
-        assert cpi_index.concept_id == "ops.cpi"
+        assert cpi_rate.concept_id is None
+        assert cpi_index.concept_id is None
         assert cpi_index.hints.time_semantics == "stock"
         current_total = next(
             row
             for row in model_rows
             if row.label == "Total" and row.parent_label == "Current assets"
         )
-        assert current_total.concept_id == "bs.assets_current"
+        assert current_total.concept_id is None
         principal = next(
             row
             for row in model_rows
             if row.label == "Principal repayment" and row.parent_label == "Linear repayment"
         )
-        assert principal.concept_id == "cf.repayment"
+        assert principal.concept_id is None
+        assert principal.hints.sign == "outflow"
         for label in (
             "Commercial Management",
             "O&M period 1",
@@ -356,10 +336,9 @@ def test_corpus_workbook_dispositions(tmp_path: Path, filename: str, gold_path: 
                 )
             ]
             assert cash_rows, label
-            assert all(row.concept_id == "cf.opex_paid" for row in cash_rows)
+            assert all(row.concept_id is None for row in cash_rows)
         flags = {name for period in axis.periods for name in period.flags}
         assert not flags & {"live case", "case number", "mid case", "low case"}
-        assert ctx_doc.mapping_stats.mapping_quality.unit_coverage >= 0.8
     if not expectations:
         pytest.skip("gold expectations not filled yet")
     errors = []

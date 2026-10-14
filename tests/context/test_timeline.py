@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from tests.helpers.policy import accept_min
-
 from finance_context.context.build import build_context
 from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
-from finance_context.mapping.models import MappingDocument
 from finance_context.render.markdown import render_markdown
 
 
@@ -74,8 +71,6 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
         workbook_meta={"sheets": [{"name": "TBA"}]},
         cells=cells,
         layout=layout,
-        mapping=MappingDocument(),
-        concept_accept_min=accept_min(),
     )
     revenue_block = next(block for block in doc.blocks if block.sheet == "TBA")
     assert revenue_block.periods == []
@@ -184,8 +179,6 @@ def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
         workbook_meta={"sheets": [{"name": "Output"}]},
         cells=cells,
         layout=layout,
-        mapping=MappingDocument(),
-        concept_accept_min=accept_min(),
     )
     payload = doc.model_dump(mode="json")
     assert "timeline" not in payload

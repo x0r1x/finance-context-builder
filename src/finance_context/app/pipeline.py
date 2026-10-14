@@ -224,6 +224,12 @@ class Pipeline:
         )
         cells = ir_cells
         edges = ir_edges
+        relations = list(mapping.relations)
+        exclusion = {
+            (row.sheet, row.row): row.exclusion_reason
+            for row in mapping.rows
+            if row.exclusion_reason
+        }
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status(mapping, embed=self.embed, chat=self.chat)
         set_stage("graph", status="running")
@@ -238,11 +244,11 @@ class Pipeline:
                     dest_dir,
                     job_id=job_id,
                     layout=layout,
-                    mapping=mapping,
                     cells=ir_cells,
                     edges=ir_edges,
                     cell_edges=ir_cell_edges,
                     book_dir=book,
+                    exclusion=exclusion,
                 ),
             )
         else:
@@ -276,15 +282,13 @@ class Pipeline:
                 workbook_meta=workbook_meta,
                 cells=cells,
                 layout=layout,
-                mapping=mapping,
-                concept_accept_min=self.settings.concept_accept_min,
+                relations=relations,
                 source_filename=source_filename,
                 content_sha256=content_sha256,
                 status=status,
                 stage="done",
                 graph=graph,
                 edges=edges,
-                concepts=taxonomy,
             ),
         )
         _write_sorted_json(dest_dir / "context.json", doc.model_dump(mode="json"))

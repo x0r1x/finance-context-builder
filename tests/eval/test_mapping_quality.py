@@ -269,11 +269,7 @@ def test_repayment_outflow_next_to_debt_stock_passes() -> None:
 
 
 def test_pre_tax_income_is_not_an_outflow() -> None:
-    measure = parse_measure(
-        label="EBT (Taxable Profit)",
-        concept_id="pnl.pre_tax_income",
-        statement="pnl",
-    )
+    measure = parse_measure(label="EBT (Taxable Profit)")
     assert measure.sign != "outflow"
 
 
