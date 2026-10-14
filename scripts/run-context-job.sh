@@ -86,7 +86,7 @@ if [[ -n "$origin" ]]; then
     --origin "$origin"
   log_summary "graph_trace_from=${origin}"
 else
-  log_summary "graph_trace skipped (no formula cell, concept_id, or row_key)"
+  log_summary "graph_trace skipped (no formula cell or row_key)"
 fi
 
 echo "OK  job ${job_id} (${job_status})  wrote ${RUN_DIR}"

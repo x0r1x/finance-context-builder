@@ -79,7 +79,7 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
     assert "construction" in rendered
     flag_rows = [row for block in doc.blocks for row in block.rows if row.kind == "flag"]
     assert flag_rows
-    assert all(row.concept_id is None for row in flag_rows)
+    assert all(row.disposition == "excluded" for row in flag_rows)
 
 
 def test_calendar_book_timeline_has_no_phase() -> None:

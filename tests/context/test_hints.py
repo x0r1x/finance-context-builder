@@ -12,21 +12,19 @@ def test_percent_unit_is_a_rate() -> None:
     assert "inflation" in blob
     row = LayoutRow(row=8, label="Inflation per year (costs) from beginning of concession")
     hints = _hints_for(row, "%")
-    assert hints.escalation is None
     assert hints.time_semantics == "rate"
     assert hints.unit == "rate"
 
 
-def test_segment_and_escalation_stay_empty() -> None:
+def test_traffic_label_keeps_flow_time() -> None:
     row = LayoutRow(
         row=13,
         label="TRAFFIC - Heavy Vehicle (HV)",
         kind="fact",
     )
     hints = _hints_for(row)
-    assert hints.segment is None
-    assert hints.escalation is None
-    assert hints.statement is None
+    assert hints.time_semantics == "flow"
+    assert hints.unit is None
 
 
 def test_sheet_name_does_not_make_a_balance() -> None:
@@ -34,7 +32,6 @@ def test_sheet_name_does_not_make_a_balance() -> None:
     hints = _hints_for(row)
     assert hints.nature is None
     assert hints.time_semantics == "flow"
-    assert hints.statement is None
 
 
 def test_opening_balance_stays_bop() -> None:
@@ -48,7 +45,6 @@ def test_index_unit_is_a_level_and_percent_stays_a_rate() -> None:
     index = LayoutRow(row=172, label="CPI", kind="fact")
     index_hints = _hints_for(index, "Index")
     assert index_hints.time_semantics == "stock"
-    assert index_hints.statement is None
     rate = LayoutRow(row=165, label="CPI", kind="fact")
     rate_hints = _hints_for(rate, "%")
     assert rate_hints.time_semantics == "rate"

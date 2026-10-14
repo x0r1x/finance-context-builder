@@ -76,7 +76,6 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
         content_sha256="deadbeef",
     )
     metric = doc.blocks[0].rows[0]
-    assert metric.concept_id is None
     assert metric.sheet == "CF"
     assert metric.row == 2
     assert metric.values == ["320000", "320000"]
@@ -86,7 +85,6 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.period_position == "beginning"
     assert metric.aggregation == "first"
     assert metric.formula == "=RC[-1]"
-    assert metric.mapping is None
     assert metric.unit == "money"
     assert metric.hints.currency == "USD"
     assert metric.hints.scale == "unit"
@@ -202,9 +200,6 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     cash = rows[1]
     assert cash.kind == "fact"
     assert cash.disposition is None
-    assert cash.concept_id is None
-    assert cash.candidates == []
-    assert cash.mapping is None
     assert cash.label_path == ["Cashflow"]
     assert cash.formula == "=RC[1]"
     assert cash.neighbors == ["CF!3"]
@@ -214,10 +209,9 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert rows[2].neighbors == ["CF!2"]
     assert not any("Content completeness" in warning for warning in doc.warnings)
     abstract = rows[0]
-    assert abstract.concept_id is None
     assert abstract.disposition is None
     assert abstract.neighbors == []
-    assert doc.schema_version == "1.13.0"
+    assert doc.schema_version == "1.14.0"
 
 
 def test_fact_time_comes_from_the_label_not_a_concept() -> None:
@@ -261,8 +255,6 @@ def test_fact_time_comes_from_the_label_not_a_concept() -> None:
         layout=layout,
     )
     row = doc.blocks[0].rows[0]
-    assert row.concept_id is None
-    assert row.hints.statement is None
     assert row.hints.time_semantics == "flow"
     assert row.hints.sign is None
 
@@ -372,8 +364,6 @@ def test_build_exports_role_cells_not_graph_samples() -> None:
     )
     series = doc.blocks[0].rows[0]
     assert any(cell.role == "value" and cell.addr == "C26" for cell in series.cells)
-    assert series.candidates == []
-    assert series.concept_id is None
     assert series.values == ["50"]
 
 

@@ -86,7 +86,6 @@ class TraceNode(BaseModel):
     sheet: str | None = None
     addr: str | None = None
     row_key: str | None = None
-    concept_id: str | None = None
     period_id: str | None = None
     node_type: str | None = None
     formula: str | None = None

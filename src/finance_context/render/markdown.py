@@ -75,32 +75,8 @@ def refresh_context_markdown(dest: Path) -> bool:
 
 
 def _coverage_lines(doc: ContextDocument) -> list[str]:
-    stats = doc.mapping_stats
-    annotatable = stats.mapped + stats.abstained
-    return [
-        (
-            f"- Content completeness: {stats.content_completeness:.2f} "
-            f"({stats.inventory_rows}/{stats.inventory_rows} layout rows)"
-        ),
-        (
-            f"- Concept coverage: {stats.concept_coverage:.2f} "
-            f"({stats.mapped}/{annotatable} annotatable)"
-        ),
-        *_quality_lines(doc),
-    ]
-
-
-def _quality_lines(doc: ContextDocument) -> list[str]:
-    quality = doc.mapping_stats.mapping_quality
-    passed = "true" if quality.confidence_threshold_passed else "false"
-    return [
-        f"- Label coverage: {quality.label_coverage:.2f}",
-        f"- Semantic coverage: {quality.semantic_coverage:.2f}",
-        f"- Unit coverage: {quality.unit_coverage:.2f}",
-        f"- Temporal coverage: {quality.temporal_coverage:.2f}",
-        f"- Formula coverage: {quality.formula_coverage:.2f}",
-        f"- Confidence threshold passed: {passed}",
-    ]
+    rows = sum(len(block.rows) for block in doc.blocks)
+    return [f"- Content completeness: 1.00 ({rows}/{rows} layout rows)"]
 
 
 def _axes_section(axes: list[ContextAxis]) -> list[str]:
@@ -346,7 +322,6 @@ def _value_table(rows: list[BlockRow], periods: list[dict], axis_id: str | None)
         "Path",
         "Kind",
         "Disposition",
-        "Concept",
         "Unit",
         "Time",
         "Formula",
@@ -393,10 +368,6 @@ def _row_line(
     period_cols: set | None = None,
 ) -> str:
     unit = _unit_label(row)
-    concept = row.concept_id or ""
-    confidence = row.mapping.confidence if row.mapping and row.mapping.confidence else ""
-    if concept and confidence:
-        concept = f"{concept} ({confidence})"
     source_values = series.values if series is not None else row.values
     source_statuses = series.value_statuses if series is not None else row.value_statuses
     source_normalized = series.normalized_values if series is not None else row.normalized_values
@@ -412,7 +383,6 @@ def _row_line(
         _cell(" / ".join(row.label_path)),
         _cell(row.kind),
         _cell(row.disposition or ""),
-        _cell(concept),
         _cell(unit),
         _cell(_time_label(row)),
         _cell(formula or ""),

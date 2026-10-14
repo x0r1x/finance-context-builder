@@ -52,7 +52,7 @@ def _ok_graph(**overrides: object) -> dict:
 
 def _ok_context(**overrides: object) -> dict:
     body: dict = {
-        "schema_version": "1.13.0",
+        "schema_version": "1.14.0",
         "graph": {"artifact": "graph.json", "nodes": 8, "edges": 20, "iterate": False},
         "blocks": [
             {
@@ -61,7 +61,6 @@ def _ok_context(**overrides: object) -> dict:
                     {
                         "row_key": "P&L|13|P&L!r2",
                         "label": "EBITDA",
-                        "concept_id": "pnl.ebitda",
                         "formula": "=SUM(RC[-4]:RC[-1])",
                         "values": ["13", "23"],
                         "value_statuses": ["cached", "cached"],
@@ -176,7 +175,6 @@ def test_markdown_must_repeat_blocks_and_links(tmp_path: Path) -> None:
                 "",
                 "EBITDA",
                 "P&L\\|13\\|P&L!r2",
-                "pnl.ebitda",
                 "P&L!r2",
                 "=SUM(RC[-4]:RC[-1])",
                 "",
@@ -301,7 +299,6 @@ def test_shifted_sheet_total_is_not_a_period_of_the_shared_axis(tmp_path: Path) 
                     "sheet": "Operation",
                     "row": 5,
                     "label": "Amount",
-                    "concept_id": "pnl.revenue",
                     "formula": "=1",
                     "cells": [{"col": 4, "role": "total", "cached_value": "9"}],
                     "values": ["1", "2"],
@@ -323,7 +320,7 @@ def test_shifted_sheet_total_is_not_a_period_of_the_shared_axis(tmp_path: Path) 
     context_md.write_text(
         "\n| TBA!r2 | Y1 | Y2 |\n\n"
         "Operation!r2\nAmount\nOperation\\|5\\|Operation!r2\n"
-        "pnl.revenue\n=1\nD total: 9\n[Operation!E5] [Operation!F5]\n",
+        "=1\nD total: 9\n[Operation!E5] [Operation!F5]\n",
         encoding="utf-8",
     )
     result = _run(str(context), str(graph), "--context-md", str(context_md))

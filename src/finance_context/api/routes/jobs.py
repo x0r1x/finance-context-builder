@@ -51,8 +51,6 @@ async def readyz(request: Request) -> JSONResponse:
     writable = _data_dir_writable(settings.data_dir)
     body = {
         "status": "ready" if writable else "unavailable",
-        "llm": settings.llm_configured(),
-        "embeddings": settings.embed_configured(),
         "queue": "in_process",
         "jobs": ctx.processes.alive_count(),
     }
@@ -174,7 +172,7 @@ async def post_job(
                 _LOGGER,
                 logging.INFO,
                 "snapshot_invalidated",
-                "layout and mapping artifacts invalidated",
+                "stale artifacts invalidated",
                 job_id=job_id,
             )
             started = ctx.bus.enqueue(job_id)

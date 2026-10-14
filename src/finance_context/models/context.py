@@ -6,12 +6,10 @@ from pydantic import BaseModel, Field, model_serializer
 
 from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
 
-SCHEMA_VERSION = "1.13.0"
+SCHEMA_VERSION = "1.14.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
-Confidence = Literal["high", "medium", "low"]
-MapMethod = Literal["rule", "embed", "llm", "unmapped", "structure"]
 JobStatus = Literal["queued", "running", "succeeded", "degraded", "needs_input", "failed"]
 
 
@@ -26,44 +24,6 @@ class SourceRef(BaseModel):
         return f"{self.sheet}!{self.addr}"
 
 
-class MappingEvidence(BaseModel):
-    method: MapMethod
-    score: float | None = None
-    confidence: Confidence | None = None
-    alternatives: list[tuple[str, float]] = Field(default_factory=list)
-    source: str | None = None
-    evidence: str | None = None
-    disposition: str = "mapped"
-    exclusion_reason: str | None = None
-
-
-class CandidateHit(BaseModel):
-    concept_id: str
-    score: float
-    evidence: str | None = None
-
-
-class SemanticIdentity(BaseModel):
-    """Economic meaning of the line. Not the statement slot and not a rival candidate."""
-
-    family: str
-    concept_id: str
-    confidence: float
-
-
-class ReportingRole(BaseModel):
-    """Where this row is used: selected statement concept, or a layout/calculation role."""
-
-    role: str
-    confidence: float
-    selected: bool = False
-
-
-class CashSemantics(BaseModel):
-    recognition: Literal["accrual", "cash", "noncash", "rate", "stock"]
-    cash_movement: Literal["inflow", "outflow", "none"]
-
-
 class NumericSummary(BaseModel):
     first: str | None = None
     last: str | None = None
@@ -76,14 +36,11 @@ class NumericSummary(BaseModel):
 class RowHints(BaseModel):
     nature: str | None = None
     time_semantics: str | None = None
-    statement: str | None = None
     unit: str | None = None
     unit_per: str | None = None
     currency: str | None = None
     scale: str | None = None
     sign: str | None = None
-    segment: str | None = None
-    escalation: str | None = None
 
 
 class RoleCell(BaseModel):
@@ -120,7 +77,6 @@ class BlockRow(BaseModel):
     kind: str
     disposition: str | None = None
     exclusion_reason: str | None = None
-    concept_id: str | None = None
     article_role: str | None = None
     unit: str | None = None
     formula: str | None = None
@@ -130,15 +86,8 @@ class BlockRow(BaseModel):
     check_row: bool = False
     neighbors: list[str] = Field(default_factory=list)
     numeric_summary: NumericSummary | None = None
-    candidates: list[CandidateHit] = Field(default_factory=list)
     hints: RowHints = Field(default_factory=RowHints)
     cells: list[RoleCell] = Field(default_factory=list)
-    mapping: MappingEvidence | None = None
-    context_role: str | None = None
-    secondary_concepts: list[str] = Field(default_factory=list)
-    semantic_identity: SemanticIdentity | None = None
-    reporting_roles: list[ReportingRole] = Field(default_factory=list)
-    cash_semantics: CashSemantics | None = None
     period_position: PeriodPosition | None = None
     aggregation: SeriesAggregation | None = None
     scale_factor: int | None = None
@@ -261,42 +210,11 @@ class GraphPointer(BaseModel):
     empty_range_members: int = 0
 
 
-class MappingQuality(BaseModel):
-    """Checks on accepted concepts. Independent of `concept_coverage`."""
-
-    label_coverage: float = 0.0
-    semantic_coverage: float = 0.0
-    unit_coverage: float = 0.0
-    temporal_coverage: float = 0.0
-    formula_coverage: float = 0.0
-    confidence_threshold_passed: bool = False
-
-
-class MappingStats(BaseModel):
-    """Layout coverage plus semantic quality of accepted concepts.
-
-    `unmapped_series` counts abstained fact lines inside blocks.
-    `concept_coverage` is the share of annotatable rows with an accepted concept.
-    `mapping_quality` scores label, semantic, unit, temporal, and formula checks.
-    """
-
-    inventory_rows: int = 0
-    mapped: int = 0
-    abstained: int = 0
-    excluded: int = 0
-    abstract: int = 0
-    unmapped_series: int = 0
-    content_completeness: float = 1.0
-    concept_coverage: float = 0.0
-    mapping_quality: MappingQuality = Field(default_factory=MappingQuality)
-
-
 class ContextDocument(BaseModel):
     schema_version: str = SCHEMA_VERSION
     meta: ArtifactMeta
     workbook: WorkbookRaw
     axes: list[ContextAxis] = Field(default_factory=list)
     blocks: list[FinancialBlock] = Field(default_factory=list)
-    mapping_stats: MappingStats = Field(default_factory=MappingStats)
     graph: GraphPointer = Field(default_factory=GraphPointer)
     warnings: list[str] = Field(default_factory=list)

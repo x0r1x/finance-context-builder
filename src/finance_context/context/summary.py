@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from finance_context.context.catalog import slice_mapping_stats
 from finance_context.graph.models import GraphDocument
 from finance_context.models.context import ContextDocument
 from finance_context.models.summary import SummaryCycle, SummaryDocument, SummaryHint
@@ -29,7 +28,6 @@ def build_summary(
         content_sha256=_text(identity, "content_sha256"),
         status=_text(identity, "status"),
         stage=_text(identity, "stage"),
-        mapping_stats=slice_mapping_stats(parsed_context.mapping_stats),
         sheets=list(workbook.sheets),
         formula_count=workbook.formula_count,
         missing_cached_values=workbook.missing_cached_values,

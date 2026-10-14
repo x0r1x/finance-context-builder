@@ -28,7 +28,7 @@ def _client(tmp_path: Path) -> TestClient:
 def test_etag_match_is_strong(tmp_path: Path) -> None:
     path = tmp_path / "context.json"
     path.write_text("{}", encoding="utf-8")
-    tag = strong_etag("catalog-1", "abc", path)
+    tag = strong_etag("catalog-2", "abc", path)
     assert etag_matches("*", tag)
     assert etag_matches(tag, tag)
     assert etag_matches(f" {tag} , \"other\"", tag)
@@ -49,7 +49,7 @@ def test_list_finds_a_book_by_filename(tmp_path: Path) -> None:
     body = response.json()
     assert [item["job_id"] for item in body] == [_JOB]
     assert body[0]["source_filename"] == "rvi-project-finance.xlsx"
-    assert body[0]["schema_version"] == "1.13.0"
+    assert body[0]["schema_version"] == "1.14.0"
     assert "warnings" not in body[0]
 
 
@@ -59,7 +59,7 @@ def test_catalog_etag_head_and_rewrite(tmp_path: Path) -> None:
         first = client.get(f"/v1/context-jobs/{_JOB}/catalog")
         assert first.status_code == 200
         etag = first.headers["etag"]
-        assert etag.startswith('"catalog-1:')
+        assert etag.startswith('"catalog-2:')
         assert "values" not in first.text
         head = client.head(f"/v1/context-jobs/{_JOB}/catalog")
         assert head.status_code == 200
@@ -98,7 +98,7 @@ def test_observations_selector_limit_and_unknown_row(tmp_path: Path) -> None:
         )
         assert unknown.status_code == 200
         assert unknown.json() == {
-            "schema_version": "observation-1",
+            "schema_version": "observation-2",
             "truncated": False,
             "observations": [],
         }
@@ -136,12 +136,12 @@ def test_summary_has_counters_without_links(tmp_path: Path) -> None:
         response = client.get(f"/v1/context-jobs/{_JOB}/summary")
     assert response.status_code == 200
     body = response.json()
-    assert body["schema_version"] == "summary-1"
+    assert body["schema_version"] == "summary-2"
     assert body["missing_cached_values"] == 17
     assert body["unresolved"]["count"] == 2
     assert "links" not in body
     assert "1234.56" not in response.text
-    assert response.headers["etag"].startswith('"summary-1:')
+    assert response.headers["etag"].startswith('"summary-2:')
 
 
 def test_missing_graph_and_unknown_job(tmp_path: Path) -> None:

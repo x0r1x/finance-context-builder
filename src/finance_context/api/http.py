@@ -27,7 +27,6 @@ _STAGE_RANK = {
     "parse": 1,
     "compile": 2,
     "layout": 3,
-    "mapping": 4,
     "graph": 5,
     "build": 6,
     "render": 7,

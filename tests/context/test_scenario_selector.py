@@ -70,7 +70,6 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
     selector = next(row for row in rows if row.label == "Scenario Chosen")
     assert selector.kind == "flag"
     assert selector.row == 3
-    assert selector.context_role is None
     assert selector.disposition == "excluded"
     assert any(cell.addr == "D3" and str(cell.cached_value) == "1" for cell in selector.cells)
     assert "1" in selector.values

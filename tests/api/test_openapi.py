@@ -95,9 +95,9 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
         "ObservationDocument",
     ):
         assert name in schemas
-    assert _const(schemas["CatalogDocument"], "schema_version") == "catalog-1"
-    assert _const(schemas["SummaryDocument"], "schema_version") == "summary-1"
-    assert _const(schemas["ObservationDocument"], "schema_version") == "observation-1"
+    assert _const(schemas["CatalogDocument"], "schema_version") == "catalog-2"
+    assert _const(schemas["SummaryDocument"], "schema_version") == "summary-2"
+    assert _const(schemas["ObservationDocument"], "schema_version") == "observation-2"
 
     listing = spec["paths"]["/v1/context-jobs"]["get"]
     listed = listing["responses"]["200"]["content"]["application/json"]["schema"]
@@ -137,7 +137,6 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     assert _schema_ref(catalog, "200").endswith("/CatalogDocument")
     assert _query_names(catalog) == {
         "q",
-        "concept_id",
         "sheet",
         "disposition",
         "limit",
@@ -149,7 +148,6 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
 
     trace_described = {item["name"]: item.get("description") for item in trace["parameters"]}
     assert trace_described["from"]
-    assert "concept_id" not in trace_described["from"]
     assert "label_path" not in trace_described["from"]
 
     summary = spec["paths"]["/v1/context-jobs/{job_id}/summary"]["get"]
@@ -159,7 +157,6 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     assert _schema_ref(observations, "200").endswith("/ObservationDocument")
     assert _query_names(observations) == {
         "row_key",
-        "concept_id",
         "q",
         "period_id",
         "phase",

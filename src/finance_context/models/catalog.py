@@ -9,17 +9,7 @@ from pydantic import BaseModel, Field, model_serializer
 from finance_context.models.context import TimelinePhase
 from finance_context.vocab import PeriodPosition, SeriesAggregation
 
-CATALOG_SCHEMA_VERSION = "catalog-1"
-
-
-class SliceMappingStats(BaseModel):
-    """Book-level coverage. The six mapping_quality scores stay out."""
-
-    inventory_rows: int = 0
-    mapped: int = 0
-    abstained: int = 0
-    excluded: int = 0
-    concept_coverage: float = 0.0
+CATALOG_SCHEMA_VERSION = "catalog-2"
 
 
 class CatalogHints(BaseModel):
@@ -64,7 +54,6 @@ class CatalogRow(BaseModel):
     sheet: str
     label: str
     label_path: list[str] = Field(default_factory=list)
-    concept_id: str | None = None
     disposition: str | None = None
     kind: str
     axis_ids: list[str] = Field(default_factory=list)
@@ -75,12 +64,11 @@ class CatalogRow(BaseModel):
 
 
 class CatalogDocument(BaseModel):
-    """Rows of one finished job, without values. Schema catalog-1."""
+    """Rows of one finished job, without values. Schema catalog-2."""
 
-    schema_version: Literal["catalog-1"] = CATALOG_SCHEMA_VERSION
+    schema_version: Literal["catalog-2"] = CATALOG_SCHEMA_VERSION
     total: int
     offset: int = 0
     limit: int | None = None
-    mapping_stats: SliceMappingStats = Field(default_factory=SliceMappingStats)
     axes: list[CatalogAxis] = Field(default_factory=list)
     rows: list[CatalogRow] = Field(default_factory=list)

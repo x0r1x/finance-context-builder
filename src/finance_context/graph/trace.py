@@ -182,7 +182,6 @@ def _node(node_id: str, cell: dict, meta: dict, depth: int) -> TraceNode:
         sheet=None if sheet is None else str(sheet),
         addr=None if addr is None else str(addr),
         row_key=meta.get("row_key"),
-        concept_id=meta.get("concept_id"),
         period_id=meta.get("period_id"),
         node_type=meta.get("node_type"),
         formula=cell.get("formula_raw"),

@@ -39,7 +39,7 @@ class _CellIndex:
 
 
 def formula_relations(layout: Layout, cells: list[dict]) -> list[RowRelation]:
-    """Formula-shape relations. No taxonomy and no concept ids."""
+    """Formula-shape relations for alias, aggregate, difference, and roll-forward."""
     book = _CellIndex(layout, cells)
     relations: list[RowRelation] = []
     for sheet in layout.sheets:

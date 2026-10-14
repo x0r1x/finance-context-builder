@@ -29,7 +29,6 @@ INDEX_COLUMNS = (
     ("sheet", "VARCHAR"),
     ("addr", "VARCHAR"),
     ("row_key", "VARCHAR"),
-    ("concept_id", "VARCHAR"),
     ("period_id", "VARCHAR"),
     ("node_type", "VARCHAR"),
 )
@@ -66,7 +65,7 @@ def build_formula_graph(
     )
     write_parquet(dest_dir / "ir" / "graph_index.parquet", INDEX_COLUMNS, index_rows)
 
-    period_of = {row[0]: row[5] for row in index_rows}
+    period_of = {row[0]: row[4] for row in index_rows}
     enriched = [_enrich_edge(edge, period_of, period_index) for edge in cell_edges]
     write_parquet(
         dest_dir / "ir" / "graph_edges.parquet",
@@ -275,7 +274,6 @@ def _index_rows(
                 sheet,
                 addr,
                 meta,
-                None,
                 period_by_cell.get((sheet, col_n)),
                 node_type,
             )
@@ -304,7 +302,7 @@ def _empty_index_row(
 ) -> tuple[object, ...]:
     parsed = parse_node_id(node_id)
     if parsed is None:
-        return (node_id, None, None, None, None, None, "empty")
+        return (node_id, None, None, None, None, "empty")
     sheet, col_n, row_n = parsed
     addr = f"{index_to_col(col_n)}{row_n}"
     meta = row_meta.get((sheet, row_n))
@@ -313,7 +311,6 @@ def _empty_index_row(
         sheet,
         addr,
         meta,
-        None,
         period_by_cell.get((sheet, col_n)),
         "empty",
     )

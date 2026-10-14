@@ -9,26 +9,14 @@ from finance_context.models.catalog import (
     CatalogHints,
     CatalogPeriod,
     CatalogRow,
-    SliceMappingStats,
 )
-from finance_context.models.context import BlockRow, ContextAxis, ContextDocument, MappingStats
-
-
-def slice_mapping_stats(stats: MappingStats) -> SliceMappingStats:
-    return SliceMappingStats(
-        inventory_rows=stats.inventory_rows,
-        mapped=stats.mapped,
-        abstained=stats.abstained,
-        excluded=stats.excluded,
-        concept_coverage=stats.concept_coverage,
-    )
+from finance_context.models.context import BlockRow, ContextAxis, ContextDocument
 
 
 def build_catalog(
     context: ContextDocument,
     *,
     q: str | None = None,
-    concept_ids: list[str] | None = None,
     sheet: str | None = None,
     disposition: str | None = None,
     limit: int | None = None,
@@ -36,15 +24,12 @@ def build_catalog(
 ) -> CatalogDocument:
     """Rows and axes. Does not copy values, series, or normalized values."""
     needle = (q or "").strip()
-    concepts = set(concept_ids or [])
     matched: list[CatalogRow] = []
     for block in context.blocks:
         for row in block.rows:
             if sheet is not None and row.sheet != sheet:
                 continue
             if disposition is not None and row.disposition != disposition:
-                continue
-            if concepts and row.concept_id not in concepts:
                 continue
             if needle and not own_label_contains(row.label, needle):
                 continue
@@ -55,7 +40,6 @@ def build_catalog(
         total=len(matched),
         offset=start,
         limit=limit,
-        mapping_stats=slice_mapping_stats(context.mapping_stats),
         axes=[_catalog_axis(axis) for axis in context.axes],
         rows=page,
     )
@@ -88,7 +72,6 @@ def _catalog_row(row: BlockRow, axis_ids: list[str]) -> CatalogRow:
         sheet=row.sheet,
         label=row.label,
         label_path=list(row.label_path),
-        concept_id=row.concept_id,
         disposition=row.disposition,
         kind=row.kind,
         axis_ids=list(axis_ids),
@@ -102,5 +85,3 @@ def _catalog_row(row: BlockRow, axis_ids: list[str]) -> CatalogRow:
             sign=hints.sign,
         ),
     )
-
-
