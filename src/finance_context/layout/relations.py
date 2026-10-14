@@ -4,8 +4,9 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
-from finance_context.layout.formulas_shape import RowPattern
-from finance_context.layout.models import Block, LayoutRow
+from finance_context.layout.formulas_shape import RowPattern, _pattern_for_row
+from finance_context.layout.models import Block, Layout, LayoutRow
+from finance_context.layout.resolve import period_headers
 
 
 class RowRelation(BaseModel):
@@ -20,6 +21,41 @@ class _RelationBook(Protocol):
     row_index: dict[tuple[str, int], tuple[object, object]]
 
     def row_key(self, sheet: str, row: int, block_id: str) -> str: ...
+
+
+class _CellIndex:
+    def __init__(self, layout: Layout, cells: list[dict]) -> None:
+        self.cells = {
+            (str(cell["sheet"]), int(cell["row"]), int(cell["col"])): cell for cell in cells
+        }
+        self.row_index: dict[tuple[str, int], tuple[Block, LayoutRow]] = {}
+        for sheet in layout.sheets:
+            for block in sheet.blocks:
+                for row in block.rows:
+                    self.row_index[(sheet.name, row.row)] = (block, row)
+
+    def row_key(self, sheet: str, row: int, block_id: str) -> str:
+        return f"{sheet}|{row}|{block_id}"
+
+
+def formula_relations(layout: Layout, cells: list[dict]) -> list[RowRelation]:
+    """Formula-shape relations. No taxonomy and no concept ids."""
+    book = _CellIndex(layout, cells)
+    relations: list[RowRelation] = []
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            headers = period_headers(sheet, block)
+            period_cols = [header.col for header in headers]
+            if getattr(block, "kind", "timeline") == "params":
+                period_cols = [
+                    header.col for header in headers if header.role in {"value", "scenario"}
+                ]
+            for layout_row in block.rows:
+                pattern = _pattern_for_row(book, sheet.name, layout_row.row, period_cols)
+                relation = _relation_from_pattern(book, sheet.name, block, layout_row, pattern)
+                if relation is not None:
+                    relations.append(relation)
+    return relations
 
 
 def _block_id(book: _RelationBook, sheet: str, row: int) -> str | None:

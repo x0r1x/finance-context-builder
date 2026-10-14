@@ -6,33 +6,22 @@ import os
 import time
 from pathlib import Path
 
-from finance_context.adapters.slots import AlwaysGrant
 from finance_context.app.publisher import publisher_stamp, stamped_stages
 from finance_context.context.build import build_context
 from finance_context.errors import ContextError, PortError
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
+from finance_context.layout.exclusion import row_exclusion
 from finance_context.layout.models import Layout
+from finance_context.layout.relations import formula_relations
 from finance_context.layout.stage import layout_workbook
-from finance_context.mapping.models import MappingDocument
-from finance_context.mapping.stage import mapping_cache_current, mapping_workbook
-from finance_context.mapping.taxonomy import ensure_runtime_taxonomy
-from finance_context.mapping.vectors import TaxonomyPrefetch, taxonomy_digest
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
 from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
-from finance_context.ports.protocols import ChatPort, EmbedPort, SlotGate
 from finance_context.render.markdown import refresh_context_markdown, write_context_markdown
 from finance_context.settings import Settings
 from finance_context.store.fs import file_lock, read_parquet, update_json
-from finance_context.store.paths import (
-    embedding_cache_file,
-    glossary_file,
-    label_memory_file,
-    runtime_taxonomy_file,
-    session_job_dir,
-    shared_book_dir,
-)
+from finance_context.store.paths import session_job_dir, shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
 _TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
@@ -40,18 +29,8 @@ _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
 
 
 class Pipeline:
-    def __init__(
-        self,
-        settings: Settings | None = None,
-        *,
-        embed: EmbedPort | None = None,
-        chat: ChatPort | None = None,
-        slots: SlotGate | None = None,
-    ) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
-        self.embed = embed if embed is not None else self.settings.embed()
-        self.chat = chat if chat is not None else self.settings.chat()
-        self.slots = slots or AlwaysGrant()
 
     def run(
         self,
@@ -116,21 +95,15 @@ class Pipeline:
         source = book / "source.xlsx"
         if not source.is_file():
             raise ContextError("empty_file", "source.xlsx missing")
-        prefetch = _start_taxonomy_prefetch(self)
-        try:
-            return self._run_loaded(
-                dest_dir,
-                job_id=job_id,
-                source_filename=source_filename,
-                content_sha256=content_sha256,
-                progress=progress,
-                prefetch=prefetch,
-                generation=generation,
-                shared_dir=book if book != dest_dir else None,
-            )
-        finally:
-            if prefetch is not None:
-                prefetch.join()
+        return self._run_loaded(
+            dest_dir,
+            job_id=job_id,
+            source_filename=source_filename,
+            content_sha256=content_sha256,
+            progress=progress,
+            generation=generation,
+            shared_dir=book if book != dest_dir else None,
+        )
 
     def _run_loaded(
         self,
@@ -140,7 +113,6 @@ class Pipeline:
         source_filename: str | None,
         content_sha256: str | None,
         progress: object | None,
-        prefetch: TaxonomyPrefetch | None,
         generation: int,
         shared_dir: Path | None = None,
     ) -> ContextDocument:
@@ -185,53 +157,12 @@ class Pipeline:
             )
         else:
             layout = Layout.model_validate_json((book / "layout.json").read_text(encoding="utf-8"))
-        set_stage("mapping")
-        glossary_path = glossary_file(self.settings.data_dir, self.settings.session_id)
-        taxonomy = ensure_runtime_taxonomy(runtime_taxonomy_file(self.settings.data_dir))
-        cache_path = embedding_cache_file(
-            self.settings.data_dir,
-            model=self.settings.embedding_model or "",
-            taxonomy_digest=taxonomy_digest(taxonomy),
-        )
-        thresholds = self.settings.mapping_thresholds()
-        default_thresholds = Settings.default_mapping_thresholds()
-        if not mapping_cache_current(dest_dir / "mapping.json", thresholds, default_thresholds):
-            graph_json = dest_dir / "graph.json"
-            if graph_json.is_file():
-                graph_json.unlink()
-        mapping = _timed(
-            "mapping",
-            lambda: mapping_workbook(
-                dest_dir,
-                thresholds=thresholds,
-                default_thresholds=default_thresholds,
-                embed=self.embed,
-                chat=self.chat,
-                slots=self.slots,
-                taxonomy=taxonomy,
-                cache_path=cache_path,
-                slot_timeout_sec=self.settings.llm_slot_wait_sec,
-                embedding_model=self.settings.embedding_model or "",
-                glossary_path=glossary_path,
-                label_memory_path=label_memory_file(self.settings.data_dir),
-                runtime_taxonomy_path=runtime_taxonomy_file(self.settings.data_dir),
-                concept_index=prefetch,
-                llm_concurrency=self.settings.llm_concurrency,
-                cells=ir_cells,
-                edges=ir_cell_edges,
-                book_dir=book,
-            ),
-        )
         cells = ir_cells
         edges = ir_edges
-        relations = list(mapping.relations)
-        exclusion = {
-            (row.sheet, row.row): row.exclusion_reason
-            for row in mapping.rows
-            if row.exclusion_reason
-        }
+        relations = formula_relations(layout, ir_cells)
+        exclusion = row_exclusion(layout, ir_cells)
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
-        status = _final_status(mapping, embed=self.embed, chat=self.chat)
+        status = _final_status()
         set_stage("graph", status="running")
         # graph.json can outlive ir/graph_edges.parquet (a publisher change drops the parquet).
         # Trace walks that file, so a missing parquet has to be rebuilt.
@@ -356,7 +287,6 @@ def _install_stage_pause() -> None:
         "parse": "parse_workbook",
         "compile": "compile_workbook",
         "layout": "layout_workbook",
-        "mapping": "mapping_workbook",
     }.get(stage)
     if attr is None:
         return
@@ -388,22 +318,6 @@ def _read_ir(dest_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
     return cells, edges, cell_edges
 
 
-def _start_taxonomy_prefetch(pipeline: Pipeline) -> TaxonomyPrefetch | None:
-    if pipeline.embed is None:
-        return None
-    taxonomy = ensure_runtime_taxonomy(runtime_taxonomy_file(pipeline.settings.data_dir))
-    return TaxonomyPrefetch(
-        pipeline.embed,
-        taxonomy,
-        cache_path=embedding_cache_file(
-            pipeline.settings.data_dir,
-            model=pipeline.settings.embedding_model or "",
-            taxonomy_digest=taxonomy_digest(taxonomy),
-        ),
-        model=pipeline.settings.embedding_model or "",
-    )
-
-
 def _raise_if_cancelled(progress: object | None) -> None:
     if progress is None:
         return
@@ -412,9 +326,7 @@ def _raise_if_cancelled(progress: object | None) -> None:
         raise ContextError("job_timeout", "job timed out")
 
 
-def _final_status(mapping: MappingDocument, *, embed: object, chat: object) -> str:
-    # A published book is succeeded. An unmapped fact stays on the row.
-    del mapping, embed, chat
+def _final_status() -> str:
     return "succeeded"
 
 

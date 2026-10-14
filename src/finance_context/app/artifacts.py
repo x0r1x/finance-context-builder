@@ -50,8 +50,6 @@ def clear_downstream_artifacts(
         ir = dest / "ir"
         for name in _GRAPH_IR:
             (ir / name).unlink(missing_ok=True)
-    if reached("mapping"):
-        (dest / "mapping.json").unlink(missing_ok=True)
     if reached("layout"):
         (book / "layout.json").unlink(missing_ok=True)
     (dest / "meta.json").unlink(missing_ok=True)

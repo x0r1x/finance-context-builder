@@ -43,7 +43,6 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
         "finance_context.store.fs",
         "finance_context.formulas.stage",
         "finance_context.layout.stage",
-        "finance_context.mapping.stage",
         "finance_context.graph.stage",
         "finance_context.app.pipeline",
     ):

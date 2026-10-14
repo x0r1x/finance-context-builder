@@ -6,13 +6,12 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.app.ids import sha256_bytes
 from finance_context.app.pipeline import Pipeline
-from finance_context.mapping.glossary import load_glossary, save_glossary
 from finance_context.settings import Settings
 from finance_context.store.fs import write_json
-from finance_context.store.paths import glossary_file, session_job_dir, shared_book_dir
+from finance_context.store.paths import session_job_dir, shared_book_dir
 
 
-def test_sessions_share_formula_ir_and_keep_glossary_apart(tmp_path: Path) -> None:
+def test_sessions_share_formula_ir(tmp_path: Path) -> None:
     source = tmp_path / "model.xlsx"
     build_xlsx(
         source,
@@ -35,8 +34,6 @@ def test_sessions_share_formula_ir_and_keep_glossary_apart(tmp_path: Path) -> No
     shared = shared_book_dir(root, job_id)
     shared.mkdir(parents=True)
     (shared / "source.xlsx").write_bytes(raw)
-    save_glossary(glossary_file(root, "alpha"), {("only alpha", "sales"): "pnl.revenue"})
-    seeded = load_glossary(glossary_file(root, "alpha"))
 
     def once(session: str) -> None:
         settings = Settings(
@@ -66,7 +63,5 @@ def test_sessions_share_formula_ir_and_keep_glossary_apart(tmp_path: Path) -> No
 
     assert (shared / "ir" / "cells.parquet").stat().st_mtime_ns == compiled
     assert (shared / "layout.json").is_file()
-    assert (session_job_dir(root, job_id, "alpha") / "mapping.json").is_file()
+    assert (session_job_dir(root, job_id, "alpha") / "context.md").is_file()
     assert (session_job_dir(root, job_id, "beta") / "context.md").is_file()
-    assert seeded.keys().isdisjoint(load_glossary(glossary_file(root, "beta")))
-    assert set(seeded).issubset(load_glossary(glossary_file(root, "alpha")))

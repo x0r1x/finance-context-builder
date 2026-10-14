@@ -97,8 +97,6 @@ def test_repeated_upload_reuses_parse_and_compile(client: TestClient, tmp_path: 
     book_dir = _book_dir(tmp_path, job_id)
     sentinel = book_dir / "raw" / "keep-on-publisher-change"
     sentinel.write_text("keep", encoding="utf-8")
-    mapping_path = job_dir / "mapping.json"
-    mapping_path.write_text("not valid json", encoding="utf-8")
     (book_dir / "layout.json").write_text("{}", encoding="utf-8")
     meta_path = job_dir / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -121,7 +119,6 @@ def test_repeated_upload_reuses_parse_and_compile(client: TestClient, tmp_path: 
         assert (book_dir / "ir" / name).read_bytes() == payload
     layout = json.loads((book_dir / "layout.json").read_text(encoding="utf-8"))
     assert "sheets" in layout
-    assert "rows" in json.loads(mapping_path.read_text(encoding="utf-8"))
     assert (job_dir / "context.json").is_file()
     assert (job_dir / "context.md").is_file()
     assert (job_dir / "ir" / "graph_edges.parquet").is_file()
@@ -193,10 +190,10 @@ def test_ready_post_logs_job_reuse_and_does_not_launch(tmp_path: Path, caplog) -
     )
 
 
-def test_two_children_reach_mapping_together(tmp_path: Path, monkeypatch) -> None:
+def test_two_children_reach_layout_together(tmp_path: Path, monkeypatch) -> None:
     pause = tmp_path / "pause"
     pause.write_text("hold", encoding="utf-8")
-    monkeypatch.setenv("FINANCE_CONTEXT_PAUSE_STAGE", "mapping")
+    monkeypatch.setenv("FINANCE_CONTEXT_PAUSE_STAGE", "layout")
     monkeypatch.setenv("FINANCE_CONTEXT_PAUSE_FILE", str(pause))
     other = build_xlsx(
         tmp_path / "other.xlsx",
@@ -241,17 +238,17 @@ def test_two_children_reach_mapping_together(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_get_job_keeps_fresher_disk_stage(tmp_path: Path, monkeypatch) -> None:
-    pause = _hold_stage(tmp_path, monkeypatch, "mapping")
+    pause = _hold_stage(tmp_path, monkeypatch, "layout")
     source = _xlsx(tmp_path / "model.xlsx")
     try:
         with _app(tmp_path) as client:
             created = _upload(client, source)
             assert created.status_code == 202
             job_id = created.json()["job_id"]
-            assert _wait_disk_stage(tmp_path, job_id, "mapping")
+            assert _wait_disk_stage(tmp_path, job_id, "layout")
             body = client.get(f"/v1/context-jobs/{job_id}").json()
             assert body["status"] == "running"
-            assert body["stage"] == "mapping"
+            assert body["stage"] == "layout"
     finally:
         pause.unlink(missing_ok=True)
 
@@ -273,7 +270,7 @@ def test_get_job_reads_compile_stage_from_disk(tmp_path: Path, monkeypatch) -> N
 
 
 def test_second_job_waits_behind_the_process_cap(tmp_path: Path, monkeypatch) -> None:
-    pause = _hold_stage(tmp_path, monkeypatch, "mapping")
+    pause = _hold_stage(tmp_path, monkeypatch, "layout")
     other = build_xlsx(
         tmp_path / "other.xlsx",
         sheets=[
@@ -304,7 +301,7 @@ def test_second_job_waits_behind_the_process_cap(tmp_path: Path, monkeypatch) ->
             first = _upload(client, source)
             assert first.status_code == 202
             job_id = first.json()["job_id"]
-            assert _wait_disk_stage(tmp_path, job_id, "mapping")
+            assert _wait_disk_stage(tmp_path, job_id, "layout")
             repeated = _upload(client, source)
             assert repeated.status_code == 202
             blocked = _upload(client, other)
@@ -342,7 +339,7 @@ def test_dead_queued_job_relaunches(client: TestClient, tmp_path: Path) -> None:
 
 
 def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
-    pause = _hold_stage(tmp_path, monkeypatch, "mapping")
+    pause = _hold_stage(tmp_path, monkeypatch, "layout")
     source = _xlsx(tmp_path / "model.xlsx")
     settings = Settings(
         data_dir=tmp_path / "data",

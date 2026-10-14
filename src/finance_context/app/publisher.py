@@ -11,25 +11,21 @@ _CACHE_KEY: tuple[tuple[str, int], ...] | None = None
 _CACHE_STAGES: dict[str, str] | None = None
 _CACHE_FINGERPRINT: str | None = None
 
-STAGE_ORDER = ("compile", "layout", "mapping", "graph", "publish")
+STAGE_ORDER = ("compile", "layout", "graph", "publish")
 _STAGE_DIRS = {
     "compile": {"excel", "formulas"},
     "layout": {"layout"},
-    "mapping": {"mapping", "ontology"},
     "graph": {"graph"},
     "publish": {"context", "render"},
 }
 
 
 def _sources() -> list[Path]:
-    ontology = _PACKAGE / "ontology"
     found: list[Path] = []
     for path in _PACKAGE.rglob("*"):
         if not path.is_file() or "__pycache__" in path.parts:
             continue
         if path.suffix == ".py":
-            found.append(path)
-        elif path.suffix in {".yaml", ".yml"} and ontology in path.parents:
             found.append(path)
     found.sort(key=lambda item: item.relative_to(_PACKAGE).as_posix())
     return found

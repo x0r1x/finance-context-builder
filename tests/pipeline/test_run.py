@@ -4,18 +4,11 @@ import json
 import logging
 from pathlib import Path
 
-from tests.helpers.ports import FakeChat, FakeEmbed, GrantSlots
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.app.pipeline import Pipeline, _timed, run_job_process
 from finance_context.excel import parse_workbook
 from finance_context.settings import Settings
-
-VECS = {
-    "revenue": [1.0, 0.0, 0.0],
-    "выручка": [1.0, 0.0, 0.0],
-    "sales": [1.0, 0.0, 0.0],
-}
 
 
 def _model(path: Path) -> Path:
@@ -42,13 +35,7 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     source = _model(tmp_path / "model.xlsx")
     parse_workbook(source, dest)
     (dest / "source.xlsx").write_bytes(source.read_bytes())
-    embed = FakeEmbed(VECS)
-    pipeline = Pipeline(
-        Settings(data_dir=tmp_path / "data", _env_file=None),
-        embed=embed,
-        chat=FakeChat("pnl.revenue"),
-        slots=GrantSlots(),
-    )
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     doc = pipeline.run(dest, job_id="job-test", source_filename="model.xlsx")
     assert (dest / "context.json").is_file()
     assert (dest / "graph.json").is_file()
@@ -66,15 +53,12 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     assert "generation" not in document["meta"]
     meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
     assert meta["generation"] == 0
-    assert set(meta["stages"]) == {"compile", "layout", "mapping", "graph", "publish"}
+    assert set(meta["stages"]) == {"compile", "layout", "graph", "publish"}
 
 
 def test_run_job_process_emits_stage_done_on_stdout(tmp_path: Path, capsys, monkeypatch) -> None:
     logger = logging.getLogger("finance_context")
     saved = (list(logger.handlers), logger.level, logger.propagate)
-    monkeypatch.setattr(Settings, "embed", lambda self: None)
-    monkeypatch.setattr(Settings, "chat", lambda self: None)
-
     def fake_run(self, dest, *, job_id, **kwargs):
         _timed("parse", lambda: None)
 
