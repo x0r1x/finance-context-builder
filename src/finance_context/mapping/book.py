@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from finance_context.layout.formulas_shape import RowPattern
 from finance_context.layout.models import Block, Layout, LayoutRow
 from finance_context.layout.resolve import axes_for, period_headers
 from finance_context.mapping.adjacency import row_adjacency
@@ -17,31 +18,6 @@ from finance_context.mapping.models import (
 from finance_context.mapping.normalize import memory_unit, normalize_label
 from finance_context.mapping.roles import article_role
 from finance_context.mapping.rowfacets import infer_row_facets
-
-
-class RowPattern:
-    __slots__ = (
-        "kind",
-        "alias_sheet",
-        "alias_row",
-        "aggregate_rows",
-        "diff_rows",
-        "roll_from_row",
-        "is_ratio",
-        "is_total",
-        "template",
-    )
-
-    def __init__(self) -> None:
-        self.kind = "value"
-        self.alias_sheet: str | None = None
-        self.alias_row: int | None = None
-        self.aggregate_rows: list[int] = []
-        self.diff_rows: tuple[int, int] | None = None
-        self.roll_from_row: int | None = None
-        self.is_ratio = False
-        self.is_total = False
-        self.template: str | None = None
 
 
 class BookView:

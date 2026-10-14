@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finance_context.layout.models import RowKind
+from finance_context.layout.relations import RowRelation
 from finance_context.models.context import CashSemantics, ReportingRole, SemanticIdentity
 
 ArticleRole = Literal[
@@ -197,14 +198,6 @@ class MappingQuestion(BaseModel):
     prompt: str
     cell_refs: list[str]
     options: list[str]
-
-
-class RowRelation(BaseModel):
-    kind: str
-    source_row_key: str
-    target_row_key: str | None = None
-    member_row_keys: list[str] = Field(default_factory=list)
-    evidence: str | None = None
 
 
 class MappingThresholds(BaseModel):

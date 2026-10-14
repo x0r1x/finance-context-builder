@@ -1,66 +1,11 @@
 from __future__ import annotations
 
-from finance_context.layout.models import Block, LayoutRow
-from finance_context.mapping.book import BookView, RowPattern, _block_id
-from finance_context.mapping.models import RowContext, RowRelation
+from finance_context.layout.relations import _relation_from_pattern
+from finance_context.mapping.book import BookView
+from finance_context.mapping.models import RowContext
 from finance_context.mapping.normalize import normalize_label
 
-
-def _relation_from_pattern(
-    book: BookView,
-    sheet: str,
-    block: Block,
-    layout_row: LayoutRow,
-    pattern: RowPattern,
-) -> RowRelation | None:
-    source = book.row_key(sheet, layout_row.row, block.block_id)
-    if pattern.kind == "alias" and pattern.alias_row is not None:
-        target_block = _block_id(book, pattern.alias_sheet or sheet, pattern.alias_row)
-        if target_block is None:
-            return None
-        return RowRelation(
-            kind="alias",
-            source_row_key=source,
-            target_row_key=book.row_key(
-                pattern.alias_sheet or sheet, pattern.alias_row, target_block
-            ),
-            evidence=pattern.template,
-        )
-    if pattern.kind == "aggregate" and pattern.aggregate_rows:
-        members = []
-        for row_n in pattern.aggregate_rows:
-            block_id = _block_id(book, sheet, row_n)
-            if block_id:
-                members.append(book.row_key(sheet, row_n, block_id))
-        return RowRelation(
-            kind="aggregate",
-            source_row_key=source,
-            member_row_keys=members,
-            evidence=pattern.template,
-        )
-    if pattern.kind == "diff" and pattern.diff_rows:
-        members = []
-        for row_n in pattern.diff_rows:
-            block_id = _block_id(book, sheet, row_n)
-            if block_id:
-                members.append(book.row_key(sheet, row_n, block_id))
-        return RowRelation(
-            kind="difference",
-            source_row_key=source,
-            member_row_keys=members,
-            evidence=pattern.template,
-        )
-    if pattern.kind == "roll" and pattern.roll_from_row is not None:
-        block_id = _block_id(book, sheet, pattern.roll_from_row)
-        if block_id is None:
-            return None
-        return RowRelation(
-            kind="roll_forward",
-            source_row_key=source,
-            target_row_key=book.row_key(sheet, pattern.roll_from_row, block_id),
-            evidence=pattern.template,
-        )
-    return None
+__all__ = ["_relation_from_pattern"]
 
 
 def _shared_concept(

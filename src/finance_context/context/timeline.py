@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis
+from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import display_cell_text, is_calendar_key
 from finance_context.layout.resolve import axes_for
-from finance_context.mapping.normalize import normalize_label
 from finance_context.models.context import ContextAxis, ContextPeriod, TimelinePhase
 
 _SERIES_ROLES = {
