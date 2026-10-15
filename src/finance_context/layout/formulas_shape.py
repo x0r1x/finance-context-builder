@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter
 from typing import Any, Protocol
 
@@ -66,7 +67,7 @@ def _pattern_for_row(
         return pattern
     kinds = Counter(item["type"] for item in shapes)
     top, count = kinds.most_common(1)[0]
-    if count < max(1, int(0.6 * len(shapes))):
+    if count < max(1, math.ceil(0.6 * len(shapes))):
         pattern.kind = "mixed"
         pattern.is_ratio = "ratio" in kinds
         return pattern
