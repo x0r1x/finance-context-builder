@@ -18,7 +18,7 @@ A FAST date band (`Start of period` / `End of period`) is one axis of the sheet.
 
 A relative header (project finance) is a label `Year` / `Period` / `Month` / `Quarter` (and Russian год/период/мес/кв) with a contiguous integer run `0|1, 2, 3, …` of length ≥ 3 to the right. Period keys: `Y1` / `Q1` / `M1` / `P1`. Column role: `relative`. Grain: `model_year` / `model_quarter` / `model_month` / `model_period`. `apply_grain` does not touch calendar keys.
 
-After `build_context`, 0/1 flags attach to the axis whose rows contain them (`context.axes`): `phase` construction/operation, `phase_year` inside a run, overlays (repayment, availability) only in `flags`. A calendar book without those flags gets `calendar_year` and `phase=null`. Flag rows stay on the block with `disposition=excluded`.
+After `build_context`, 0/1 flags attach to the axis whose rows contain them (`context.axes`): `phase` construction/operation, `phase_year` inside a run, overlays (repayment, availability) only in `flags`. A repeated flag label does not overwrite the earlier row: its key is the normalized label plus the nearest preceding flag label in parentheses. A calendar book without those flags gets `calendar_year` and `phase=null`. Flag rows stay on the block with `disposition=excluded`.
 
 If the row has no Year word, but there are ≥ 8 integers `0|1..n` to the right **and** those columns match the widest formula-copy run on the sheet (`formula_template` / R1C1), the axis is still built. A `Week #` counter under a calendar on the same columns does not become a second axis.
 

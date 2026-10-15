@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis
 from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import display_cell_text, is_calendar_key
@@ -86,6 +88,39 @@ def _sheet_axes(sheet) -> list[TimeAxis]:
     return found
 
 
+def _flag_keys(flags: list[LayoutRow]) -> list[str]:
+    """One key per flag row. A repeated label keeps the nearest preceding flag."""
+    bases = [normalize_label(row.label) or f"row {row.row}" for row in flags]
+    counts = Counter(bases)
+    used: set[str] = set()
+    keys: list[str] = []
+    for index, row in enumerate(flags):
+        base = bases[index]
+        if counts[base] == 1:
+            key = base
+        else:
+            qualifier = _preceding_unique_flag(bases, counts, index)
+            key = f"{base} ({qualifier})" if qualifier else f"{base} {row.row}"
+            if key in used:
+                key = f"{base} {row.row}"
+        used.add(key)
+        keys.append(key)
+    return keys
+
+
+def _preceding_unique_flag(
+    bases: list[str],
+    counts: Counter[str],
+    index: int,
+) -> str | None:
+    own = bases[index]
+    for earlier in range(index - 1, -1, -1):
+        base = bases[earlier]
+        if base != own and counts[base] == 1:
+            return base
+    return None
+
+
 def _flag_rows(sheet, axis: TimeAxis) -> list[LayoutRow]:
     rows: list[LayoutRow] = []
     for block in sheet.blocks:
@@ -117,13 +152,13 @@ def _annotate_axis(
     last_phase: TimelinePhase | None = None
     run = 0
     grain = axis.grain
+    flag_keys = _flag_keys(flags)
     for index, header in enumerate(periods_in, start=1):
         flag_map: dict[str, bool] = {}
         construction = False
         operation = False
-        for row in flags:
+        for row, key in zip(flags, flag_keys, strict=True):
             on = _flag_on(by_addr, sheet_name, row.row, header.col, date1904)
-            key = normalize_label(row.label)
             flag_map[key] = on
             kind = _phase_kind(row.label)
             if kind == "construction" and on:

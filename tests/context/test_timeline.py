@@ -82,6 +82,50 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
     assert all(row.disposition == "excluded" for row in flag_rows)
 
 
+def test_repeated_flag_labels_keep_both_rows() -> None:
+    cells = [
+        _c("TBA", "A1", "Year"),
+        _c("TBA", "B1", "1"),
+        _c("TBA", "C1", "2"),
+        _c("TBA", "D1", "3"),
+        _c("TBA", "E1", "4"),
+        _c("TBA", "A2", "Availability Start Date"),
+        _c("TBA", "B2", "1"),
+        _c("TBA", "C2", "0"),
+        _c("TBA", "D2", "0"),
+        _c("TBA", "E2", "0"),
+        _c("TBA", "A3", "Active"),
+        _c("TBA", "B3", "1"),
+        _c("TBA", "C3", "1"),
+        _c("TBA", "D3", "0"),
+        _c("TBA", "E3", "0"),
+        _c("TBA", "A4", "Repayment Start Date"),
+        _c("TBA", "B4", "0"),
+        _c("TBA", "C4", "0"),
+        _c("TBA", "D4", "1"),
+        _c("TBA", "E4", "0"),
+        _c("TBA", "A5", "Active"),
+        _c("TBA", "B5", "0"),
+        _c("TBA", "C5", "0"),
+        _c("TBA", "D5", "1"),
+        _c("TBA", "E5", "1"),
+    ]
+    layout = detect_layout(cells)
+    axes, warnings = build_axes(layout, cells)
+    assert axes
+    assert not warnings
+    by_id = {item.period_key: item for item in axes[0].periods}
+    availability = "active (availability start date)"
+    repayment = "active (repayment start date)"
+    assert by_id["Y1"].flags[availability] is True
+    assert by_id["Y1"].flags[repayment] is False
+    assert by_id["Y2"].flags[availability] is True
+    assert by_id["Y3"].flags[availability] is False
+    assert by_id["Y3"].flags[repayment] is True
+    assert by_id["Y4"].flags[repayment] is True
+    assert "active" not in by_id["Y1"].flags
+
+
 def test_calendar_book_timeline_has_no_phase() -> None:
     cells = [
         _c("P&L", "A1", "Item"),
