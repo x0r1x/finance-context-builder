@@ -21,7 +21,6 @@ from finance_context.graph.models import (
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
 from finance_context.layout.resolve import period_headers
-from finance_context.mapping.models import MappingDocument
 from finance_context.models.context import GraphPointer
 from finance_context.store.fs import read_parquet, write_json, write_parquet
 
@@ -30,7 +29,6 @@ INDEX_COLUMNS = (
     ("sheet", "VARCHAR"),
     ("addr", "VARCHAR"),
     ("row_key", "VARCHAR"),
-    ("concept_id", "VARCHAR"),
     ("period_id", "VARCHAR"),
     ("node_type", "VARCHAR"),
 )
@@ -41,11 +39,11 @@ def build_formula_graph(
     *,
     job_id: str,
     layout: Layout,
-    mapping: MappingDocument,
     cells: list[dict] | None = None,
     edges: list[dict] | None = None,
     cell_edges: list[dict] | None = None,
     book_dir: Path | None = None,
+    exclusion: dict[tuple[str, int], str] | None = None,
 ) -> GraphPointer:
     book = book_dir or dest_dir
     if cells is None:
@@ -57,7 +55,8 @@ def build_formula_graph(
         cell_edges_path = book / "ir" / "cell_edges.parquet"
         cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
 
-    row_meta = _row_meta(layout, mapping)
+    excluded = dict(exclusion or {})
+    row_meta = _row_meta(layout)
     period_by_cell, period_index = _period_maps(layout)
     index_rows = _index_rows(cells, row_meta, period_by_cell)
     empty_nodes = _empty_range_nodes(cell_edges, {row[0] for row in index_rows})
@@ -66,7 +65,7 @@ def build_formula_graph(
     )
     write_parquet(dest_dir / "ir" / "graph_index.parquet", INDEX_COLUMNS, index_rows)
 
-    period_of = {row[0]: row[5] for row in index_rows}
+    period_of = {row[0]: row[4] for row in index_rows}
     enriched = [_enrich_edge(edge, period_of, period_index) for edge in cell_edges]
     write_parquet(
         dest_dir / "ir" / "graph_edges.parquet",
@@ -96,8 +95,8 @@ def build_formula_graph(
         ],
     )
 
-    cycles = attach_cycle_breakers(classify_cycles(enriched), mapping)
-    hints = circularity_hints(mapping, layout, index_rows, cycles)
+    cycles = attach_cycle_breakers(classify_cycles(enriched), excluded)
+    hints = circularity_hints(layout, index_rows, cycles, excluded)
     iterate = _workbook_iterate(book)
     doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
     doc.links = _formula_links(cells, edges, row_meta, period_by_cell, enriched)
@@ -153,14 +152,12 @@ def _cells_by_row(index_rows: list[tuple[object, ...]]) -> dict[tuple[str, int],
 
 def attach_cycle_breakers(
     cycles: list[CycleRecord],
-    mapping: MappingDocument,
+    exclusion: dict[tuple[str, int], str],
 ) -> list[CycleRecord]:
     if not cycles:
         return cycles
     bridge_rows = {
-        (row.sheet, row.row)
-        for row in mapping.rows
-        if row.exclusion_reason == "technical_bridge"
+        key for key, reason in exclusion.items() if reason == "technical_bridge"
     }
     if not bridge_rows:
         return cycles
@@ -178,10 +175,10 @@ def attach_cycle_breakers(
 
 
 def circularity_hints(
-    mapping: MappingDocument,
     layout: Layout,
     index_rows: list[tuple[object, ...]],
     cycles: list[CycleRecord],
+    exclusion: dict[tuple[str, int], str],
 ) -> list[CircularityHint]:
     if cycles:
         return []
@@ -203,10 +200,9 @@ def circularity_hints(
             )
         )
 
-    for row in mapping.rows:
-        blob = (row.label or "").casefold()
-        if row.exclusion_reason == "technical_bridge" or "circular" in blob:
-            add(row.sheet, row.row, row.label)
+    for (sheet, row), reason in exclusion.items():
+        if reason == "technical_bridge":
+            add(sheet, row, _layout_label(layout, sheet, row))
     for sheet in layout.sheets:
         for block in sheet.blocks:
             for row in block.rows:
@@ -215,17 +211,23 @@ def circularity_hints(
     return hints
 
 
-def _row_meta(
-    layout: Layout, mapping: MappingDocument
-) -> dict[tuple[str, int], tuple[str, str | None]]:
-    concepts = {(row.sheet, row.row): row.concept_id for row in mapping.rows}
-    out: dict[tuple[str, int], tuple[str, str | None]] = {}
+def _layout_label(layout: Layout, sheet: str, row: int) -> str:
+    for item in layout.sheets:
+        if item.name != sheet:
+            continue
+        for block in item.blocks:
+            for layout_row in block.rows:
+                if layout_row.row == row:
+                    return layout_row.label
+    return ""
+
+
+def _row_meta(layout: Layout) -> dict[tuple[str, int], str]:
+    out: dict[tuple[str, int], str] = {}
     for sheet in layout.sheets:
         for block in sheet.blocks:
             for row in block.rows:
-                key = (sheet.name, row.row)
-                row_key = f"{sheet.name}|{row.row}|{block.block_id}"
-                out[key] = (row_key, concepts.get(key) or concepts.get((sheet.name, row.row)))
+                out[(sheet.name, row.row)] = f"{sheet.name}|{row.row}|{block.block_id}"
     return out
 
 
@@ -248,7 +250,7 @@ def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, 
 
 def _index_rows(
     cells: list[dict],
-    row_meta: dict[tuple[str, int], tuple[str, str | None]],
+    row_meta: dict[tuple[str, int], str],
     period_by_cell: dict[tuple[str, int], str],
 ) -> list[tuple[object, ...]]:
     rows: list[tuple[object, ...]] = []
@@ -271,8 +273,7 @@ def _index_rows(
                 f"{sheet}!{addr}",
                 sheet,
                 addr,
-                meta[0] if meta else None,
-                meta[1] if meta else None,
+                meta,
                 period_by_cell.get((sheet, col_n)),
                 node_type,
             )
@@ -296,12 +297,12 @@ def _empty_range_nodes(cell_edges: list[dict], existing: set[str]) -> list[str]:
 
 def _empty_index_row(
     node_id: str,
-    row_meta: dict[tuple[str, int], tuple[str, str | None]],
+    row_meta: dict[tuple[str, int], str],
     period_by_cell: dict[tuple[str, int], str],
 ) -> tuple[object, ...]:
     parsed = parse_node_id(node_id)
     if parsed is None:
-        return (node_id, None, None, None, None, None, "empty")
+        return (node_id, None, None, None, None, "empty")
     sheet, col_n, row_n = parsed
     addr = f"{index_to_col(col_n)}{row_n}"
     meta = row_meta.get((sheet, row_n))
@@ -309,8 +310,7 @@ def _empty_index_row(
         node_id,
         sheet,
         addr,
-        meta[0] if meta else None,
-        meta[1] if meta else None,
+        meta,
         period_by_cell.get((sheet, col_n)),
         "empty",
     )
@@ -339,7 +339,7 @@ def _lags_by_source(cell_edges: list[dict]) -> dict[str, list[str]]:
 def _formula_links(
     cells: list[dict],
     formula_edges: list[dict],
-    row_meta: dict[tuple[str, int], tuple[str, str | None]],
+    row_meta: dict[tuple[str, int], str],
     period_by_cell: dict[tuple[str, int], str],
     cell_edges: list[dict] | None = None,
 ) -> list[FormulaLink]:
@@ -353,7 +353,7 @@ def _formula_links(
         formula_by_node[node] = str(raw)
         meta = row_meta.get((str(cell["sheet"]), int(cell["row"])))
         period = period_by_cell.get((str(cell["sheet"]), int(cell["col"])))
-        identity[node] = (meta[0] if meta else None, period)
+        identity[node] = (meta, period)
     grouped: dict[str, list[str]] = {}
     for edge in formula_edges:
         source = str(edge.get("source") or "")

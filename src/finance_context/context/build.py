@@ -4,7 +4,6 @@ from collections import Counter
 
 from finance_context.context.assemble import (
     _SERIES_KINDS,
-    _candidates_for,
     _hints_for,
     _relations_for_block,
     _row_for_layout,
@@ -18,25 +17,13 @@ from finance_context.context.series import (
 )
 from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import format_addr
+from finance_context.layout.adjacency import row_adjacency
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow
 from finance_context.layout.params import is_scenario_selector_label
 from finance_context.layout.periods import display_cell_text
+from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
-from finance_context.mapping.adjacency import cell_ref_row, row_adjacency, row_key_ref
-from finance_context.mapping.eval import (
-    assess_mapping_quality,
-    context_report_metrics,
-    inventory_coverage_counts,
-)
-from finance_context.mapping.models import (
-    MappedRow,
-    MappingDocument,
-    RowContext,
-    RowRelation,
-)
-from finance_context.mapping.rowroles import infer_row_roles
-from finance_context.mapping.semantics import classify_semantics
-from finance_context.mapping.taxonomy import load_taxonomy
+from finance_context.layout.roles import article_role
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
@@ -45,7 +32,6 @@ from finance_context.models.context import (
     ContextDocument,
     FinancialBlock,
     GraphPointer,
-    MappingStats,
     NumericSummary,
     RoleCell,
     RowSeries,
@@ -69,30 +55,21 @@ def build_context(
     workbook_meta: dict,
     cells: list[dict],
     layout: Layout,
-    mapping: MappingDocument,
-    concept_accept_min: float,
+    relations: list[RowRelation] | None = None,
     source_filename: str | None = None,
     content_sha256: str | None = None,
     status: str = "succeeded",
     stage: str = "done",
     graph: GraphPointer | None = None,
     edges: list[dict] | None = None,
-    concepts: list | None = None,
 ) -> ContextDocument:
-    catalog = list(concepts) if concepts is not None else load_taxonomy()
-    by_concept = {item.id: item for item in catalog}
+    relations = list(relations or [])
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
     axes, timeline_warnings = build_axes(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
     axes_by_id = {axis.id: axis for axis in axes}
-    mapped_by_key = {row.row_key: row for row in mapping.rows}
-    _precedents, dependents = row_adjacency(edges or [])
-    concept_by_ref = {
-        row_key_ref(row.sheet, row.row): row.concept_id
-        for row in mapping.rows
-        if row.concept_id
-    }
+    precedents, dependents = row_adjacency(edges or [], limit=0)
     warnings: list[str] = []
     formula_count = 0
     missing_cached = 0
@@ -108,7 +85,7 @@ def build_context(
                 unparsed += 1
                 warnings.append(f"Unparsed formula at {cell['sheet']}!{cell['addr']}")
 
-    roll_time = _roll_forward_time(mapping.relations)
+    roll_time = _roll_forward_time(relations)
     out_of_phase: set[str] = set()
     blocks: list[FinancialBlock] = []
     for sheet in layout.sheets:
@@ -133,14 +110,14 @@ def build_context(
             ]
             rows: list[BlockRow] = []
             parent_by_row = {r.row: r.label for r in block.rows}
-            labeled = [r.label for r in block.rows if r.label]
-            for index, layout_row in enumerate(block.rows):
+            for layout_row in block.rows:
                 row_key = f"{sheet.name}|{layout_row.row}|{block.block_id}"
-                mapped = mapped_by_key.get(row_key)
                 parent = None
                 if layout_row.parent_row:
                     parent = parent_by_row.get(layout_row.parent_row)
-                neighbors = _neighbors(labeled, index)
+                neighbors = _formula_neighbors(
+                    sheet.name, layout_row.row, precedents, dependents
+                )
                 label_path = list(layout_row.section_path)
                 if parent and parent not in label_path:
                     label_path = [*label_path, parent]
@@ -163,14 +140,10 @@ def build_context(
                 )
                 static = _is_static_row(kind, sheet.name, layout_row, hint_headers, by_addr)
                 hints = _hints_for(
-                    mapped,
                     layout_row,
                     unit_text,
-                    sheet=sheet.name,
-                    parent=parent,
                     number_formats=formats,
                     static=static,
-                    concepts=by_concept,
                 )
                 rolled = roll_time.get(row_key)
                 if rolled is not None and not static:
@@ -179,38 +152,11 @@ def build_context(
                         update["nature"] = "flow"
                     hints = hints.model_copy(update=update)
                 series_unit = hints.unit
-                role_ctx = RowContext(
-                    row_key=row_key,
-                    sheet=sheet.name,
-                    row=layout_row.row,
-                    block_id=block.block_id,
-                    label=layout_row.label,
-                    parent_label=parent,
-                    section_path=list(layout_row.section_path),
-                    kind=layout_row.kind,
-                    article_role=mapped.article_role if mapped else "database_like",
+                role = article_role(
+                    layout_row,
+                    _row_templates(sheet.name, layout_row.row, hint_headers, by_addr),
+                    block_kind=kind,
                 )
-                feeds_cfads = _row_feeds_cfads(
-                    sheet.name, layout_row.row, dependents, concept_by_ref
-                )
-                context_role, secondary = infer_row_roles(
-                    role_ctx,
-                    mapped.concept_id if mapped else None,
-                    feeds_cfads=feeds_cfads,
-                )
-                if mapped is not None:
-                    secondary = list(
-                        dict.fromkeys([*mapped.secondary_concepts, *secondary])
-                    )
-                identity, reporting_roles, cash = classify_semantics(
-                    label=layout_row.label,
-                    concept_id=mapped.concept_id if mapped else None,
-                    score=mapped.score if mapped else None,
-                    alternatives=list(mapped.alternatives) if mapped else [],
-                    context_role=context_role,
-                    secondary_concepts=secondary,
-                )
-                candidates = _candidates_for(mapped)
                 series: list[RowSeries] = []
                 for axis_id, headers, phases in views:
                     row_headers = headers
@@ -226,7 +172,6 @@ def build_context(
                         sheet_name=sheet.name,
                         row_num=layout_row.row,
                         layout_row=layout_row,
-                        mapped=mapped,
                         headers=headers,
                         value_headers=row_headers,
                         by_addr=by_addr,
@@ -251,7 +196,7 @@ def build_context(
                     block_id=block.block_id,
                     layout_row=layout_row,
                     layout_row_parent=parent,
-                    mapped=mapped,
+                    article_role=role,
                     headers=[],
                     value_headers=[],
                     by_addr=by_addr,
@@ -261,16 +206,9 @@ def build_context(
                     formula=first.formula if first else None,
                     formula_exceptions=list(first.formula_exceptions) if first else [],
                     numeric_summary=first.numeric_summary if first else None,
-                    candidates=candidates,
                     hints=hints,
                     role_cells=role_cells,
                     series_unit=series_unit,
-                    concepts=by_concept,
-                    context_role=context_role,
-                    secondary_concepts=secondary,
-                    semantic_identity=identity,
-                    reporting_roles=reporting_roles,
-                    cash_semantics=cash,
                     series=series,
                     static=static,
                 )
@@ -291,7 +229,7 @@ def build_context(
                     axis_ids=axis_ids,
                     periods=periods,
                     rows=rows,
-                    relations=_relations_for_block(mapping.relations, block.block_id),
+                    relations=_relations_for_block(relations, block.block_id),
                 )
             )
 
@@ -341,34 +279,12 @@ def build_context(
         warnings=warnings[:50],
         questions=[],
     )
-    counts = inventory_coverage_counts(document_rows)
-    unmapped_series = sum(
-        1
-        for row in document_rows
-        if row.kind in _SERIES_KINDS and row.disposition == "abstained"
-    )
-    stats = context_report_metrics(
-        layout_rows=expected_rows,
-        inventory_rows=len(document_rows),
-        mapped=int(counts["mapped"]),
-        abstained=int(counts["abstained"]),
-        excluded=int(counts["excluded"]),
-        abstract=int(counts["abstract"]),
-        unmapped_series=unmapped_series,
-    )
-    stats["mapping_quality"] = assess_mapping_quality(
-        document_rows,
-        blocks,
-        concepts=catalog,
-        concept_accept_min=concept_accept_min,
-    )
     return ContextDocument(
         schema_version=SCHEMA_VERSION,
         meta=meta,
         workbook=workbook,
         axes=axes,
         blocks=blocks,
-        mapping_stats=MappingStats.model_validate(stats),
         graph=graph or GraphPointer(),
         warnings=warnings[:50],
     )
@@ -450,7 +366,6 @@ def _series_numbers(
     sheet_name: str,
     row_num: int,
     layout_row: LayoutRow,
-    mapped: MappedRow | None,
     headers: list,
     value_headers: list,
     by_addr: dict[tuple[str, int, int], dict],
@@ -459,8 +374,7 @@ def _series_numbers(
     factor: int | None,
 ) -> tuple[list[str | None], list[ValueStatus], list[str | None]]:
     keep_cols = {header.col for header in value_headers}
-    concept_id = mapped.concept_id if mapped else None
-    gate = phase_gate(mapped.label if mapped else layout_row.label, concept_id)
+    gate = phase_gate(layout_row.label)
     values: list[str | None] = []
     statuses: list[ValueStatus] = []
     for header in headers:
@@ -542,37 +456,43 @@ def _row_number_formats(
     return out
 
 
-def _neighbors(labels: list[str], index: int, span: int = 2) -> list[str]:
-    start = max(0, index - span)
-    end = min(len(labels), index + span + 1)
-    return [label for i, label in enumerate(labels[start:end], start=start) if i != index]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _row_feeds_cfads(
+def _formula_neighbors(
     sheet: str,
     row: int,
+    precedents: dict[tuple[str, int], list[str]],
     dependents: dict[tuple[str, int], list[str]],
-    concept_by_ref: dict[str, str | None],
-) -> bool:
-    for ref in dependents.get((sheet, row), []):
-        if concept_by_ref.get(ref) == "cf.cfads":
-            return True
-        parsed = cell_ref_row(ref)
-        if parsed and concept_by_ref.get(row_key_ref(*parsed)) == "cf.cfads":
-            return True
-    return False
+) -> list[str]:
+    seen: list[str] = []
+    for ref in [*precedents.get((sheet, row), []), *dependents.get((sheet, row), [])]:
+        if ref not in seen:
+            seen.append(ref)
+    return seen
+
+
+def _row_templates(
+    sheet: str,
+    row: int,
+    headers: list,
+    by_addr: dict[tuple[str, int, int], dict],
+) -> list[str | None]:
+    templates: list[str | None] = []
+    for header in headers:
+        cell = by_addr.get((sheet, row, header.col))
+        template = None if cell is None else cell.get("formula_template")
+        templates.append(str(template) if template else None)
+    return templates
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _row_formula_and_numbers(

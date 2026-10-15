@@ -2,70 +2,62 @@
 
 [Русский](../ru/overview.md) · **English**
 
-**finance-context-builder** is a read-only service that turns Excel cash-flow models (`.xlsx` / `.xlsm`) into versioned JSON and Markdown context for people and LLMs.
+**finance-context-builder** is a read-only service that turns Excel cash-flow models (`.xlsx` / `.xlsm`) into versioned JSON and Markdown.
 
-Formulas are not recalculated: artifacts keep Excel's cached values. Content is complete: every layout row lives once inside its block. The taxonomy annotates `concept_id`; it is not a funnel. A wrong tag is worse than `unknown`. An unknown row stays in the block with its label hierarchy, neighbors, formula, and top-3 candidates. JSON and Markdown are the same facts. Cells, AST, and edges are not merged into one document: they stay in `raw/` and `ir/`, while the public `context` and `graph` describe the report row and formula links.
+Formulas are not recalculated: artifacts keep Excel's cached values. Content is complete: every layout row lives once inside its block. JSON and Markdown are the same facts. Cells, AST, and edges are not merged into one document: they stay in `raw/` and `ir/`, while the public `context` and `graph` describe the report row and formula links.
 
 How to run, Docker, and the API: [README](../../README.md). The layer snapshot is [architecture.md](architecture.md).
 
 | Topic | Document |
 | --- | --- |
 | Blocks, period axes, row labels | [layout.md](layout.md) |
-| Mapping cascade, signals, thresholds, glossary | [mapping.md](mapping.md) |
-| Taxonomy: fields, id families, how to add a meaning | [taxonomy.md](taxonomy.md) |
 | Formula graph, cycles, trace | [graph.md](graph.md) |
 | One observation for the answering LLM | [llm.md](llm.md) |
-| Review of `unknown` / `unmapped.json` after a run | [review.md](review.md) |
 
 ## Input and output
 
 The input is a workbook whose formulas are already calculated. `.xls`, `.xlsb`, and encrypted files are rejected.
 
-A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{sha256}/` and are the same for every session. `mapping.json`, context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{sha256}/`. Shared `taxonomy.json` and `label_memory.json` live in `shared/` and do not follow a session.
+A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{job_id}/` and are the same for every session. Context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{job_id}/`. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash.
 
 | Artifact | Contents |
 | --- | --- |
 | `raw/` | Cells, formulas, cache, formats, `cell_presence.parquet` (`populated` / `styled_blank`) |
 | `ir/` | Templates, AST, `edges.parquet` (as written in the formula), `cell_edges.parquet` (formula expansion, lag empty), `graph_edges.parquet` (`col_offset` / `period_lag`), and `compile.json` (IR schema stamp) |
 | `layout.json` | Report blocks, period axes, row kinds |
-| `mapping.json` | Fact/flag/helper rows linked to a `concept_id`, or an abstention |
 | `graph.json` / `graph.md` | Schema `1.7.0`: cell-level parquet counts, `iterate`, cycles (`breakers`) / `circularity_hints`, `dangling_classes`, and `links[]` (cell, A1 formula, `formula_class`, `row_key`, `period_id`, inputs; a range is not expanded). Markdown links have a Class column. AST and cell-edges stay in `ir/` |
-| `context.json` / `context.md` | Schema `1.13.0`: passport, `axes` (the only place for phases, flags, and `group_key`), every block and every row (`row_key`, `disposition`, `concept_id`, one formula, cached series per `axis_ids`, `value_statuses`, `scale_factor`, `normalized_values`, `period_position`, `aggregation`). A year repeated over months is `group_key`, not a second axis. A year and a month in one header band are one table. The same header repeated in the next section points at the same axis. Markdown `## Axes` prints each axis once, periods as columns: the header is the axis id and the period keys (`\| PF Model!r9 \| 2021 \| 2022 \| 2032 \|`), and under it `Start` / `End` (ISO dates when the book has a Start/End ruler), `Group` / `Phase` / `Phase year` / `Calendar` / `Flags`. A block table adds `Path` (`label_path`) and `Cells` (`L total: -86400`, `G Start: 01.01.2024`). A role cell has `header`. Markdown Time is `time_semantics/period_position/aggregation`. A scalar and a params row are `instant/instant/none`; a static rate is `rate/instant/none`; a filled year flow is `flow/during_period/sum`. The word `none` is the aggregation. A `total` / `stub` column is not part of the axis. Empty attribute rows are hidden: a year with no phase is the header alone. A regular month grid collapses to one column per year (`\| Output!r6 \| 2020 \| 2021 \|` and a row `\| Periods \| 2020-01 .. 2020-12 \| ... \|`). JSON omits an empty `phase`, empty `flags`, and a `calendar_year` that repeats the period key. The block table has `Axes: ...` and one grid per series. Time sits next to Unit as `time_semantics/period_position/aggregation` (`flow/during_period/sum`, a point `instant/instant/none`, a static rate `rate/instant/none`), an empty cell is `empty`, a period outside the phase is `n/a`, thousands render as `k£ ×1000` and `1.5 (1500)`. A period header is `period_key` plus the column letter (`Y23 (AA)`). A period value shows the cache and `[Sheet!A1]`. Under the block, `relations` use the same `row_key`. There is no `inventory` / `unmapped` / `excluded` and no cell registry. `mapping_stats` (`concept_coverage` and `mapping_quality`) and a `graph` pointer |
-| `unmapped.json` | Abstained rows from `blocks[].rows` (after `run.sh`, at the run root) |
+| `context.json` / `context.md` | Schema `1.14.0`: passport, `axes` (the only place for phases, flags, and `group_key`), every block and every row (`row_key`, `disposition`, one formula, cached series per `axis_ids`, `value_statuses`, `scale_factor`, `normalized_values`, `period_position`, `aggregation`). A year repeated over months is `group_key`, not a second axis. A year and a month in one header band are one table. The same header repeated in the next section points at the same axis. Markdown `## Axes` prints each axis once, periods as columns: the header is the axis id and the period keys (`\| PF Model!r9 \| 2021 \| 2022 \| 2032 \|`), and under it `Start` / `End` (ISO dates when the book has a Start/End ruler), `Group` / `Phase` / `Phase year` / `Calendar` / `Flags`. A block table adds `Path` (`label_path`) and `Cells` (`L total: -86400`, `G Start: 01.01.2024`). A role cell has `header`. Markdown Time is `time_semantics/period_position/aggregation`. A scalar and a params row are `instant/instant/none`; a static rate is `rate/instant/none`; a filled year flow is `flow/during_period/sum`. The word `none` is the aggregation. A `total` / `stub` column is not part of the axis. Empty attribute rows are hidden: a year with no phase is the header alone. A regular month grid collapses to one column per year (`\| Output!r6 \| 2020 \| 2021 \|` and a row `\| Periods \| 2020-01 .. 2020-12 \| ... \|`). JSON omits an empty `phase`, empty `flags`, and a `calendar_year` that repeats the period key. The block table has `Axes: ...` and one grid per series. Time sits next to Unit as `time_semantics/period_position/aggregation`. An empty cell is `empty`, a period outside the phase is `n/a`, thousands render as `k£ ×1000` and `1.5 (1500)`. A period header is `period_key` plus the column letter (`Y23 (AA)`). A period value shows the cache and `[Sheet!A1]`. Under the block, `relations` use the same `row_key`. There is no second row catalog and no cell registry. The header line is content completeness. `graph` is a pointer |
 
-The answering LLM does not receive `context.json`. A finished job has three projections. They are not a pipeline stage and not a new file: a `summary` passport (counters without `links` and without a cell cache), a catalog without numbers, and observations of one row × period. Observations are not returned without a selector. Details: [llm.md](llm.md).
+Catalog, summary, and observations are HTTP projections, not files. Schemas: `catalog-2`, `summary-2`, `observation-2`. Details: [llm.md](llm.md).
 
-Across every session: `$DATA_DIR/shared/label_memory.json` (accepted pairs with a score) and `$DATA_DIR/shared/taxonomy.json` (the concept store). The concept embedding cache is shared: `$DATA_DIR/shared/embeddings/{embedding model name}-{digest}.npz`. That file holds one vector per `concept_id`, the mean of that concept's phrases, not a mean of the workbook. Formula IR and layout for the same workbook are shared too: `$DATA_DIR/shared/books/{sha256}/`. An old `$DATA_DIR/sessions/{session}/glossary.json` is still read.
+Formula IR and layout for the same workbook are shared: `$DATA_DIR/shared/books/{job_id}/`.
 
 ## Pipeline
 
-`parse → compile → layout → mapping → graph → build → render`.
+`parse → compile → layout → graph → build → render`.
 
 The passport, the catalog, and observations are not in that sequence. They are read from `context.json` and `graph.json` that the job has already written.
 
 HTTP starts a separate process for each new book and then reads `meta.json`. CLI `build` stays one process. PyArrow writes parquet: it is the compile cache and the trace input after the process exits. Inside one run, stages pass the row lists they already built. A repeat POST of a finished book returns the snapshot when `meta.json` `publisher` matches the code on disk. A different `publisher` stops that book's process and starts a new one; a missing stamp does not. The new run deletes only the stale stage tail in `meta.stages`, or from layout downward when that map is absent. A job left `queued` or `running` across a restart is `failed` with `error` `process_lost`. `scripts/run.sh` only polls HTTP. Its `JOB_TIMEOUT_SEC` defaults to 300 seconds and does not stop the process; the server stops the process at its own `JOB_TIMEOUT_SEC` (3600 in `.env.example`).
 
-The mapping cascade resolves `fact` / `flag` / `helper`. If the detector built neither a timeline nor params (prose / navigation) or found no article labels, there are no fact rows: the status can be `succeeded` with an empty context. That is layout, not the taxonomy. Details: [layout.md](layout.md).
+If the detector built neither a timeline nor params (prose / navigation) or found no article labels, there are no fact rows: the status can be `succeeded` with an empty context. That is layout. Details: [layout.md](layout.md).
 
-Section headers (`abstract`) and counters (`index`) are **not dropped**: they are rows of their block (`disposition=header` on abstract). Values along an axis are an array on a `fact` / `flag` / `helper` row; params rows have column roles and values only in value columns. A row has one formula. Cell-level adjacency and AST live in IR / [graph.md](graph.md). Downstream sees the label, `label_path`, neighbors ±2, the formula, hints, candidates, and the cache. An empty `unmapped.json` does not mean every block row has a `concept_id`.
+Section headers (`abstract`) and counters (`index`) are **not dropped**: they are rows of their block. An ordinary row, including an abstract header, has `disposition` null. A flag, helper, check, noise label, or technical bridge has `disposition=excluded` and an `exclusion_reason`. Values along an axis are an array on a `fact` / `flag` / `helper` row; params rows have column roles and values only in value columns. A row has one formula. Cell-level adjacency and AST live in IR / [graph.md](graph.md). Downstream sees the label, `label_path`, neighbors from formula row refs, the formula, hints, and the cache.
 
-Embeddings and chat are optional (an OpenAI-compatible endpoint, LM Studio by default). Without them, structure + lexical + glossary remain, then `unknown` with candidates.
-
-Do not mix the two report metrics: **content completeness** must be 100% (block rows equal the layout rows of accepted blocks); **concept coverage** may honestly be below 100% (phasing 0.2/0.8 stays unknown).
+Markdown reports **content completeness** as `1.00 (rows/rows layout rows)`: every layout row of a published block is in the document.
 
 ## Job statuses
 
 | Status | Meaning |
 | --- | --- |
 | `queued` / `running` | Still working |
-| `succeeded` | Documents are ready. A fact without a concept stays `abstained` on the row. |
+| `succeeded` | Documents are ready |
 | `failed` | Pipeline error, or the book's process was stopped by the server `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`). No usable context |
 
 Older snapshots may still say `needs_input` or `degraded`. Those jobs are finished, and the same four documents are served.
 
-## Two levers for coverage
+## What a row records
 
-1. **Taxonomy** — the store `$DATA_DIR/shared/taxonomy.json`. An empty file is filled once from `src/finance_context/ontology/taxonomy.yaml`. After that the cascade reads the store. A new id is appended only for an abstained row whose nearest alternative scores below `mint_score_max` ([thresholds](mapping.md#thresholds)). `Months per year`, `Thousand`, `On`, `Off`, and a bare `Total` stay without an id. The id is the statement prefix plus the normalized label of the first sighting, and it is not renamed later. Shared memory stores the label with the narrowest section and the unit (`money`, `rate`, `years`, or empty), so P&L and CFS do not merge.
-2. **Signal cascade** — features (label, section, neighbors, formula shape, graph). A new kind of match is a new `Signal`, not a wide `anti_labels` and not a branch “if the sheet is Cash_Receipts”.
+Hints come from the label and the unit cell: `nature`, `time_semantics` (`flow` / `bop` / `eop` / `rate` / `stock` / `instant`), `unit` (`money` / `count` / `rate` / `ratio` / `years` / `price` / `date`), `unit_per`, `currency` (GBP/EUR/USD/RUB), `scale` (`unit` / `k` / `m` / `bn`), and `sign` (`inflow` / `outflow` / `stock`). `k£` in a label or Units cell is money, GBP, and `k`.
 
-The shared label memory remembers triples that were already confident: normalized label, narrowest section, and unit (`money`, `rate`, `years`, or empty) point at `concept_id`, together with a score. A strictly higher score replaces the concept. An equal score does not. A high-confidence embedding is stored. A model answer is not. A second concept or an abstained row on the same triple removes the stored key. A `section_class` key is not stored.
+`disposition` is structural exclusion only. It is `excluded` when the reason is `flag`, `helper`, `check`, `noise`, or `technical_bridge`. Otherwise `disposition` and `exclusion_reason` are null. Formula-shape relations on the block are `alias`, `aggregate`, `difference`, and `roll_forward`. They are not a second catalog of the row.

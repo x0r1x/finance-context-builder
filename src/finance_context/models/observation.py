@@ -9,11 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer
 from finance_context.models.context import TimelinePhase
 from finance_context.vocab import FormulaClass, PeriodPosition, SeriesAggregation, ValueStatus
 
-OBSERVATION_SCHEMA_VERSION = "observation-1"
-
-
-class ObservationDimensions(BaseModel):
-    segment: str
+OBSERVATION_SCHEMA_VERSION = "observation-2"
 
 
 class ObservationUnit(BaseModel):
@@ -25,7 +21,6 @@ class ObservationUnit(BaseModel):
 
 class ObservationPrecedent(BaseModel):
     row_key: str | None = None
-    concept_id: str | None = None
     period_id: str | None = None
     value: str | None = None
     cell: str | None = None
@@ -77,9 +72,7 @@ class Observation(BaseModel):
 
     row_key: str
     label: str
-    concept_id: str | None = None
     disposition: str | None = None
-    dimensions: ObservationDimensions | None = None
     period_id: str
     value: str | None = None
     value_status: ValueStatus
@@ -96,8 +89,6 @@ class Observation(BaseModel):
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
-        if data.get("dimensions") is None:
-            data.pop("dimensions", None)
         if data.get("scenario") is None:
             data.pop("scenario", None)
         if data.get("timeline") is None:
@@ -106,8 +97,8 @@ class Observation(BaseModel):
 
 
 class ObservationDocument(BaseModel):
-    """Selected observations. Schema observation-1. Not a file on disk."""
+    """Selected observations. Schema observation-2. Not a file on disk."""
 
-    schema_version: Literal["observation-1"] = OBSERVATION_SCHEMA_VERSION
+    schema_version: Literal["observation-2"] = OBSERVATION_SCHEMA_VERSION
     truncated: bool = False
     observations: list[Observation] = Field(default_factory=list)

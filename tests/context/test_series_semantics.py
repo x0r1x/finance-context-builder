@@ -1,11 +1,8 @@
-from tests.helpers.policy import accept_min
-
 from finance_context.context.build import build_context
 from finance_context.context.series import normalize_value, phase_gate, value_status
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
-from finance_context.mapping.models import MappingDocument
 from finance_context.render.markdown import render_markdown
 
 
@@ -18,9 +15,9 @@ def test_status_keeps_explicit_zero_apart_from_empty() -> None:
     assert value_status(None, applicable=False) == "not_applicable"
     assert normalize_value("12.5", 1000) == "12500"
     assert normalize_value("31.12.2023", 1) is None
-    assert phase_gate("PC traffic", None) == "operation"
-    assert phase_gate("Capex", "cf.capex") == "construction"
-    assert phase_gate("Opening cash", "bs.cash") is None
+    assert phase_gate("PC traffic") == "operation"
+    assert phase_gate("Capex") == "construction"
+    assert phase_gate("Opening cash") is None
 
 
 def test_build_marks_scale_and_blank_cells() -> None:
@@ -66,8 +63,6 @@ def test_build_marks_scale_and_blank_cells() -> None:
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=layout,
-        mapping=MappingDocument(),
-        concept_accept_min=accept_min(),
     )
     row = doc.blocks[0].rows[0]
     assert row.hints.scale == "k"
@@ -129,8 +124,6 @@ def test_empty_operation_line_outside_phase_is_not_applicable() -> None:
         workbook_meta={"sheets": [{"name": "TBA"}]},
         cells=cells,
         layout=layout,
-        mapping=MappingDocument(),
-        concept_accept_min=accept_min(),
     )
     rows = {row.label: row for block in doc.blocks for row in block.rows}
     traffic = rows["PC traffic"]
@@ -161,4 +154,4 @@ def test_cached_number_is_canonical_without_a_scale_factor() -> None:
 
 
 def test_debt_service_cover_is_gated_to_operations() -> None:
-    assert phase_gate("Debt Service Coverage Ratio", "cov.dscr") == "operation"
+    assert phase_gate("Debt Service Coverage Ratio") == "operation"

@@ -47,14 +47,14 @@ def temporal_profile(
     return _TEMPORAL.get(time_semantics, (None, None))
 
 
-def phase_gate(label: str, concept_id: str | None) -> str | None:
+def phase_gate(label: str) -> str | None:
     """Phase where an empty cell is not a missing number.
 
     A cached value, including an explicit zero, always wins over the gate.
+    The gate reads the row label only.
     """
 
-    blob = f"{label or ''} {concept_id or ''}"
-    tokens = set(re.sub(r"[^a-z0-9]+", " ", blob.casefold()).split())
+    tokens = set(re.sub(r"[^a-z0-9]+", " ", (label or "").casefold()).split())
     if tokens & _CONSTRUCTION_GATE:
         return "construction"
     if tokens & _OPERATION_GATE:

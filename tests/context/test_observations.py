@@ -30,9 +30,7 @@ def test_revenue_observation_matches_the_slice_fields() -> None:
         {
             "row_key": REVENUE,
             "label": "Revenue",
-            "concept_id": "pnl.revenue",
-            "disposition": "mapped",
-            "dimensions": {"segment": "pc"},
+            "disposition": None,
             "period_id": "Y5",
             "value": "1234.56",
             "value_status": "cached",
@@ -71,7 +69,6 @@ def test_sum_precedents_include_child_rows() -> None:
         return [
             ObservationPrecedent(
                 row_key=REVENUE,
-                concept_id="pnl.revenue",
                 period_id="Y5",
                 value="1234.56",
                 cell="H10",
@@ -79,7 +76,6 @@ def test_sum_precedents_include_child_rows() -> None:
             ),
             ObservationPrecedent(
                 row_key=OTHER,
-                concept_id="pnl.other",
                 period_id="Y5",
                 value="765.44",
                 cell="H11",
@@ -231,14 +227,10 @@ def test_precedent_outside_the_layout_keeps_an_empty_label() -> None:
     assert precedent["depth"] == 2
 
 
-def test_abstained_is_found_by_label_and_not_by_a_foreign_concept() -> None:
+def test_label_query_finds_the_mystery_line() -> None:
     found = _dump(sample_context(), q="mystery")
     assert len(found["observations"]) == 1
     assert found["observations"][0]["row_key"] == MYSTERY
-    assert found["observations"][0]["concept_id"] is None
-    missed = _dump(sample_context(), concept_ids=["pnl.nope"])
-    assert missed["observations"] == []
-    assert missed["truncated"] is False
 
 
 def test_query_does_not_follow_another_rows_path() -> None:

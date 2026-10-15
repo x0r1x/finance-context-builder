@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+import json
+import math
+from collections import Counter
+from typing import Any, Protocol
+
+from finance_context.formulas.engine import FormulaEngine
+
+_ENGINE = FormulaEngine(locale_hint="en")
+_EXCEL_MAX_ROW = 1_048_576
+
+
+class RowPattern:
+    __slots__ = (
+        "kind",
+        "alias_sheet",
+        "alias_row",
+        "aggregate_span",
+        "diff_rows",
+        "roll_from_row",
+        "is_ratio",
+        "is_total",
+        "template",
+    )
+
+    def __init__(self) -> None:
+        self.kind = "value"
+        self.alias_sheet: str | None = None
+        self.alias_row: int | None = None
+        self.aggregate_span: tuple[int, int] | None = None
+        self.diff_rows: tuple[int, int] | None = None
+        self.roll_from_row: int | None = None
+        self.is_ratio = False
+        self.is_total = False
+        self.template: str | None = None
+
+
+class _CellBook(Protocol):
+    cells: dict[tuple[str, int, int], dict]
+
+
+def _pattern_for_row(
+    book: _CellBook,
+    sheet: str,
+    row: int,
+    period_cols: list[int],
+) -> RowPattern:
+    shapes: list[dict[str, Any]] = []
+    templates: list[str] = []
+    for col in period_cols:
+        cell = book.cells.get((sheet, row, col))
+        if cell is None:
+            continue
+        template = cell.get("formula_template")
+        if template:
+            templates.append(str(template))
+        ast = _ast_for(cell, sheet)
+        if ast is None:
+            continue
+        shape = _shape(ast, sheet, col, row)
+        if shape is not None:
+            shapes.append(shape)
+    pattern = RowPattern()
+    if templates:
+        pattern.template = Counter(templates).most_common(1)[0][0]
+    if not shapes:
+        return pattern
+    kinds = Counter(item["type"] for item in shapes)
+    top, count = kinds.most_common(1)[0]
+    if count < max(1, math.ceil(0.6 * len(shapes))):
+        pattern.kind = "mixed"
+        pattern.is_ratio = "ratio" in kinds
+        return pattern
+    pattern.kind = top
+    sample = next(item for item in shapes if item["type"] == top)
+    if top == "alias":
+        pattern.alias_sheet = sample.get("sheet")
+        pattern.alias_row = sample.get("row")
+    elif top == "aggregate":
+        span = sample.get("span")
+        if isinstance(span, tuple):
+            pattern.aggregate_span = (int(span[0]), int(span[1]))
+        pattern.is_total = True
+    elif top == "diff":
+        rows = sample.get("rows") or []
+        if len(rows) == 2:
+            pattern.diff_rows = (int(rows[0]), int(rows[1]))
+    elif top == "roll":
+        pattern.roll_from_row = sample.get("row")
+    elif top == "ratio":
+        pattern.is_ratio = True
+    return pattern
+
+
+def _ast_for(cell: dict, sheet: str) -> dict[str, Any] | None:
+    raw_json = cell.get("ast_json")
+    if raw_json:
+        try:
+            data = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+        except (TypeError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict) and "op" in data:
+            return data
+    formula = cell.get("formula_raw")
+    if not formula:
+        return None
+    parsed = _ENGINE.parse(str(formula), sheet=sheet, addr=str(cell.get("addr") or "A1"))
+    return parsed.ast
+
+
+def _shape(ast: dict[str, Any], sheet: str, col: int, row: int) -> dict[str, Any] | None:
+    op = ast.get("op")
+    if op == "ref":
+        target_sheet = ast.get("sheet") or sheet
+        target_row = int(ast["row"])
+        target_col = int(ast["col"])
+        if target_col == col - 1 and target_row != row:
+            return {"type": "roll", "sheet": target_sheet, "row": target_row}
+        if target_row != row:
+            return {"type": "alias", "sheet": target_sheet, "row": target_row}
+        return None
+    if op == "func" and str(ast.get("name", "")).upper() in {"SUM", "СУММ"}:
+        args = ast.get("args") or []
+        if len(args) == 1 and args[0].get("op") == "range":
+            span = _range_rows(args[0], col)
+            if span is not None:
+                return {"type": "aggregate", "span": span}
+    if op == "bin" and ast.get("kind") == "-":
+        left = _ref_row(ast.get("left") or {}, sheet, col)
+        right = _ref_row(ast.get("right") or {}, sheet, col)
+        if left and right:
+            return {"type": "diff", "rows": [left[1], right[1]]}
+    if op == "bin" and ast.get("kind") == "/":
+        if _is_proration(ast):
+            return {"type": "prorate"}
+        return {"type": "ratio"}
+    return None
+
+
+def _ref_row(node: dict[str, Any], sheet: str, col: int) -> tuple[str, int] | None:
+    if node.get("op") != "ref":
+        return None
+    if int(node["col"]) != col:
+        return None
+    return (str(node.get("sheet") or sheet), int(node["row"]))
+
+
+def _range_rows(node: dict[str, Any], col: int) -> tuple[int, int] | None:
+    if node.get("col_only") or node.get("row_only"):
+        return None
+    start = node.get("start") or {}
+    end = node.get("end") or {}
+    if "row" not in start or "row" not in end:
+        return None
+    if start.get("col") != col or end.get("col") != col:
+        return None
+    lo = int(start["row"])
+    hi = int(end["row"])
+    if hi < lo:
+        lo, hi = hi, lo
+    if hi - lo + 1 >= _EXCEL_MAX_ROW:
+        return None
+    return lo, hi
+
+
+def _is_proration(ast: dict[str, Any]) -> bool:
+    right = ast.get("right") or {}
+    op = right.get("op")
+    if op in {"name", "num"}:
+        return True
+    if op == "bin":
+        return _is_proration({"right": right.get("right") or {}})
+    return False

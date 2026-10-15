@@ -35,7 +35,7 @@ GRAPH_FORBIDDEN = frozenset(
 GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "links", "artifacts")
 ARTIFACT_REQUIRED = ("cells", "edges", "cell_edges", "index")
 GRAPH_SCHEMA_PREFIX = "1.7"
-CONTEXT_SCHEMA_PREFIX = "1.13"
+CONTEXT_SCHEMA_PREFIX = "1.14"
 LINK_FIELDS = ("cell", "formula", "refs", "formula_class")
 ROW_SERIES_FIELDS = (
     "value_statuses",
@@ -88,7 +88,7 @@ def check_context(context: dict[str, Any]) -> list[str]:
             "context.json must stay a row document, not a merged cell contract: "
             + ", ".join(merged)
         )
-    catalog = [key for key in ("inventory", "unmapped", "excluded") if key in context]
+    catalog = [key for key in ("inventory", "excluded") if key in context]
     if catalog:
         errors.append(
             "context.json must not keep a second row catalog: " + ", ".join(catalog)
@@ -386,10 +386,6 @@ def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
             if row_key and not _in_markdown(str(row_key), markdown):
                 errors.append(f"context.md missing row_key {row_key}")
                 break
-            concept = row.get("concept_id")
-            if concept and str(concept) not in markdown:
-                errors.append(f"context.md missing concept {concept}")
-                break
             formula = row.get("formula")
             if formula and str(formula) not in markdown:
                 errors.append(f"context.md missing formula {formula}")
@@ -562,8 +558,6 @@ def pick_origin(context: dict[str, Any], graph: dict[str, Any] | None = None) ->
         for row in block.get("rows") or []:
             if not isinstance(row, dict):
                 continue
-            if row.get("concept_id"):
-                return str(row["concept_id"])
             if row.get("row_key"):
                 return str(row["row_key"])
     return ""
@@ -613,7 +607,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--print-origin",
         action="store_true",
-        help="print a smoke-trace origin (formula cell, else concept_id / row_key)",
+        help="print a smoke-trace origin (formula cell, else row_key)",
     )
     parser.add_argument(
         "--axes-summary",

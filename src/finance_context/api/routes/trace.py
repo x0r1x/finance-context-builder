@@ -105,7 +105,6 @@ def _precedents(dest: Path, book: Path):
         return [
             ObservationPrecedent(
                 row_key=node.row_key,
-                concept_id=node.concept_id,
                 period_id=node.period_id,
                 value=node.cached_value,
                 cell=node.addr,

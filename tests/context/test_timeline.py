@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from tests.helpers.policy import accept_min
-
 from finance_context.context.build import build_context
 from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
-from finance_context.mapping.models import MappingDocument
 from finance_context.render.markdown import render_markdown
 
 
@@ -74,8 +71,6 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
         workbook_meta={"sheets": [{"name": "TBA"}]},
         cells=cells,
         layout=layout,
-        mapping=MappingDocument(),
-        concept_accept_min=accept_min(),
     )
     revenue_block = next(block for block in doc.blocks if block.sheet == "TBA")
     assert revenue_block.periods == []
@@ -84,7 +79,130 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
     assert "construction" in rendered
     flag_rows = [row for block in doc.blocks for row in block.rows if row.kind == "flag"]
     assert flag_rows
-    assert all(row.concept_id is None for row in flag_rows)
+    assert all(row.disposition == "excluded" for row in flag_rows)
+
+
+def test_repeated_flag_labels_keep_both_rows() -> None:
+    cells = [
+        _c("TBA", "A1", "Year"),
+        _c("TBA", "B1", "1"),
+        _c("TBA", "C1", "2"),
+        _c("TBA", "D1", "3"),
+        _c("TBA", "E1", "4"),
+        _c("TBA", "A2", "Availability Start Date"),
+        _c("TBA", "B2", "1"),
+        _c("TBA", "C2", "0"),
+        _c("TBA", "D2", "0"),
+        _c("TBA", "E2", "0"),
+        _c("TBA", "A3", "Active"),
+        _c("TBA", "B3", "1"),
+        _c("TBA", "C3", "1"),
+        _c("TBA", "D3", "0"),
+        _c("TBA", "E3", "0"),
+        _c("TBA", "A4", "Repayment Start Date"),
+        _c("TBA", "B4", "0"),
+        _c("TBA", "C4", "0"),
+        _c("TBA", "D4", "1"),
+        _c("TBA", "E4", "0"),
+        _c("TBA", "A5", "Active"),
+        _c("TBA", "B5", "0"),
+        _c("TBA", "C5", "0"),
+        _c("TBA", "D5", "1"),
+        _c("TBA", "E5", "1"),
+    ]
+    layout = detect_layout(cells)
+    axes, warnings = build_axes(layout, cells)
+    assert axes
+    assert not warnings
+    by_id = {item.period_key: item for item in axes[0].periods}
+    availability = "active (availability start date)"
+    repayment = "active (repayment start date)"
+    assert by_id["Y1"].flags[availability] is True
+    assert by_id["Y1"].flags[repayment] is False
+    assert by_id["Y2"].flags[availability] is True
+    assert by_id["Y3"].flags[availability] is False
+    assert by_id["Y3"].flags[repayment] is True
+    assert by_id["Y4"].flags[repayment] is True
+    assert "active" not in by_id["Y1"].flags
+
+
+def test_two_identical_flags_under_one_anchor_stay_distinct() -> None:
+    cells = [
+        _c("TBA", "A1", "Year"),
+        _c("TBA", "B1", "1"),
+        _c("TBA", "C1", "2"),
+        _c("TBA", "D1", "3"),
+        _c("TBA", "E1", "4"),
+        _c("TBA", "A2", "Availability Start Date"),
+        _c("TBA", "B2", "1"),
+        _c("TBA", "C2", "0"),
+        _c("TBA", "D2", "0"),
+        _c("TBA", "E2", "0"),
+        _c("TBA", "A3", "Active"),
+        _c("TBA", "B3", "1"),
+        _c("TBA", "C3", "1"),
+        _c("TBA", "D3", "0"),
+        _c("TBA", "E3", "0"),
+        _c("TBA", "A4", "Active"),
+        _c("TBA", "B4", "0"),
+        _c("TBA", "C4", "0"),
+        _c("TBA", "D4", "1"),
+        _c("TBA", "E4", "1"),
+    ]
+    layout = detect_layout(cells)
+    axes, warnings = build_axes(layout, cells)
+    assert axes
+    assert not warnings
+    by_id = {item.period_key: item for item in axes[0].periods}
+    first = "active (availability start date)"
+    second = "active (availability start date) 4"
+    assert by_id["Y1"].flags[first] is True
+    assert by_id["Y1"].flags[second] is False
+    assert by_id["Y3"].flags[first] is False
+    assert by_id["Y3"].flags[second] is True
+    assert by_id["Y4"].flags[second] is True
+    assert "active" not in by_id["Y1"].flags
+
+
+def test_flag_row_fallback_does_not_replace_another_label() -> None:
+    cells = [
+        _c("TBA", "A1", "Year"),
+        _c("TBA", "B1", "1"),
+        _c("TBA", "C1", "2"),
+        _c("TBA", "D1", "3"),
+        _c("TBA", "E1", "4"),
+        _c("TBA", "A2", "Active 4"),
+        _c("TBA", "B2", "1"),
+        _c("TBA", "C2", "0"),
+        _c("TBA", "D2", "0"),
+        _c("TBA", "E2", "0"),
+        _c("TBA", "A3", "Active"),
+        _c("TBA", "B3", "1"),
+        _c("TBA", "C3", "1"),
+        _c("TBA", "D3", "0"),
+        _c("TBA", "E3", "0"),
+        _c("TBA", "A4", "Active"),
+        _c("TBA", "B4", "0"),
+        _c("TBA", "C4", "0"),
+        _c("TBA", "D4", "1"),
+        _c("TBA", "E4", "1"),
+    ]
+    layout = detect_layout(cells)
+    axes, warnings = build_axes(layout, cells)
+    assert axes
+    assert not warnings
+    by_id = {item.period_key: item for item in axes[0].periods}
+    qualified = "active (active 4)"
+    later = "active (active 4) 4"
+    assert by_id["Y1"].flags["active 4"] is True
+    assert by_id["Y2"].flags["active 4"] is False
+    assert by_id["Y3"].flags["active 4"] is False
+    assert by_id["Y1"].flags[qualified] is True
+    assert by_id["Y2"].flags[qualified] is True
+    assert by_id["Y3"].flags[qualified] is False
+    assert by_id["Y1"].flags[later] is False
+    assert by_id["Y3"].flags[later] is True
+    assert by_id["Y4"].flags[later] is True
 
 
 def test_calendar_book_timeline_has_no_phase() -> None:
@@ -184,8 +302,6 @@ def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
         workbook_meta={"sheets": [{"name": "Output"}]},
         cells=cells,
         layout=layout,
-        mapping=MappingDocument(),
-        concept_accept_min=accept_min(),
     )
     payload = doc.model_dump(mode="json")
     assert "timeline" not in payload

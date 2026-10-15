@@ -21,9 +21,8 @@ def _index_row(
     sheet: str,
     addr: str,
     row_key: str,
-    concept_id: str | None,
 ) -> tuple:
-    return (node_id, sheet, addr, row_key, concept_id, "Y1", "formula")
+    return (node_id, sheet, addr, row_key, "Y1", "formula")
 
 
 def _write_index(dest: Path) -> None:
@@ -32,12 +31,12 @@ def _write_index(dest: Path) -> None:
         dest / "ir" / "graph_index.parquet",
         INDEX_COLUMNS,
         [
-            _index_row("Ratios!F6", "Ratios", "F6", _PROJECT, "val.irr"),
-            _index_row("Ratios!G6", "Ratios", "G6", _PROJECT, "val.irr"),
-            _index_row("Ratios!F19", "Ratios", "F19", _EQUITY, "val.irr"),
-            _index_row("PF Model!F10", "PF Model", "F10", _CAPEX, "val.irr"),
-            _index_row("PF Model!F30", "PF Model", "F30", _EBITDA, None),
-            _index_row("PF Model!Z1", "PF Model", "Z1", _OTHER, "pnl.other"),
+            _index_row("Ratios!F6", "Ratios", "F6", _PROJECT),
+            _index_row("Ratios!G6", "Ratios", "G6", _PROJECT),
+            _index_row("Ratios!F19", "Ratios", "F19", _EQUITY),
+            _index_row("PF Model!F10", "PF Model", "F10", _CAPEX),
+            _index_row("PF Model!F30", "PF Model", "F30", _EBITDA),
+            _index_row("PF Model!Z1", "PF Model", "Z1", _OTHER),
         ],
     )
 
@@ -80,24 +79,14 @@ def test_label_starts_project_and_equity_irr_and_skips_capex(tmp_path: Path) -> 
     _write_context(tmp_path)
     traced = trace_graph(tmp_path, origin="IRR", direction="precedents", depth=1)
     assert {node.node_id for node in traced.nodes} == {"Ratios!F6", "Ratios!G6", "Ratios!F19"}
-    assert {node.concept_id for node in traced.nodes} == {"val.irr"}
     assert "PF Model!F10" not in {node.node_id for node in traced.nodes}
 
 
-def test_concept_id_does_not_start_the_walk(tmp_path: Path) -> None:
-    _write_index(tmp_path)
-    _write_context(tmp_path)
-    traced = trace_graph(tmp_path, origin="val.irr", direction="precedents", depth=1)
-    assert traced.nodes == []
-    assert traced.stopped == "empty"
-
-
-def test_empty_concept_starts_when_the_label_matches(tmp_path: Path) -> None:
+def test_label_starts_ebitda(tmp_path: Path) -> None:
     _write_index(tmp_path)
     _write_context(tmp_path)
     traced = trace_graph(tmp_path, origin="EBITDA", direction="precedents", depth=1)
     assert [node.node_id for node in traced.nodes] == ["PF Model!F30"]
-    assert traced.nodes[0].concept_id is None
     assert traced.nodes[0].row_key == _EBITDA
 
 

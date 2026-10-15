@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from tests.helpers.policy import accept_min
-
 from finance_context.context.build import build_context
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
-from finance_context.mapping.models import MappingDocument
 from finance_context.render.markdown import render_markdown
 
 
@@ -68,14 +65,11 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
         workbook_meta={"sheets": [{"name": "Input Assumptions"}]},
         cells=cells,
         layout=layout,
-        mapping=MappingDocument(),
-        concept_accept_min=accept_min(),
     )
     rows = [row for block in doc.blocks for row in block.rows]
     selector = next(row for row in rows if row.label == "Scenario Chosen")
     assert selector.kind == "flag"
     assert selector.row == 3
-    assert selector.context_role == "scenario_selector"
     assert selector.disposition == "excluded"
     assert any(cell.addr == "D3" and str(cell.cached_value) == "1" for cell in selector.cells)
     assert "1" in selector.values

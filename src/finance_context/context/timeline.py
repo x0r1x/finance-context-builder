@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis
+from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import display_cell_text, is_calendar_key
 from finance_context.layout.resolve import axes_for
-from finance_context.mapping.normalize import normalize_label
 from finance_context.models.context import ContextAxis, ContextPeriod, TimelinePhase
 
 _SERIES_ROLES = {
@@ -86,6 +88,44 @@ def _sheet_axes(sheet) -> list[TimeAxis]:
     return found
 
 
+def _flag_keys(flags: list[LayoutRow]) -> list[str]:
+    """One key per flag row. A repeated label keeps the nearest preceding flag."""
+    bases = [normalize_label(row.label) or f"row {row.row}" for row in flags]
+    counts = Counter(bases)
+    used: set[str] = set()
+    keys: list[str] = []
+    for index, row in enumerate(flags):
+        base = bases[index]
+        if counts[base] == 1:
+            key = base
+        else:
+            qualifier = _preceding_flag_key(bases, keys, index)
+            key = f"{base} ({qualifier})" if qualifier else f"{base} {row.row}"
+        key = _unused_flag_key(key, used, row.row)
+        used.add(key)
+        keys.append(key)
+    return keys
+
+
+def _preceding_flag_key(bases: list[str], keys: list[str], index: int) -> str | None:
+    own = bases[index]
+    for earlier in range(index - 1, -1, -1):
+        if bases[earlier] != own:
+            return keys[earlier]
+    return None
+
+
+def _unused_flag_key(key: str, used: set[str], row: int) -> str:
+    if key not in used:
+        return key
+    candidate = f"{key} {row}"
+    suffix = 2
+    while candidate in used:
+        candidate = f"{key} {row} {suffix}"
+        suffix += 1
+    return candidate
+
+
 def _flag_rows(sheet, axis: TimeAxis) -> list[LayoutRow]:
     rows: list[LayoutRow] = []
     for block in sheet.blocks:
@@ -117,13 +157,13 @@ def _annotate_axis(
     last_phase: TimelinePhase | None = None
     run = 0
     grain = axis.grain
+    flag_keys = _flag_keys(flags)
     for index, header in enumerate(periods_in, start=1):
         flag_map: dict[str, bool] = {}
         construction = False
         operation = False
-        for row in flags:
+        for row, key in zip(flags, flag_keys, strict=True):
             on = _flag_on(by_addr, sheet_name, row.row, header.col, date1904)
-            key = normalize_label(row.label)
             flag_map[key] = on
             kind = _phase_kind(row.label)
             if kind == "construction" and on:

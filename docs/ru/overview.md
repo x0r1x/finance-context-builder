@@ -1,71 +1,63 @@
 # Обзор проекта
 
-**Русский** · [English](../en/overview.md)
+[English](../en/overview.md) · **Русский**
 
-**finance-context-builder** — read-only сервис, который превращает Excel-модели cash-flow (`.xlsx` / `.xlsm`) в версионированный JSON и Markdown-контекст для людей и LLM.
+**finance-context-builder** — read-only сервис. Он превращает Excel-модели cash-flow (`.xlsx` / `.xlsm`) в версионированные JSON и Markdown.
 
-Формулы не пересчитываются: в артефакты попадают кэшированные значения Excel. Контент полный: каждая строка layout живёт один раз внутри своего блока. Таксономия — аннотация `concept_id`, не воронка: неверный тег хуже, чем `unknown`. Unknown-строка остаётся в блоке с иерархией подписи, соседями, формулой и top-3 кандидатами. JSON и Markdown — одни и те же факты. Ячейки, AST и рёбра не сливаются в один документ: они остаются в `raw/` и `ir/`, а публичные `context` и `graph` описывают строку отчёта и формульные links.
+Формулы не пересчитываются: в артефакты попадают кэшированные значения Excel. Контент полный: каждая строка layout живёт один раз внутри своего блока. JSON и Markdown — одни и те же факты. Ячейки, AST и рёбра не сливаются в один документ: они остаются в `raw/` и `ir/`, а публичные `context` и `graph` описывают строку отчёта и формульные links.
 
-Запуск, Docker и API — в [README](../../README.ru.md). Технический снимок слоёв — в [architecture.md](architecture.md).
+Как запускать, Docker и API: [README](../../README.ru.md). Снимок слоёв: [architecture.md](architecture.md).
 
 | Тема | Документ |
 | --- | --- |
-| Блоки, оси периодов, лейблы строк | [layout.md](layout.md) |
-| Каскад маппинга, сигналы, пороги, glossary | [mapping.md](mapping.md) |
-| Таксономия: поля, семейства id, как добавлять смысл | [taxonomy.md](taxonomy.md) |
+| Блоки, оси периодов, подписи строк | [layout.md](layout.md) |
 | Граф формул, циклы, trace | [graph.md](graph.md) |
-| Срез одного наблюдения для отвечающей LLM | [llm.md](llm.md) |
-| Разбор `unknown` / `unmapped.json` после прогона | [review.md](review.md) |
+| Одно наблюдение для отвечающей LLM | [llm.md](llm.md) |
 
 ## Что на входе и на выходе
 
-На вход — рабочая книга с уже посчитанными формулами. Отклоняются `.xls`, `.xlsb` и зашифрованные файлы.
+На входе книга, формулы которой уже посчитаны. `.xls`, `.xlsb` и зашифрованные файлы отклоняются.
 
-На выход джоба. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и `layout.json` лежат в `shared/books/{sha256}/` и одинаковы для любой сессии. `mapping.json`, context, graph, `meta.json`, `ir/graph_edges.parquet` и `ir/graph_index.parquet` лежат в `sessions/{session}/jobs/{sha256}/`. Общие `taxonomy.json` и `label_memory.json` лежат в `shared/` и не зависят от сессии.
+На выход джоба. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и `layout.json` лежат в `shared/books/{job_id}/` и одинаковы для любой сессии. Context, graph, `meta.json`, `ir/graph_edges.parquet` и `ir/graph_index.parquet` лежат в `sessions/{session}/jobs/{job_id}/`. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла.
 
-| Артефакт | Содержание |
+| Артефакт | Содержимое |
 | --- | --- |
 | `raw/` | Ячейки, формулы, кэш, форматы, `cell_presence.parquet` (`populated` / `styled_blank`) |
-| `ir/` | Шаблоны, AST, `edges.parquet` (как в формуле), `cell_edges.parquet` (развёртка формул, лаг пустой), `graph_edges.parquet` (`col_offset` / `period_lag`) и `compile.json` (штамп схемы IR) |
-| `layout.json` | Блоки отчётов, оси периодов, виды строк |
-| `mapping.json` | Связь fact/flag/helper-строк с `concept_id` или отказ |
-| `graph.json` / `graph.md` | Схема `1.7.0`: counts cell-level parquet, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, A1-формула, `formula_class`, `row_key`, `period_id`, входы; диапазон не развёрнут). В Markdown у links есть колонка Class. AST и cell-edges остаются в `ir/` |
-| `context.json` / `context.md` | Схема `1.13.0`: паспорт, `axes` (единственное место фаз, флагов и `group_key`), каждый блок и каждая строка (`row_key`, `disposition`, `concept_id`, одна формула, серии кэша по `axis_ids`, `value_statuses`, `scale_factor`, `normalized_values`, `period_position`, `aggregation`). Год, повторённый над месяцами, — `group_key`, не вторая ось. Год и месяц в одной полосе заголовков — одна таблица. Повтор той же шапки в следующей секции ссылается на ту же ось. В Markdown секция `## Axes` печатает ось один раз, периоды — колонками: в шапке id оси и ключи периодов (`\| PF Model!r9 \| 2021 \| 2022 \| 2032 \|`), под ней строки `Start` / `End` (ISO-даты периода, если линейка Start/End есть в книге), `Group` / `Phase` / `Phase year` / `Calendar` / `Flags`. Таблица блока добавляет колонки `Path` (`label_path`) и `Cells` (`L total: -86400`, `G Start: 01.01.2024`). Ячейка периода показывает кэш и `[Sheet!A1]`. У role-ячейки есть `header`. Колонка Time в Markdown — `time_semantics/period_position/aggregation`. Скаляр и params-строка — `instant/instant/none`; статическая ставка — `rate/instant/none`; заполненный годовой поток — `flow/during_period/sum`. Слово `none` — это агрегирование. Колонка `total` / `stub` в ось не входит. Пустые строки атрибутов скрыты: у года без фазы остаётся одна шапка. Ровная месячная сетка сжимается до колонки на год (`\| Output!r6 \| 2020 \| 2021 \|` и строка `\| Periods \| 2020-01 .. 2020-12 \| ... \|`). В JSON у периода нет пустой `phase`, пустого `flags` и `calendar_year`, если год уже в ключе. У таблицы `Axes: ...` и сетка по каждой серии. Рядом с Unit стоит Time как `time_semantics/period_position/aggregation` (`flow/during_period/sum`, точка `instant/instant/none`, статическая ставка `rate/instant/none`), пустая ячейка — `empty`, период вне фазы — `n/a`, тысячи показываются как `k£ ×1000` и `1.5 (1500)`. Заголовок периода — `period_key` и буква колонки (`Y23 (AA)`). Под блоком список `relations` теми же `row_key`. Без `inventory` / `unmapped` / `excluded` и без реестра ячеек. `mapping_stats` (`concept_coverage` и `mapping_quality`), pointer `graph` |
-| `unmapped.json` | Abstained-строки из `blocks[].rows` (после `run.sh`, в корне прогона) |
+| `ir/` | Шаблоны, AST, `edges.parquet` (как написано в формуле), `cell_edges.parquet` (раскрытие формулы, lag пустой), `graph_edges.parquet` (`col_offset` / `period_lag`) и `compile.json` (штамп схемы IR) |
+| `layout.json` | Блоки отчёта, оси периодов, виды строк |
+| `graph.json` / `graph.md` | Схема `1.7.0`: счётчики parquet на уровне ячеек, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, формула A1, `formula_class`, `row_key`, `period_id`, входы; диапазон не раскрывается). В Markdown у links есть колонка Class. AST и cell-edges остаются в `ir/` |
+| `context.json` / `context.md` | Схема `1.14.0`: паспорт, `axes` (единственное место фаз, флагов и `group_key`), каждый блок и каждая строка (`row_key`, `disposition`, одна формула, серии кэша по `axis_ids`, `value_statuses`, `scale_factor`, `normalized_values`, `period_position`, `aggregation`). Год, повторённый над месяцами, — `group_key`, не вторая ось. Год и месяц в одной полосе заголовков — одна таблица. Повтор той же шапки в следующей секции ссылается на ту же ось. В Markdown секция `## Axes` печатает ось один раз, периоды — колонками: в шапке id оси и ключи периодов (`\| PF Model!r9 \| 2021 \| 2022 \| 2032 \|`), под ней строки `Start` / `End` (ISO-даты периода, если линейка Start/End есть в книге), `Group` / `Phase` / `Phase year` / `Calendar` / `Flags`. Таблица блока добавляет колонки `Path` (`label_path`) и `Cells` (`L total: -86400`, `G Start: 01.01.2024`). У role-ячейки есть `header`. Колонка Time в Markdown — `time_semantics/period_position/aggregation`. Скаляр и строка params — `instant/instant/none`; статическая ставка — `rate/instant/none`; заполненный годовой поток — `flow/during_period/sum`. Слово `none` — это aggregation. Колонка `total` / `stub` не входит в ось. Пустые строки атрибутов скрыты: год без фазы — только шапка. Регулярная месячная сетка схлопывается в одну колонку на год (`\| Output!r6 \| 2020 \| 2021 \|` и строка `\| Periods \| 2020-01 .. 2020-12 \| ... \|`). JSON не пишет пустую `phase`, пустой `flags` и `calendar_year`, если год уже в ключе. У блока есть `Axes: ...` и одна сетка на серию. Time стоит рядом с Unit. Пустая ячейка — `empty`, период вне фазы — `n/a`, тысячи печатаются как `k£ ×1000` и `1.5 (1500)`. Заголовок периода — `period_key` и буква колонки (`Y23 (AA)`). Значение периода показывает кэш и `[Sheet!A1]`. Под блоком `relations` используют тот же `row_key`. Второго каталога строк и реестра ячеек нет. В шапке одна строка полноты контента. `graph` — указатель |
 
-Отвечающей LLM не отдают `context.json`. У готовой джобы есть три проекции, это не стадия пайплайна и не новый файл: паспорт `summary` (счётчики без `links` и без кэша ячеек), каталог без чисел и наблюдения строка × период. Наблюдения без селектора не отдаются. Подробности: [llm.md](llm.md).
+Каталог, паспорт и наблюдения — HTTP-проекции, не файлы. Схемы: `catalog-2`, `summary-2`, `observation-2`. Подробности: [llm.md](llm.md).
 
-Между всеми сессиями: `$DATA_DIR/shared/label_memory.json` (принятые пары с баллом) и `$DATA_DIR/shared/taxonomy.json` (склад концептов). Кэш эмбеддингов концептов общий: `$DATA_DIR/shared/embeddings/{имя модели эмбеддингов}-{отпечаток}.npz`. Это один вектор на `concept_id`, среднее фраз концепта, не средний вектор книги. Formula IR и layout той же книги тоже общие: `$DATA_DIR/shared/books/{sha256}/`. Старый `$DATA_DIR/sessions/{session}/glossary.json` ещё читается.
+Formula IR и layout той же книги общие: `$DATA_DIR/shared/books/{job_id}/`.
 
 ## Пайплайн
 
-`parse → compile → layout → mapping → graph → build → render`.
+`parse → compile → layout → graph → build → render`.
 
-Паспорт, каталог и наблюдения в этот ряд не входят. Их собирают из уже записанных `context.json` и `graph.json`.
+Паспорт, каталог и наблюдения в эту последовательность не входят. Они читаются из уже записанных `context.json` и `graph.json`.
 
-HTTP поднимает на каждую новую книгу отдельный процесс и дальше читает `meta.json`. CLI `build` остаётся одним процессом. Parquet пишет PyArrow: это кэш compile и вход trace после выхода процесса. Внутри одного прогона стадии передают уже собранные списки строк. Повторный POST готовой книги отдаёт снимок, если `publisher` в `meta.json` совпадает с кодом на диске. Другой `publisher` останавливает процесс этой книги и запускает новый; пустой штамп не останавливает. Новый прогон удаляет только устаревший хвост стадий из `meta.stages`, а если карты нет — всё от layout вниз. Книга, оставшаяся в `queued` или `running` после рестарта, становится `failed` с `error` `process_lost`. `scripts/run.sh` только опрашивает HTTP. Его `JOB_TIMEOUT_SEC` по умолчанию 300 секунд и процесс не останавливает; сервер останавливает процесс по своему `JOB_TIMEOUT_SEC` (в `.env.example` это 3600).
+HTTP поднимает отдельный процесс на каждую новую книгу и дальше читает `meta.json`. CLI `build` остаётся одним процессом. PyArrow пишет parquet: это кэш compile и вход trace после выхода процесса. Внутри одного прогона стадии передают уже собранные списки строк. Повторный POST готовой книги возвращает снимок, когда `publisher` в `meta.json` совпадает с кодом на диске. Другой `publisher` останавливает процесс этой книги и стартует новый; пустой штамп не останавливает. Новый прогон удаляет только хвост устаревших стадий из `meta.stages` или от layout вниз, если карты нет. Джоба, оставшаяся в `queued` или `running` через рестарт, становится `failed` с `error` `process_lost`. `scripts/run.sh` только опрашивает HTTP. Его `JOB_TIMEOUT_SEC` по умолчанию 300 секунд и процесс не останавливает; сервер останавливает процесс по своему `JOB_TIMEOUT_SEC` (3600 в `.env.example`).
 
-Каскад маппинга резолвит `fact` / `flag` / `helper`. Если детектор не собрал ни timeline, ни params (проза / навигация) или не нашёл лейблы статей, fact-строк нет: статус может быть `succeeded` при пустом контексте — это layout, не таксономия. Подробности: [layout.md](layout.md).
+Если детектор не собрал ни timeline, ни params (проза / навигация) или не нашёл подписей статей, fact-строк нет: статус может быть `succeeded` с пустым context. Это layout. Подробности: [layout.md](layout.md).
 
-Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они строки своего блока (`disposition=header` у abstract). Значения по оси — массив на строке `fact` / `flag` / `helper`; у params — роли колонок и значения только в value-колонках. Формула строки одна. Cell-level adjacency и AST — в IR / [graph.md](graph.md). Даунстрим видит лейбл, `label_path`, соседей ±2, формулу, hints, кандидатов и кэш. Пустой `unmapped.json` не значит, что у каждой строки блока есть `concept_id`.
+Заголовки секций (`abstract`) и счётчики (`index`) **не теряются**: они строки своего блока. У обычной строки, включая abstract-заголовок, `disposition` равен null. У flag, helper, check, noise и technical bridge `disposition=excluded` и есть `exclusion_reason`. Значения по оси — массив на строке `fact` / `flag` / `helper`; у params — роли колонок и значения только в value-колонках. Формула строки одна. Cell-level adjacency и AST — в IR / [graph.md](graph.md). Даунстрим видит лейбл, `label_path`, соседей по формульным ссылкам строк, формулу, hints и кэш.
 
-Опциональны embeddings и chat (OpenAI-совместимый endpoint, по умолчанию LM Studio). Без них остаются structure + lexical + glossary, затем `unknown` с кандидатами.
-
-Две метрики в отчёте не смешивать: **content completeness** должна быть 100% (число строк блоков равно числу layout-строк принятых блоков); **concept coverage** может быть ниже 100% честно (phasing 0.2/0.8 остаётся unknown).
+Markdown пишет **полноту контента** как `1.00 (rows/rows layout rows)`: каждая строка layout опубликованного блока есть в документе.
 
 ## Статусы джоба
 
 | Статус | Смысл |
 | --- | --- |
 | `queued` / `running` | Ещё считается |
-| `succeeded` | Документы готовы. Fact без концепта остаётся на строке со статусом `abstained`. |
-| `failed` | Ошибка пайплайна или процесс книги остановлен по серверному `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`). Usable context нет |
+| `succeeded` | Документы готовы |
+| `failed` | Ошибка пайплайна или процесс книги остановлен серверным `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`). Годного context нет |
 
 Старые снимки могут ещё говорить `needs_input` или `degraded`. Такая джоба уже закончена, те же четыре документа отдаются.
 
-## Два рычага покрытия
+## Что записано в строке
 
-1. **Таксономия** — склад `$DATA_DIR/shared/taxonomy.json`. Пустой файл один раз наполняется из `src/finance_context/ontology/taxonomy.yaml`. Дальше каскад читает склад. Новый id дописывается только у воздержавшейся строки, чей ближайший альтернативный балл ниже `mint_score_max` ([пороги](mapping.md#thresholds)). `Months per year`, `Thousand`, `On`, `Off` и голый `Total` остаются без id. Id — префикс отчёта и нормализованный лейбл первого появления, и дальше он не переименовывается. Общая память хранит лейбл с ближайшей секцией и единицей (`money`, `rate`, `years` или пусто), поэтому P&L и CFS не склеиваются.
-2. **Каскад сигналов** — признаки (лейбл, секция, соседи, форма формулы, граф). Новый тип совпадения — новый `Signal`, не широкий `anti_labels` и не ветка «если лист = Cash_Receipts».
+Hints берутся из подписи и ячейки единицы: `nature`, `time_semantics` (`flow` / `bop` / `eop` / `rate` / `stock` / `instant`), `unit` (`money` / `count` / `rate` / `ratio` / `years` / `price` / `date`), `unit_per`, `currency` (GBP/EUR/USD/RUB), `scale` (`unit` / `k` / `m` / `bn`) и `sign` (`inflow` / `outflow` / `stock`). `k£` в лейбле или ячейке Units — money, GBP и `k`.
 
-Общая память лейблов запоминает уже уверенные тройки: нормализованный лейбл, ближайшая секция и единица (`money`, `rate`, `years` или пусто) указывают на `concept_id` вместе с баллом. Балл строго выше заменяет концепт. Равный балл не заменяет. Эмбеддинг с `high` пишется, ответ модели не пишется. Второй концепт или воздержавшаяся строка на той же тройке стирает записанный ключ. Ключ `section_class` не пишется.
+`disposition` — только структурное исключение. Он равен `excluded`, когда причина `flag`, `helper`, `check`, `noise` или `technical_bridge`. Иначе `disposition` и `exclusion_reason` равны null. Relations блока по форме формулы — `alias`, `aggregate`, `difference` и `roll_forward`. Это не второй каталог строки.

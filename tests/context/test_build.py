@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from tests.helpers.policy import accept_min
-
 from finance_context.context.build import build_context
 from finance_context.layout.models import (
     Axis,
@@ -12,7 +10,6 @@ from finance_context.layout.models import (
     RowCell,
     SheetLayout,
 )
-from finance_context.mapping.models import Concept, Facets, MappedRow, MappingDocument
 from finance_context.models.context import GraphPointer
 
 
@@ -46,22 +43,6 @@ def _layout() -> Layout:
 
 
 def test_build_keeps_cached_value_and_cell_ref() -> None:
-    mapping = MappingDocument(
-        rows=[
-            MappedRow(
-                row_key="CF|2|CF!r1",
-                sheet="CF",
-                row=2,
-                block_id="CF!r1",
-                label="Opening cash",
-                concept_id="bs.cash",
-                article_role="database_like",
-                source="glossary",
-                confidence="high",
-                score=1.0,
-            )
-        ]
-    )
     cells = [
         {
             "sheet": "CF",
@@ -91,13 +72,10 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=_layout(),
-        mapping=mapping,
         source_filename="cashflow.xlsx",
         content_sha256="deadbeef",
-        concept_accept_min=accept_min(),
     )
     metric = doc.blocks[0].rows[0]
-    assert metric.concept_id == "bs.cash"
     assert metric.sheet == "CF"
     assert metric.row == 2
     assert metric.values == ["320000", "320000"]
@@ -107,32 +85,13 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.period_position == "beginning"
     assert metric.aggregation == "first"
     assert metric.formula == "=RC[-1]"
-    assert metric.mapping is not None
-    assert metric.mapping.method == "rule"
     assert metric.unit == "money"
     assert metric.hints.currency == "USD"
     assert metric.hints.scale == "unit"
     assert metric.hints.sign == "stock"
-    assert doc.mapping_stats.unmapped_series == 0
 
 
 def test_build_warns_on_missing_graph_targets() -> None:
-    mapping = MappingDocument(
-        rows=[
-            MappedRow(
-                row_key="CF|2|CF!r1",
-                sheet="CF",
-                row=2,
-                block_id="CF!r1",
-                label="Opening cash",
-                concept_id="bs.cash",
-                article_role="database_like",
-                source="glossary",
-                confidence="high",
-                score=1.0,
-            )
-        ]
-    )
     cells = [
         {
             "sheet": "CF",
@@ -148,31 +107,13 @@ def test_build_warns_on_missing_graph_targets() -> None:
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=_layout(),
-        mapping=mapping,
         graph=GraphPointer(dangling=12, empty_range_members=718),
-        concept_accept_min=accept_min(),
     )
     assert "Graph: 12 unresolved formula targets (see graph.json)" in doc.warnings
     assert all("empty range" not in warning for warning in doc.warnings)
 
 
 def test_build_decodes_excel_date_serials() -> None:
-    mapping = MappingDocument(
-        rows=[
-            MappedRow(
-                row_key="CF|2|CF!r1",
-                sheet="CF",
-                row=2,
-                block_id="CF!r1",
-                label="Opening cash",
-                concept_id="bs.cash",
-                article_role="database_like",
-                source="glossary",
-                confidence="high",
-                score=1.0,
-            )
-        ]
-    )
     cells = [
         {
             "sheet": "CF",
@@ -198,8 +139,6 @@ def test_build_decodes_excel_date_serials() -> None:
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=_layout(),
-        mapping=mapping,
-        concept_accept_min=accept_min(),
     )
     assert doc.blocks[0].rows[0].values[0] == "31.12.2023"
 
@@ -237,35 +176,6 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
             )
         ]
     )
-    mapping = MappingDocument(
-        rows=[
-            MappedRow(
-                row_key="CF|2|CF!r1",
-                sheet="CF",
-                row=2,
-                block_id="CF!r1",
-                label="Opening cash",
-                concept_id="bs.cash",
-                article_role="database_like",
-                source="glossary",
-                confidence="high",
-                score=1.0,
-                alternatives=[("bs.cash", 1.0), ("liq.cash", 0.4)],
-            ),
-            MappedRow(
-                row_key="CF|3|CF!r1",
-                sheet="CF",
-                row=3,
-                block_id="CF!r1",
-                label="Spare",
-                concept_id=None,
-                article_role="check",
-                source="rule",
-                disposition="excluded",
-                exclusion_reason="helper",
-            ),
-        ]
-    )
     cells = [
         {
             "sheet": "CF",
@@ -282,48 +192,54 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=layout,
-        mapping=mapping,
-        concept_accept_min=accept_min(),
+        edges=[{"source": "CF!B2", "target": "CF!B3", "kind": "ref"}],
     )
     rows = doc.blocks[0].rows
     assert [row.kind for row in rows] == ["abstract", "fact", "helper"]
     assert len(rows) == 3
     cash = rows[1]
     assert cash.kind == "fact"
-    assert cash.disposition == "mapped"
+    assert cash.disposition is None
     assert cash.label_path == ["Cashflow"]
     assert cash.formula == "=RC[1]"
-    assert cash.candidates[0].concept_id == "bs.cash"
+    assert cash.neighbors == ["CF!3"]
     assert cash.hints.time_semantics in {"bop", "flow", "eop", "stock"}
     assert rows[2].disposition == "excluded"
+    assert rows[2].exclusion_reason == "helper"
+    assert rows[2].neighbors == ["CF!2"]
     assert not any("Content completeness" in warning for warning in doc.warnings)
     abstract = rows[0]
-    assert abstract.concept_id is None
-    assert abstract.disposition == "header"
-    assert abstract.neighbors == ["Opening cash", "Spare"]
-    assert doc.mapping_stats.inventory_rows == 3
-    assert doc.mapping_stats.mapped == 1
-    assert doc.mapping_stats.excluded == 1
-    assert doc.mapping_stats.abstract == 1
-    assert doc.mapping_stats.unmapped_series == 0
-    assert doc.mapping_stats.concept_coverage == 1.0
-    assert doc.schema_version == "1.13.0"
-    quality = doc.mapping_stats.mapping_quality
-    assert quality.label_coverage == 1.0
-    assert quality.semantic_coverage == 1.0
-    assert quality.confidence_threshold_passed is True
+    assert abstract.disposition is None
+    assert abstract.neighbors == []
+    assert doc.schema_version == "1.14.0"
 
 
-def test_passed_catalog_scores_a_minted_label_and_its_facets() -> None:
-    directed = Concept(
-        id="ops.site-insurance",
-        labels=["Site insurance"],
-        broader="pnl.opex",
-        facets=Facets(statement="pnl", unit="money", direction="outflow"),
+def test_neighbors_include_every_formula_row_ref() -> None:
+    edges = [
+        {"source": "CF!B2", "target": f"CF!B{row}", "kind": "ref"}
+        for row in range(3, 15)
+    ]
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF"}]},
+        cells=[
+            {
+                "sheet": "CF",
+                "row": 2,
+                "col": 2,
+                "addr": "B2",
+                "formula_raw": "=SUM(B3:B14)",
+                "formula_template": "=SUM(R[1]C:R[12]C)",
+                "cached_value": "10",
+            }
+        ],
+        layout=_layout(),
+        edges=edges,
     )
-    instant = directed.model_copy(
-        update={"facets": Facets(statement="pnl", unit="money", period_type="instant")}
-    )
+    assert doc.blocks[0].rows[0].neighbors == [f"CF!{row}" for row in range(3, 15)]
+
+
+def test_fact_time_comes_from_the_label_not_a_concept() -> None:
     layout = Layout(
         sheets=[
             SheetLayout(
@@ -347,22 +263,6 @@ def test_passed_catalog_scores_a_minted_label_and_its_facets() -> None:
             )
         ]
     )
-    mapping = MappingDocument(
-        rows=[
-            MappedRow(
-                row_key="CF|2|CF!r1",
-                sheet="CF",
-                row=2,
-                block_id="CF!r1",
-                label="Site insurance",
-                concept_id="ops.site-insurance",
-                article_role="calculation",
-                source="embed",
-                confidence="high",
-                score=1.0,
-            )
-        ]
-    )
     cells = [
         {
             "sheet": "CF",
@@ -373,25 +273,18 @@ def test_passed_catalog_scores_a_minted_label_and_its_facets() -> None:
             "cached_value": "10",
         }
     ]
-    kwargs = dict(
+    doc = build_context(
         job_id="abc",
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=layout,
-        mapping=mapping,
     )
-    without = build_context(**kwargs, concept_accept_min=accept_min())
-    with_direction = build_context(**kwargs, concepts=[directed], concept_accept_min=accept_min())
-    with_instant = build_context(**kwargs, concepts=[instant], concept_accept_min=accept_min())
-    assert without.mapping_stats.mapping_quality.label_coverage == 0.0
-    assert without.blocks[0].rows[0].hints.time_semantics == "flow"
-    assert with_direction.mapping_stats.mapping_quality.label_coverage == 1.0
-    assert with_direction.blocks[0].rows[0].hints.sign == "outflow"
-    assert with_instant.blocks[0].rows[0].hints.time_semantics == "stock"
+    row = doc.blocks[0].rows[0]
+    assert row.hints.time_semantics == "flow"
+    assert row.hints.sign is None
 
 
 def test_zero_cached_formula_is_not_missing() -> None:
-    mapping = MappingDocument(rows=[])
     cells = [
         {
             "sheet": "CF",
@@ -423,8 +316,6 @@ def test_zero_cached_formula_is_not_missing() -> None:
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=_layout(),
-        mapping=mapping,
-        concept_accept_min=accept_min(),
     )
     assert doc.workbook.missing_cached_values == 2
     assert not any(w.startswith("Formula without cached value at") for w in doc.warnings)
@@ -465,23 +356,6 @@ def test_build_exports_role_cells_not_graph_samples() -> None:
             )
         ]
     )
-    mapping = MappingDocument(
-        rows=[
-            MappedRow(
-                row_key="Construction|26|Construction!r1",
-                sheet="Construction",
-                row=26,
-                block_id="Construction!r1",
-                label="Equity (k£)",
-                concept_id="cf.equity_issue",
-                article_role="assumption",
-                source="rule",
-                confidence="high",
-                score=0.94,
-                alternatives=[("cf.equity_issue", 0.94), ("bs.equity", 0.5), ("cf.fcf", 0.4)],
-            )
-        ]
-    )
     cells = [
         {
             "sheet": "Construction",
@@ -512,12 +386,9 @@ def test_build_exports_role_cells_not_graph_samples() -> None:
         workbook_meta={"sheets": [{"name": "Construction"}, {"name": "Debt"}]},
         cells=cells,
         layout=layout,
-        mapping=mapping,
-        concept_accept_min=accept_min(),
     )
     series = doc.blocks[0].rows[0]
     assert any(cell.role == "value" and cell.addr == "C26" for cell in series.cells)
-    assert len(series.candidates) == 3
     assert series.values == ["50"]
 
 
@@ -584,8 +455,6 @@ def test_axis_inputs_do_not_inherit_the_stub_check_formula() -> None:
         workbook_meta={"sheets": [{"name": "PF"}]},
         cells=cells,
         layout=layout,
-        mapping=MappingDocument(rows=[]),
-        concept_accept_min=accept_min(),
     )
     row = doc.blocks[0].rows[0]
     assert row.formula is None

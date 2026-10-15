@@ -53,7 +53,6 @@ def test_two_axes_on_one_sheet_become_two_blocks() -> None:
     assert [h.period_key for h in sheet.blocks[0].axis.headers] == ["2023", "2024"]
     assert all(h.role in {"historical", "forecast"} for h in sheet.blocks[1].axis.headers)
     assert sheet.blocks[0].axis.headers[0].col == 2
-    assert "concept_id" not in sheet.blocks[0].rows[0].model_dump()
 
 
 def test_hidden_column_is_not_label_column() -> None:
@@ -93,7 +92,6 @@ def test_period_role_is_not_article_role() -> None:
     }
     for row in block.rows:
         dumped = row.model_dump()
-        assert "concept_id" not in dumped
         assert dumped.get("article_role") is None
 
 

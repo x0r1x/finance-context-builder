@@ -42,7 +42,6 @@ async def get_catalog(
     request: Request,
     job_id: str,
     q: Annotated[str | None, Query(description=_OWN_LABEL)] = None,
-    concept_id: Annotated[list[str] | None, Query()] = None,
     sheet: Annotated[str | None, Query()] = None,
     disposition: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=10000)] = None,
@@ -58,7 +57,6 @@ async def get_catalog(
         build_catalog,
         context,
         q=q,
-        concept_ids=concept_id,
         sheet=sheet,
         disposition=disposition,
         limit=limit,
@@ -124,7 +122,6 @@ async def get_observations(
     request: Request,
     job_id: str,
     row_key: Annotated[list[str] | None, Query()] = None,
-    concept_id: Annotated[list[str] | None, Query()] = None,
     q: Annotated[str | None, Query(description=_OWN_LABEL)] = None,
     period_id: Annotated[list[str] | None, Query()] = None,
     phase: Annotated[list[TimelinePhase] | None, Query()] = None,
@@ -133,7 +130,7 @@ async def get_observations(
 ) -> Response:
     context_path = _require_artifact(request, job_id, "context.json")
     graph_path = _require_artifact(request, job_id, "graph.json")
-    if not (row_key or concept_id or (q and q.strip())):
+    if not (row_key or (q and q.strip())):
         raise ApiError(400, "selector_required")
     dest = context_path.parent
     etag = strong_etag(
@@ -159,7 +156,6 @@ async def get_observations(
         context,
         links,
         row_keys=row_key,
-        concept_ids=concept_id,
         q=q,
         period_ids=period_id,
         phases=phase,

@@ -82,49 +82,32 @@ def test_pound_per_year_is_money() -> None:
     assert measure.currency == "GBP"
 
 
-def test_sign_stock_for_balance_sheet() -> None:
+def test_sign_stock_for_opening_balance() -> None:
     measure = parse_measure(
         label="Opening cash",
-        concept_id="bs.cash",
-        statement="bs",
         nature="balance",
         time_semantics="bop",
     )
     assert measure.sign == "stock"
 
 
-def test_sign_inflow_from_revenue() -> None:
-    measure = parse_measure(label="Gross revenues", concept_id="pnl.revenue", statement="pnl")
+def test_sign_inflow_from_revenue_label() -> None:
+    measure = parse_measure(label="Gross revenue")
     assert measure.sign == "inflow"
 
 
-def test_sign_outflow_from_opex() -> None:
-    measure = parse_measure(label="Operating costs", concept_id="pnl.opex", statement="pnl")
+def test_sign_outflow_from_cost_label() -> None:
+    measure = parse_measure(label="Operating costs")
     assert measure.sign == "outflow"
 
 
 def test_sign_outflow_for_principal_repayment() -> None:
-    measure = parse_measure(
-        label="Principal Repayment",
-        concept_id="cf.repayment",
-        statement="cf",
-    )
+    measure = parse_measure(label="Principal Repayment")
     assert measure.sign == "outflow"
-    directed = parse_measure(
-        label="Principal Repayment",
-        concept_id="cf.repayment",
-        statement="cf",
-        direction="outflow",
-    )
-    assert directed.sign == "outflow"
 
 
 def test_sign_pre_tax_income_is_not_outflow() -> None:
-    measure = parse_measure(
-        label="EBT (Taxable Profit)",
-        concept_id="pnl.pre_tax_income",
-        statement="pnl",
-    )
+    measure = parse_measure(label="EBT (Taxable Profit)")
     assert measure.sign != "outflow"
 
 

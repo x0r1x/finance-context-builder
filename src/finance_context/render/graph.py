@@ -83,8 +83,8 @@ def render_trace_markdown(doc: TraceDocument) -> str:
         "",
         "## Nodes",
         "",
-        "| Node | Row | Concept | Period | Type | Value | Formula | Depth |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Node | Row | Period | Type | Value | Formula | Depth |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for node in doc.nodes:
         lines.append(
@@ -93,7 +93,6 @@ def render_trace_markdown(doc: TraceDocument) -> str:
                 [
                     _cell(node.node_id),
                     _cell(node.row_key or ""),
-                    _cell(node.concept_id or ""),
                     _cell(node.period_id or ""),
                     _cell(node.node_type or ""),
                     _cell(node.cached_value or ""),

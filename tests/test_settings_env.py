@@ -39,23 +39,6 @@ def test_env_example_lists_every_settings_name() -> None:
     assert _example_keys() == {spec.env_name for spec in ENV_SPECS}
 
 
-def test_blank_llm_url_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear(monkeypatch)
-    monkeypatch.setenv("LLM_BASE_URL", "  ")
-    settings = Settings(_env_file=None)
-    assert settings.llm_base_url is None
-    assert settings.llm_configured() is False
-
-
-def test_blank_embedding_model_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear(monkeypatch)
-    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://127.0.0.1:9/v1")
-    monkeypatch.setenv("EMBEDDING_MODEL", "  ")
-    settings = Settings(_env_file=None)
-    assert settings.embedding_model is None
-    assert settings.embed_configured() is False
-
-
 def test_unset_job_timeout_and_session_use_field_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

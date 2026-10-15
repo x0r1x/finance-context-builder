@@ -29,14 +29,11 @@ def test_catalog_has_no_value_arrays() -> None:
     document = build_catalog(sample_context())
     payload = document.model_dump(mode="json")
     assert _FORBIDDEN.isdisjoint(_keys(payload))
-    assert document.schema_version == "catalog-1"
+    assert document.schema_version == "catalog-2"
     assert document.total == 7
     assert document.limit is None
-    assert document.mapping_stats.abstained == 1
-    assert document.mapping_stats.inventory_rows == 7
     revenue = next(row for row in document.rows if row.label == "Revenue")
     assert revenue.has_formula is True
-    assert revenue.concept_id == "pnl.revenue"
     assert revenue.axis_ids == ["Operation!r8"]
     blank = next(row for row in document.rows if row.label == "Blank")
     assert blank.has_formula is False
@@ -83,17 +80,12 @@ def test_catalog_period_clocks_omit_empty_keys() -> None:
     assert _FORBIDDEN.isdisjoint(_keys(payload))
 
 
-def test_catalog_finds_abstained_by_label_not_by_concept() -> None:
+def test_catalog_finds_a_row_by_its_own_label() -> None:
     context = sample_context()
     found = build_catalog(context, q="MYSTERY")
     assert found.total == 1
     assert found.rows[0].row_key == MYSTERY
-    assert found.rows[0].concept_id is None
     assert found.axes
-    missed = build_catalog(context, concept_ids=["pnl.nope"])
-    assert missed.total == 0
-    assert missed.rows == []
-    assert missed.axes
 
 
 def _row(context, row_key: str):
@@ -117,26 +109,15 @@ def test_query_does_not_read_the_path() -> None:
     assert [row.row_key for row in found.rows] == [REVENUE]
 
 
-def test_query_irr_skips_a_path_only_row_and_keeps_an_empty_concept() -> None:
+def test_query_irr_skips_a_path_only_row() -> None:
     context = sample_context()
     capex = _row(context, OTHER)
     capex.label = "CAPEX"
     capex.label_path = ["Project IRR"]
-    capex.concept_id = "val.irr"
     project = _row(context, REVENUE)
     project.label = "Project IRR"
-    project.concept_id = None
     found = build_catalog(context, q="IRR")
     assert [row.row_key for row in found.rows] == [REVENUE]
-    assert found.rows[0].concept_id is None
-
-
-def test_concept_id_narrows_the_label_query() -> None:
-    found = build_catalog(sample_context(), q="income", concept_ids=["pnl.other"])
-    assert [row.row_key for row in found.rows] == [OTHER]
-    missed = build_catalog(sample_context(), q="income", concept_ids=["pnl.revenue"])
-    assert missed.rows == []
-    assert missed.axes
 
 
 def test_unknown_query_keeps_the_axes() -> None:

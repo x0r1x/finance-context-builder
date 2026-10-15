@@ -10,7 +10,6 @@ from finance_context.labels import own_label_contains
 from finance_context.models.context import BlockRow, ContextDocument, ContextPeriod, FinancialBlock
 from finance_context.models.observation import (
     Observation,
-    ObservationDimensions,
     ObservationDocument,
     ObservationFormula,
     ObservationPrecedent,
@@ -29,7 +28,6 @@ def build_observations(
     links: Sequence[FormulaLink],
     *,
     row_keys: Sequence[str] | None = None,
-    concept_ids: Sequence[str] | None = None,
     q: str | None = None,
     period_ids: Sequence[str] | None = None,
     phases: Sequence[str] | None = None,
@@ -40,8 +38,7 @@ def build_observations(
     """One observation per selected row × period. Raises ValueError without a selector."""
     needle = (q or "").strip()
     keys = set(row_keys or [])
-    concepts = set(concept_ids or [])
-    if not keys and not concepts and not needle:
+    if not keys and not needle:
         raise ValueError("selector_required")
     periods = set(period_ids or [])
     phase_set = set(phases or [])
@@ -50,7 +47,7 @@ def build_observations(
     found: list[Observation] = []
     for block in context.blocks:
         for row in block.rows:
-            if not _selected(row, keys, concepts, needle):
+            if not _selected(row, keys, needle):
                 continue
             if block.kind == "params":
                 found.extend(
@@ -104,10 +101,8 @@ def _with_label(
     return precedent.model_copy(update={"label": label})
 
 
-def _selected(row: BlockRow, keys: set[str], concepts: set[str], needle: str) -> bool:
+def _selected(row: BlockRow, keys: set[str], needle: str) -> bool:
     if keys and row.row_key not in keys:
-        return False
-    if concepts and row.concept_id not in concepts:
         return False
     if needle and not own_label_contains(row.label, needle):
         return False
@@ -158,12 +153,6 @@ def _unit(row: BlockRow) -> ObservationUnit:
         scale=hints.scale,
         sign=hints.sign,
     )
-
-
-def _dimensions(row: BlockRow) -> ObservationDimensions | None:
-    if not row.hints.segment:
-        return None
-    return ObservationDimensions(segment=row.hints.segment)
 
 
 def _cache(text: str | None, status: str | None) -> tuple[str | None, ValueStatus]:
@@ -247,9 +236,7 @@ def _timeline_observation(
     return Observation(
         row_key=row.row_key,
         label=row.label,
-        concept_id=row.concept_id,
         disposition=row.disposition,
-        dimensions=_dimensions(row),
         period_id=period.period_key,
         value=value,
         value_status=value_status,
@@ -315,9 +302,7 @@ def _params_row(
             Observation(
                 row_key=row.row_key,
                 label=row.label,
-                concept_id=row.concept_id,
                 disposition=row.disposition,
-                dimensions=_dimensions(row),
                 period_id=period_id,
                 value=value,
                 value_status=value_status,

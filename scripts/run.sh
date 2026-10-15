@@ -19,7 +19,7 @@ workbook="$(resolve_workbook "${1:-}")"
 "$SCRIPTS/run-context-job.sh" "$workbook"
 
 if [[ ! -f "$RUN_DIR/json/context.json" ]]; then
-  echo "json/context.json missing; cannot extract unmapped rows" >&2
+  echo "json/context.json missing; job did not publish the context document" >&2
   exit 1
 fi
 if [[ ! -f "$RUN_DIR/json/graph.json" ]]; then
@@ -32,10 +32,6 @@ for name in context.md graph.md; do
     exit 1
   fi
 done
-python3 "$SCRIPTS/extract-unmapped.py" \
-  "$RUN_DIR/json/context.json" \
-  --output "$RUN_DIR/unmapped.json"
-log_summary "unmapped=$RUN_DIR/unmapped.json"
 if ! axes="$(python3 "$SCRIPTS/check-graph.py" \
   "$RUN_DIR/json/context.json" \
   "$RUN_DIR/json/graph.json" \

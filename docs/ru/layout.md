@@ -2,11 +2,11 @@
 
 **Русский** · [English](../en/layout.md)
 
-Стадия `layout` режет книгу на блоки с осью периодов и строками тела. Без fact-строк маппинг не вызывается: джоб может закончиться `succeeded` с пустым контекстом. Если оси нет, классификатор шейпа собирает `params`-блок (подпись + колонка значений) или отбрасывает прозу и навигацию — они не входят в знаменатель completeness.
+Стадия `layout` режет книгу на блоки с осью периодов и строками тела. Без fact-строк джоб может закончиться `succeeded` с пустым контекстом. Если оси нет, классификатор шейпа собирает `params`-блок (подпись + колонка значений) или отбрасывает прозу и навигацию — они не входят в знаменатель completeness.
 
 Код: `src/finance_context/layout/` (`detect.py`, `periods.py`, `params.py`) и разбор ссылок в `src/finance_context/formulas/engine.py`.
 
-Связанные документы: [обзор](overview.md), [маппинг](mapping.md), [граф](graph.md), [архитектура](architecture.md).
+Связанные документы: [обзор](overview.md), [граф](graph.md), [архитектура](architecture.md).
 
 ## Что считается блоком
 
@@ -18,7 +18,7 @@
 
 Относительная шапка (project finance) — лейбл `Year` / `Period` / `Month` / `Quarter` (и русские год/период/мес/кв) и справа непрерывный ряд целых `0|1, 2, 3, …` длиной ≥ 3. Ключи периодов: `Y1` / `Q1` / `M1` / `P1`. Роль колонки — `relative`. Grain: `model_year` / `model_quarter` / `model_month` / `model_period`. `apply_grain` календарные ключи не трогает.
 
-После `build_context` 0/1-флаги вешаются на ту ось, в чьих строках они лежат (`context.axes`): `phase` construction/operation, `phase_year` внутри run, overlays (repayment, availability) только в `flags`. Календарная книга без таких флагов получает `calendar_year` и `phase=null`. Флаги по-прежнему excluded из маппинга.
+После `build_context` 0/1-флаги вешаются на ту ось, в чьих строках они лежат (`context.axes`): `phase` construction/operation, `phase_year` внутри run, overlays (repayment, availability) только в `flags`. Повторённый лейбл флага не затирает предыдущую строку: ключ — нормализованный лейбл и уже выданный ключ ближайшего другого предыдущего флага в скобках. Если такой ключ занят, к нему добавляется номер строки. Без предыдущего флага ключ — лейбл и номер строки. Календарная книга без таких флагов получает `calendar_year` и `phase=null`. Flag-строки остаются в блоке с `disposition=excluded`.
 
 Если слова Year в строке нет, но справа ≥ 8 целых `0|1..n` **и** те же колонки совпадают с самым широким formula-copy run на листе (`formula_template` / R1C1), ось всё равно строится. Счётчик `Week #` под календарём на тех же колонках второй осью не становится.
 
@@ -50,7 +50,7 @@ Formula-copy (одинаковый `formula_template` в соседних кол
 
 Лейбл строки — первая непустая ячейка span; `indent` — позиция в span плюс ведущие пробелы. У `LayoutRow` свой `label_col` (адрес в context), если статья не в `block.label_col`. Слово `Total` / `Sum` / `Итого` / `Всего` в колонке подписи — имя строки, не шапка колонки. Если в span лейбла нет, берётся первый текст левее периодных колонок (`CHECK`).
 
-Виды строк (`fact` / `abstract` / `index` / `helper` / `flag`) — как в [architecture.md](architecture.md). `index` только если по оси идёт `0|1, 2, 3, …` и лейбл счётчика (`week`, `#`, …) **или** в периодных ячейках нет формул. Ветка «все числа ≤ 12» снята: денежные 1..12 с формулами остаются `fact`. Плейсхолдеры `Spare` / `None` — `helper`. Kind `flag` — только бинарный ряд (≥90% значений в `{0, 1}`) или токен `flag` в лейбле. `Mid case` / `Low case` / `Applied (real terms)` с ценами остаются `fact`. `Case Number` — заголовок сценариев, не строка данных. Селектор (`Live Case`, `* choice`) — `flag` с `context_role=scenario_selector`. Скаляр слева от линейки (IRR, NPV, `Months per year`) с числовой role-ячейкой и без значений по периодам — `fact`, не `abstract`. Строка под outline `Check` остаётся `helper`.
+Виды строк (`fact` / `abstract` / `index` / `helper` / `flag`) — как в [architecture.md](architecture.md). `index` только если по оси идёт `0|1, 2, 3, …` и лейбл счётчика (`week`, `#`, …) **или** в периодных ячейках нет формул. Ветка «все числа ≤ 12» снята: денежные 1..12 с формулами остаются `fact`. Плейсхолдеры `Spare` / `None` — `helper`. Kind `flag` — только бинарный ряд (≥90% значений в `{0, 1}`) или токен `flag` в лейбле. `Mid case` / `Low case` / `Applied (real terms)` с ценами остаются `fact`. `Case Number` — заголовок сценариев, не строка данных. Селектор (`Live Case`, `* choice`) — `flag` с `disposition=excluded`. Скаляр слева от линейки (IRR, NPV, `Months per year`) с числовой role-ячейкой и без значений по периодам — `fact`, не `abstract`. Строка под outline `Check` остаётся `helper`.
 
 ## Формулы и ось
 
@@ -70,15 +70,15 @@ Compile помечает формулу `unparsed`, если токен не р�
 
 Шапка params может быть многострочной: имена сценариев и `Units` / `Values` / `Active` / `Notes` собираются по колонкам. Неизвестные текстовые имена над числовыми колонками → роль `scenario`. Колонка **active value** выбирается по числу кросс-листовых dependents в `ir/edges.parquet`; лексикон шапки — подсказка.
 
-Строка **Scenario Chosen** / selected scenario — не шапка колонок, а control (`kind=flag`). Индекс живого сценария (часто `D3`) остаётся строкой блока с `disposition=excluded` и `context_role=scenario_selector`; колонка D — выбранное значение, F:… — матрица кейсов. Числа `1..n` в строке селектора не перезаписывают имена оси (`Base Case`). Лейбл селектора не голосует за колонку `value`, иначе `label_col` съезжает вправо.
+Строка **Scenario Chosen** / selected scenario — не шапка колонок, а control (`kind=flag`). Индекс живого сценария (часто `D3`) остаётся строкой блока с `disposition=excluded`; колонка D — выбранное значение, F:… — матрица кейсов. Числа `1..n` в строке селектора не перезаписывают имена оси (`Base Case`). Лейбл селектора не голосует за колонку `value`, иначе `label_col` съезжает вправо.
 
-Капс-строка без значений → `abstract`. Таблица `Check` / `Result` → `helper` / `check_row`; exclusion сам снимет её с тегирования.
+Капс-строка без значений → `abstract`. Таблица `Check` / `Result` → `helper` / `check_row` и публикуется с `disposition=excluded`.
 
 На листе **с** осью `carve_params_regions` вырезает строки, у которых нет значений правее сценарного span:
 
 | Регион | Результат |
 | --- | --- |
-| Заголовок `Case Number` / `Scenario` и подряд `1..n` (n ≥ 3 и не шире 60% периодных колонок) | `params`: колонка с подписью вроде `Live Case` — `value`, колонки `1..n` — `scenario` (`Case 1` …). Селектор (`Live_case`, `OFFSET`) — `context_role=scenario_selector` |
+| Заголовок `Case Number` / `Scenario` и подряд `1..n` (n ≥ 3 и не шире 60% периодных колонок) | `params`: колонка с подписью вроде `Live Case` — `value`, колонки `1..n` — `scenario` (`Case 1` …). Селектор (`Live_case`, `OFFSET`) — строка `flag` с `disposition=excluded` |
 | Checks и constants (Reference / Result / скаляр в E/G/H), если ≥ 3 fact/helper | отдельный `params`-блок |
 
 Эти строки не остаются в timeline-блоке. Сценарные колонки в ось не входят.
@@ -87,7 +87,7 @@ Compile помечает формулу `unparsed`, если токен не р�
 
 Колонки между зоной лейбла и `min(period_col)` получают роли на `LayoutRow.cells`: `SUM` по периодным колонкам → `total`; текст единиц (`k£`, `EUR'000`, `EUR/MWh`, `%`, `x`, `years`, целая ячейка `Index`, `MWh p.a.`, `#`, `№`) → `unit`. Заголовок колонки `Index` остаётся header. `Base Index` единицей не является. Хвост `p.a.` — пометка периода на подписи (`MWh p.a.` — count, `EUR p.a.` — money, `% p.a.` — rate); колонка только с end date без start → `stub`; остальное число/формула → `value`. У role-ячейки есть `header` — ближайшая подпись в той же колонке внутри секции (`Start`, `End`, `Live Case`, `Min`, `Avg`). `total` и `stub` в периоды оси не входят; у link в графе для такой ячейки `period_id=null`. Это скаляры вроде `Construction!C22`, не отдельный дамп всех ячеек листа.
 
-## Что проверять, если маппинг пустой
+## Что проверять, если в context нет fact-строк
 
 | Симптом | Куда смотреть |
 | --- | --- |
@@ -95,8 +95,8 @@ Compile помечает формулу `unparsed`, если токен не р�
 | Много блоков по 2 периода, 0 fact | Ложные Start/End не отфильтровались; или лейблы правее `label_col` |
 | Блоки есть, fact = 0 | Зона лейблов / skip пустого `label_col` |
 | Нет `D3` / Scenario Chosen в строках блока | Control-строка попала в header params (`params.py`) |
-| `Unparsed formula` на шапке или SUM | `formulas/engine.py`, не таксономия |
+| `Unparsed formula` на шапке или SUM | `formulas/engine.py` |
 
-Публичный корпус: Packt (индекс лет + `Input Assumptions` как params) и RVI (календарь + секции в нескольких колонках; `Top Shortcuts` не даёт строк). Gold: `tests/fixtures/mapping/*_dispositions.yaml`. `three-statement.xlsx` в lock может быть недоступен — тест корпуса skip.
+Публичный корпус: Packt (индекс лет + `Input Assumptions` как params) и RVI (календарь + секции в нескольких колонках; `Top Shortcuts` не даёт строк). `three-statement.xlsx` может быть недоступен — сверка корпуса его пропускает.
 
 Тесты детектора: `tests/layout/`. На `cashflow.xlsx` появляются params-блоки (Assumptions / Checks); Cover и Disclaimer по-прежнему без строк. Timeline `label_col` недельных блоков не должен съезжать.

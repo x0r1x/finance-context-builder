@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from finance_context.layout.models import LayoutRow
-from finance_context.mapping.models import ArticleRole
-from finance_context.mapping.normalize import normalize_label
+from finance_context.layout.normalize import normalize_label
+
+ArticleRole = Literal[
+    "assumption",
+    "calculation",
+    "database_like",
+    "check",
+    "output",
+    "actual_adjustment",
+]
 
 _OUTPUT = re.compile(r"итого|total|всего")
 _ADJUST = re.compile(r"корректир|adjustment|plug")

@@ -82,9 +82,6 @@ def main() -> None:
             (dest / "source.xlsx").write_bytes(book.read_bytes())
             settings = Settings(
                 data_dir=root,
-                llm_base_url=None,
-                embedding_base_url=None,
-                embedding_model=None,
                 _env_file=None,
             )
             before = _rss_kb()

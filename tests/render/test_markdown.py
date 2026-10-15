@@ -17,8 +17,6 @@ from finance_context.models.context import (
     ContextDocument,
     ContextPeriod,
     FinancialBlock,
-    MappingEvidence,
-    MappingStats,
     RoleCell,
     RowHints,
     WorkbookRaw,
@@ -56,11 +54,8 @@ def _doc() -> ContextDocument:
                         row=2,
                         kind="fact",
                         label="Opening cash",
-                        concept_id="bs.cash",
-                        disposition="mapped",
                         formula="=RC[-1]",
                         unit="money",
-                        mapping=MappingEvidence(method="rule", confidence="high", score=1.0),
                         hints=RowHints(
                             unit="money",
                             currency="GBP",
@@ -78,12 +73,6 @@ def _doc() -> ContextDocument:
                 ],
             )
         ],
-        mapping_stats=MappingStats(
-            inventory_rows=1,
-            mapped=1,
-            content_completeness=1.0,
-            concept_coverage=1.0,
-        ),
         warnings=[],
     )
 
@@ -107,8 +96,6 @@ def test_period_cell_prints_the_graph_address_under_the_value() -> None:
                         row=172,
                         kind="fact",
                         label="CPI",
-                        disposition="mapped",
-                        concept_id="ops.cpi",
                         values=["1.3458683383241299"],
                         value_statuses=["cached"],
                         normalized_values=["1.3458683383"],
@@ -119,7 +106,6 @@ def test_period_cell_prints_the_graph_address_under_the_value() -> None:
                         row=537,
                         kind="fact",
                         label="Missing",
-                        disposition="mapped",
                         values=[None],
                         value_statuses=["empty"],
                     ),
@@ -145,7 +131,8 @@ def test_markdown_matches_golden() -> None:
     assert "100" in rendered
     assert "110" in rendered
     assert "=RC[-1]" in rendered
-    assert "bs.cash" in rendered
+    assert "Concept" not in rendered
+    assert "Content completeness: 1.00 (1/1 layout rows)" in rendered
 
 
 def test_percent_unit_shows_the_fraction_and_the_percent() -> None:
@@ -201,8 +188,6 @@ def test_markdown_keeps_every_period_and_excluded_row() -> None:
                         row=2,
                         kind="fact",
                         label="Opening cash",
-                        concept_id="bs.cash",
-                        disposition="mapped",
                         values=[str(index) for index in range(1, 21)],
                     ),
                     BlockRow(
@@ -218,7 +203,6 @@ def test_markdown_keeps_every_period_and_excluded_row() -> None:
                 ],
             )
         ],
-        mapping_stats=MappingStats(inventory_rows=2, mapped=1, excluded=1),
     )
     rendered = render_markdown(doc)
     assert "Y20" in rendered
@@ -248,7 +232,6 @@ def test_markdown_parameters_include_selector_and_value() -> None:
                         kind="flag",
                         label="Scenario Chosen",
                         disposition="excluded",
-                        context_role="scenario_selector",
                         cells=[RoleCell(addr="D3", col=4, role="value", cached_value="1")],
                         values=["1"],
                     ),
@@ -258,8 +241,6 @@ def test_markdown_parameters_include_selector_and_value() -> None:
                         row=8,
                         kind="fact",
                         label="Tax Rate",
-                        concept_id="tax.rate",
-                        disposition="mapped",
                         hints=RowHints(unit="rate"),
                         cells=[RoleCell(addr="D8", col=4, role="value", cached_value="0.3")],
                         values=["0.3"],

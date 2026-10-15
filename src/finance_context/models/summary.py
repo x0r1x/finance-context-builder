@@ -7,9 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from finance_context.graph.models import CycleClass, IdCount
-from finance_context.models.catalog import SliceMappingStats
 
-SUMMARY_SCHEMA_VERSION = "summary-1"
+SUMMARY_SCHEMA_VERSION = "summary-2"
 
 
 class SummaryCycle(BaseModel):
@@ -27,16 +26,15 @@ class SummaryHint(BaseModel):
 
 
 class SummaryDocument(BaseModel):
-    """Graph and workbook counters without links[] or row values. Schema summary-1."""
+    """Graph and workbook counters without links[] or row values. Schema summary-2."""
 
-    schema_version: Literal["summary-1"] = SUMMARY_SCHEMA_VERSION
+    schema_version: Literal["summary-2"] = SUMMARY_SCHEMA_VERSION
     context_schema_version: str
     graph_schema_version: str
     source_filename: str | None = None
     content_sha256: str | None = None
     status: str | None = None
     stage: str | None = None
-    mapping_stats: SliceMappingStats = Field(default_factory=SliceMappingStats)
     sheets: list[str] = Field(default_factory=list)
     formula_count: int = 0
     missing_cached_values: int = 0
