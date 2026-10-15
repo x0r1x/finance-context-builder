@@ -214,6 +214,31 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert doc.schema_version == "1.14.0"
 
 
+def test_neighbors_include_every_formula_row_ref() -> None:
+    edges = [
+        {"source": "CF!B2", "target": f"CF!B{row}", "kind": "ref"}
+        for row in range(3, 15)
+    ]
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF"}]},
+        cells=[
+            {
+                "sheet": "CF",
+                "row": 2,
+                "col": 2,
+                "addr": "B2",
+                "formula_raw": "=SUM(B3:B14)",
+                "formula_template": "=SUM(R[1]C:R[12]C)",
+                "cached_value": "10",
+            }
+        ],
+        layout=_layout(),
+        edges=edges,
+    )
+    assert doc.blocks[0].rows[0].neighbors == [f"CF!{row}" for row in range(3, 15)]
+
+
 def test_fact_time_comes_from_the_label_not_a_concept() -> None:
     layout = Layout(
         sheets=[

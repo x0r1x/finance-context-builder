@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from finance_context.formulas.engine import FormulaEngine
 
 _ENGINE = FormulaEngine(locale_hint="en")
+_EXCEL_MAX_ROW = 1_048_576
 
 
 class RowPattern:
@@ -144,14 +145,20 @@ def _ref_row(node: dict[str, Any], sheet: str, col: int) -> tuple[str, int] | No
 
 
 def _range_rows(node: dict[str, Any], col: int) -> list[int]:
+    if node.get("col_only") or node.get("row_only"):
+        return []
     start = node.get("start") or {}
     end = node.get("end") or {}
+    if "row" not in start or "row" not in end:
+        return []
     if start.get("col") != col or end.get("col") != col:
         return []
     lo = int(start["row"])
     hi = int(end["row"])
     if hi < lo:
         lo, hi = hi, lo
+    if hi - lo + 1 >= _EXCEL_MAX_ROW:
+        return []
     return list(range(lo, hi + 1))
 
 

@@ -69,7 +69,7 @@ def build_context(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
     axes_by_id = {axis.id: axis for axis in axes}
-    precedents, dependents = row_adjacency(edges or [])
+    precedents, dependents = row_adjacency(edges or [], limit=0)
     warnings: list[str] = []
     formula_count = 0
     missing_cached = 0

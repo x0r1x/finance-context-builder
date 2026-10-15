@@ -99,26 +99,31 @@ def _flag_keys(flags: list[LayoutRow]) -> list[str]:
         if counts[base] == 1:
             key = base
         else:
-            qualifier = _preceding_unique_flag(bases, counts, index)
+            qualifier = _preceding_flag_key(bases, keys, index)
             key = f"{base} ({qualifier})" if qualifier else f"{base} {row.row}"
-            if key in used:
-                key = f"{base} {row.row}"
+        key = _unused_flag_key(key, used, row.row)
         used.add(key)
         keys.append(key)
     return keys
 
 
-def _preceding_unique_flag(
-    bases: list[str],
-    counts: Counter[str],
-    index: int,
-) -> str | None:
+def _preceding_flag_key(bases: list[str], keys: list[str], index: int) -> str | None:
     own = bases[index]
     for earlier in range(index - 1, -1, -1):
-        base = bases[earlier]
-        if base != own and counts[base] == 1:
-            return base
+        if bases[earlier] != own:
+            return keys[earlier]
     return None
+
+
+def _unused_flag_key(key: str, used: set[str], row: int) -> str:
+    if key not in used:
+        return key
+    candidate = f"{key} {row}"
+    suffix = 2
+    while candidate in used:
+        candidate = f"{key} {row} {suffix}"
+        suffix += 1
+    return candidate
 
 
 def _flag_rows(sheet, axis: TimeAxis) -> list[LayoutRow]:

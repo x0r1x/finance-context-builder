@@ -126,6 +126,85 @@ def test_repeated_flag_labels_keep_both_rows() -> None:
     assert "active" not in by_id["Y1"].flags
 
 
+def test_two_identical_flags_under_one_anchor_stay_distinct() -> None:
+    cells = [
+        _c("TBA", "A1", "Year"),
+        _c("TBA", "B1", "1"),
+        _c("TBA", "C1", "2"),
+        _c("TBA", "D1", "3"),
+        _c("TBA", "E1", "4"),
+        _c("TBA", "A2", "Availability Start Date"),
+        _c("TBA", "B2", "1"),
+        _c("TBA", "C2", "0"),
+        _c("TBA", "D2", "0"),
+        _c("TBA", "E2", "0"),
+        _c("TBA", "A3", "Active"),
+        _c("TBA", "B3", "1"),
+        _c("TBA", "C3", "1"),
+        _c("TBA", "D3", "0"),
+        _c("TBA", "E3", "0"),
+        _c("TBA", "A4", "Active"),
+        _c("TBA", "B4", "0"),
+        _c("TBA", "C4", "0"),
+        _c("TBA", "D4", "1"),
+        _c("TBA", "E4", "1"),
+    ]
+    layout = detect_layout(cells)
+    axes, warnings = build_axes(layout, cells)
+    assert axes
+    assert not warnings
+    by_id = {item.period_key: item for item in axes[0].periods}
+    first = "active (availability start date)"
+    second = "active (availability start date) 4"
+    assert by_id["Y1"].flags[first] is True
+    assert by_id["Y1"].flags[second] is False
+    assert by_id["Y3"].flags[first] is False
+    assert by_id["Y3"].flags[second] is True
+    assert by_id["Y4"].flags[second] is True
+    assert "active" not in by_id["Y1"].flags
+
+
+def test_flag_row_fallback_does_not_replace_another_label() -> None:
+    cells = [
+        _c("TBA", "A1", "Year"),
+        _c("TBA", "B1", "1"),
+        _c("TBA", "C1", "2"),
+        _c("TBA", "D1", "3"),
+        _c("TBA", "E1", "4"),
+        _c("TBA", "A2", "Active 4"),
+        _c("TBA", "B2", "1"),
+        _c("TBA", "C2", "0"),
+        _c("TBA", "D2", "0"),
+        _c("TBA", "E2", "0"),
+        _c("TBA", "A3", "Active"),
+        _c("TBA", "B3", "1"),
+        _c("TBA", "C3", "1"),
+        _c("TBA", "D3", "0"),
+        _c("TBA", "E3", "0"),
+        _c("TBA", "A4", "Active"),
+        _c("TBA", "B4", "0"),
+        _c("TBA", "C4", "0"),
+        _c("TBA", "D4", "1"),
+        _c("TBA", "E4", "1"),
+    ]
+    layout = detect_layout(cells)
+    axes, warnings = build_axes(layout, cells)
+    assert axes
+    assert not warnings
+    by_id = {item.period_key: item for item in axes[0].periods}
+    qualified = "active (active 4)"
+    later = "active (active 4) 4"
+    assert by_id["Y1"].flags["active 4"] is True
+    assert by_id["Y2"].flags["active 4"] is False
+    assert by_id["Y3"].flags["active 4"] is False
+    assert by_id["Y1"].flags[qualified] is True
+    assert by_id["Y2"].flags[qualified] is True
+    assert by_id["Y3"].flags[qualified] is False
+    assert by_id["Y1"].flags[later] is False
+    assert by_id["Y3"].flags[later] is True
+    assert by_id["Y4"].flags[later] is True
+
+
 def test_calendar_book_timeline_has_no_phase() -> None:
     cells = [
         _c("P&L", "A1", "Item"),
