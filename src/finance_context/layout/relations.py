@@ -58,6 +58,18 @@ def formula_relations(layout: Layout, cells: list[dict]) -> list[RowRelation]:
     return relations
 
 
+def _member_keys_in_span(book: _RelationBook, sheet: str, lo: int, hi: int) -> list[str]:
+    found: list[tuple[int, str]] = []
+    for (name, row_n), (block, _layout_row) in book.row_index.items():
+        if name != sheet or row_n < lo or row_n > hi:
+            continue
+        block_id = getattr(block, "block_id", None)
+        if block_id:
+            found.append((row_n, block_id))
+    found.sort()
+    return [book.row_key(sheet, row_n, block_id) for row_n, block_id in found]
+
+
 def _block_id(book: _RelationBook, sheet: str, row: int) -> str | None:
     found = book.row_index.get((sheet, row))
     if found is None:
@@ -86,12 +98,9 @@ def _relation_from_pattern(
             ),
             evidence=pattern.template,
         )
-    if pattern.kind == "aggregate" and pattern.aggregate_rows:
-        members = []
-        for row_n in pattern.aggregate_rows:
-            block_id = _block_id(book, sheet, row_n)
-            if block_id:
-                members.append(book.row_key(sheet, row_n, block_id))
+    if pattern.kind == "aggregate" and pattern.aggregate_span is not None:
+        lo, hi = pattern.aggregate_span
+        members = _member_keys_in_span(book, sheet, lo, hi)
         return RowRelation(
             kind="aggregate",
             source_row_key=source,

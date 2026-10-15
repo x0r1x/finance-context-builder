@@ -16,7 +16,7 @@ class RowPattern:
         "kind",
         "alias_sheet",
         "alias_row",
-        "aggregate_rows",
+        "aggregate_span",
         "diff_rows",
         "roll_from_row",
         "is_ratio",
@@ -28,7 +28,7 @@ class RowPattern:
         self.kind = "value"
         self.alias_sheet: str | None = None
         self.alias_row: int | None = None
-        self.aggregate_rows: list[int] = []
+        self.aggregate_span: tuple[int, int] | None = None
         self.diff_rows: tuple[int, int] | None = None
         self.roll_from_row: int | None = None
         self.is_ratio = False
@@ -78,7 +78,9 @@ def _pattern_for_row(
         pattern.alias_sheet = sample.get("sheet")
         pattern.alias_row = sample.get("row")
     elif top == "aggregate":
-        pattern.aggregate_rows = list(sample.get("rows") or [])
+        span = sample.get("span")
+        if isinstance(span, tuple):
+            pattern.aggregate_span = (int(span[0]), int(span[1]))
         pattern.is_total = True
     elif top == "diff":
         rows = sample.get("rows") or []
@@ -121,9 +123,9 @@ def _shape(ast: dict[str, Any], sheet: str, col: int, row: int) -> dict[str, Any
     if op == "func" and str(ast.get("name", "")).upper() in {"SUM", "СУММ"}:
         args = ast.get("args") or []
         if len(args) == 1 and args[0].get("op") == "range":
-            rows = _range_rows(args[0], col)
-            if rows:
-                return {"type": "aggregate", "rows": rows}
+            span = _range_rows(args[0], col)
+            if span is not None:
+                return {"type": "aggregate", "span": span}
     if op == "bin" and ast.get("kind") == "-":
         left = _ref_row(ast.get("left") or {}, sheet, col)
         right = _ref_row(ast.get("right") or {}, sheet, col)
@@ -144,22 +146,22 @@ def _ref_row(node: dict[str, Any], sheet: str, col: int) -> tuple[str, int] | No
     return (str(node.get("sheet") or sheet), int(node["row"]))
 
 
-def _range_rows(node: dict[str, Any], col: int) -> list[int]:
+def _range_rows(node: dict[str, Any], col: int) -> tuple[int, int] | None:
     if node.get("col_only") or node.get("row_only"):
-        return []
+        return None
     start = node.get("start") or {}
     end = node.get("end") or {}
     if "row" not in start or "row" not in end:
-        return []
+        return None
     if start.get("col") != col or end.get("col") != col:
-        return []
+        return None
     lo = int(start["row"])
     hi = int(end["row"])
     if hi < lo:
         lo, hi = hi, lo
     if hi - lo + 1 >= _EXCEL_MAX_ROW:
-        return []
-    return list(range(lo, hi + 1))
+        return None
+    return lo, hi
 
 
 def _is_proration(ast: dict[str, Any]) -> bool:
