@@ -18,7 +18,7 @@
 
 На входе книга, формулы которой уже посчитаны. `.xls`, `.xlsb` и зашифрованные файлы отклоняются.
 
-На выход джоба. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и `layout.json` лежат в `shared/books/{sha256}/` и одинаковы для любой сессии. Context, graph, `meta.json`, `ir/graph_edges.parquet` и `ir/graph_index.parquet` лежат в `sessions/{session}/jobs/{sha256}/`.
+На выход джоба. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и `layout.json` лежат в `shared/books/{job_id}/` и одинаковы для любой сессии. Context, graph, `meta.json`, `ir/graph_edges.parquet` и `ir/graph_index.parquet` лежат в `sessions/{session}/jobs/{job_id}/`. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла.
 
 | Артефакт | Содержимое |
 | --- | --- |
@@ -30,7 +30,7 @@
 
 Каталог, паспорт и наблюдения — HTTP-проекции, не файлы. Схемы: `catalog-2`, `summary-2`, `observation-2`. Подробности: [llm.md](llm.md).
 
-Formula IR и layout той же книги общие: `$DATA_DIR/shared/books/{sha256}/`.
+Formula IR и layout той же книги общие: `$DATA_DIR/shared/books/{job_id}/`.
 
 ## Пайплайн
 

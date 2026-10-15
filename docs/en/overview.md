@@ -18,7 +18,7 @@ How to run, Docker, and the API: [README](../../README.md). The layer snapshot i
 
 The input is a workbook whose formulas are already calculated. `.xls`, `.xlsb`, and encrypted files are rejected.
 
-A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{sha256}/` and are the same for every session. Context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{sha256}/`.
+A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{job_id}/` and are the same for every session. Context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{job_id}/`. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash.
 
 | Artifact | Contents |
 | --- | --- |
@@ -30,7 +30,7 @@ A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `com
 
 Catalog, summary, and observations are HTTP projections, not files. Schemas: `catalog-2`, `summary-2`, `observation-2`. Details: [llm.md](llm.md).
 
-Formula IR and layout for the same workbook are shared: `$DATA_DIR/shared/books/{sha256}/`.
+Formula IR and layout for the same workbook are shared: `$DATA_DIR/shared/books/{job_id}/`.
 
 ## Pipeline
 

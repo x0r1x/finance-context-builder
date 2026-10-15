@@ -51,7 +51,7 @@ Hints are written from the label and the unit cell: `nature`, `time_semantics`, 
 
 ## Storage
 
-`data/shared/books/{job_id}/` holds source, raw, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and layout. `data/sessions/{session}/jobs/{job_id}/` holds context, graph, meta, plus `ir/graph_edges.parquet` and `ir/graph_index.parquet`. The session name is `SESSION_ID`, default `local`. Parquet is written with PyArrow. A run keeps the row lists it just built and reads `ir/*.parquet` again only on a later process, when `ir/compile.json` still matches. Swap the store adapter for object storage without changing the pipeline.
+`data/shared/books/{job_id}/` holds source, raw, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and layout. `data/sessions/{session}/jobs/{job_id}/` holds context, graph, meta, plus `ir/graph_edges.parquet` and `ir/graph_index.parquet`. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash. The session name is `SESSION_ID`, default `local`. Parquet is written with PyArrow. A run keeps the row lists it just built and reads `ir/*.parquet` again only on a later process, when `ir/compile.json` still matches. Swap the store adapter for object storage without changing the pipeline.
 
 Publisher stages are `compile`, `layout`, `graph`, `publish`. A change in `layout` rebuilds the graph and the published documents and keeps `raw/` and formula IR.
 

@@ -90,7 +90,7 @@ Endpoints:
 - `GET /v1/context-jobs/{id}/graph/trace?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs?status=&q=` — session jobs from `meta.json` only (`job_id`, `status`, `stage`, `source_filename`, `content_sha256`, context `schema_version`). `q` is a case-insensitive piece of the file name
-- `GET /v1/context-jobs/{id}/summary` — passport of a finished job: coverage, workbook counters, and graph counters (`unresolved`, `external`, `dangling`, cycles). No `links` and no cell cache. It does not replace polling `GET /v1/context-jobs/{id}` while the job is still running
+- `GET /v1/context-jobs/{id}/summary` — passport of a finished job: workbook counters, graph counters, and warnings (`unresolved`, `external`, `dangling`, cycles). No `links` and no cell cache. It does not replace polling `GET /v1/context-jobs/{id}` while the job is still running
 - `GET /v1/context-jobs/{id}/catalog` — rows and axes without numbers. A period also carries `phase_year`, `flags`, and `group_key`. Filters: `q` (case-insensitive substring of the row's own label; `label_path` is not searched), `sheet`, `disposition`, `limit`, `offset`
 - `GET /v1/context-jobs/{id}/observations` — the only route that returns a cell cache. Requires repeatable `row_key` or `q` (the same own-label substring). Without a selector the response is 400 `selector_required`. `limit` defaults to 24 and stops at 48 (`truncated`). Precedents are not cut by the row limit. Completeness is `precedents_total`. `precedent_depth` defaults to 0 and stops at 3
 - `GET /healthz`, `GET /readyz`
@@ -113,11 +113,11 @@ HTTP `error` codes:
 
 `report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book.
 
-Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (server default 3600), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Check, helper, noise, and technical-bridge rows stay in the block with `disposition=excluded`. An ordinary row has `disposition` null.
+Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (server default 3600), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, check, noise, and technical-bridge rows stay in the block with `disposition=excluded`. An ordinary row has `disposition` null.
 
 ## Data
 
-`data/shared/books/{sha256}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. `data/sessions/{session}/jobs/{sha256}/` holds that session's context and graph. The session defaults to `local`.
+`data/shared/books/{job_id}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. `data/sessions/{session}/jobs/{job_id}/` holds that session's context and graph. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash. The session defaults to `local`.
 
 At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2. `finance-context serve` starts one worker. Several API replicas on one data directory are not supported.
 

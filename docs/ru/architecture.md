@@ -51,7 +51,7 @@ Hints пишутся из подписи и ячейки единицы: `nature
 
 ## Хранение
 
-`data/shared/books/{job_id}/` хранит source, raw, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и layout. `data/sessions/{session}/jobs/{job_id}/` хранит context, graph, meta, а также `ir/graph_edges.parquet` и `ir/graph_index.parquet`. Имя сессии — `SESSION_ID`, по умолчанию `local`. Parquet пишет PyArrow. Прогон держит только что собранные списки строк и читает `ir/*.parquet` снова только в другом процессе, когда `ir/compile.json` всё ещё совпадает. Адаптер хранилища можно заменить на object storage, не меняя пайплайн.
+`data/shared/books/{job_id}/` хранит source, raw, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и layout. `data/sessions/{session}/jobs/{job_id}/` хранит context, graph, meta, а также `ir/graph_edges.parquet` и `ir/graph_index.parquet`. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла. Имя сессии — `SESSION_ID`, по умолчанию `local`. Parquet пишет PyArrow. Прогон держит только что собранные списки строк и читает `ir/*.parquet` снова только в другом процессе, когда `ir/compile.json` всё ещё совпадает. Адаптер хранилища можно заменить на object storage, не меняя пайплайн.
 
 Стадии publisher: `compile`, `layout`, `graph`, `publish`. Смена `layout` пересобирает граф и опубликованные документы и сохраняет `raw/` и formula IR.
 

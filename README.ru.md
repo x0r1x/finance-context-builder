@@ -87,7 +87,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 - `GET /v1/context-jobs/{id}/graph/trace?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs/{id}/graph/trace.md?from=&direction=precedents&depth=8`
 - `GET /v1/context-jobs?status=&q=` — книги сессии только из `meta.json` (`job_id`, `status`, `stage`, `source_filename`, `content_sha256`, `schema_version` context). `q` — фрагмент имени файла без регистра
-- `GET /v1/context-jobs/{id}/summary` — паспорт готовой джобы: покрытие, счётчики книги и счётчики графа (`unresolved`, `external`, `dangling`, циклы). Без `links` и без кэша ячеек. Пока джоба считается, статус по-прежнему смотрят через `GET /v1/context-jobs/{id}`
+- `GET /v1/context-jobs/{id}/summary` — паспорт готовой джобы: счётчики книги, счётчики графа и предупреждения (`unresolved`, `external`, `dangling`, циклы). Без `links` и без кэша ячеек. Пока джоба считается, статус по-прежнему смотрят через `GET /v1/context-jobs/{id}`
 - `GET /v1/context-jobs/{id}/catalog` — строки и оси без чисел. У периода также есть `phase_year`, `flags` и `group_key`. Фильтры: `q` (подстрока собственной подписи без регистра; `label_path` в иглу не входит), `sheet`, `disposition`, `limit`, `offset`
 - `GET /v1/context-jobs/{id}/observations` — единственный роут с кэшем ячеек. Нужен повторяемый `row_key` или `q` (та же подстрока собственной подписи). Без селектора ответ 400 `selector_required`. `limit` по умолчанию 24 и не больше 48 (`truncated`). Прецеденты не режутся лимитом строк. Полнота видна по `precedents_total`. `precedent_depth` по умолчанию 0 и не больше 3
 - `GET /healthz`, `GET /readyz`
@@ -110,11 +110,11 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 
 `report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key` или `q` — это `selector_required`, а не вся книга.
 
-Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки check, helper, noise и technical-bridge остаются в блоке с `disposition=excluded`. У обычной строки `disposition` равен null.
+Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper, check, noise и technical-bridge остаются в блоке с `disposition=excluded`. У обычной строки `disposition` равен null.
 
 ## Данные
 
-`data/shared/books/{sha256}/` хранит книгу, raw, formula IR и layout. Они общие для всех сессий. `data/sessions/{session}/jobs/{sha256}/` хранит context и graph этой сессии. Сессия по умолчанию `local`.
+`data/shared/books/{job_id}/` хранит книгу, raw, formula IR и layout. Они общие для всех сессий. `data/sessions/{session}/jobs/{job_id}/` хранит context и graph этой сессии. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла. Сессия по умолчанию `local`.
 
 Одновременно считается не больше `MAX_CONCURRENT_JOBS` книг, по умолчанию 2. `finance-context serve` запускает один worker. Несколько реплик API на одном каталоге не поддерживаются.
 
