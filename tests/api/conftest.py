@@ -18,9 +18,6 @@ def _app(tmp_path: Path) -> TestClient:
     settings = Settings(
         data_dir=tmp_path / "data",
         max_upload_bytes=1024 * 1024,
-        llm_base_url=None,
-        embedding_base_url=None,
-        embedding_model=None,
         _env_file=None,
     )
     return TestClient(create_app(settings))

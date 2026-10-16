@@ -42,9 +42,6 @@ def _spec(tmp_path: Path) -> dict:
     app = create_app(
         Settings(
             data_dir=tmp_path / "data",
-            llm_base_url=None,
-            embedding_base_url=None,
-            embedding_model=None,
             _env_file=None,
         )
     )

@@ -14,9 +14,6 @@ def _offline_settings(**kwargs: object) -> Settings:
     data_dir = kwargs.get("data_dir", Path("data"))
     return Settings(
         data_dir=data_dir,  # type: ignore[arg-type]
-        llm_base_url=None,
-        embedding_base_url=None,
-        embedding_model=None,
         _env_file=None,
     )
 
