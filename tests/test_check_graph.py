@@ -209,6 +209,74 @@ def test_markdown_must_repeat_blocks_and_links(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_markdown_label_matches_after_newline_and_strip(tmp_path: Path) -> None:
+    context = _ok_context()
+    context["blocks"][0]["rows"][0]["label"] = "Note line\nsecond  "
+    context["blocks"][0]["rows"][0]["formula"] = "=A1\n+A2"
+    context_path = _write(tmp_path / "context.json", context)
+    graph_path = _write(tmp_path / "graph.json", _ok_graph())
+    context_md = tmp_path / "context.md"
+    graph_md = tmp_path / "graph.md"
+    context_md.write_text(
+        "\n".join(
+            [
+                "Note line second",
+                "P&L\\|13\\|P&L!r2",
+                "P&L!r2",
+                "=A1 +A2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    graph_md.write_text(
+        "\n".join(
+            [
+                "Nodes: 8",
+                "Edges: 20",
+                "P&L!C13",
+                "P&L\\|13\\|P&L!r2",
+                "2024",
+                "aggregation",
+                "=SUM(C9:C12)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = _run(
+        str(context_path),
+        str(graph_path),
+        "--context-md",
+        str(context_md),
+        "--graph-md",
+        str(graph_md),
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_markdown_still_rejects_a_label_that_was_not_rendered(tmp_path: Path) -> None:
+    context_path = _write(tmp_path / "context.json", _ok_context())
+    graph_path = _write(tmp_path / "graph.json", _ok_graph())
+    context_md = tmp_path / "context.md"
+    graph_md = tmp_path / "graph.md"
+    context_md.write_text("P&L\\|13\\|P&L!r2\nP&L!r2\n=SUM(RC[-4]:RC[-1])\n", encoding="utf-8")
+    graph_md.write_text(
+        "Nodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\naggregation\n=SUM(C9:C12)\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        str(context_path),
+        str(graph_path),
+        "--context-md",
+        str(context_md),
+        "--graph-md",
+        str(graph_md),
+    )
+    assert result.returncode == 1
+    assert "context.md missing row EBITDA" in result.stderr
+
+
 def test_markdown_axis_must_head_a_period_column_table(tmp_path: Path) -> None:
     axis = {
         "id": "PF Model!r9",
