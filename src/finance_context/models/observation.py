@@ -66,7 +66,7 @@ class ObservationTimeline(BaseModel):
 
 
 class Observation(BaseModel):
-    """Inner object from the llm slice. Absent keys are omitted, not sent as null."""
+    """One row and one period. Absent keys are omitted, not sent as null."""
 
     model_config = ConfigDict(populate_by_name=True)
 
