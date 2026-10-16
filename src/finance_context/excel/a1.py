@@ -10,7 +10,7 @@ _ADDR = re.compile(r"\$?([A-Za-z]+)\$?(\d+)")
 # a dot (`Rate_A1`, `1E5`, `_xlfn.LOG10`), not before one or `(` / `[` (`LOG10(`,
 # `DEC2HEX`, `Table1[`).
 _REF = re.compile(
-    r"(?<![\w.])(?P<sheet>(?:'(?:[^']|'')+'|[\w.]+)!)?"
+    r"(?<![\w.])(?P<sheet>[\w.]+!)?"
     r"(?P<abscol>\$)?(?P<col>[A-Z]{1,3})(?P<absrow>\$)?(?P<row>\d+)(?![\w.(\[])",
     re.IGNORECASE,
 )
@@ -67,6 +67,13 @@ def shift_formula(formula: str, from_col: int, from_row: int, to_col: int, to_ro
             out.append(ch)
             i += 1
             continue
+        if ch in "['":
+            # A table column or book index (`Table1[Q1]`, `[1]`) and a quoted sheet name
+            # (`'Q1 2025'!`) are copied as is; only the cell after them moves.
+            end = _segment_end(formula, i)
+            out.append(formula[i:end])
+            i = end
+            continue
         match = _REF.match(formula, i)
         if match is None:
             out.append(ch)
@@ -88,3 +95,19 @@ def shift_formula(formula: str, from_col: int, from_row: int, to_col: int, to_ro
         out.append(f"{sheet}{abscol}{index_to_col(col)}{absrow}{row}")
         i = match.end()
     return "".join(out)
+
+
+def _segment_end(formula: str, i: int) -> int:
+    """End of the `[...]` or `'...'` segment at `i`. `''` inside quotes is one quote."""
+    if formula[i] == "[":
+        close = formula.find("]", i + 1)
+        return len(formula) if close < 0 else close + 1
+    j = i + 1
+    while j < len(formula):
+        if formula[j] == "'":
+            if formula[j + 1 : j + 2] == "'":
+                j += 2
+                continue
+            return j + 1
+        j += 1
+    return len(formula)
