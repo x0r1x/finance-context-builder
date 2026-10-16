@@ -58,7 +58,7 @@ def classify_cycles(edges: list[dict]) -> list[CycleRecord]:
         self_loop = any(edge.get("source") == edge.get("target") for edge in intra)
         if len(group) < 2 and not self_loop:
             continue
-        cls = _classify(group, intra)
+        cls = _classify(intra)
         cycles.append(
             CycleRecord.model_validate(
                 {"id": f"c{seq}", "members": sorted(group), "class": cls}
@@ -68,7 +68,7 @@ def classify_cycles(edges: list[dict]) -> list[CycleRecord]:
     return cycles
 
 
-def _classify(members: list[str], intra: list[dict]) -> str:
+def _classify(intra: list[dict]) -> str:
     if not intra:
         return "unexpected"
     if all(_is_period_chain(edge) for edge in intra):
