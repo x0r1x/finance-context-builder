@@ -38,12 +38,12 @@ def test_reap_kills_when_terminate_leaves_the_process_alive() -> None:
 def test_mark_job_failed_keeps_a_newer_generation(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
-    original = {"job_id": "job", "status": "running", "stage": "mapping", "generation": 2}
+    original = {"job_id": "job", "status": "running", "stage": "layout", "generation": 2}
     (dest / "meta.json").write_text(json.dumps(original), encoding="utf-8")
     mark_job_failed(dest, "job", "TimeoutError", 1)
     stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
     assert stored["status"] == "running"
-    assert stored["stage"] == "mapping"
+    assert stored["stage"] == "layout"
     assert stored["generation"] == 2
 
 

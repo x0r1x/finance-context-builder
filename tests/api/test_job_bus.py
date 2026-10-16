@@ -43,10 +43,10 @@ def test_progress_updates_stage_until_expire() -> None:
     generation = bus.current_generation("job")
     bus.set_progress("job", "parse", generation=generation)
     progress = JobProgress(bus, "job", generation)
-    progress.progress("mapping")
+    progress.progress("layout")
     rec = bus.get("job")
     assert rec is not None
-    assert rec.stage == "mapping"
+    assert rec.stage == "layout"
     assert rec.status == "running"
     assert bus.expire("job", generation)
     progress.progress("build")
