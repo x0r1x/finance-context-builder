@@ -65,10 +65,6 @@ def _normalize_label(text: str) -> str:
     return normalized
 
 
-def _qualifier_tokens(blob: str) -> list[str]:
-    return _paren_tokens(blob)
-
-
 def _paren_tokens(blob: str) -> list[str]:
     kept: list[str] = []
     for raw in _ACRONYM.findall(blob):
