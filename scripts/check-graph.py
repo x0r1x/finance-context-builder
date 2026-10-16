@@ -290,6 +290,14 @@ def _in_markdown(text: str, markdown: str) -> bool:
     return text.replace("|", "\\|") in markdown
 
 
+_MD_CELL = str.maketrans({"|": "\\|", "\n": " "})
+
+
+def _markdown_cell(text: str) -> str:
+    """Same folding as the context markdown cell: escape, flatten newlines, strip."""
+    return text.translate(_MD_CELL).strip()
+
+
 def check_link_identity(context: dict[str, Any], graph: dict[str, Any]) -> list[str]:
     keys: set[str] = set()
     for block in context.get("blocks") or []:
@@ -378,7 +386,7 @@ def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
         for row in block.get("rows") or []:
             if not isinstance(row, dict):
                 continue
-            label = str(row.get("label") or "")
+            label = _markdown_cell(str(row.get("label") or ""))
             if label and label not in markdown:
                 errors.append(f"context.md missing row {label}")
                 break
@@ -386,8 +394,8 @@ def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
             if row_key and not _in_markdown(str(row_key), markdown):
                 errors.append(f"context.md missing row_key {row_key}")
                 break
-            formula = row.get("formula")
-            if formula and str(formula) not in markdown:
+            formula = _markdown_cell(str(row.get("formula") or ""))
+            if formula and formula not in markdown:
                 errors.append(f"context.md missing formula {formula}")
                 break
             errors.extend(_check_row_markdown(row, markdown))
