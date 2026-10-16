@@ -105,15 +105,7 @@ def configure_logging(
     root.addHandler(handler)
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
     root.propagate = False
-    for noisy in ("httpx", "httpcore", "openai", "uvicorn.access"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
-
-
-def debug_port_io(logger: logging.Logger, msg: str, **fields: object) -> None:
-    """Log model request and response bodies only when DEBUG is enabled."""
-    if not logger.isEnabledFor(logging.DEBUG):
-        return
-    log_event(logger, logging.DEBUG, "port_io", msg, **fields)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 def log_event(logger: logging.Logger, level: int, event: str, msg: str, **fields: object) -> None:

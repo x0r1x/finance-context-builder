@@ -10,7 +10,7 @@ CACHE_CONTROL = "private, no-cache"
 
 
 def strong_etag(schema: str, content_sha256: str, *paths: Path) -> str:
-    """Workbook hash plus file stat. A remap keeps the hash and rewrites the file."""
+    """Workbook hash plus file mtime and size."""
     parts = [schema, content_sha256]
     for path in paths:
         stat = path.stat()

@@ -188,12 +188,6 @@ def parse_rels(zf: zipfile.ZipFile, rels_part: str) -> dict[str, Rel]:
     return out
 
 
-def text_of(el: etree._Element | None) -> str:
-    if el is None:
-        return ""
-    return "".join(el.itertext())
-
-
 def parse_ooxml(
     zf: zipfile.ZipFile,
 ) -> tuple[list[RawCell], WorkbookMeta, list[CellPresence]]:

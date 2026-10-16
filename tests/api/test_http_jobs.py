@@ -45,9 +45,6 @@ def test_readyz_reports_jobs_and_a_blocked_data_dir(client: TestClient, tmp_path
     blocked.write_text("x", encoding="utf-8")
     settings = Settings(
         data_dir=blocked,
-        llm_base_url=None,
-        embedding_base_url=None,
-        embedding_model=None,
         _env_file=None,
     )
     with TestClient(create_app(settings)) as client:
@@ -290,9 +287,6 @@ def test_second_job_waits_behind_the_process_cap(tmp_path: Path, monkeypatch) ->
     settings = Settings(
         data_dir=tmp_path / "data",
         max_upload_bytes=1024 * 1024,
-        llm_base_url=None,
-        embedding_base_url=None,
-        embedding_model=None,
         max_concurrent_jobs=1,
         _env_file=None,
     )
@@ -344,9 +338,6 @@ def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",
         max_upload_bytes=1024 * 1024,
-        llm_base_url=None,
-        embedding_base_url=None,
-        embedding_model=None,
         job_timeout_sec=1,
         _env_file=None,
     )

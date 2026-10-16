@@ -39,9 +39,6 @@ def test_sessions_share_formula_ir(tmp_path: Path) -> None:
         settings = Settings(
             data_dir=root,
             session_id=session,
-            llm_base_url=None,
-            embedding_base_url=None,
-            embedding_model=None,
             _env_file=None,
         )
         dest = session_job_dir(root, job_id, session)

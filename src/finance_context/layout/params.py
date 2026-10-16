@@ -53,12 +53,12 @@ def detect_params_block(
     header_rows, header_row = _header_rows(by_row, date1904, roles)
     check_table = _is_check_table(by_row, header_rows, date1904)
     data_rows = _params_data_rows(
-        by_row, date1904, label_col, roles, header_rows, value_cols, check_table
+        by_row, date1904, label_col, roles, header_rows, check_table
     )
     content_rows = [row for row in data_rows if row.kind in {"fact", "helper"}]
     if len(content_rows) < _MIN_VALUE_ROWS:
         return None
-    headers = _axis_headers(roles, by_row, date1904, header_rows, header_row)
+    headers = _axis_headers(roles, by_row, date1904, header_rows)
     if not headers:
         return None
     return Block(
@@ -89,7 +89,7 @@ def attach_stub_cells(
         col = int(cell["col"])
         if col <= span_max or col >= left_edge or col in period_cols:
             continue
-        role = _stub_role(cell, row.row, period_cols, date1904)
+        role = _stub_role(cell, row.row, date1904)
         if role is None:
             continue
         header = None
@@ -505,7 +505,6 @@ def _params_data_rows(
     label_col: int,
     roles: dict[int, str],
     header_rows: set[int],
-    value_cols: list[int],
     check_table: bool = False,
 ) -> list[LayoutRow]:
     out: list[LayoutRow] = []
@@ -599,7 +598,6 @@ def _axis_headers(
     by_row: dict[int, list[dict]],
     date1904: bool,
     header_rows: set[int],
-    header_row: int,
 ) -> list[AxisHeader]:
     names: dict[int, str] = {}
     for row_n in sorted(header_rows):
@@ -634,13 +632,11 @@ def _axis_headers(
     return headers
 
 
-def _stub_role(
-    cell: dict, row: int, period_cols: set[int], date1904: bool
-) -> str | None:
+def _stub_role(cell: dict, row: int, date1904: bool) -> str | None:
     text = _text(cell, date1904)
     formula = str(cell.get("formula_raw") or "")
     template = str(cell.get("formula_template") or "")
-    if _is_same_row_total(formula, template, row, period_cols):
+    if _is_same_row_total(formula, template, row):
         return "total"
     if text and is_unit_text(text):
         return "unit"
@@ -654,9 +650,7 @@ def _stub_role(
     return None
 
 
-def _is_same_row_total(
-    formula: str, template: str, row: int, period_cols: set[int]
-) -> bool:
+def _is_same_row_total(formula: str, template: str, row: int) -> bool:
     blob = f"{formula} {template}".upper()
     if "SUM(" not in blob:
         return False
