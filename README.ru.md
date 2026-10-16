@@ -6,7 +6,7 @@
 
 `context` хранит строки блоков, периоды и значения. `graph` хранит связи формул. Trace одной ячейки читает этот граф.
 
-Гайды: [обзор](docs/ru/overview.md), [layout](docs/ru/layout.md), [граф](docs/ru/graph.md), [Срезы](docs/ru/slices.md), [архитектура](docs/ru/architecture.md).
+Гайды: [обзор](docs/ru/overview.md), [layout](docs/ru/layout.md), [граф](docs/ru/graph.md), [срезы](docs/ru/slices.md), [архитектура](docs/ru/architecture.md).
 
 Адаптировано из [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). См. `NOTICE`.
 
