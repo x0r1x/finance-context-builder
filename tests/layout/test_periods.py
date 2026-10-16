@@ -264,3 +264,29 @@ def test_semiannual_month_ends_become_half_years() -> None:
     months = ["2025-06", "2025-12", "2026-06"]
     assert infer_grain(months) == "half_year"
     assert [apply_grain(key, "half_year") for key in months] == ["2025H1", "2025H2", "2026H1"]
+
+
+@pytest.mark.parametrize("text", ["1 кВт", "2 квота", "3 квм", "4 квартира"])
+def test_words_starting_like_a_quarter_are_not_quarters(text: str) -> None:
+    assert classify_atom(text) is None
+
+
+@pytest.mark.parametrize("text", ["2025 график", "2025 группа", "1 кв. 2025 график"])
+def test_words_starting_like_a_year_word_are_not_periods(text: str) -> None:
+    assert classify_header(text) is None
+
+
+def test_inflected_year_word_is_still_the_year() -> None:
+    hit = classify_header("2025 года")
+    assert hit is not None and hit.period_key == "2025"
+
+
+@pytest.mark.parametrize("text", ["History", "Histogram", "Actually", "Budgets", "Budgeting"])
+def test_words_starting_like_a_role_are_not_role_markers(text: str) -> None:
+    assert classify_atom(text) is None
+
+
+@pytest.mark.parametrize("text", ["Actuals", "Historical", "Факт", "фактический", "Плановый"])
+def test_role_words_and_russian_inflections_are_role_markers(text: str) -> None:
+    atom = classify_atom(text)
+    assert atom is not None and atom.kind == "role_marker"

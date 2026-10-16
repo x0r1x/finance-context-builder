@@ -19,21 +19,21 @@
     ]
   },
   "phases": {
-    "construction": ["construction", "строительств", "инвестиционн"],
-    "operation": ["operation", "operating", "эксплуатац", "операционн"]
+    "construction": ["construction*", "строител*", "инвестиционн*"],
+    "operation": ["operation*", "operating", "эксплуатац*", "операционн*"]
   },
   "phase_events": [
     "beginning", "end of", "start date", "end date",
-    "начал", "окончан", "конец", "заверш", "дата", "ввод"
+    "начал*", "окончан*", "конец", "конца", "заверш*", "дата", "даты", "ввод*"
   ],
-  "operation_duration": ["duration", "продолжительн"],
+  "operation_duration": ["duration", "продолжительн*"],
   "period_roles": {
-    "historical": ["факт", "actual", "hist"],
-    "forecast": ["план", "прогноз", "forecast", "budget"]
+    "historical": ["факт*", "actual", "actuals", "hist", "historical"],
+    "forecast": ["план*", "прогноз*", "forecast", "budget"]
   },
   "period_words": {
-    "quarter": ["кв", "quarter"],
-    "half": ["полугод", "half"],
-    "year": ["год", "г"]
+    "quarter": ["кв", "квартал*", "quarter"],
+    "half": ["полугоди*", "half"],
+    "year": ["г", "гг", "год", "года", "году"]
   }
 }

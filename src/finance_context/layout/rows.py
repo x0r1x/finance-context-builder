@@ -9,6 +9,7 @@ from finance_context.layout.params import attach_stub_cells
 from finance_context.layout.periods import (
     LAYER_BOUNDS,
     LAYER_DATE,
+    LAYER_HALF,
     LAYER_MONTH,
     LAYER_QUARTER,
     LAYER_ROLE,
@@ -86,12 +87,18 @@ def _row_layers(row_cells: list[dict], date1904: bool) -> set[str]:
     years = sum(
         1
         for atom in atoms
-        if atom.year and atom.quarter is None and atom.month is None and atom.day is None
+        if atom.year
+        and atom.quarter is None
+        and atom.half is None
+        and atom.month is None
+        and atom.day is None
     )
     if years >= 1:
         layers.add(LAYER_YEAR)
     if sum(1 for atom in atoms if atom.quarter) >= 2:
         layers.add(LAYER_QUARTER)
+    if sum(1 for atom in atoms if atom.half) >= 2:
+        layers.add(LAYER_HALF)
     if sum(1 for atom in atoms if atom.month and atom.day is None) >= 2:
         layers.add(LAYER_MONTH)
     return layers

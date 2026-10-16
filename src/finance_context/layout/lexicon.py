@@ -2,6 +2,10 @@
 
 The lists are data in ``lexicon.json`` next to this module, so a new spelling is a
 data edit. The publisher hashes that file into the layout stage.
+
+A word matches whole. A trailing ``*`` keeps any ending (``факт*`` is ``фактический``,
+``строител*`` is ``строительная``); without it ``кв`` is not ``кВт`` and ``г`` is not
+``график``. A word with a space is a phrase (``end of``).
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ def words(*path: str) -> tuple[str, ...]:
     return tuple(node)
 
 
-def stems(*path: str) -> str:
-    """Regex alternation of word stems, longest first: `квартал` wins over `кв`."""
-    return "|".join(re.escape(item) for item in sorted(words(*path), key=len, reverse=True))
+def pattern(*path: str) -> str:
+    """Regex for the words at `path`, longest first, not followed by another letter."""
+    items = sorted(words(*path), key=len, reverse=True)
+    alts = [re.escape(w[:-1]) + r"\w*" if w.endswith("*") else re.escape(w) for w in items]
+    return rf"(?:{'|'.join(alts)})(?![^\W\d_])"

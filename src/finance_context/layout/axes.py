@@ -10,6 +10,7 @@ from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis
 from finance_context.layout.periods import (
     LAYER_BOUNDS,
     LAYER_DATE,
+    LAYER_HALF,
     LAYER_MONTH,
     LAYER_QUARTER,
     LAYER_ROLE,
@@ -43,7 +44,7 @@ _FLAG_LABEL = re.compile(
 )
 
 
-_CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_MONTH})
+_CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_HALF, LAYER_MONTH})
 
 
 _PERIOD_ROLES = frozenset({"historical", "forecast", "stub", "relative"})
@@ -498,7 +499,7 @@ def _band_calendar_cols(
             atom = classify_atom(_text(cell, date1904))
             if atom is None or atom.kind in {"role_marker", "noise"}:
                 continue
-            if atom.kind == "full" or atom.year or atom.quarter or atom.month:
+            if atom.kind == "full" or atom.year or atom.quarter or atom.half or atom.month:
                 cols.add(int(cell["col"]))
     return cols
 
@@ -721,9 +722,10 @@ def _role_runs(
         col
         for col in cols
         if any(
-            atom.kind in {"full", "quarter_token", "month_num"}
+            atom.kind in {"full", "quarter_token", "half_token", "month_num"}
             or atom.year
             or atom.quarter
+            or atom.half
             or atom.month
             for atom in _column_atoms(
                 col,

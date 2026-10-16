@@ -5,10 +5,10 @@ from dataclasses import dataclass, replace
 from datetime import date
 
 from finance_context.excel.dates import is_date_format, serial_to_date
-from finance_context.layout.lexicon import stems
+from finance_context.layout.lexicon import pattern
 from finance_context.layout.models import ColumnRole, PeriodHit
 
-_YEAR_WORD = rf"(?:\s*(?:{stems('period_words', 'year')})\w*\.?)?"
+_YEAR_WORD = rf"(?:\s*{pattern('period_words', 'year')}\.?)?"
 _YEAR = re.compile(
     rf"^(?:FY\s*)?((?:19|20)\d{{2}}){_YEAR_WORD}([EFAPеЕфФпПaA])?$", re.IGNORECASE
 )
@@ -16,8 +16,8 @@ _YEAR_FLOAT = re.compile(r"^((?:19|20)\d{2})(?:\.0+)?$")
 # Quarter and half-year headers: "1 кв. 2025", "I кв. 2025", "1-й квартал 2025", "Кв.1 2025",
 # "Q1 2025", "1Q25", "Q2'25", "1 полугодие 2025", "H1 2025", "2H25". The year may be missing
 # (a year row above) or two digits; "2025 г." is the same year.
-_QUARTER_WORD = rf"(?:{stems('period_words', 'quarter')})\w*\.?"
-_HALF_WORD = rf"(?:{stems('period_words', 'half')})\w*\.?"
+_QUARTER_WORD = rf"{pattern('period_words', 'quarter')}\.?"
+_HALF_WORD = rf"{pattern('period_words', 'half')}\.?"
 _ORDINAL = r"(?:\s*-?\s*(?:й|ый|ой|е|ое))?"
 _PART_YEAR = rf"(?:\s*'?\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}}){_YEAR_WORD}(?P<sfx>[EFAPеЕ])?)?"
 _QUARTER_FORMS = tuple(
@@ -45,8 +45,8 @@ _SCENARIO = re.compile(
     r"^(base(?:\s*case)?|upside|downside|негативн\w*|позитивн\w*|stress|сценарий(?:\s+\w+)?)$",
     re.IGNORECASE,
 )
-_HISTORICAL_WORD = rf"(?:{stems('period_roles', 'historical')})\w*"
-_FORECAST_WORD = rf"(?:{stems('period_roles', 'forecast')})\w*"
+_HISTORICAL_WORD = pattern("period_roles", "historical")
+_FORECAST_WORD = pattern("period_roles", "forecast")
 _FACT = re.compile(rf"^({_HISTORICAL_WORD})$", re.IGNORECASE)
 _PLAN = re.compile(rf"^({_FORECAST_WORD})$", re.IGNORECASE)
 # "2024 факт", "2025 (факт)" and "Факт 2025", "План I кв. 2026".
@@ -140,6 +140,7 @@ LAYER_DATE = "date"
 LAYER_YEAR = "year"
 LAYER_QUARTER = "quarter"
 LAYER_MONTH = "month"
+LAYER_HALF = "half"
 LAYER_ROLE = "role"
 LAYER_BOUNDS = "bounds"
 

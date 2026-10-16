@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 
-from finance_context.layout.lexicon import words
+from finance_context.layout.lexicon import pattern
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis
 from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import display_cell_text, is_calendar_key
@@ -240,13 +241,12 @@ def _phase_kind(label: str) -> TimelinePhase | None:
     эксплуатацию") is one period, not a phase. Words come from the layout lexicon.
     """
     n = normalize_label(label)
-    if any(event in n for event in words("phase_events")):
-        return None
-    tokens = n.split()
 
     def has(*path: str) -> bool:
-        return any(token.startswith(stem) for token in tokens for stem in words(*path))
+        return re.search(rf"(?<!\w){pattern(*path)}", n) is not None
 
+    if has("phase_events"):
+        return None
     if has("phases", "construction"):
         return "construction"
     if has("phases", "operation") and not has("operation_duration"):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 
@@ -595,4 +597,33 @@ def test_half_year_headers_keep_both_halves_on_the_axis() -> None:
     layout = detect_layout(cells)
     block = layout.sheets[0].blocks[0]
     assert block.kind == "timeline"
+    assert [h.period_key for h in block.axis.headers] == ["2025H1", "2025H2", "2026H1", "2026H2"]
+
+
+def test_quantity_with_a_kv_unit_under_years_stays_a_row() -> None:
+    cells = [_c("S", "A1", "Показатель")]
+    years = ["2023", "2024", "2025", "2026"]
+    cells += [_c("S", f"{col}1", y) for col, y in zip("BCDE", years, strict=True)]
+    cells += [_c("S", "A2", "Мощность")]
+    cells += [_c("S", f"{col}2", f"{i} кВт") for i, col in enumerate("BCDE", start=1)]
+    cells += [_c("S", "A3", "Выручка")]
+    cells += [_c("S", f"{col}3", str(10 * i)) for i, col in enumerate("BCDE", start=1)]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert [h.period_key for h in block.axis.headers] == ["2023", "2024", "2025", "2026"]
+    assert [row.label for row in block.rows] == ["Мощность", "Выручка"]
+
+
+@pytest.mark.parametrize(
+    "halves",
+    [["H1", "H2", "H1", "H2"], ["1 полугодие", "2 полугодие", "1 полугодие", "2 полугодие"]],
+)
+def test_year_row_over_half_tokens_forms_a_half_year_axis(halves: list[str]) -> None:
+    years = ["2025", "2025", "2026", "2026"]
+    cells = [_c("S", f"{col}1", y) for col, y in zip("BCDE", years, strict=True)]
+    cells += [_c("S", "A2", "Показатель")]
+    cells += [_c("S", f"{col}2", h) for col, h in zip("BCDE", halves, strict=True)]
+    for r, label in enumerate(["Выручка", "Расходы", "Прибыль"], start=3):
+        cells.append(_c("S", f"A{r}", label))
+        cells += [_c("S", f"{col}{r}", str(r * 10 + i)) for i, col in enumerate("BCDE")]
+    block = detect_layout(cells).sheets[0].blocks[0]
     assert [h.period_key for h in block.axis.headers] == ["2025H1", "2025H2", "2026H1", "2026H2"]

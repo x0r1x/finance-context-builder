@@ -424,3 +424,23 @@ def test_russian_event_flags_are_not_phases() -> None:
     )
     axes, _warnings = build_axes(detect_layout(cells), cells)
     assert [p.phase for p in axes[0].periods] == [None, None, None, None]
+
+
+def test_russian_construction_adjectives_and_cwip_mark_construction() -> None:
+    for label in ("Строительная фаза", "Незавершенное строительство"):
+        cells = _ru_timeline(
+            (label, ["1", "1", "0", "0"]), ("Флаг эксплуатации", ["0", "0", "1", "1"])
+        )
+        axes, _warnings = build_axes(detect_layout(cells), cells)
+        assert [p.phase for p in axes[0].periods] == [
+            "construction",
+            "construction",
+            "operation",
+            "operation",
+        ], label
+
+
+def test_initial_investment_period_is_not_a_start_event() -> None:
+    cells = _ru_timeline(("Первоначальный инвестиционный период", ["1", "1", "0", "0"]))
+    axes, _warnings = build_axes(detect_layout(cells), cells)
+    assert [p.phase for p in axes[0].periods] == ["construction", "construction", None, None]
