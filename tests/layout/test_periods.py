@@ -223,3 +223,44 @@ def test_half_year_grain_keeps_both_halves() -> None:
     assert [apply_grain(key, "half_year") for key in keys] == keys
     assert apply_grain("2025-08", "half_year") == "2025H2"
     assert apply_grain("2025Q2", "half_year") == "2025H1"
+
+
+@pytest.mark.parametrize(
+    ("text", "quarter", "half", "role"),
+    [
+        ("План I кв.", 1, None, "forecast"),
+        ("Факт H2", None, 2, "historical"),
+        ("I кв. план", 1, None, "forecast"),
+        ("H2 (факт)", None, 2, "historical"),
+    ],
+)
+def test_role_word_on_a_part_without_a_year(
+    text: str, quarter: int | None, half: int | None, role: str
+) -> None:
+    atom = classify_atom(text)
+    assert atom is not None
+    assert (atom.quarter, atom.half, atom.role, atom.explicit_role) == (quarter, half, role, True)
+
+
+def test_year_row_over_role_tagged_quarter_keeps_the_role() -> None:
+    year = classify_atom("2025")
+    part = classify_atom("План I кв.")
+    assert year is not None and part is not None
+    hit = compose_period([year, part])
+    assert hit is not None
+    assert (hit.period_key, hit.role) == ("2025Q1", "forecast")
+
+
+def test_sparse_quarter_and_half_keys_keep_their_identity() -> None:
+    quarters = ["2025Q1", "2025Q3", "2026Q1"]
+    grain = infer_grain(quarters)
+    assert [apply_grain(key, grain) for key in quarters] == quarters
+    halves = ["2025H1", "2026H1"]
+    assert infer_grain(halves) == "half_year"
+    assert [apply_grain(key, "half_year") for key in halves] == halves
+
+
+def test_semiannual_month_ends_become_half_years() -> None:
+    months = ["2025-06", "2025-12", "2026-06"]
+    assert infer_grain(months) == "half_year"
+    assert [apply_grain(key, "half_year") for key in months] == ["2025H1", "2025H2", "2026H1"]

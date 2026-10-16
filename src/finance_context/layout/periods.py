@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from finance_context.excel.dates import is_date_format, serial_to_date
@@ -272,12 +272,15 @@ def classify_atom(
             explicit_role=hit.explicit_role,
             half=int(half.group(2)) if half else None,
         )
-    part = _part_of_year(raw)
-    if part is not None and part[2] is None:
-        grain, num = part[0], part[1]
-        if grain == "Q":
-            return HeaderAtom(kind="quarter_token", quarter=num)
-        return HeaderAtom(kind="half_token", half=num)
+    token = _part_token(raw)
+    if token is not None:
+        return token
+    tagged = _role_tag(raw)
+    if tagged is not None:
+        token = _part_token(tagged[0].strip())
+        if token is not None:
+            # "План I кв.", "H2 (факт)" under a year row: the part keeps its role.
+            return replace(token, role=_tag_role(tagged[1]), explicit_role=True)
     if allow_quarter_num and _is_int_token(raw):
         num = int(raw)
         if 1 <= num <= 4:
@@ -394,6 +397,9 @@ def infer_grain(keys: list[str]) -> str | None:
     calendar = [key for key in keys if is_calendar_key(key)]
     if len(calendar) < 2:
         return None
+    if all(_HALF_KEY.fullmatch(key) for key in calendar):
+        return "half_year"
+    quarters = all(_QUARTER_KEY.fullmatch(key) for key in calendar)
     dates = [_key_as_date(key) for key in calendar]
     if all(item is not None for item in dates):
         ordered = sorted(zip(dates, calendar, strict=True), key=lambda item: item[0] or date.min)
@@ -424,15 +430,14 @@ def infer_grain(keys: list[str]) -> str | None:
                     return "month"
                 if 2 <= med <= 4:
                     return "quarter"
-                if 5 <= med <= 7:
+                if 5 <= med <= 7 and not quarters:
+                    # Semiannual month ends become halves; sparse "2025Q1, 2025Q3" stay quarters.
                     return "half_year"
                 if 11 <= med <= 13:
                     return "year"
             return None
     if all(_QUARTER_KEY.fullmatch(key) for key in calendar):
         return "quarter"
-    if all(_HALF_KEY.fullmatch(key) for key in calendar):
-        return "half_year"
     if all(_MONTH_KEY.fullmatch(key) for key in calendar):
         return "month"
     if all(_YEAR_KEY.fullmatch(key) for key in calendar):
@@ -533,20 +538,39 @@ def is_role_marker_text(text: str | None) -> bool:
     return atom is not None and atom.kind == "role_marker"
 
 
-def _tagged_hit(raw: str) -> PeriodHit | None:
+def _role_tag(raw: str) -> tuple[str, str] | None:
+    """Period text and role word of "2024 факт", "2025 (план)" or "Факт 2025"."""
     match = _TAG.fullmatch(raw)
     if match is not None:
-        period, tag = match.group(1), match.group(2)
-    else:
-        match = _TAG_FIRST.fullmatch(raw)
-        if match is None:
-            return None
-        tag, period = match.group(1), match.group(2)
-    base = classify_header(period.strip())
+        return match.group(1), match.group(2)
+    match = _TAG_FIRST.fullmatch(raw)
+    if match is not None:
+        return match.group(2), match.group(1)
+    return None
+
+
+def _tag_role(tag: str) -> ColumnRole:
+    return "historical" if _FACT.fullmatch(tag) else "forecast"
+
+
+def _tagged_hit(raw: str) -> PeriodHit | None:
+    tagged = _role_tag(raw)
+    if tagged is None:
+        return None
+    base = classify_header(tagged[0].strip())
     if base is None or base.role not in {"historical", "forecast", "stub"}:
         return None
-    role: ColumnRole = "historical" if _FACT.fullmatch(tag) else "forecast"
-    return PeriodHit(role=role, period_key=base.period_key, explicit_role=True)
+    return PeriodHit(role=_tag_role(tagged[1]), period_key=base.period_key, explicit_role=True)
+
+
+def _part_token(raw: str) -> HeaderAtom | None:
+    """A quarter or half with no year ("I кв.", "H2"); the year comes from a row above."""
+    part = _part_of_year(raw)
+    if part is None or part[2] is not None:
+        return None
+    if part[0] == "Q":
+        return HeaderAtom(kind="quarter_token", quarter=part[1])
+    return HeaderAtom(kind="half_token", half=part[1])
 
 
 def _part_of_year(raw: str) -> tuple[str, int, str | None, str | None] | None:
