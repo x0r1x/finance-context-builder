@@ -27,10 +27,10 @@ _COL_PAIR = re.compile(r"(\$?)([A-Za-z]+):(\$?)([A-Za-z]+)(?![A-Za-z0-9])", re.I
 _ROW_PAIR = re.compile(r"(\$?)(\d+):(\$?)(\d+)(?!\d)")
 
 
-_UNQUOTED_SHEET = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*!")
+_UNQUOTED_SHEET = re.compile(r"[^\W\d][\w.]*!")
 
 
-_BRACKET_SHEET = re.compile(r"[A-Za-z0-9_.]+")
+_BRACKET_SHEET = re.compile(r"[\w.]+")
 
 
 class FormulaSyntaxError(ValueError):
@@ -87,6 +87,11 @@ def _tokenize(text: str, decimal: str, sep: str) -> list[Token]:
             raise FormulaSyntaxError("unexpected character")
         if ch == sep:
             tokens.append(Token("SEP", ch, i))
+            i += 1
+            continue
+        if ch == ";":
+            # en-US array constant row break: {1,2;3,4}.
+            tokens.append(Token("ROWSEP", ch, i))
             i += 1
             continue
         if text.startswith("<>", i) or text.startswith("<=", i) or text.startswith(">=", i):

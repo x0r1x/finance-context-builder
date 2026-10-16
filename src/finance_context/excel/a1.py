@@ -4,7 +4,7 @@ import re
 
 _ADDR = re.compile(r"\$?([A-Za-z]+)\$?(\d+)")
 _REF = re.compile(
-    r"(?P<sheet>(?:'(?:[^']|'')+'|[A-Za-z0-9_.]+(?:\.[A-Za-z0-9]+)?)!)?"
+    r"(?P<sheet>(?:'(?:[^']|'')+'|[\w.]+)!)?"
     r"(?P<abscol>\$)?(?P<col>[A-Z]+)(?P<absrow>\$)?(?P<row>\d+)",
     re.IGNORECASE,
 )
@@ -73,13 +73,3 @@ def shift_formula(formula: str, from_col: int, from_row: int, to_col: int, to_ro
         out.append(f"{sheet}{abscol}{index_to_col(col)}{absrow}{row}")
         i = match.end()
     return "".join(out)
-
-
-def formula_uses_semicolon(formula: str) -> bool:
-    in_quote = False
-    for ch in formula:
-        if ch == '"':
-            in_quote = not in_quote
-        elif ch == ";" and not in_quote:
-            return True
-    return False

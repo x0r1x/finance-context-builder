@@ -16,7 +16,8 @@ _UNIT_TOKEN = re.compile(
     r"(?:'?000|k|m|mn|bn|thousands?|millions?)?"
     r"(?:\s*/\s*(?:mwh|mw|mwp|kwh|kw|year|yr|month|unit|veh))?(?:\s*p\.?\s*a\.?)?$"
     r"|^%(?:\s*p\.?\s*a\.?)?$|^x$|^#$"
-    r"|^(?:mwh|mw|mwp|kwh|kw|gwh)(?:\s*/\s*(?:mw|mwp|kw|year|yr))?$",
+    r"|^(?:mwh|mw|mwp|kwh|kw|gwh)(?:\s*/\s*(?:mw|mwp|kw|year|yr))?$"
+    r"|^(?:(?:тыс|млн|млрд)\.?\s*)?(?:руб(?:\.|лей)?|₽)$",
     re.IGNORECASE,
 )
 

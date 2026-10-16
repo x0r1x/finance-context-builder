@@ -88,6 +88,32 @@ def test_shared_formula_expanded_to_a1(tmp_path: Path, dest: Path) -> None:
     assert by[("Sheet1", "B2")]["formula_raw"] == "A2"
 
 
+def test_shared_formula_keeps_unquoted_cyrillic_sheet_name(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "shared_ru.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="Модель",
+                cells=[
+                    CellSpec(
+                        addr="B1",
+                        value="1",
+                        formula="Q1_план!A1+A1",
+                        shared_si=0,
+                        shared_ref="B1:B2",
+                    ),
+                    CellSpec(addr="B2", value="2", shared_si=0),
+                ],
+            ),
+            SheetSpec(name="Q1_план", cells=[CellSpec(addr="A1", value="1")]),
+        ],
+    )
+    parse_workbook(source, dest)
+    by = _by_addr(load_cells(dest))
+    assert by[("Модель", "B2")]["formula_raw"] == "Q1_план!A2+A2"
+
+
 def test_hidden_row_and_column(tmp_path: Path, dest: Path) -> None:
     source = tmp_path / "hidden.xlsx"
     build_xlsx(
@@ -212,7 +238,7 @@ def test_defined_names_iterate_and_locale_hint(tmp_path: Path, dest: Path) -> No
                 name="Inputs",
                 cells=[
                     CellSpec(addr="D5", value="0.2"),
-                    CellSpec(addr="E5", value="1", formula="СУММ(D5;D5)"),
+                    CellSpec(addr="E5", value="2", formula="INDEX({1;2},2)"),
                 ],
             )
         ],
@@ -222,7 +248,8 @@ def test_defined_names_iterate_and_locale_hint(tmp_path: Path, dest: Path) -> No
     meta = parse_workbook(source, dest)
     assert meta.iterate is True
     assert any(n.name == "Rate" and n.formula == "Inputs!$D$5" for n in meta.defined_names)
-    assert meta.locale_hint == "ru"
+    # OOXML stores formulas in en-US; `;` in an array constant is a row break.
+    assert meta.locale_hint == "en"
 
 
 def test_date1904_flag_does_not_decode_cached_value(tmp_path: Path, dest: Path) -> None:

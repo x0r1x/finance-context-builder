@@ -448,3 +448,27 @@ def test_totals_take_the_asset_section_as_parent() -> None:
     labels = {row.row: row.label for row in layout.sheets[0].blocks[0].rows}
     assert labels[noncurrent.parent_row] == "Non-current assets"
     assert labels[current.parent_row] == "Current assets"
+
+
+def test_rub_unit_column_cells_are_units() -> None:
+    cells = [
+        _c("Модель", "B3", "Показатель"),
+        _c("Модель", "C3", "Ед. изм."),
+        _c("Модель", "D3", "2025"),
+        _c("Модель", "E3", "2026"),
+        _c("Модель", "F3", "2027"),
+        _c("Модель", "B4", "Выручка"),
+        _c("Модель", "C4", "тыс. руб."),
+        _c("Модель", "D4", "100"),
+        _c("Модель", "E4", "110"),
+        _c("Модель", "F4", "121"),
+        _c("Модель", "B5", "Капзатраты"),
+        _c("Модель", "C5", "млрд руб."),
+        _c("Модель", "D5", "5"),
+        _c("Модель", "E5", "6"),
+        _c("Модель", "F5", "7"),
+    ]
+    layout = detect_layout(cells)
+    rows = {row.label: row for row in layout.sheets[0].blocks[0].rows}
+    assert [(cell.col, cell.role) for cell in rows["Выручка"].cells] == [(3, "unit")]
+    assert [(cell.col, cell.role) for cell in rows["Капзатраты"].cells] == [(3, "unit")]

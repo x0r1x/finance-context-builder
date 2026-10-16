@@ -145,3 +145,79 @@ def test_garbage_formula_is_unparsed() -> None:
     parsed = engine.parse("=(((oops", sheet="Sheet1", addr="A1")
     assert parsed.unparsed is True
     assert parsed.ast is None
+
+
+def test_unquoted_cyrillic_sheet_is_cross_sheet_ref() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=Допущения!C4+1", sheet="Модель", addr="D5")
+    assert parsed.unparsed is False
+    assert parsed.template == "=Допущения!R[-1]C[-1]+1"
+    assert [(e.kind, e.target) for e in parsed.edges] == [("cross_sheet", "Допущения!C4")]
+
+
+def test_unquoted_cyrillic_sheet_with_digit_is_cross_sheet_ref() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=Лист1!A1*2", sheet="Модель", addr="B2")
+    assert parsed.unparsed is False
+    assert [(e.kind, e.target) for e in parsed.edges] == [("cross_sheet", "Лист1!A1")]
+
+
+def test_cyrillic_sheet_qualifies_both_range_ends() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=SUM(Допущения!C4:Допущения!C6)", sheet="Модель", addr="D5")
+    assert parsed.unparsed is False
+    assert [(e.kind, e.target) for e in parsed.edges] == [("range", "Допущения!C4:C6")]
+
+
+def test_external_book_with_cyrillic_sheet() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=[1]Допущения!A1", sheet="Модель", addr="B1")
+    assert parsed.unparsed is False
+    assert [e.kind for e in parsed.edges] == ["external"]
+
+
+def test_bare_cells_stay_cells_next_to_unicode_sheet_names() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=A1+XFD1048576", sheet="Модель", addr="B1")
+    assert parsed.unparsed is False
+    assert [(e.kind, e.target) for e in parsed.edges] == [
+        ("ref", "Модель!A1"),
+        ("ref", "Модель!XFD1048576"),
+    ]
+
+
+def test_column_array_constant_is_parsed() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=INDEX({1;2;3},2)", sheet="Inputs", addr="D1")
+    assert parsed.unparsed is False
+    assert parsed.template == "=INDEX({1;2;3},2)"
+    assert parsed.edges == []
+
+
+def test_two_dimensional_array_constant_keeps_rows_and_columns() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse('=INDEX({1,-2.5;"x",TRUE},2,1)', sheet="Inputs", addr="D1")
+    assert parsed.unparsed is False
+    assert parsed.ast is not None
+    assert parsed.ast["args"][0] == {
+        "op": "array",
+        "rows": [
+            [{"op": "num", "value": 1.0}, {"op": "num", "value": -2.5}],
+            [{"op": "str", "value": "x"}, {"op": "name", "value": "TRUE"}],
+        ],
+    }
+    assert parsed.template == '=INDEX({1,-2.5;"x",TRUE},2,1)'
+
+
+def test_array_constant_next_to_a_reference_keeps_the_reference_edge() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse('=LOOKUP(A1,{0,10},{"low","high"})', sheet="Inputs", addr="B1")
+    assert parsed.unparsed is False
+    assert [(e.kind, e.target) for e in parsed.edges] == [("ref", "Inputs!A1")]
+
+
+def test_array_constant_rejects_references_and_ragged_rows() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    assert engine.parse("=SUM({A1,2})", sheet="Inputs", addr="B1").unparsed is True
+    assert engine.parse("=SUM({1,2;3})", sheet="Inputs", addr="B1").unparsed is True
+    assert engine.parse("=SUM({1,2", sheet="Inputs", addr="B1").unparsed is True

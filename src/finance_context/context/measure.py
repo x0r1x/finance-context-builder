@@ -34,6 +34,9 @@ _CURRENCY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
 )
+# Number-format tag `[$₽-419]`: the currency symbol, then an optional locale id.
+# `[$-419]` and `[$-F800]` carry only a locale, so they name no currency.
+_FORMAT_CURRENCY_TAG = re.compile(r"\[\$([^\]\-]*)(?:-[^\]]*)?\]")
 _REPAYMENT_TOKENS = {"repayment", "principal"}
 _INFLOW_TOKENS = {"revenue", "receipts", "receipt", "inflow", "inflows", "income"}
 _OUTFLOW_TOKENS = {
@@ -57,6 +60,10 @@ _COUNT_PER = re.compile(r"^\s*(months?|days?|hours?|weeks?)\s+(per|in a|/)\s+", 
 _PER_UNIT = re.compile(r"/\s*(mwh|mw|mwp|kwh|kw|gwh|unit|veh|tonne|t|bbl|m3)\b", re.I)
 _THOUSANDS = re.compile(r"'000(?!')|\b000s\b|\(000\)", re.I)
 _MILLIONS = re.compile(r"'000'000|\bmn\b|\bmm\b", re.I)
+# "тыс. руб.", "млн ₽", "млрд руб.": the Russian multiplier stands before the currency.
+_RU_THOUSANDS = re.compile(r"\bтыс\b|\bтысяч", re.I)
+_RU_MILLIONS = re.compile(r"\bмлн\b|\bмиллион", re.I)
+_RU_BILLIONS = re.compile(r"\bмлрд\b|\bмиллиард", re.I)
 _RATIO_TEXT = re.compile(r"^\s*x\s*$", re.I)
 _DATE_TEXT = re.compile(r"^\s*date\s*$", re.I)
 # A trailing period marker is not a second unit: "MWh p.a." is the same count as "MWh".
@@ -106,9 +113,12 @@ def parse_measure(
     measure = Measure()
     measure = _fill(measure, _parse_text(unit_text or ""))
     measure = _fill(measure, _parse_text(label or ""))
+    # Base units only when the unit cell or label names the currency with no multiplier.
+    # A number format names the currency, not the scale of the stored amount.
+    currency_in_text = measure.currency is not None
     for fmt in number_formats or []:
         measure = _fill(measure, _parse_format(fmt))
-    if measure.unit in {"money", "price"} and measure.scale is None:
+    if measure.unit in {"money", "price"} and measure.scale is None and currency_in_text:
         measure = Measure(
             unit=measure.unit,
             currency=measure.currency,
@@ -200,6 +210,14 @@ def unit_caption(text: str | None) -> str | None:
 def currency_code_from_text(text: str | None) -> str | None:
     if not text:
         return None
+    for symbol in _FORMAT_CURRENCY_TAG.findall(text):
+        code = _currency_code(symbol)
+        if code:
+            return code
+    return _currency_code(_FORMAT_CURRENCY_TAG.sub(" ", text))
+
+
+def _currency_code(text: str) -> str | None:
     for code, pattern in _CURRENCY_PATTERNS:
         if pattern.search(text):
             return code
@@ -213,13 +231,19 @@ def _scale_from(text: str) -> str | None:
         return None
     if re.search(r"\bbn\b|\bbillion", blob) or "bn£" in blob or "£bn" in blob:
         return "bn"
+    if _RU_BILLIONS.search(blob):
+        return "bn"
     if re.search(r"\bmillion", blob) or re.search(r"m[£$€₽]|[£$€₽]m\b", blob):
+        return "m"
+    if _RU_MILLIONS.search(blob):
         return "m"
     if currency_code_from_text(text) and _MILLIONS.search(text):
         return "m"
     if re.search(r"\bthousands?\b", blob) or re.search(r"(^|[^a-z])k[£$€₽]|[£$€₽]k\b", blob):
         return "k"
     if currency_code_from_text(text) and _THOUSANDS.search(text):
+        return "k"
+    if _RU_THOUSANDS.search(blob):
         return "k"
     return None
 

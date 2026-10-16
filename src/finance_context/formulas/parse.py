@@ -106,7 +106,42 @@ class _Parser:
             node = self.parse_expr()
             self.eat("RPAREN")
             return node
+        if tok.kind == "LBRACE":
+            return self._parse_array()
         raise FormulaSyntaxError("expected value")
+
+    def _parse_array(self) -> dict[str, Any]:
+        """Array constant: `,` between columns, `;` between rows, constants only."""
+        self.eat("LBRACE")
+        rows: list[list[dict[str, Any]]] = [[self._parse_array_item()]]
+        while True:
+            tok = self.eat()
+            if tok.kind == "SEP":
+                rows[-1].append(self._parse_array_item())
+            elif tok.kind == "ROWSEP":
+                rows.append([self._parse_array_item()])
+            elif tok.kind == "RBRACE":
+                break
+            else:
+                raise FormulaSyntaxError("bad array constant")
+        if len({len(row) for row in rows}) != 1:
+            raise FormulaSyntaxError("ragged array constant")
+        return {"op": "array", "rows": rows}
+
+    def _parse_array_item(self) -> dict[str, Any]:
+        tok = self.eat()
+        if tok.kind == "OP" and tok.value in {"+", "-"}:
+            number = self.eat("NUMBER").value
+            return {"op": "num", "value": -number if tok.value == "-" else number}
+        if tok.kind == "NUMBER":
+            return {"op": "num", "value": tok.value}
+        if tok.kind == "STRING":
+            return {"op": "str", "value": tok.value}
+        if tok.kind == "ERROR":
+            return {"op": "err", "value": tok.value}
+        if tok.kind == "NAME" and tok.value.upper() in {"TRUE", "FALSE"}:
+            return {"op": "name", "value": tok.value.upper()}
+        raise FormulaSyntaxError("array constant holds constants only")
 
     def _parse_call(self, name: str) -> dict[str, Any]:
         self.eat("LPAREN")
