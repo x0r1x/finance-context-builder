@@ -25,7 +25,7 @@ def _sources() -> list[Path]:
     for path in _PACKAGE.rglob("*"):
         if not path.is_file() or "__pycache__" in path.parts:
             continue
-        if path.suffix == ".py":
+        if path.suffix in {".py", ".json"}:
             found.append(path)
     found.sort(key=lambda item: item.relative_to(_PACKAGE).as_posix())
     return found

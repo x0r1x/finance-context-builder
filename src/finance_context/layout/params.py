@@ -4,27 +4,17 @@ import re
 from collections import Counter, defaultdict
 
 from finance_context.excel.a1 import index_to_col, parse_addr
+from finance_context.layout.lexicon import words
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text
 from finance_context.layout.units import is_unit_text
 from finance_context.layout.units import unit_kind_from_text as unit_kind_from_text
 
+# "Parameter / Value / Units / Notes" and "Параметр / Значение / Ед. изм. / Примечание".
 _HEADER_ROLES: dict[str, str] = {
-    "parameter": "label",
-    "parameters": "label",
-    "item": "label",
-    "check": "label",
-    "assumption": "label",
-    "assumptions": "label",
-    "value": "value",
-    "values": "value",
-    "active": "value",
-    "result": "value",
-    "chosen": "value",
-    "unit": "unit",
-    "units": "unit",
-    "note": "note",
-    "notes": "note",
+    word: role
+    for role in ("label", "value", "unit", "note")
+    for word in words("header_roles", role)
 }
 _SCENARIO_HEADER = re.compile(r"\b(case|scenario)s?\b", re.IGNORECASE)
 _PROSE_MIN = 80
@@ -711,7 +701,7 @@ def _is_check_table(
 
 
 def _header_role(text: str) -> str | None:
-    n = re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
+    n = re.sub(r"[\W_]+", " ", text.casefold()).strip()
     if n in _HEADER_ROLES:
         return _HEADER_ROLES[n]
     return None

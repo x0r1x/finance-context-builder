@@ -115,3 +115,18 @@ def test_compile_change_drops_raw_and_formula_ir(tmp_path) -> None:
     assert not (dest / "ir" / "cells.parquet").exists()
     assert not (dest / "raw" / "workbook.json").exists()
     assert not (dest / "layout.json").exists()
+
+
+def test_layout_lexicon_edit_restales_the_layout_stage(tmp_path, monkeypatch) -> None:
+    from finance_context.app import publisher
+
+    (tmp_path / "layout").mkdir()
+    (tmp_path / "layout" / "rows.py").write_text("x = 1\n", encoding="utf-8")
+    lexicon = tmp_path / "layout" / "lexicon.json"
+    lexicon.write_text('{"phases": {}}', encoding="utf-8")
+    monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
+    before = publisher._compute_stages()
+    lexicon.write_text('{"phases": {"construction": ["строительств"]}}', encoding="utf-8")
+    after = publisher._compute_stages()
+    assert before["layout"] != after["layout"]
+    assert before["compile"] == after["compile"]

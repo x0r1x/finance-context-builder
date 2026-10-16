@@ -372,3 +372,55 @@ def test_phased_year_axis_is_forecast_unless_the_header_says_actual() -> None:
     assert roles["2024"] == "forecast"
     assert roles["2025"] == "forecast"
     assert roles["2056"] == "forecast"
+
+
+def _ru_timeline(*rows: tuple[str, list[str]]) -> list[dict]:
+    cells = [_c("Модель", "A1", "Показатель")]
+    years = ["2025", "2026", "2027", "2028"]
+    cells += [_c("Модель", f"{col}1", year) for col, year in zip("BCDE", years, strict=True)]
+    cells += [_c("Модель", "A2", "Выручка")]
+    revenue = ["0", "0", "10", "20"]
+    cells += [_c("Модель", f"{col}2", v) for col, v in zip("BCDE", revenue, strict=True)]
+    for r, (label, values) in enumerate(rows, start=3):
+        cells.append(_c("Модель", f"A{r}", label))
+        cells += [_c("Модель", f"{col}{r}", v) for col, v in zip("BCDE", values, strict=True)]
+    return cells
+
+
+def test_russian_flag_rows_set_construction_then_operation_phase() -> None:
+    cells = _ru_timeline(
+        ("Флаг строительства", ["1", "1", "0", "0"]),
+        ("Флаг эксплуатации", ["0", "0", "1", "1"]),
+        ("Флаг ввода в эксплуатацию", ["0", "0", "1", "0"]),
+    )
+    axes, _warnings = build_axes(detect_layout(cells), cells)
+    assert [(p.period_key, p.phase, p.phase_year, p.role) for p in axes[0].periods] == [
+        ("2025", "construction", 1, "forecast"),
+        ("2026", "construction", 2, "forecast"),
+        ("2027", "operation", 1, "forecast"),
+        ("2028", "operation", 2, "forecast"),
+    ]
+
+
+def test_russian_investment_phase_is_construction() -> None:
+    cells = _ru_timeline(
+        ("Инвестиционная фаза", ["1", "1", "1", "0"]),
+        ("Операционный период", ["0", "0", "0", "1"]),
+    )
+    axes, _warnings = build_axes(detect_layout(cells), cells)
+    assert [p.phase for p in axes[0].periods] == [
+        "construction",
+        "construction",
+        "construction",
+        "operation",
+    ]
+
+
+def test_russian_event_flags_are_not_phases() -> None:
+    cells = _ru_timeline(
+        ("Дата начала строительства", ["1", "0", "0", "0"]),
+        ("Окончание строительства", ["0", "1", "0", "0"]),
+        ("Ввод в эксплуатацию", ["0", "0", "1", "0"]),
+    )
+    axes, _warnings = build_axes(detect_layout(cells), cells)
+    assert [p.phase for p in axes[0].periods] == [None, None, None, None]

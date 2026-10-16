@@ -494,3 +494,27 @@ def test_rub_unit_captions_are_unit_text(text: str) -> None:
     from finance_context.layout.params import is_unit_text
 
     assert is_unit_text(text)
+
+
+def test_plan_fact_and_scenario_labels_stay_rows_under_a_year_axis() -> None:
+    labels = ["План", "Факт", "Отклонение", "Budget", "Base case"]
+    cells = [_c("ПФ", "A2", "Показатель")]
+    years = ["2023", "2024", "2025"]
+    cells += [_c("ПФ", f"{col}2", y) for col, y in zip("BCD", years, strict=True)]
+    for r, label in enumerate(labels, start=3):
+        cells.append(_c("ПФ", f"A{r}", label))
+        cells += [_c("ПФ", f"{col}{r}", str(r + i)) for i, col in enumerate("BCD")]
+    rows = detect_layout(cells).sheets[0].blocks[0].rows
+    assert [row.label for row in rows] == labels
+
+
+def test_year_in_the_label_column_is_still_not_a_row_name() -> None:
+    cells = [_c("ПФ", "A2", "Показатель")]
+    years = ["2023", "2024", "2025"]
+    cells += [_c("ПФ", f"{col}2", y) for col, y in zip("BCD", years, strict=True)]
+    cells += [_c("ПФ", "A3", "Выручка")]
+    cells += [_c("ПФ", f"{col}3", v) for col, v in zip("BCD", ["1", "2", "3"], strict=True)]
+    cells += [_c("ПФ", "A4", "2024")]
+    cells += [_c("ПФ", f"{col}4", v) for col, v in zip("BCD", ["4", "5", "6"], strict=True)]
+    rows = detect_layout(cells).sheets[0].blocks[0].rows
+    assert "2024" not in [row.label for row in rows]

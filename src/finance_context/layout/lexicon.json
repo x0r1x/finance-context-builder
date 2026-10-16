@@ -1,0 +1,39 @@
+{
+  "header_roles": {
+    "label": [
+      "parameter", "parameters", "item", "check", "assumption", "assumptions",
+      "параметр", "параметры", "показатель", "показатели", "статья", "наименование",
+      "допущение", "допущения", "предпосылка", "предпосылки", "проверка"
+    ],
+    "value": [
+      "value", "values", "active", "result", "chosen",
+      "значение", "значения", "величина", "результат"
+    ],
+    "unit": [
+      "unit", "units",
+      "ед", "ед изм", "единица", "единицы", "единица измерения", "единицы измерения"
+    ],
+    "note": [
+      "note", "notes",
+      "примечание", "примечания", "комментарий", "комментарии"
+    ]
+  },
+  "phases": {
+    "construction": ["construction", "строительств", "инвестиционн"],
+    "operation": ["operation", "operating", "эксплуатац", "операционн"]
+  },
+  "phase_events": [
+    "beginning", "end of", "start date", "end date",
+    "начал", "окончан", "конец", "заверш", "дата", "ввод"
+  ],
+  "operation_duration": ["duration", "продолжительн"],
+  "period_roles": {
+    "historical": ["факт", "actual", "hist"],
+    "forecast": ["план", "прогноз", "forecast", "budget"]
+  },
+  "period_words": {
+    "quarter": ["кв", "quarter"],
+    "half": ["полугод", "half"],
+    "year": ["год", "г"]
+  }
+}

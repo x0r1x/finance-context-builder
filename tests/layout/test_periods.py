@@ -138,3 +138,88 @@ def test_model_year_keys_infer_relative_grain() -> None:
     assert infer_grain(["M1", "M2", "M3"]) == "model_month"
     assert infer_grain(["P0", "P1", "P2"]) == "model_period"
     assert apply_grain("Y1", "model_year") == "Y1"
+
+
+@pytest.mark.parametrize(
+    ("text", "period_key"),
+    [
+        ("I кв. 2025", "2025Q1"),
+        ("IV кв. 2025", "2025Q4"),
+        ("1 квартал 2025", "2025Q1"),
+        ("2-й квартал 2025", "2025Q2"),
+        ("III квартал 2025 г.", "2025Q3"),
+        ("Кв.1 2025", "2025Q1"),
+        ("кв. 3 2026", "2026Q3"),
+        ("1Q25", "2025Q1"),
+        ("Q2'25", "2025Q2"),
+        ("2025г.", "2025"),
+        ("2025 г.", "2025"),
+        ("2025 год", "2025"),
+        ("01.2025", "2025-01"),
+        ("12/2025", "2025-12"),
+        ("H1 2025", "2025H1"),
+        ("2H25", "2025H2"),
+        ("1 полугодие 2025", "2025H1"),
+        ("II полугодие 2025 г.", "2025H2"),
+    ],
+)
+def test_russian_and_short_period_headers(text: str, period_key: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert (hit.period_key, hit.role) == (period_key, "historical")
+
+
+@pytest.mark.parametrize(
+    ("text", "role", "period_key"),
+    [
+        ("Факт 2025", "historical", "2025"),
+        ("План 2026", "forecast", "2026"),
+        ("Прогноз 2027", "forecast", "2027"),
+        ("Budget 2026", "forecast", "2026"),
+        ("2025 (факт)", "historical", "2025"),
+        ("Факт I кв. 2025", "historical", "2025Q1"),
+    ],
+)
+def test_role_word_before_or_around_the_period(text: str, role: str, period_key: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert (hit.period_key, hit.role, hit.explicit_role) == (period_key, role, True)
+
+
+@pytest.mark.parametrize("text", ["13.2025", "V кв. 2025", "3 полугодие 2025", "1.2025"])
+def test_not_a_period_header(text: str) -> None:
+    assert classify_header(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "kind", "quarter", "half"),
+    [
+        ("I кв.", "quarter_token", 1, None),
+        ("Кв.4", "quarter_token", 4, None),
+        ("2 квартал", "quarter_token", 2, None),
+        ("H2", "half_token", None, 2),
+        ("1 полугодие", "half_token", None, 1),
+    ],
+)
+def test_quarter_and_half_tokens_without_a_year(
+    text: str, kind: str, quarter: int | None, half: int | None
+) -> None:
+    atom = classify_atom(text)
+    assert atom is not None
+    assert (atom.kind, atom.quarter, atom.half) == (kind, quarter, half)
+
+
+def test_year_row_over_half_tokens_composes_half_keys() -> None:
+    year = classify_atom("2025")
+    half = classify_atom("II полугодие")
+    assert year is not None and half is not None
+    hit = compose_period([year, half])
+    assert hit is not None and hit.period_key == "2025H2"
+
+
+def test_half_year_grain_keeps_both_halves() -> None:
+    keys = ["2025H1", "2025H2", "2026H1", "2026H2"]
+    assert infer_grain(keys) == "half_year"
+    assert [apply_grain(key, "half_year") for key in keys] == keys
+    assert apply_grain("2025-08", "half_year") == "2025H2"
+    assert apply_grain("2025Q2", "half_year") == "2025H1"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from finance_context.layout.lexicon import words
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis
 from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import display_cell_text, is_calendar_key
@@ -14,7 +15,6 @@ _SERIES_ROLES = {
     "stub",
     "relative",
 }
-_BEGIN_END = ("beginning", "end of", "start date", "end date")
 
 
 def build_axes(
@@ -234,13 +234,22 @@ def _promote_forecast_roles(periods: list[ContextPeriod], headers) -> None:
 
 
 def _phase_kind(label: str) -> TimelinePhase | None:
+    """Phase a 0/1 flag row marks: "Construction", "Флаг строительства", "Операционный период".
+
+    A start/end/commissioning event flag ("Дата начала строительства", "Ввод в
+    эксплуатацию") is one period, not a phase. Words come from the layout lexicon.
+    """
     n = normalize_label(label)
-    if any(token in n for token in _BEGIN_END):
+    if any(event in n for event in words("phase_events")):
         return None
-    tokens = set(n.split())
-    if "construction" in tokens:
+    tokens = n.split()
+
+    def has(*path: str) -> bool:
+        return any(token.startswith(stem) for token in tokens for stem in words(*path))
+
+    if has("phases", "construction"):
         return "construction"
-    if tokens & {"operation", "operations", "operating"} and "duration" not in tokens:
+    if has("phases", "operation") and not has("operation_duration"):
         return "operation"
     return None
 

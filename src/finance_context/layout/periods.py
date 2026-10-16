@@ -5,29 +5,57 @@ from dataclasses import dataclass
 from datetime import date
 
 from finance_context.excel.dates import is_date_format, serial_to_date
+from finance_context.layout.lexicon import stems
 from finance_context.layout.models import ColumnRole, PeriodHit
 
-_YEAR = re.compile(r"^(?:FY\s*)?((?:19|20)\d{2})([EFAPеЕфФпПaA])?$", re.IGNORECASE)
+_YEAR_WORD = rf"(?:\s*(?:{stems('period_words', 'year')})\w*\.?)?"
+_YEAR = re.compile(
+    rf"^(?:FY\s*)?((?:19|20)\d{{2}}){_YEAR_WORD}([EFAPеЕфФпПaA])?$", re.IGNORECASE
+)
 _YEAR_FLOAT = re.compile(r"^((?:19|20)\d{2})(?:\.0+)?$")
-_QUARTER_RU = re.compile(
-    r"^([1-4])\s*кв\.?\s*((?:19|20)\d{2})([EFAPеЕ])?$",
-    re.IGNORECASE,
+# Quarter and half-year headers: "1 кв. 2025", "I кв. 2025", "1-й квартал 2025", "Кв.1 2025",
+# "Q1 2025", "1Q25", "Q2'25", "1 полугодие 2025", "H1 2025", "2H25". The year may be missing
+# (a year row above) or two digits; "2025 г." is the same year.
+_QUARTER_WORD = rf"(?:{stems('period_words', 'quarter')})\w*\.?"
+_HALF_WORD = rf"(?:{stems('period_words', 'half')})\w*\.?"
+_ORDINAL = r"(?:\s*-?\s*(?:й|ый|ой|е|ое))?"
+_PART_YEAR = rf"(?:\s*'?\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}}){_YEAR_WORD}(?P<sfx>[EFAPеЕ])?)?"
+_QUARTER_FORMS = tuple(
+    re.compile(rf"^{body}{_PART_YEAR}$", re.IGNORECASE)
+    for body in (
+        rf"(?P<num>[1-4]|IV|I{{1,3}}){_ORDINAL}\s*{_QUARTER_WORD}",
+        rf"{_QUARTER_WORD}\s*(?P<num>[1-4]|IV|I{{1,3}})",
+        r"Q(?P<num>[1-4])",
+        r"(?P<num>[1-4])\s*Q",
+    )
 )
-_QUARTER_EN = re.compile(r"^Q([1-4])\s*((?:19|20)\d{2})([EFAP])?$", re.IGNORECASE)
-_QUARTER_TOKEN = re.compile(
-    r"^(?:([1-4])\s*кв\.?|Q([1-4]))$",
-    re.IGNORECASE,
+_HALF_FORMS = tuple(
+    re.compile(rf"^{body}{_PART_YEAR}$", re.IGNORECASE)
+    for body in (
+        rf"(?P<num>[12]|I{{1,2}}){_ORDINAL}\s*{_HALF_WORD}",
+        r"H(?P<num>[12])",
+        r"(?P<num>[12])\s*H",
+    )
 )
+_ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4}
+_MONTH_YEAR = re.compile(r"^(0[1-9]|1[0-2])[./]((?:19|20)\d{2})([EFAPеЕфФпП])?$")
 _TOTAL = re.compile(r"^(итого|всего|total|sum)$", re.IGNORECASE)
 _STUB = re.compile(r"^(stub|частичн\w*|partial)$", re.IGNORECASE)
 _SCENARIO = re.compile(
     r"^(base(?:\s*case)?|upside|downside|негативн\w*|позитивн\w*|stress|сценарий(?:\s+\w+)?)$",
     re.IGNORECASE,
 )
-_FACT = re.compile(r"^(факт\w*|actual|hist(?:orical)?)$", re.IGNORECASE)
-_PLAN = re.compile(r"^(план\w*|прогноз\w*|forecast|budget)$", re.IGNORECASE)
+_HISTORICAL_WORD = rf"(?:{stems('period_roles', 'historical')})\w*"
+_FORECAST_WORD = rf"(?:{stems('period_roles', 'forecast')})\w*"
+_FACT = re.compile(rf"^({_HISTORICAL_WORD})$", re.IGNORECASE)
+_PLAN = re.compile(rf"^({_FORECAST_WORD})$", re.IGNORECASE)
+# "2024 факт", "2025 (факт)" and "Факт 2025", "План I кв. 2026".
 _TAG = re.compile(
-    r"^(.*?)\s+(факт\w*|actual|hist(?:orical)?|план\w*|прогноз\w*|forecast|budget)$",
+    rf"^(.*?)\s+\(?({_HISTORICAL_WORD}|{_FORECAST_WORD})\)?$",
+    re.IGNORECASE,
+)
+_TAG_FIRST = re.compile(
+    rf"^({_HISTORICAL_WORD}|{_FORECAST_WORD})\.?\s+(.+)$",
     re.IGNORECASE,
 )
 _FORECAST_SFX = {"E", "F", "P", "Е", "П"}
@@ -43,6 +71,7 @@ _NAMED_MONTH = re.compile(
     re.IGNORECASE,
 )
 _QUARTER_KEY = re.compile(r"^((?:19|20)\d{2})Q([1-4])$")
+_HALF_KEY = re.compile(r"^((?:19|20)\d{2})H([12])$")
 _MONTH_KEY = re.compile(r"^((?:19|20)\d{2})-(\d{2})$")
 _YEAR_KEY = re.compile(r"^((?:19|20)\d{2})$")
 _DATE_KEY = re.compile(r"^((?:19|20)\d{2})-(\d{2})-(\d{2})$")
@@ -125,6 +154,7 @@ class HeaderAtom:
     role: ColumnRole | None = None
     period_key: str | None = None
     explicit_role: bool = False
+    half: int | None = None
 
 
 def normalize_header(text: str | None) -> str | None:
@@ -183,15 +213,22 @@ def classify_header(text: str | None) -> PeriodHit | None:
         )
         if hit is not None:
             return hit
+    month_year = _MONTH_YEAR.fullmatch(raw)
+    if month_year:
+        return PeriodHit(
+            role=_suffix_role(month_year.group(3)),
+            period_key=f"{month_year.group(2)}-{month_year.group(1)}",
+            explicit_role=bool(month_year.group(3)),
+        )
     named = _month_hit(raw)
     if named is not None:
         return named
-    quarter = _QUARTER_RU.fullmatch(raw) or _QUARTER_EN.fullmatch(raw)
-    if quarter:
-        q, year, sfx = quarter.group(1), quarter.group(2), quarter.group(3)
+    part = _part_of_year(raw)
+    if part is not None and part[2] is not None:
+        grain, num, year, sfx = part
         return PeriodHit(
             role=_suffix_role(sfx),
-            period_key=f"{year}Q{q}",
+            period_key=f"{_full_year(year)}{grain}{num}",
             explicit_role=bool(sfx),
         )
     year = _YEAR.fullmatch(raw)
@@ -223,6 +260,7 @@ def classify_atom(
         if hit.period_key in {"actual", "plan"}:
             return HeaderAtom(kind="role_marker", role=hit.role, explicit_role=True)
         parsed = parse_period_key(hit.period_key)
+        half = _HALF_KEY.fullmatch(hit.period_key)
         return HeaderAtom(
             kind="full",
             year=parsed[0] if parsed else None,
@@ -232,10 +270,14 @@ def classify_atom(
             role=hit.role,
             period_key=hit.period_key,
             explicit_role=hit.explicit_role,
+            half=int(half.group(2)) if half else None,
         )
-    qtok = _QUARTER_TOKEN.fullmatch(raw)
-    if qtok:
-        return HeaderAtom(kind="quarter_token", quarter=int(qtok.group(1) or qtok.group(2)))
+    part = _part_of_year(raw)
+    if part is not None and part[2] is None:
+        grain, num = part[0], part[1]
+        if grain == "Q":
+            return HeaderAtom(kind="quarter_token", quarter=num)
+        return HeaderAtom(kind="half_token", half=num)
     if allow_quarter_num and _is_int_token(raw):
         num = int(raw)
         if 1 <= num <= 4:
@@ -273,9 +315,10 @@ def compose_period(
         for atom in calendar
         if atom.kind != "role_marker"
         and (
-            atom.kind in {"full", "quarter_token", "month_num"}
+            atom.kind in {"full", "quarter_token", "half_token", "month_num"}
             or atom.year
             or atom.quarter
+            or atom.half
             or atom.month
         )
     ]
@@ -293,9 +336,12 @@ def compose_period(
         )
     year = next(iter(years), None) or year_hint
     quarter = next((atom.quarter for atom in calendar if atom.quarter), None)
+    half = next((atom.half for atom in calendar if atom.half), None)
     month = next((atom.month for atom in calendar if atom.month and atom.day is None), None)
     if year and quarter:
         return PeriodHit(role=role, period_key=f"{year}Q{quarter}")
+    if year and half:
+        return PeriodHit(role=role, period_key=f"{year}H{half}")
     if year and month:
         return PeriodHit(role=role, period_key=f"{year}-{month:02d}")
     full = next((atom for atom in calendar if atom.kind == "full" and atom.period_key), None)
@@ -314,6 +360,7 @@ def is_calendar_key(key: str | None) -> bool:
         or _MONTH_KEY.fullmatch(key)
         or _DATE_KEY.fullmatch(key)
         or _QUARTER_KEY.fullmatch(key)
+        or _HALF_KEY.fullmatch(key)
     )
 
 
@@ -334,6 +381,9 @@ def parse_period_key(key: str) -> tuple[str | None, int | None, int | None, int 
     yk = _YEAR_KEY.fullmatch(key)
     if yk:
         return yk.group(1), None, None, None
+    hk = _HALF_KEY.fullmatch(key)
+    if hk:
+        return hk.group(1), None, None, None
     return None, None, None, None
 
 
@@ -374,11 +424,15 @@ def infer_grain(keys: list[str]) -> str | None:
                     return "month"
                 if 2 <= med <= 4:
                     return "quarter"
+                if 5 <= med <= 7:
+                    return "half_year"
                 if 11 <= med <= 13:
                     return "year"
             return None
     if all(_QUARTER_KEY.fullmatch(key) for key in calendar):
         return "quarter"
+    if all(_HALF_KEY.fullmatch(key) for key in calendar):
+        return "half_year"
     if all(_MONTH_KEY.fullmatch(key) for key in calendar):
         return "month"
     if all(_YEAR_KEY.fullmatch(key) for key in calendar):
@@ -426,6 +480,12 @@ def apply_grain(key: str, grain: str | None) -> str:
     if grain == "month":
         if _DATE_KEY.fullmatch(key) or _MONTH_KEY.fullmatch(key):
             return f"{year}-{month:02d}" if month else key
+        return key
+    if grain == "half_year":
+        if quarter:
+            return f"{year}H{1 if quarter <= 2 else 2}"
+        if month:
+            return f"{year}H{1 if month <= 6 else 2}"
         return key
     return key
 
@@ -475,14 +535,32 @@ def is_role_marker_text(text: str | None) -> bool:
 
 def _tagged_hit(raw: str) -> PeriodHit | None:
     match = _TAG.fullmatch(raw)
-    if match is None:
-        return None
-    base = classify_header(match.group(1).strip())
+    if match is not None:
+        period, tag = match.group(1), match.group(2)
+    else:
+        match = _TAG_FIRST.fullmatch(raw)
+        if match is None:
+            return None
+        tag, period = match.group(1), match.group(2)
+    base = classify_header(period.strip())
     if base is None or base.role not in {"historical", "forecast", "stub"}:
         return None
-    tag = match.group(2)
     role: ColumnRole = "historical" if _FACT.fullmatch(tag) else "forecast"
     return PeriodHit(role=role, period_key=base.period_key, explicit_role=True)
+
+
+def _part_of_year(raw: str) -> tuple[str, int, str | None, str | None] | None:
+    """Quarter ("Q") or half ("H") header: grain, its number, the year if any, a role suffix."""
+    for grain, forms, top in (("Q", _QUARTER_FORMS, 4), ("H", _HALF_FORMS, 2)):
+        for form in forms:
+            match = form.fullmatch(raw)
+            if match is None:
+                continue
+            token = match.group("num").upper()
+            num = _ROMAN[token] if token in _ROMAN else int(token)
+            if 1 <= num <= top:
+                return grain, num, match.group("year"), match.group("sfx")
+    return None
 
 
 def _month_hit(raw: str) -> PeriodHit | None:
@@ -546,6 +624,9 @@ def _compose_role(atoms: list[HeaderAtom]) -> ColumnRole:
 
 
 def _key_as_date(key: str) -> date | None:
+    half = _HALF_KEY.fullmatch(key)
+    if half:
+        return date(int(half.group(1)), 1 if half.group(2) == "1" else 7, 1)
     year, quarter, month, day = parse_period_key(key)
     if year is None:
         return None

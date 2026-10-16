@@ -149,3 +149,31 @@ def test_params_block_from_parameter_table() -> None:
     assert "unit" in roles
     assert "value" in roles
     assert "scenario" in roles
+
+
+def test_russian_param_headers_name_value_unit_and_note_columns() -> None:
+    note = "источник: бизнес-план компании на 2025 год, утверждён советом директоров"
+    heads = ["Параметр", "Значение", "Ед. изм.", "Примечание"]
+    cells = [_c("Допущения", f"{col}2", head) for col, head in zip("BCDE", heads, strict=True)]
+    for r, (label, value, unit) in enumerate(
+        [("Цена", "12", "тыс. руб."), ("Доля расходов", "0.4", "%"), ("Ставка налога", "0.2", "%")],
+        start=3,
+    ):
+        cells += [
+            _c("Допущения", f"B{r}", label),
+            _c("Допущения", f"C{r}", value),
+            _c("Допущения", f"D{r}", unit),
+            _c("Допущения", f"E{r}", note),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "params"
+    assert [(h.col, h.role, h.text) for h in block.axis.headers] == [
+        (3, "value", "Значение"),
+        (4, "unit", "Ед. изм."),
+        (5, "note", "Примечание"),
+    ]
+    assert [(cell.col, cell.role) for cell in block.rows[0].cells] == [
+        (3, "value"),
+        (4, "unit"),
+        (5, "note"),
+    ]

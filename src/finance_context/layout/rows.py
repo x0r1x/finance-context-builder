@@ -394,9 +394,11 @@ def _left_of_axis_label(
 
 
 def _is_column_header_text(text: str) -> bool:
-    """Year, scenario, and role headers are not row names. Total/Sum/Итого is."""
-    hit = classify_header(text)
-    return hit is not None and hit.period_key != "total"
+    """A period in the label column ("2024", "I кв. 2025") is not a row name.
+
+    "План", "Факт", "Budget" or "Base case" there is: the position says it is a row label.
+    """
+    return is_calendar_hit(classify_header(text))
 
 
 def _row_kind(

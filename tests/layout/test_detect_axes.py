@@ -571,3 +571,28 @@ def test_short_start_end_left_of_timeline_is_dropped() -> None:
     assert len(sheet.blocks) == 1
     keys = [h.period_key for h in sheet.blocks[0].axis.headers]
     assert keys == ["2020", "2021", "2022", "2023"]
+
+
+def test_roman_quarter_headers_form_a_timeline_axis() -> None:
+    heads = ["I кв. 2025", "II кв. 2025", "III кв. 2025", "IV кв. 2025"]
+    cells = [_c("Кв", "A2", "Показатель")]
+    cells += [_c("Кв", f"{col}2", h) for col, h in zip("BCDE", heads, strict=True)]
+    for r, label in enumerate(["Выручка", "Расходы", "Прибыль"], start=3):
+        cells.append(_c("Кв", f"A{r}", label))
+        cells += [_c("Кв", f"{col}{r}", str(r * 10 + i)) for i, col in enumerate("BCDE")]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "timeline"
+    assert [h.period_key for h in block.axis.headers] == ["2025Q1", "2025Q2", "2025Q3", "2025Q4"]
+
+
+def test_half_year_headers_keep_both_halves_on_the_axis() -> None:
+    heads = ["1 полугодие 2025", "2 полугодие 2025", "1 полугодие 2026", "2 полугодие 2026"]
+    cells = [_c("ПГ", "A2", "Показатель")]
+    cells += [_c("ПГ", f"{col}2", h) for col, h in zip("BCDE", heads, strict=True)]
+    for r, label in enumerate(["Выручка", "Расходы", "Прибыль"], start=3):
+        cells.append(_c("ПГ", f"A{r}", label))
+        cells += [_c("ПГ", f"{col}{r}", str(r * 10 + i)) for i, col in enumerate("BCDE")]
+    layout = detect_layout(cells)
+    block = layout.sheets[0].blocks[0]
+    assert block.kind == "timeline"
+    assert [h.period_key for h in block.axis.headers] == ["2025H1", "2025H2", "2026H1", "2026H2"]
