@@ -2,7 +2,7 @@
 
 **Русский** · [English](README.md)
 
-Парсер документов Excel. Read-only сервис читает книгу cash-flow `.xlsx` или `.xlsm` и преобразует её в JSON и Markdown: `context.json`, `context.md`, `graph.json` и `graph.md`. Формулы сохраняются. Числа берутся из кэша Excel и не пересчитываются.
+Парсер документов Excel. Read-only сервис читает книгу cash-flow `.xlsx`, `.xlsm` или старый `.xls` и преобразует её в JSON и Markdown: `context.json`, `context.md`, `graph.json` и `graph.md`. Формулы сохраняются. Числа берутся из кэша Excel и не пересчитываются.
 
 `context` хранит строки блоков, периоды и значения. `graph` хранит связи формул. Trace одной ячейки читает этот граф.
 
@@ -13,7 +13,8 @@
 ## Вход
 
 - Принимаются `.xlsx` и `.xlsm`.
-- `.xls`, `.xlsb` и зашифрованная книга отклоняются.
+- Старый `.xls` (BIFF8, OLE2) принимается, если установлен LibreOffice: джоба один раз конвертирует его через `soffice --headless --convert-to xlsx` (чистый профиль, без прокси, `XLS_CONVERT_TIMEOUT_SEC`) и разбирает `.xlsx`. Без `soffice` в `PATH` или в `SOFFICE_BIN` загрузка — `unsupported_media_type`. В Docker-образе LibreOffice нет.
+- `.xlsb` и зашифрованная книга отклоняются. Зашифрованный `.xlsx` — тоже OLE2-файл; это `encrypted_workbook`, а не старый `.xls`.
 - Кэш формул уже должен лежать в файле.
 
 ## Окружение
@@ -60,7 +61,7 @@ curl -s http://127.0.0.1:8080/readyz
 | --- | --- |
 | `queued` / `running` | Ещё считается |
 | `succeeded` | Документы готовы. |
-| `failed` | Ошибка пайплайна, процесс книги остановлен по серверному `JOB_TIMEOUT_SEC` (`error` — `TimeoutError`), или API перезапустился, пока книга была в `queued` или `running` (`error` — `process_lost`). Отправьте книгу снова. |
+| `failed` | Ошибка пайплайна с кодом в `error` (`zip_rejected`, `encrypted_workbook`, `unsupported_media_type`, `conversion_failed`), процесс книги остановлен по серверному `JOB_TIMEOUT_SEC` (`error` — `TimeoutError`), или API перезапустился, пока книга была в `queued` или `running` (`error` — `process_lost`). Отправьте книгу снова. |
 
 Старые снимки могут ещё говорить `needs_input` или `degraded`. Такая джоба уже закончена, те же четыре документа отдаются.
 
@@ -103,6 +104,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 | `file_too_large` | 413 |
 | `encrypted_workbook` | 422 |
 | `zip_rejected` | 422 |
+| `conversion_failed` | только `error` джобы |
 | `selector_required` | 400 |
 | `not_found` | 404 |
 | `report_not_ready` | 409 |
@@ -110,7 +112,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 
 `report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key` или `q` — это `selector_required`, а не вся книга.
 
-Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper, check, noise и technical-bridge остаются в блоке с `disposition=excluded`. У обычной строки `disposition` равен null.
+Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `SOFFICE_BIN` (по умолчанию `soffice` / `libreoffice` из `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper, check, noise и technical-bridge остаются в блоке с `disposition=excluded`. У обычной строки `disposition` равен null.
 
 ## Данные
 

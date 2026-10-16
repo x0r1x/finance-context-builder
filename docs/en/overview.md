@@ -2,7 +2,7 @@
 
 [Русский](../ru/overview.md) · **English**
 
-**finance-context-builder** is a read-only service that turns Excel cash-flow models (`.xlsx` / `.xlsm`) into versioned JSON and Markdown.
+**finance-context-builder** is a read-only service that turns Excel cash-flow models (`.xlsx` / `.xlsm`, legacy `.xls` through LibreOffice) into versioned JSON and Markdown.
 
 Formulas are not recalculated: artifacts keep Excel's cached values. Content is complete: every layout row lives once inside its block. JSON and Markdown are the same facts. Cells, AST, and edges are not merged into one document: they stay in `raw/` and `ir/`, while the public `context` and `graph` describe the report row and formula links.
 
@@ -60,4 +60,6 @@ Older snapshots may still say `needs_input` or `degraded`. Those jobs are finish
 
 Hints come from the label and the unit cell: `nature`, `time_semantics` (`flow` / `bop` / `eop` / `rate` / `stock` / `instant`), `unit` (`money` / `count` / `rate` / `ratio` / `years` / `price` / `date`), `unit_per`, `currency` (GBP/EUR/USD/RUB), `scale` (`unit` / `k` / `m` / `bn`), and `sign` (`inflow` / `outflow` / `stock`). `k£` in a label or Units cell is money, GBP, and `k`. `тыс. руб.` / `млн ₽` / `млрд руб.` is money, RUB, and `k` / `m` / `bn`; `руб.` alone is `unit`. A currency known only from a number format (`[$₽-419]`) leaves `scale` empty; `[$-419]` names no currency.
 
-`disposition` is structural exclusion only. It is `excluded` when the reason is `flag`, `helper`, `check`, `noise`, or `technical_bridge`. Otherwise `disposition` and `exclusion_reason` are null. Formula-shape relations on the block are `alias`, `aggregate`, `difference`, and `roll_forward`. They are not a second catalog of the row.
+Time comes from the label and the section. `Opening`, `BoP`, `b/f`, `beginning of period`, `на начало`, `входящий остаток` are `bop`; `Closing`, `EoP`, `c/f`, `end of period`, `на конец`, `исходящее сальдо` are `eop`. A fact row on a `Balance Sheet` / `Баланс` tab or under that heading is `stock` (`end/last`). A price (`EUR/MWh`) or a multiple (`x`, or a `DSCR` / `LLCR` / `ratio` / `коэффициент` label with no unit) is `rate` with aggregation `none`: neither its sum nor its mean over periods is a number of the model. A percent rate keeps `average`; an index level keeps `last`.
+
+`disposition` is structural exclusion only. It is `excluded` when the reason is `flag`, `helper`, `check`, `noise`, or `technical_bridge`. Otherwise `disposition` and `exclusion_reason` are null. Formula-shape relations on the block are `alias`, `aggregate`, `difference`, and `roll_forward`. They are not a second catalog of the row. `roll_forward` is a reference to the previous column on the same sheet; the previous column of another sheet is an `alias` (sheets often shift the period grid by one column).

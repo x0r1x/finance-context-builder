@@ -2,7 +2,7 @@
 
 [English](../en/overview.md) · **Русский**
 
-**finance-context-builder** — read-only сервис. Он превращает Excel-модели cash-flow (`.xlsx` / `.xlsm`) в версионированные JSON и Markdown.
+**finance-context-builder** — read-only сервис. Он превращает Excel-модели cash-flow (`.xlsx` / `.xlsm`, старый `.xls` через LibreOffice) в версионированные JSON и Markdown.
 
 Формулы не пересчитываются: в артефакты попадают кэшированные значения Excel. Контент полный: каждая строка layout живёт один раз внутри своего блока. JSON и Markdown — одни и те же факты. Ячейки, AST и рёбра не сливаются в один документ: они остаются в `raw/` и `ir/`, а публичные `context` и `graph` описывают строку отчёта и формульные links.
 
@@ -60,4 +60,6 @@ Markdown пишет **полноту контента** как `1.00 (rows/rows 
 
 Hints берутся из подписи и ячейки единицы: `nature`, `time_semantics` (`flow` / `bop` / `eop` / `rate` / `stock` / `instant`), `unit` (`money` / `count` / `rate` / `ratio` / `years` / `price` / `date`), `unit_per`, `currency` (GBP/EUR/USD/RUB), `scale` (`unit` / `k` / `m` / `bn`) и `sign` (`inflow` / `outflow` / `stock`). `k£` в лейбле или ячейке Units — money, GBP и `k`. `тыс. руб.` / `млн ₽` / `млрд руб.` — money, RUB и `k` / `m` / `bn`; просто `руб.` — `unit`. Валюта только из числового формата (`[$₽-419]`) оставляет `scale` пустым; `[$-419]` валюты не задаёт.
 
-`disposition` — только структурное исключение. Он равен `excluded`, когда причина `flag`, `helper`, `check`, `noise` или `technical_bridge`. Иначе `disposition` и `exclusion_reason` равны null. Relations блока по форме формулы — `alias`, `aggregate`, `difference` и `roll_forward`. Это не второй каталог строки.
+Время берётся из подписи и раздела. `Opening`, `BoP`, `b/f`, `beginning of period`, «на начало», «входящий остаток» — `bop`; `Closing`, `EoP`, `c/f`, `end of period`, «на конец», «исходящее сальдо» — `eop`. Строка-факт на листе `Balance Sheet` / «Баланс» или под таким заголовком — `stock` (`end/last`). Цена (`EUR/MWh`) и кратность (`x` или подпись `DSCR` / `LLCR` / `ratio` / «коэффициент» без единицы) — `rate` с агрегированием `none`: ни сумма, ни среднее по периодам не число модели. Процентная ставка сохраняет `average`, уровень индекса — `last`.
+
+`disposition` — только структурное исключение. Он равен `excluded`, когда причина `flag`, `helper`, `check`, `noise` или `technical_bridge`. Иначе `disposition` и `exclusion_reason` равны null. Relations блока по форме формулы — `alias`, `aggregate`, `difference` и `roll_forward`. Это не второй каталог строки. `roll_forward` — ссылка на предыдущую колонку того же листа; предыдущая колонка другого листа — `alias` (листы часто сдвигают сетку периодов на колонку).
