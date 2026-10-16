@@ -92,3 +92,68 @@ def test_bounded_column_sum_keeps_member_rows() -> None:
         "CF|3|CF!r1",
         "CF|4|CF!r1",
     ]
+
+
+def _two_sheet_layout() -> Layout:
+    def block(sheet: str, rows: list[LayoutRow]) -> Block:
+        return Block(
+            block_id=f"{sheet}!r1",
+            label_col=1,
+            axis=Axis(
+                id=f"{sheet}!r1",
+                row=1,
+                headers=[
+                    AxisHeader(col=4, text="2024", role="historical", period_key="2024"),
+                    AxisHeader(col=5, text="2025", role="forecast", period_key="2025"),
+                ],
+            ),
+            rows=rows,
+        )
+
+    return Layout(
+        sheets=[
+            SheetLayout(
+                name="Ops",
+                blocks=[block("Ops", [LayoutRow(row=14, label="Total Revenue")])],
+            ),
+            SheetLayout(
+                name="CF",
+                blocks=[
+                    block(
+                        "CF",
+                        [
+                            LayoutRow(row=8, label="Gross Revenues"),
+                            LayoutRow(row=14, label="CFADS"),
+                        ],
+                    )
+                ],
+            ),
+        ]
+    )
+
+
+def _cf_cell(row: int, col: int, formula: str) -> dict:
+    letter = {4: "D", 5: "E"}[col]
+    return {
+        "sheet": "CF",
+        "row": row,
+        "col": col,
+        "addr": f"{letter}{row}",
+        "formula_raw": formula,
+    }
+
+
+def test_previous_column_on_another_sheet_is_not_a_roll_forward() -> None:
+    cells = [_cf_cell(8, 4, "=Ops!C14"), _cf_cell(8, 5, "=Ops!D14")]
+    relations = formula_relations(_two_sheet_layout(), cells)
+    assert [rel.kind for rel in relations] == ["alias"]
+    assert relations[0].source_row_key == "CF|8|CF!r1"
+    assert relations[0].target_row_key == "Ops|14|Ops!r1"
+
+
+def test_previous_column_on_the_same_sheet_stays_a_roll_forward() -> None:
+    cells = [_cf_cell(8, 4, "=C14"), _cf_cell(8, 5, "=CF!D14")]
+    relations = formula_relations(_two_sheet_layout(), cells)
+    assert [rel.kind for rel in relations] == ["roll_forward"]
+    assert relations[0].source_row_key == "CF|8|CF!r1"
+    assert relations[0].target_row_key == "CF|14|CF!r1"

@@ -115,7 +115,9 @@ def _shape(ast: dict[str, Any], sheet: str, col: int, row: int) -> dict[str, Any
         target_sheet = ast.get("sheet") or sheet
         target_row = int(ast["row"])
         target_col = int(ast["col"])
-        if target_col == col - 1 and target_row != row:
+        # Another sheet's previous column is usually the same period on a shifted grid.
+        same_sheet = str(target_sheet).casefold() == sheet.casefold()
+        if same_sheet and target_col == col - 1 and target_row != row:
             return {"type": "roll", "sheet": target_sheet, "row": target_row}
         if target_row != row:
             return {"type": "alias", "sheet": target_sheet, "row": target_row}
