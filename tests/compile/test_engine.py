@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from finance_context.formulas.engine import FormulaEngine
 
 
@@ -231,3 +233,57 @@ def test_percent_literals_are_array_constants() -> None:
     lookup = engine.parse('=LOOKUP(A1,{0,10%},{"a","b"})', sheet="Inputs", addr="B1")
     assert lookup.unparsed is False
     assert [(e.kind, e.target) for e in lookup.edges] == [("ref", "Inputs!A1")]
+
+
+@pytest.mark.parametrize(
+    ("formula", "template", "targets"),
+    [
+        ("=LOG10(A1)", "=LOG10(R[-1]C[-1])", ["S!A1"]),
+        ("=ATAN2(A1,B1)", "=ATAN2(R[-1]C[-1],R[-1]C[0])", ["S!A1", "S!B1"]),
+        ("=DAYS360(A1,B1)", "=DAYS360(R[-1]C[-1],R[-1]C[0])", ["S!A1", "S!B1"]),
+        ("=DEC2HEX(A1)", "=DEC2HEX(R[-1]C[-1])", ["S!A1"]),
+    ],
+)
+def test_function_name_ending_in_digits_is_a_function(
+    formula: str, template: str, targets: list[str]
+) -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse(formula, sheet="S", addr="B2")
+    assert parsed.unparsed is False
+    assert parsed.template == template
+    assert [(e.kind, e.target) for e in parsed.edges] == [("ref", t) for t in targets]
+
+
+@pytest.mark.parametrize(
+    ("formula", "name"),
+    [
+        ("=Rate1*2", "Rate1"),
+        ("=WACC1*2", "WACC1"),
+        ("=XFE1*2", "XFE1"),
+        ("=A1048577*2", "A1048577"),
+    ],
+)
+def test_name_outside_the_grid_is_a_defined_name(formula: str, name: str) -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse(formula, sheet="S", addr="B2")
+    assert parsed.unparsed is False
+    assert parsed.template == f"={name}*2"
+    assert [(e.kind, e.target, e.named) for e in parsed.edges] == [("ref", name, True)]
+
+
+def test_wide_letters_pair_is_a_named_range_not_columns() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=SUM(Start:Finish)", sheet="S", addr="B2")
+    assert parsed.unparsed is False
+    assert [(e.kind, e.target, e.named) for e in parsed.edges] == [
+        ("range", "Start:Finish", True)
+    ]
+
+
+def test_column_range_inside_the_grid_stays_columns() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=SUM(A:C)+SUM($XFD:$XFD)", sheet="S", addr="B2")
+    assert [(e.kind, e.target) for e in parsed.edges] == [
+        ("range", "S!A:C"),
+        ("range", "S!XFD:XFD"),
+    ]

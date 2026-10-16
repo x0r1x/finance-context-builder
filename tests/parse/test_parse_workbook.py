@@ -114,6 +114,33 @@ def test_shared_formula_keeps_unquoted_cyrillic_sheet_name(tmp_path: Path, dest:
     assert by[("Модель", "B2")]["formula_raw"] == "Q1_план!A2+A2"
 
 
+def test_shared_formula_child_keeps_function_and_name_text(
+    tmp_path: Path, dest: Path
+) -> None:
+    source = tmp_path / "shared_names.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="Sheet1",
+                cells=[
+                    CellSpec(
+                        addr="B1",
+                        value="0",
+                        formula="LOG10(A1)*Rate1",
+                        shared_si=0,
+                        shared_ref="B1:B2",
+                    ),
+                    CellSpec(addr="B2", value="0", shared_si=0),
+                ],
+            )
+        ],
+    )
+    parse_workbook(source, dest)
+    by = _by_addr(load_cells(dest))
+    assert by[("Sheet1", "B2")]["formula_raw"] == "LOG10(A2)*Rate1"
+
+
 def test_hidden_row_and_column(tmp_path: Path, dest: Path) -> None:
     source = tmp_path / "hidden.xlsx"
     build_xlsx(

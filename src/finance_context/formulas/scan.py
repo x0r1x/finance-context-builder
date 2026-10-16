@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from finance_context.excel.a1 import col_to_index
+from finance_context.excel.a1 import col_to_index, in_grid
 
 _ERRORS = (
     "#GETTING_DATA!",
@@ -18,10 +18,12 @@ _ERRORS = (
 )
 
 
-_CELL_BODY = re.compile(r"(\$?)([A-Za-z]+)(\$?)(\d+)")
+# Up to three column letters and nothing word-like after the row: `LOG10(`, `DEC2HEX`
+# and `Table1[` are not cells. `in_grid` then drops `Rate1` and `XFE1`.
+_CELL_BODY = re.compile(r"(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![\w.(\[])")
 
 
-_COL_PAIR = re.compile(r"(\$?)([A-Za-z]+):(\$?)([A-Za-z]+)(?![A-Za-z0-9])", re.I)
+_COL_PAIR = re.compile(r"(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})(?![\w.(\[])")
 
 
 _ROW_PAIR = re.compile(r"(\$?)(\d+):(\$?)(\d+)(?!\d)")
@@ -250,14 +252,21 @@ def _cell_node(match: re.Match[str]) -> dict[str, Any]:
     }
 
 
-def _scan_range_body(text: str, i: int) -> tuple[dict[str, Any], int] | None:
+def _grid_cell(text: str, i: int) -> re.Match[str] | None:
     cell = _CELL_BODY.match(text, i)
+    if cell and in_grid(col_to_index(cell.group(2)), int(cell.group(4))):
+        return cell
+    return None
+
+
+def _scan_range_body(text: str, i: int) -> tuple[dict[str, Any], int] | None:
+    cell = _grid_cell(text, i)
     if cell:
         start = _cell_node(cell)
         j = cell.end()
         if j < len(text) and text[j] == ":":
             k = _skip_sheet_qualifier(text, j + 1)
-            cell2 = _CELL_BODY.match(text, k)
+            cell2 = _grid_cell(text, k)
             if cell2:
                 return (
                     {"op": "range", "start": start, "end": _cell_node(cell2)},
@@ -265,7 +274,7 @@ def _scan_range_body(text: str, i: int) -> tuple[dict[str, Any], int] | None:
                 )
         return start, j
     cols = _COL_PAIR.match(text, i)
-    if cols:
+    if cols and in_grid(col_to_index(cols.group(2))) and in_grid(col_to_index(cols.group(4))):
         return (
             {
                 "op": "range",
