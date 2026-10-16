@@ -12,7 +12,7 @@
 | --- | --- |
 | Блоки, оси периодов, подписи строк | [layout.md](layout.md) |
 | Граф формул, циклы, trace | [graph.md](graph.md) |
-| Одно наблюдение для отвечающей LLM | [llm.md](llm.md) |
+| Каталог, паспорт и наблюдения | [slices.md](slices.md) |
 
 ## Что на входе и на выходе
 
@@ -28,7 +28,7 @@
 | `graph.json` / `graph.md` | Схема `1.7.0`: счётчики parquet на уровне ячеек, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, формула A1, `formula_class`, `row_key`, `period_id`, входы; диапазон не раскрывается). В Markdown у links есть колонка Class. AST и cell-edges остаются в `ir/` |
 | `context.json` / `context.md` | Схема `1.14.0`: паспорт, `axes` (единственное место фаз, флагов и `group_key`), каждый блок и каждая строка (`row_key`, `disposition`, одна формула, серии кэша по `axis_ids`, `value_statuses`, `scale_factor`, `normalized_values`, `period_position`, `aggregation`). Год, повторённый над месяцами, — `group_key`, не вторая ось. Год и месяц в одной полосе заголовков — одна таблица. Повтор той же шапки в следующей секции ссылается на ту же ось. В Markdown секция `## Axes` печатает ось один раз, периоды — колонками: в шапке id оси и ключи периодов (`\| PF Model!r9 \| 2021 \| 2022 \| 2032 \|`), под ней строки `Start` / `End` (ISO-даты периода, если линейка Start/End есть в книге), `Group` / `Phase` / `Phase year` / `Calendar` / `Flags`. Таблица блока добавляет колонки `Path` (`label_path`) и `Cells` (`L total: -86400`, `G Start: 01.01.2024`). У role-ячейки есть `header`. Колонка Time в Markdown — `time_semantics/period_position/aggregation`. Скаляр и строка params — `instant/instant/none`; статическая ставка — `rate/instant/none`; заполненный годовой поток — `flow/during_period/sum`. Слово `none` — это aggregation. Колонка `total` / `stub` не входит в ось. Пустые строки атрибутов скрыты: год без фазы — только шапка. Регулярная месячная сетка схлопывается в одну колонку на год (`\| Output!r6 \| 2020 \| 2021 \|` и строка `\| Periods \| 2020-01 .. 2020-12 \| ... \|`). JSON не пишет пустую `phase`, пустой `flags` и `calendar_year`, если год уже в ключе. У блока есть `Axes: ...` и одна сетка на серию. Time стоит рядом с Unit. Пустая ячейка — `empty`, период вне фазы — `n/a`, тысячи печатаются как `k£ ×1000` и `1.5 (1500)`. Заголовок периода — `period_key` и буква колонки (`Y23 (AA)`). Значение периода показывает кэш и `[Sheet!A1]`. Под блоком `relations` используют тот же `row_key`. Второго каталога строк и реестра ячеек нет. В шапке одна строка полноты контента. `graph` — указатель |
 
-Каталог, паспорт и наблюдения — HTTP-проекции, не файлы. Схемы: `catalog-2`, `summary-2`, `observation-2`. Подробности: [llm.md](llm.md).
+Каталог, паспорт и наблюдения — HTTP-проекции, не файлы. Схемы: `catalog-2`, `summary-2`, `observation-2`. Подробности: [slices.md](slices.md).
 
 Formula IR и layout той же книги общие: `$DATA_DIR/shared/books/{job_id}/`.
 
