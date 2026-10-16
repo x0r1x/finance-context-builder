@@ -236,6 +236,12 @@ def _render(node: dict[str, Any], ocol: int, orow: int, sep: str, decimal: str) 
     if op == "func":
         args = sep.join(_render(a, ocol, orow, sep, decimal) for a in node["args"])
         return f"{node['name']}({args})"
+    if op == "array":
+        rows = (
+            sep.join(_render(item, ocol, orow, sep, decimal) for item in row)
+            for row in node["rows"]
+        )
+        return "{" + ";".join(rows) + "}"
     raise FormulaSyntaxError("cannot render")
 
 

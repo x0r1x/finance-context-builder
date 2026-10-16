@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from lxml import etree
 
 from finance_context.errors import ContextError
-from finance_context.excel.a1 import format_addr, formula_uses_semicolon, parse_addr, shift_formula
+from finance_context.excel.a1 import format_addr, parse_addr, shift_formula
 from finance_context.excel.models import (
     CellPresence,
     DefinedName,
@@ -240,19 +240,19 @@ def parse_ooxml(
 
     cells: list[RawCell] = []
     presence: list[CellPresence] = []
-    locale_ru = False
     for sheet in sheets:
-        parsed, ru, sheet_presence = _parse_sheet(zf, sheet, sst, formats)
+        parsed, sheet_presence = _parse_sheet(zf, sheet, sst, formats)
         cells.extend(parsed)
         presence.extend(sheet_presence)
-        locale_ru = locale_ru or ru
 
     meta = WorkbookMeta(
         sheets=[sheet.info for sheet in sheets],
         has_vba=has_vba,
         has_xlm=has_xlm,
         externals=externals,
-        locale_hint="ru" if locale_ru else "en",
+        # OOXML stores every formula in en-US whatever the Excel UI locale was.
+        # A `;` there is an array-constant row break, not a ru argument separator.
+        locale_hint="en",
         iterate=iterate,
         date1904=date1904,
         defined_names=names,
@@ -349,7 +349,7 @@ def _parse_sheet(
     sheet: _SheetParse,
     sst: list[str],
     formats: list[str | None],
-) -> tuple[list[RawCell], bool, list[CellPresence]]:
+) -> tuple[list[RawCell], list[CellPresence]]:
     member = zip_member(zf, sheet.part)
     if member is None:
         raise ContextError("zip_rejected", f"missing sheet {sheet.part}")
@@ -388,7 +388,6 @@ def _parse_sheet(
                 if built.shared_si is not None and built.formula:
                     masters[built.shared_si] = (built.col, built.row, built.formula)
 
-    locale_ru = False
     cells: list[RawCell] = []
     for item in pending:
         formula = item.formula
@@ -396,8 +395,6 @@ def _parse_sheet(
         if item.shared_si is not None and not formula and item.shared_si in masters:
             mcol, mrow, mformula = masters[item.shared_si]
             formula = shift_formula(mformula, mcol, mrow, item.col, item.row)
-        if formula and formula_uses_semicolon(formula):
-            locale_ru = True
         cells.append(
             RawCell(
                 sheet=sheet.info.name,
@@ -413,7 +410,7 @@ def _parse_sheet(
                 shared_master=is_master,
             )
         )
-    return cells, locale_ru, presence
+    return cells, presence
 
 
 def _hidden_cols(root: etree._Element) -> set[int]:

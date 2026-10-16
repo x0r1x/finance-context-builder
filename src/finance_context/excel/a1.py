@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import re
 
+_MAX_COL = 16_384  # XFD
+_MAX_ROW = 1_048_576
+
 _ADDR = re.compile(r"\$?([A-Za-z]+)\$?(\d+)")
+# A cell in formula text is not part of a longer token: not after a word character or
+# a dot (`Rate_A1`, `1E5`, `_xlfn.LOG10`), not before one or `(` / `[` (`LOG10(`,
+# `DEC2HEX`, `Table1[`).
 _REF = re.compile(
-    r"(?P<sheet>(?:'(?:[^']|'')+'|[A-Za-z0-9_.]+(?:\.[A-Za-z0-9]+)?)!)?"
-    r"(?P<abscol>\$)?(?P<col>[A-Z]+)(?P<absrow>\$)?(?P<row>\d+)",
+    r"(?<![\w.])(?P<sheet>[\w.]+!)?"
+    r"(?P<abscol>\$)?(?P<col>[A-Z]{1,3})(?P<absrow>\$)?(?P<row>\d+)(?![\w.(\[])",
     re.IGNORECASE,
 )
 
@@ -15,6 +21,11 @@ def col_to_index(col: str) -> int:
     for ch in col.upper():
         n = n * 26 + (ord(ch) - 64)
     return n
+
+
+def in_grid(col: int, row: int = 1) -> bool:
+    """Inside an Excel 2007+ sheet, A1 to XFD1048576. `Rate1` and `XFE1` are names."""
+    return 1 <= col <= _MAX_COL and 1 <= row <= _MAX_ROW
 
 
 def index_to_col(n: int) -> str:
@@ -56,6 +67,13 @@ def shift_formula(formula: str, from_col: int, from_row: int, to_col: int, to_ro
             out.append(ch)
             i += 1
             continue
+        if ch in "['":
+            # A table column or book index (`Table1[Q1]`, `[1]`) and a quoted sheet name
+            # (`'Q1 2025'!`) are copied as is; only the cell after them moves.
+            end = _segment_end(formula, i)
+            out.append(formula[i:end])
+            i = end
+            continue
         match = _REF.match(formula, i)
         if match is None:
             out.append(ch)
@@ -63,6 +81,10 @@ def shift_formula(formula: str, from_col: int, from_row: int, to_col: int, to_ro
             continue
         col = col_to_index(match.group("col"))
         row = int(match.group("row"))
+        if not in_grid(col, row):
+            out.append(match.group(0))
+            i = match.end()
+            continue
         if not match.group("abscol"):
             col = max(col + dc, 1)
         if not match.group("absrow"):
@@ -75,11 +97,17 @@ def shift_formula(formula: str, from_col: int, from_row: int, to_col: int, to_ro
     return "".join(out)
 
 
-def formula_uses_semicolon(formula: str) -> bool:
-    in_quote = False
-    for ch in formula:
-        if ch == '"':
-            in_quote = not in_quote
-        elif ch == ";" and not in_quote:
-            return True
-    return False
+def _segment_end(formula: str, i: int) -> int:
+    """End of the `[...]` or `'...'` segment at `i`. `''` inside quotes is one quote."""
+    if formula[i] == "[":
+        close = formula.find("]", i + 1)
+        return len(formula) if close < 0 else close + 1
+    j = i + 1
+    while j < len(formula):
+        if formula[j] == "'":
+            if formula[j + 1 : j + 2] == "'":
+                j += 2
+                continue
+            return j + 1
+        j += 1
+    return len(formula)

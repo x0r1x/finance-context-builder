@@ -115,3 +115,31 @@ def test_open_column_range_is_truncated_in_edges(tmp_path: Path, dest: Path) -> 
     range_edges = [e for e in edges if e["kind"] == "range"]
     assert range_edges
     assert any(e["truncated"] for e in range_edges)
+
+
+def test_array_constant_keeps_en_argument_separator(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "array.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="Inputs",
+                cells=[
+                    CellSpec(addr="A1", value="1"),
+                    CellSpec(addr="B1", value="2"),
+                    CellSpec(addr="C1", value="3", formula="SUM(A1,B1)"),
+                    CellSpec(addr="D1", value="2", formula="INDEX({1;2},2)"),
+                ],
+            )
+        ],
+    )
+    parse_workbook(source, dest)
+    compile_workbook(dest)
+    cells = load_parquet(dest / "ir" / "cells.parquet")
+    by = {(c["sheet"], c["addr"]): c for c in cells}
+    assert by[("Inputs", "C1")]["unparsed"] is False
+    assert by[("Inputs", "C1")]["formula_template"] == "=SUM(R[0]C[-2],R[0]C[-1])"
+    edges = load_parquet(dest / "ir" / "edges.parquet")
+    targets = {e["target"] for e in edges if e["source"] == "Inputs!C1"}
+    assert targets == {"Inputs!A1", "Inputs!B1"}
+    assert by[("Inputs", "D1")]["unparsed"] is False

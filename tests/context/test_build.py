@@ -80,14 +80,14 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.row == 2
     assert metric.values == ["320000", "320000"]
     assert metric.value_statuses == ["cached", "cached"]
-    assert metric.scale_factor == 1
+    assert metric.scale_factor is None
     assert metric.normalized_values == ["320000", "320000"]
     assert metric.period_position == "beginning"
     assert metric.aggregation == "first"
     assert metric.formula == "=RC[-1]"
     assert metric.unit == "money"
     assert metric.hints.currency == "USD"
-    assert metric.hints.scale == "unit"
+    assert metric.hints.scale is None
     assert metric.hints.sign == "stock"
 
 
