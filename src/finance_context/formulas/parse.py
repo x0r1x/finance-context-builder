@@ -132,9 +132,9 @@ class _Parser:
         tok = self.eat()
         if tok.kind == "OP" and tok.value in {"+", "-"}:
             number = self.eat("NUMBER").value
-            return {"op": "num", "value": -number if tok.value == "-" else number}
+            return self._array_number(-number if tok.value == "-" else number)
         if tok.kind == "NUMBER":
-            return {"op": "num", "value": tok.value}
+            return self._array_number(tok.value)
         if tok.kind == "STRING":
             return {"op": "str", "value": tok.value}
         if tok.kind == "ERROR":
@@ -142,6 +142,13 @@ class _Parser:
         if tok.kind == "NAME" and tok.value.upper() in {"TRUE", "FALSE"}:
             return {"op": "name", "value": tok.value.upper()}
         raise FormulaSyntaxError("array constant holds constants only")
+
+    def _array_number(self, value: float) -> dict[str, Any]:
+        node: dict[str, Any] = {"op": "num", "value": value}
+        if self._op("%"):
+            self.eat("OP")
+            node = {"op": "percent", "expr": node}
+        return node
 
     def _parse_call(self, name: str) -> dict[str, Any]:
         self.eat("LPAREN")

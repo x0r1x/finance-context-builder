@@ -221,3 +221,13 @@ def test_array_constant_rejects_references_and_ragged_rows() -> None:
     assert engine.parse("=SUM({A1,2})", sheet="Inputs", addr="B1").unparsed is True
     assert engine.parse("=SUM({1,2;3})", sheet="Inputs", addr="B1").unparsed is True
     assert engine.parse("=SUM({1,2", sheet="Inputs", addr="B1").unparsed is True
+
+
+def test_percent_literals_are_array_constants() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=SUM({10%,-20%})", sheet="Inputs", addr="B1")
+    assert parsed.unparsed is False
+    assert parsed.template == "=SUM({10%,-20%})"
+    lookup = engine.parse('=LOOKUP(A1,{0,10%},{"a","b"})', sheet="Inputs", addr="B1")
+    assert lookup.unparsed is False
+    assert [(e.kind, e.target) for e in lookup.edges] == [("ref", "Inputs!A1")]

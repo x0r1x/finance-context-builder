@@ -181,6 +181,13 @@ def test_index_and_per_annum_captions_are_cell_units() -> None:
         ("₽", "unit"),
         ("тыс. ₽", "k"),
         ("млн ₽", "m"),
+        ("тыс.р.", "k"),
+        ("млн.р.", "m"),
+        ("т. руб.", "k"),
+        ("т.р.", "k"),
+        ("тысячи руб.", "k"),
+        ("тысяч рублей", "k"),
+        ("р.", "unit"),
     ],
 )
 def test_rub_unit_cell_is_money_with_its_scale(unit_text: str, scale: str) -> None:
@@ -218,6 +225,7 @@ def test_rub_unit_cell_scale_beats_a_plain_label() -> None:
         ("[$£-809]#,##0", "GBP"),
         ("[$€-x-euro2] #,##0", "EUR"),
         ('"$"#,##0', "USD"),
+        ('#,##0.00"р."', "RUB"),
         ("[$-419]# ##0", None),
         ("[$-F800]dddd, mmmm dd, yyyy", None),
     ],
@@ -229,3 +237,18 @@ def test_currency_code_reads_the_symbol_of_a_format_tag(fmt: str, code: str | No
 def test_locale_only_format_tag_is_not_money() -> None:
     measure = parse_measure(number_formats=["[$-419]# ##0"])
     assert (measure.unit, measure.currency) == (None, None)
+
+
+@pytest.mark.parametrize("label", ["Тысяча", "Миллион", "Миллиард"])
+def test_russian_multiplier_label_is_not_a_scaled_amount(label: str) -> None:
+    assert parse_measure(label=label).scale is None
+
+
+@pytest.mark.parametrize("label", ["тысячная доля", "миллиардный", "миллионер", "Стоимость труб"])
+def test_word_built_on_a_multiplier_is_not_a_scale(label: str) -> None:
+    assert parse_measure(label=label).scale is None
+
+
+def test_rub_label_in_thousands_phrase_is_scaled() -> None:
+    measure = parse_measure(label="Выручка, в тысячах рублей")
+    assert (measure.unit, measure.currency, measure.scale) == ("money", "RUB", "k")

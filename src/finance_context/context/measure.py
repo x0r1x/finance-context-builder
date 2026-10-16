@@ -29,7 +29,7 @@ _CURRENCY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "RUB",
         re.compile(
-            r"₽|\brubs?\b|\bруб\.?\b|\bрубл(?:ей|я|ь)?\b",
+            r"₽|\brubs?\b|\bруб\.?\b|\bрубл(?:ей|я|ь)?\b|(?<!\w)р\.(?!\w)",
             re.IGNORECASE,
         ),
     ),
@@ -60,10 +60,15 @@ _COUNT_PER = re.compile(r"^\s*(months?|days?|hours?|weeks?)\s+(per|in a|/)\s+", 
 _PER_UNIT = re.compile(r"/\s*(mwh|mw|mwp|kwh|kw|gwh|unit|veh|tonne|t|bbl|m3)\b", re.I)
 _THOUSANDS = re.compile(r"'000(?!')|\b000s\b|\(000\)", re.I)
 _MILLIONS = re.compile(r"'000'000|\bmn\b|\bmm\b", re.I)
-# "тыс. руб.", "млн ₽", "млрд руб.": the Russian multiplier stands before the currency.
-_RU_THOUSANDS = re.compile(r"\bтыс\b|\bтысяч", re.I)
-_RU_MILLIONS = re.compile(r"\bмлн\b|\bмиллион", re.I)
-_RU_BILLIONS = re.compile(r"\bмлрд\b|\bмиллиард", re.I)
+# "тыс. руб.", "т.р.", "млн ₽", "в тысячах рублей": the multiplier stands before the currency.
+# Whole words only: "тысячная доля" and "миллионер" are not a scale.
+_RU_THOUSANDS = re.compile(r"\bтыс\b|\bтысяч(?:а|и|ах)?\b|\bт(?:\.\s*|\s+)(?=руб|р\.)", re.I)
+_RU_MILLIONS = re.compile(r"\bмлн\b|\bмиллион(?:а|ов|ах)?\b", re.I)
+_RU_BILLIONS = re.compile(r"\bмлрд\b|\bмиллиард(?:а|ов|ах)?\b", re.I)
+# A label that is only the multiplier word names the multiplier row (`Thousand` = 1000).
+_MULTIPLIER_WORD = re.compile(
+    r"thousands?|millions?|billions?|тысяч[аи]?|миллион(?:а|ов)?|миллиард(?:а|ов)?"
+)
 _RATIO_TEXT = re.compile(r"^\s*x\s*$", re.I)
 _DATE_TEXT = re.compile(r"^\s*date\s*$", re.I)
 # A trailing period marker is not a second unit: "MWh p.a." is the same count as "MWh".
@@ -227,7 +232,7 @@ def _currency_code(text: str) -> str | None:
 def _scale_from(text: str) -> str | None:
     blob = text.casefold().strip()
     # The row *is* the multiplier (`Thousand` = 1000), not an amount in thousands.
-    if re.fullmatch(r"thousands?|millions?|billions?", blob):
+    if _MULTIPLIER_WORD.fullmatch(blob):
         return None
     if re.search(r"\bbn\b|\bbillion", blob) or "bn£" in blob or "£bn" in blob:
         return "bn"

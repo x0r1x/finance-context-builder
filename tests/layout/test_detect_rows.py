@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 
@@ -472,3 +474,23 @@ def test_rub_unit_column_cells_are_units() -> None:
     rows = {row.label: row for row in layout.sheets[0].blocks[0].rows}
     assert [(cell.col, cell.role) for cell in rows["Выручка"].cells] == [(3, "unit")]
     assert [(cell.col, cell.role) for cell in rows["Капзатраты"].cells] == [(3, "unit")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "тыс. руб.",
+        "тыс.р.",
+        "млн.р.",
+        "млрд.р.",
+        "т. руб.",
+        "т.р.",
+        "тысячи руб.",
+        "тысяч рублей",
+        "р.",
+    ],
+)
+def test_rub_unit_captions_are_unit_text(text: str) -> None:
+    from finance_context.layout.params import is_unit_text
+
+    assert is_unit_text(text)
