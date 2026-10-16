@@ -8,13 +8,11 @@ requires-python = ">=3.12"
 dependencies = [
     "pyarrow>=16",
     "fastapi>=0.141.1",
-    "httpx>=0.28.1",
     "lxml>=5.3",
     "numpy>=2.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "python-multipart>=0.0.12",
-    "pyyaml>=6.0",
     "scipy>=1.13",
     "typer>=0.16",
     "uvicorn>=0.32",
