@@ -24,6 +24,38 @@ from finance_context.models.context import (
 from finance_context.vocab import ValueStatus
 
 _SERIES_KINDS = {"fact", "flag", "helper"}
+# A period start or end in the label. "End of construction" is a phase, not a period end.
+# "На начало" / "на конец" always names a point in time.
+_BOP_TEXT = re.compile(
+    r"\b(?:beginning|start) of (?:the )?(?:period|year|month|quarter)\b"
+    r"|\bbeginning balance\b|\bb/f\b|\bbrought forward\b"
+    r"|\bна начало\b"
+    r"|\b(?:входящ|начальн)\w*\s+(?:остат\w*|сальдо)\b"
+)
+_EOP_TEXT = re.compile(
+    r"\bend of (?:the )?(?:period|year|month|quarter)\b"
+    r"|\bending balance\b|\bc/f\b|\bcarried forward\b"
+    r"|\bна конец\b"
+    r"|\b(?:исходящ|конечн)\w*\s+(?:остат\w*|сальдо)\b"
+)
+# "Остаточная стоимость" is not an account balance.
+_RU_BALANCE = re.compile(r"\bостат(?:ок|ки|ка|ков|ке)\b|\bсальдо\b")
+# Coverage and other multiples. Summing or averaging them across periods is wrong.
+_RATIO_TEXT = re.compile(r"\b(?:ratio|dscr|llcr|plcr|icr|coverage|коэффициент\w*|коэф)\b")
+_BALANCE_SHEET_TITLES = frozenset(
+    {
+        "balance sheet",
+        "balance sheets",
+        "statement of financial position",
+        "баланс",
+        "бухгалтерский баланс",
+        "прогнозный баланс",
+        "балансовый отчет",
+        "балансовый отчёт",
+        "отчет о финансовом положении",
+        "отчёт о финансовом положении",
+    }
+)
 
 
 class _ExclusionView:
@@ -119,6 +151,9 @@ def _row_for_layout(
     )
     factor = scale_factor_for(hints.scale)
     position, aggregation = temporal_profile(hints.time_semantics)
+    # A level (an index at period end) keeps `last`; a sum or a mean of prices does not hold.
+    if aggregation in {"sum", "average"} and _not_additive(unit, layout_row.label):
+        aggregation = "none"
     if static:
         position, aggregation = "instant", "none"
     if series:
@@ -180,16 +215,18 @@ def _hints_for(
     *,
     number_formats: list[str] | None = None,
     static: bool = False,
+    sheet: str | None = None,
 ) -> RowHints:
     blob, tokens = _hint_blob_and_tokens(layout_row.label or "")
+    text = re.sub(r"\s+", " ", (layout_row.label or "").casefold()).strip()
     nature = None
     time_semantics = None
-    if tokens & {"opening", "closing", "balance", "beg", "ending"}:
+    if tokens & {"opening", "closing", "balance", "beg", "ending"} or _RU_BALANCE.search(blob):
         nature = "balance"
-    if "opening" in tokens or "b/f" in blob or "brought forward" in blob:
+    if tokens & {"opening", "bop"} or _BOP_TEXT.search(text):
         time_semantics = "bop"
         nature = "balance"
-    elif "closing" in tokens or "c/f" in blob or "carried forward" in blob:
+    elif tokens & {"closing", "eop"} or _EOP_TEXT.search(text):
         time_semantics = "eop"
         nature = "balance"
     if time_semantics is None and any(token in tokens for token in ("rate", "ratio", "%")):
@@ -198,6 +235,8 @@ def _hints_for(
         time_semantics = "flow"
     if _is_index_unit(unit_text):
         time_semantics = "stock"
+        nature = nature or "balance"
+    if time_semantics == "flow" and _in_balance_sheet(layout_row, sheet):
         nature = nature or "balance"
     if time_semantics == "flow" and nature == "balance":
         time_semantics = "stock"
@@ -214,6 +253,8 @@ def _hints_for(
         measure = Measure(unit="rate", sign=measure.sign)
     if measure.unit == "rate" and time_semantics in {None, "flow", "instant"}:
         time_semantics = "rate"
+    elif time_semantics == "flow" and _not_additive(measure.unit, layout_row.label):
+        time_semantics = "rate"
     return RowHints(
         nature=nature,
         time_semantics=time_semantics,
@@ -223,6 +264,28 @@ def _hints_for(
         scale=measure.scale,
         sign=measure.sign,
     )
+
+
+def _not_additive(unit: str | None, label: str | None) -> bool:
+    """A price or a multiple (DSCR, x). Neither a sum nor an average over periods holds."""
+    if unit in {"ratio", "price"}:
+        return True
+    if unit is not None:
+        return False
+    blob, _tokens = _hint_blob_and_tokens(label or "")
+    return bool(_RATIO_TEXT.search(blob))
+
+
+def _in_balance_sheet(layout_row: LayoutRow, sheet: str | None) -> bool:
+    """The row sits on a balance sheet tab or under a balance sheet heading."""
+    return any(_is_balance_sheet_title(title) for title in (sheet, *layout_row.section_path))
+
+
+def _is_balance_sheet_title(title: str | None) -> bool:
+    blob = re.sub(r"\([^)]*\)", " ", title or "")
+    blob = re.sub(r"^\s*(?:\d+|[ivx]+)[.)]\s*", "", blob, flags=re.IGNORECASE)
+    blob = re.sub(r"[^\w\s]+", " ", blob)
+    return re.sub(r"\s+", " ", blob).strip().casefold() in _BALANCE_SHEET_TITLES
 
 
 def _hint_blob_and_tokens(label: str) -> tuple[str, set[str]]:

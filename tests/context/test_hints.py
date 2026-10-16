@@ -27,9 +27,16 @@ def test_traffic_label_keeps_flow_time() -> None:
     assert hints.unit is None
 
 
-def test_sheet_name_does_not_make_a_balance() -> None:
+def test_balance_sheet_section_makes_a_stock() -> None:
     row = LayoutRow(row=8, label="Cash in hand", kind="fact", section_path=["Balance Sheet"])
     hints = _hints_for(row)
+    assert hints.nature == "balance"
+    assert hints.time_semantics == "stock"
+
+
+def test_balance_word_in_a_section_is_not_the_balance_sheet() -> None:
+    row = LayoutRow(row=8, label="Cash in hand", kind="fact", section_path=["Balance check"])
+    hints = _hints_for(row, sheet="Balances and checks")
     assert hints.nature is None
     assert hints.time_semantics == "flow"
 
