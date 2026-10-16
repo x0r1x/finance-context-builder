@@ -6,7 +6,7 @@ An Excel document parser. This read-only service reads a cash-flow workbook (`.x
 
 `context` holds block rows, periods, and values. `graph` holds formula links. A trace of one cell reads that graph.
 
-Guides: [overview](docs/en/overview.md), [layout](docs/en/layout.md), [graph](docs/en/graph.md), [Slices](docs/en/slices.md), [architecture](docs/en/architecture.md).
+Guides: [overview](docs/en/overview.md), [layout](docs/en/layout.md), [graph](docs/en/graph.md), [slices](docs/en/slices.md), [architecture](docs/en/architecture.md).
 
 Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2.0). See `NOTICE`.
 
