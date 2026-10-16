@@ -6,9 +6,11 @@ import os
 import time
 from pathlib import Path
 
+from finance_context.adapters.soffice import SofficeConverter
 from finance_context.app.publisher import publisher_stamp, stamped_stages
 from finance_context.context.build import build_context
 from finance_context.errors import ContextError
+from finance_context.excel.legacy import XlsConverter, ensure_xlsx, has_source
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
@@ -29,8 +31,11 @@ _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
 
 
 class Pipeline:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self, settings: Settings | None = None, *, converter: XlsConverter | None = None
+    ) -> None:
         self.settings = settings or Settings()
+        self.converter = converter or SofficeConverter.from_settings(self.settings)
 
     def run(
         self,
@@ -92,8 +97,7 @@ class Pipeline:
         if context_path.is_file() and markdown_path.is_file():
             refresh_context_markdown(dest_dir)
             return ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
-        source = book / "source.xlsx"
-        if not source.is_file():
+        if not has_source(book):
             raise ContextError("empty_file", "source.xlsx missing")
         return self._run_loaded(
             dest_dir,
@@ -117,7 +121,6 @@ class Pipeline:
         shared_dir: Path | None = None,
     ) -> ContextDocument:
         book = shared_dir or dest_dir
-        source = book / "source.xlsx"
         owner = _load_owner(dest_dir)
         source_filename = source_filename or owner.get("source_filename")
         content_sha256 = content_sha256 or owner.get("content_sha256")
@@ -140,7 +143,7 @@ class Pipeline:
 
         set_stage("parse")
         if not (book / "raw" / "workbook.json").is_file():
-            _timed("parse", lambda: parse_workbook(source, book))
+            _timed("parse", lambda: parse_workbook(ensure_xlsx(book, self.converter), book))
         set_stage("compile")
         if not ir_is_current(book):
             compiled = _timed("compile", lambda: compile_workbook(book))
@@ -251,6 +254,10 @@ def run_job_process(
     shared = shared_book_dir(settings.data_dir, job_id)
     try:
         Pipeline(settings).run(dest, job_id=job_id, generation=generation, shared_dir=shared)
+    except ContextError as exc:
+        # A known refusal (encrypted book, no LibreOffice, bad zip): the code, no traceback.
+        mark_job_failed(dest, job_id, exc.code, generation)
+        log_event(_LOGGER, logging.WARNING, "job_failed", str(exc), error=exc.code)
     except Exception as exc:
         mark_job_failed(dest, job_id, type(exc).__name__, generation)
         raise

@@ -12,7 +12,7 @@ from finance_context.api.schemas import ErrorBody
 from finance_context.api.state import AppContext
 
 _LOGGER = logging.getLogger("finance_context.api")
-_ALLOWED = {".xlsx", ".xlsm"}
+_ALLOWED = {".xlsx", ".xlsm", ".xls"}
 _JOB_ID = re.compile(r"^[0-9a-f]{64}$")
 
 _MARKDOWN = {
