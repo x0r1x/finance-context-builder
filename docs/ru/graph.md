@@ -6,7 +6,7 @@
 
 Код: `src/finance_context/graph/` (`stage.py`, `cycles.py`, `trace.py`), рендер — `src/finance_context/render/graph.py`, развёртка диапазонов — `formulas/csr.py`. Пайплайн: `parse → compile → layout → graph → build → render`.
 
-Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [срез для LLM](llm.md).
+Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [срезы](slices.md).
 
 ## Владение данными
 
@@ -25,7 +25,7 @@
 
 `links[]` — одна запись на ячейку с формулой: `cell`, A1-текст один раз, `formula_class` (`same_period`, `cross_period`, `aggregation`, `rollforward`, `conditional`, `hardcoded`), `refs`, `row_key` строки контекста и `period_id` колонки оси. Оба ключа `null`, если ячейка вне layout. Колонка `total` или `stub` периодом не является, поэтому у её link `period_id=null`, даже если строка лежит в timeline-блоке. `SUM(J9:J12)` остаётся одним диапазоном, не десятками `range_member`. Пустые члены диапазона в `links` не входят. `nodes` и `edges` — не `len(links)`. `context.md` печатает в значении периода `[Sheet!A1]` — это `links[].cell`, формула остаётся в link. Заголовок периода по-прежнему содержит букву колонки (`Y23 (AA)`).
 
-`context.json` хранит pointer `graph` (счётчики и пути). В нём нет `precedents_rows`, `dependents_rows`, `precedent_cells`, `formula_ast` и второго каталога строк. Формула строки — один fingerprint. Значения блока с одной осью — плоский массив кэша или `null`; у нескольких осей числа лежат в `rows[].series` по `axis_id`, а плоские `values` повторяют первую серию. Рядом такой же длины `value_statuses` и `normalized_values`, плюс `scale_factor`, `period_position` и `aggregation`. Фазы и `group_key` — в `axes`, не в поле `timeline`. Это не каталог ячеек. Прецеденты среза для отвечающей LLM берутся из `links` / trace (`row_key`, `period_id`); AST в срез не копируется.
+`context.json` хранит pointer `graph` (счётчики и пути). В нём нет `precedents_rows`, `dependents_rows`, `precedent_cells`, `formula_ast` и второго каталога строк. Формула строки — один fingerprint. Значения блока с одной осью — плоский массив кэша или `null`; у нескольких осей числа лежат в `rows[].series` по `axis_id`, а плоские `values` повторяют первую серию. Рядом такой же длины `value_statuses` и `normalized_values`, плюс `scale_factor`, `period_position` и `aggregation`. Фазы и `group_key` — в `axes`, не в поле `timeline`. Это не каталог ячеек. Прецеденты среза наблюдения берутся из `links` / trace (`row_key`, `period_id`); AST в срез не копируется.
 
 Отдельных `graph-edges.json`, `graph-dangling.json` и `formulas.json` нет. Полнота cell-графа не живёт в `context.blocks[].relations` (там formula-shape alias, aggregate, difference и roll_forward).
 

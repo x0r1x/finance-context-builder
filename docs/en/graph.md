@@ -6,7 +6,7 @@ The public graph is two files with the same facts: `graph.json` and `graph.md` (
 
 Code: `src/finance_context/graph/` (`stage.py`, `cycles.py`, `trace.py`), render in `src/finance_context/render/graph.py`, range expansion in `formulas/csr.py`. Pipeline: `parse → compile → layout → graph → build → render`.
 
-Related documents: [overview](overview.md), [architecture](architecture.md), [LLM slice](llm.md).
+Related documents: [overview](overview.md), [architecture](architecture.md), [slices](slices.md).
 
 ## Who owns each fact
 
@@ -25,7 +25,7 @@ One fact, one place.
 
 `links[]` is one record per formula cell: `cell`, the A1 text once, `formula_class` (`same_period`, `cross_period`, `aggregation`, `rollforward`, `conditional`, `hardcoded`), `refs`, the context row's `row_key`, and the axis column's `period_id`. Both keys are `null` when the cell is outside layout. A `total` or `stub` column is not a period, so its link has `period_id=null` even when the row sits in a timeline block. `SUM(J9:J12)` stays one range, not dozens of `range_member`. Empty range members are not in `links`. `nodes` and `edges` are not `len(links)`. `context.md` prints `[Sheet!A1]` in the period value, the same key as `links[].cell`; the formula stays on the link. The period header still carries the column letter (`Y23 (AA)`).
 
-`context.json` stores a `graph` pointer (counts and paths). It has no `precedents_rows`, `dependents_rows`, `precedent_cells`, `formula_ast`, and no second row catalog. A row formula is one fingerprint. Values of a one-axis block are a flat cache array or `null`; with several axes the numbers live in `rows[].series` by `axis_id`, and flat `values` repeat the first series. Beside them, `value_statuses` and `normalized_values` have the same length, plus `scale_factor`, `period_position`, and `aggregation`. Phases and `group_key` live in `axes`, not in a `timeline` field. This is not a cell catalog. Precedents for the answering LLM's slice come from `links` / trace (`row_key`, `period_id`); AST is not copied into the slice.
+`context.json` stores a `graph` pointer (counts and paths). It has no `precedents_rows`, `dependents_rows`, `precedent_cells`, `formula_ast`, and no second row catalog. A row formula is one fingerprint. Values of a one-axis block are a flat cache array or `null`; with several axes the numbers live in `rows[].series` by `axis_id`, and flat `values` repeat the first series. Beside them, `value_statuses` and `normalized_values` have the same length, plus `scale_factor`, `period_position`, and `aggregation`. Phases and `group_key` live in `axes`, not in a `timeline` field. This is not a cell catalog. Precedents in the observation slice come from `links` / trace (`row_key`, `period_id`); AST is not copied into the slice.
 
 There are no separate `graph-edges.json`, `graph-dangling.json`, or `formulas.json`. Cell-graph completeness does not live in `context.blocks[].relations` (those are formula-shape alias, aggregate, difference, and roll_forward).
 

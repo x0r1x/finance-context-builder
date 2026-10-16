@@ -8,7 +8,7 @@ from pathlib import Path
 
 from finance_context.app.publisher import publisher_stamp, stamped_stages
 from finance_context.context.build import build_context
-from finance_context.errors import ContextError, PortError
+from finance_context.errors import ContextError
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
@@ -335,9 +335,6 @@ def _timed(stage: str, fn):
     t0 = time.monotonic()
     try:
         return fn()
-    except PortError:
-        log_event(_LOGGER, logging.WARNING, "port_fallback", "port failed", stage=stage)
-        raise
     finally:
         log_event(
             _LOGGER,

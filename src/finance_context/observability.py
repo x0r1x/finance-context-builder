@@ -21,10 +21,7 @@ FORBIDDEN_LOG_KEYS = frozenset(
         "formula",
         "formula_raw",
         "label",
-        "messages",
-        "prompt",
         "source_filename",
-        "texts",
         "authorization",
     }
 )
@@ -34,15 +31,12 @@ _ALLOWED_EXTRA = frozenset(
         "event",
         "stage",
         "duration_ms",
-        "port",
-        "model",
         "http_status",
         "reason",
         "skipped",
         "worker",
         "kind",
         "reachable",
-        "model_present",
         "latency_ms",
         "status",
         "error_code",
@@ -54,11 +48,6 @@ _ALLOWED_EXTRA = frozenset(
         "exc_type",
         "job_id",
         "host",
-        "tls_ca",
-        "request",
-        "response",
-        "batch",
-        "batches",
     }
 )
 
