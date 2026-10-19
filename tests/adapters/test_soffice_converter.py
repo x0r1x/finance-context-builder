@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -67,6 +68,8 @@ def test_settings_pick_the_binary_and_the_timeout(tmp_path: Path) -> None:
 
 def test_headless_conversion_writes_an_xlsx(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("SOFFICE_SHOULD_NOT_LEAK", "secret")
+    monkeypatch.setenv("LANG", "C.UTF-8")
     binary = _converting_soffice(tmp_path)
     work = tmp_path / "work"
     work.mkdir()
@@ -81,7 +84,10 @@ def test_headless_conversion_writes_an_xlsx(tmp_path: Path, monkeypatch) -> None
     assert profile.startswith(f"-env:UserInstallation={work.as_uri()}")
     env = (tmp_path / "soffice.log.env").read_text(encoding="utf-8")
     assert "proxy.invalid" not in env
+    assert "SOFFICE_SHOULD_NOT_LEAK" not in env
     assert f"HOME={work}" in env
+    assert "LANG=C.UTF-8" in env
+    assert "PATH=" in env
 
 
 def test_nonzero_exit_is_a_conversion_failure(tmp_path: Path) -> None:
@@ -98,6 +104,48 @@ def test_no_output_file_is_a_conversion_failure(tmp_path: Path) -> None:
     with pytest.raises(ContextError) as ei:
         SofficeConverter(str(binary)).convert(_xls(tmp_path), tmp_path)
     assert ei.value.code == "conversion_failed"
+
+
+def test_converter_dies_with_the_parent(tmp_path: Path) -> None:
+    seen = tmp_path / "seen"
+    prepared = build_xlsx(
+        tmp_path / "prepared.xlsx",
+        sheets=[SheetSpec(name="P&L", cells=[CellSpec(addr="A1", value="1")])],
+    )
+    binary = tmp_path / "soffice"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import ctypes, os, sys, shutil\n"
+        "from pathlib import Path\n"
+        "libc = ctypes.CDLL('libc.so.6')\n"
+        "sig = ctypes.c_int()\n"
+        "libc.prctl.argtypes = [ctypes.c_int, ctypes.c_void_p]\n"
+        "libc.prctl(2, ctypes.byref(sig))\n"
+        f"Path({str(seen)!r}).write_text(str(sig.value))\n"
+        "args = sys.argv[1:]\n"
+        "outdir = args[args.index('--outdir') + 1]\n"
+        f"shutil.copyfile({str(prepared)!r}, os.path.join(outdir, 'book.xlsx'))\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    produced = SofficeConverter(str(binary)).convert(_xls(tmp_path), tmp_path / "work")
+    assert produced.is_file()
+    assert seen.read_text(encoding="utf-8") == "9"
+
+
+def test_finished_group_is_not_signalled() -> None:
+    from finance_context.adapters.soffice import _kill_group
+
+    process = subprocess.Popen(["/bin/true"], start_new_session=True)
+    pgid = os.getpgid(process.pid)
+    process.wait()
+    victim = subprocess.Popen(["/bin/sleep", "30"])
+    try:
+        _kill_group(pgid)
+        os.kill(victim.pid, 0)
+    finally:
+        victim.kill()
+        victim.wait()
 
 
 def test_timeout_kills_soffice_and_its_children(tmp_path: Path) -> None:

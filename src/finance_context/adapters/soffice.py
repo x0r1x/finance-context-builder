@@ -2,16 +2,18 @@
 
 Each call runs in its own process group with a fresh profile and `HOME` under the
 call's temporary directory, so no user settings, extensions or a running instance
-take part. Proxy variables are dropped; the conversion itself needs no network,
-and the container is expected to run without egress. A timeout kills the whole group.
+take part. The child sees only `PATH`, `HOME`, and `LANG`. `prctl(PR_SET_PDEATHSIG)`
+kills it if the worker dies; a timeout still kills the whole group.
 """
 
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 from finance_context.errors import ContextError
@@ -20,8 +22,18 @@ from finance_context.settings import Settings
 
 _SEARCH = ("soffice", "libreoffice")
 _MAC_APP = Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
-_PROXY_VARS = {"http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "no_proxy"}
 _STDERR_TAIL = 300
+_PR_SET_PDEATHSIG = 1
+_LIBC = ctypes.CDLL("libc.so.6", use_errno=True) if sys.platform == "linux" else None
+if _LIBC is not None:
+    _LIBC.prctl.argtypes = (
+        ctypes.c_int,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+    )
+    _LIBC.prctl.restype = ctypes.c_int
 
 
 class SofficeConverter:
@@ -77,19 +89,23 @@ class SofficeConverter:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=inbox,
-            env=_offline_env(out_dir),
+            env=_converter_env(out_dir),
             start_new_session=True,
+            preexec_fn=_die_with_parent,
         )
+        pgid = _pgid(process)
         try:
             _stdout, stderr = process.communicate(timeout=self.timeout_sec)
         except subprocess.TimeoutExpired:
-            _kill_group(process)
+            if pgid is not None:
+                _kill_group(pgid)
             process.communicate()
             raise ContextError(
                 "conversion_failed", f"soffice did not finish in {self.timeout_sec:g}s"
             ) from None
         finally:
-            _kill_group(process)
+            if pgid is not None:
+                _kill_group(pgid)
         produced = outbox / "book.xlsx"
         if process.returncode != 0 or not produced.is_file():
             detail = f"soffice exited with {process.returncode} and wrote no .xlsx"
@@ -108,17 +124,50 @@ def _executable(candidate: str) -> str | None:
     return None
 
 
-def _offline_env(home: Path) -> dict[str, str]:
-    env = {
-        key: value for key, value in os.environ.items() if key.casefold() not in _PROXY_VARS
-    }
-    env["HOME"] = str(home)
+def _converter_env(home: Path) -> dict[str, str]:
+    env = {"HOME": str(home)}
+    path = os.environ.get("PATH")
+    if path:
+        env["PATH"] = path
+    lang = os.environ.get("LANG")
+    if lang:
+        env["LANG"] = lang
     return env
 
 
-def _kill_group(process: subprocess.Popen) -> None:
-    """soffice forks `soffice.bin`; the leader alone is not enough."""
+def _die_with_parent() -> None:
+    """SIGKILL this process when the worker exits. Runs after `setsid`, before exec."""
+    if _LIBC is None:
+        return
+    if _LIBC.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0) != 0:
+        return
+    if os.getppid() == 1:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
+def _pgid(process: subprocess.Popen) -> int | None:
     try:
-        os.killpg(process.pid, signal.SIGKILL)
+        group = os.getpgid(process.pid)
+    except ProcessLookupError:
+        return None
+    if group <= 0:
+        return None
+    return group
+
+
+def _kill_group(pgid: int) -> None:
+    """soffice forks `soffice.bin`; the leader alone is not enough.
+
+    Signal only while the group still exists. After a successful `communicate`
+    the leader's pid can be reused.
+    """
+    if pgid <= 0:
+        return
+    try:
+        os.killpg(pgid, 0)
+    except (ProcessLookupError, PermissionError):
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
