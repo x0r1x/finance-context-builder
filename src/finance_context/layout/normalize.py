@@ -48,6 +48,7 @@ def normalize_label(label: str | None) -> str:
 
 @lru_cache(maxsize=8192)
 def _normalize_label(text: str) -> str:
+    text = text.replace("Ё", "Е").replace("ё", "е")
     text = text.replace("&", " and ").replace("−", " ").replace("–", " ").replace("+", " ")
     text = text.replace("/", " ")
     extras: list[str] = []

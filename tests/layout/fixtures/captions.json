@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {"text": "Бюджет 2026", "period_key": "2026", "role": "forecast", "explicit_role": true},
+    {"text": "Plan 2026", "period_key": "2026", "role": "forecast", "explicit_role": true},
+    {"text": "1 кв. 2025П", "period_key": "2025Q1", "role": "forecast", "explicit_role": true},
+    {"text": "Н1 2025", "period_key": "2025H1", "role": "historical", "explicit_role": false},
+    {"text": "2025А", "period_key": "2025", "role": "historical", "explicit_role": true},
+    {"text": "2025 A", "period_key": "2025", "role": "historical", "explicit_role": true},
+    {"text": "2025\u00a0A", "period_key": "2025", "role": "historical", "explicit_role": true},
+    {"text": "２０２５", "period_key": "2025", "role": "historical", "explicit_role": false},
+    {"text": "Mар.2025", "period_key": "2025-03", "role": "historical", "explicit_role": false},
+    {"text": "Ед. измерения", "header_role": "unit"},
+    {"text": "Источник", "header_role": "note"},
+    {"text": "Период СМР", "phase": "construction", "period": null},
+    {"text": "Начальный период эксплуатации", "phase": "operation", "period": null},
+    {"text": "Ввод в эксплуатацию", "phase": null},
+    {"text": "начальный", "phase": null},
+    {"text": "кВт", "period": null, "quarter": false, "phase": null},
+    {"text": "квота 2025", "period": null},
+    {"text": "график 2025", "period": null},
+    {"text": "Histogram 2024", "period": null},
+    {"text": "History", "period": null},
+    {"text": "фактор", "period": null},
+    {"text": "планета", "period": null},
+    {"text": "Q5 2025", "period": null, "unparsed": true},
+    {"text": "1.2025", "period": null, "unparsed": true},
+    {"text": "13.2024", "period": null, "unparsed": true},
+    {"text": "Revenue 2024", "period": null, "unparsed": false}
+  ]
+}

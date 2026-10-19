@@ -24,6 +24,33 @@ _UNIT_TOKEN = re.compile(
 )
 
 
+# A timeline caption. It is not the measure of the rows under that header.
+_PERIOD_BANNER = re.compile(
+    r"^(?:years?|months?|quarters?|weeks?|days?|dates?|год(?:а|ов)?|лет)$",
+    re.IGNORECASE,
+)
+# A scale marker or a symbol. A bare word such as ``Euro`` or ``Year`` is a line item.
+_UNIT_BANNER = re.compile(r"[£$€₽%#]|'000|\d|тыс|млн|млрд|руб", re.IGNORECASE)
+
+
+def is_block_unit_caption(text: str | None) -> bool:
+    """A caption that sets the measure for the following rows.
+
+    ``RURm``, ``RUR``, ``k£``, ``EUR'000`` and ``тыс. руб.`` do. The header
+    word ``Year`` and a currency list line ``Euro`` do not.
+    """
+    from finance_context.context.measure import is_iso_unit_caption, unit_caption
+
+    caption = unit_caption(text)
+    if caption is None or _PERIOD_BANNER.fullmatch(caption):
+        return False
+    if is_iso_unit_caption(caption):
+        return True
+    if not is_unit_text(caption):
+        return False
+    return _UNIT_BANNER.search(caption) is not None
+
+
 def is_unit_text(text: str | None) -> bool:
     from finance_context.context.measure import unit_caption
 
@@ -32,7 +59,11 @@ def is_unit_text(text: str | None) -> bool:
         return False
     if caption.casefold() == "index":
         return True
-    return bool(_UNIT_TEXT.fullmatch(caption) or _UNIT_TOKEN.fullmatch(caption))
+    if _UNIT_TEXT.fullmatch(caption) or _UNIT_TOKEN.fullmatch(caption):
+        return True
+    from finance_context.context.measure import is_iso_unit_caption
+
+    return is_iso_unit_caption(caption)
 
 
 def unit_kind_from_text(text: str | None) -> str | None:

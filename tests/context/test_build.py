@@ -42,6 +42,263 @@ def _layout() -> Layout:
     )
 
 
+def test_hidden_rows_and_columns_warn_once_per_sheet() -> None:
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={
+            "sheets": [
+                {
+                    "name": "Предпосылки",
+                    "hidden_rows": [17, 18, 20, 21, 22],
+                    "hidden_cols": [],
+                },
+                {
+                    "name": "Вход",
+                    "hidden_rows": [],
+                    "hidden_cols": [23, 24, 25, 26, 27],
+                },
+                {"name": "CF", "hidden": True, "hidden_rows": [2]},
+            ]
+        },
+        cells=[
+            {"sheet": "Предпосылки", "row": row, "col": 1, "cached_value": "x"}
+            for row in (17, 18, 20, 21, 22)
+        ]
+        + [
+            {"sheet": "Вход", "row": 1, "col": col, "cached_value": "x"}
+            for col in (23, 24, 25, 26, 27)
+        ]
+        + [{"sheet": "CF", "row": 2, "col": 1, "cached_value": "Opening"}],
+        layout=Layout(sheets=[]),
+    )
+    assert doc.warnings == [
+        "Hidden rows Предпосылки!17:18,20:22 are included",
+        "Hidden columns Вход!W:AA are included",
+        "Hidden sheet CF is included",
+        "Hidden rows CF!2 are included",
+    ]
+
+
+def test_empty_hidden_rows_and_columns_do_not_warn() -> None:
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={
+            "sheets": [
+                {
+                    "name": "Input Assumptions",
+                    "hidden_rows": [40, 41],
+                    "hidden_cols": [19, *range(20, 16385)],
+                }
+            ]
+        },
+        cells=[
+            {"sheet": "Input Assumptions", "row": 1, "col": 1, "cached_value": "Year"},
+            {"sheet": "Input Assumptions", "row": 2, "col": 19, "cached_value": "  "},
+            {
+                "sheet": "Input Assumptions",
+                "row": 3,
+                "col": 20,
+                "addr": "T3",
+                "cached_value": None,
+                "formula_raw": "=B3",
+            },
+            {"sheet": "Input Assumptions", "row": 40, "col": 2, "cached_value": ""},
+            {"sheet": "Input Assumptions", "row": 8, "col": 4, "cached_value": 0},
+        ],
+        layout=Layout(sheets=[]),
+    )
+    assert doc.warnings == [
+        "1 formula cell(s) missing cached values (e.g. Input Assumptions!T3)",
+        "Hidden columns Input Assumptions!T are included",
+    ]
+
+
+def test_hidden_period_and_row_stay_flagged_in_context() -> None:
+    from finance_context.layout.detect import detect_layout
+
+    cells = [
+        {
+            "sheet": "CF",
+            "row": 1,
+            "col": 1,
+            "addr": "A1",
+            "cached_value": "Item",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 1,
+            "col": 2,
+            "addr": "B1",
+            "cached_value": "2023",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 1,
+            "col": 3,
+            "addr": "C1",
+            "cached_value": "2024",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 1,
+            "col": 4,
+            "addr": "D1",
+            "cached_value": "2025E",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 1,
+            "addr": "A2",
+            "cached_value": "Revenue",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 2,
+            "addr": "B2",
+            "cached_value": "1",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 3,
+            "addr": "C2",
+            "cached_value": "2",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 4,
+            "addr": "D2",
+            "cached_value": "3",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 3,
+            "col": 1,
+            "addr": "A3",
+            "cached_value": "Продажи продукта 2",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 3,
+            "col": 2,
+            "addr": "B3",
+            "cached_value": "4",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 3,
+            "col": 3,
+            "addr": "C3",
+            "cached_value": "5",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 3,
+            "col": 4,
+            "addr": "D3",
+            "cached_value": "6",
+            "hidden": True,
+        },
+    ]
+    layout = detect_layout(cells)
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF", "hidden_cols": [3]}]},
+        cells=cells,
+        layout=layout,
+    )
+    periods = {period.period_key: period for period in doc.axes[0].periods}
+    assert periods["2024"].hidden is True
+    assert "hidden" not in periods["2023"].model_dump(mode="json")
+    assert periods["2024"].model_dump(mode="json")["hidden"] is True
+    rows = {row.label: row for row in doc.blocks[0].rows}
+    assert rows["Revenue"].hidden is False
+    assert rows["Продажи продукта 2"].hidden is True
+    assert rows["Продажи продукта 2"].values == ["4", "5", "6"]
+    assert "Hidden columns CF!C are included" in doc.warnings
+
+
+def test_unrecognized_column_headers_warn_once_per_block() -> None:
+    from finance_context.layout.detect import detect_layout
+
+    cells = []
+    for col, head in zip("ABCD", ["Показатель", "Отрасль", "Мероприятия", "Значение"], strict=True):
+        cells.append(
+            {
+                "sheet": "Показатели FLM",
+                "row": 5,
+                "col": ord(col) - ord("A") + 1,
+                "addr": f"{col}5",
+                "cached_value": head,
+                "hidden": False,
+            }
+        )
+    rows = [
+        ("Инфляция", "Все", "Мониторинг", "0.05"),
+        ("Доходы", "Все", "Мониторинг", "0.04"),
+        ("EBITDA", "Все", "Мониторинг", "0.03"),
+    ]
+    for row, (name, industry, action, amount) in enumerate(rows, start=6):
+        for col, value in zip("ABCD", [name, industry, action, amount], strict=True):
+            cells.append(
+                {
+                    "sheet": "Показатели FLM",
+                    "row": row,
+                    "col": ord(col) - ord("A") + 1,
+                    "addr": f"{col}{row}",
+                    "cached_value": value,
+                    "hidden": False,
+                }
+            )
+    layout = detect_layout(cells)
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "Показатели FLM"}]},
+        cells=cells,
+        layout=layout,
+    )
+    assert doc.warnings == [
+        "Unrecognized column headers in Показатели FLM!r5: «Отрасль»"
+    ]
+    roles = {header.text: header.role for header in layout.sheets[0].blocks[0].axis.headers}
+    assert roles["Отрасль"] == "unknown"
+    assert roles["Мероприятия"] == "note"
+    assert roles["Значение"] == "value"
+
+
+def test_hidden_sheet_is_included_with_a_warning() -> None:
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF", "hidden": True}]},
+        cells=[
+            {
+                "sheet": "CF",
+                "row": 2,
+                "col": 2,
+                "addr": "B2",
+                "cached_value": "1",
+            }
+        ],
+        layout=_layout(),
+    )
+    assert doc.blocks[0].rows[0].label == "Opening cash"
+    assert any(warning == "Hidden sheet CF is included" for warning in doc.warnings)
+
+
 def test_build_keeps_cached_value_and_cell_ref() -> None:
     cells = [
         {
@@ -89,6 +346,33 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.hints.currency == "USD"
     assert metric.hints.scale is None
     assert metric.hints.sign == "stock"
+
+
+def test_hidden_warnings_do_not_crowd_out_formula_warnings() -> None:
+    sheets = [{"name": f"S{index}", "hidden": True} for index in range(60)]
+    cells = [
+        {
+            "sheet": "S0",
+            "row": 1,
+            "col": 1,
+            "addr": "A1",
+            "cached_value": None,
+            "formula_raw": "=1+1",
+            "unparsed": True,
+        }
+    ]
+    doc = build_context(
+        job_id="cap",
+        workbook_meta={"sheets": sheets},
+        cells=cells,
+        layout=Layout(sheets=[]),
+        graph=GraphPointer(dangling=3),
+    )
+    assert len(doc.warnings) == 50
+    assert doc.meta.warnings == doc.warnings
+    assert "Unparsed formula at S0!A1" in doc.warnings
+    assert "1 formula cell(s) missing cached values (e.g. S0!A1)" in doc.warnings
+    assert "Graph: 3 unresolved formula targets (see graph.json)" in doc.warnings
 
 
 def test_build_warns_on_missing_graph_targets() -> None:

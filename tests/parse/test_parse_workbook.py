@@ -45,6 +45,9 @@ def test_raw_cell_schema_formula_and_cached_value(tmp_path: Path, dest: Path) ->
         "comment",
         "shared_si",
         "shared_master",
+        "style_indent",
+        "outline_level",
+        "col_outline_level",
     }
     assert cells[0]["shared_si"] is None
     assert cells[0]["shared_master"] is False
@@ -141,6 +144,33 @@ def test_shared_formula_child_keeps_function_and_name_text(
     assert by[("Sheet1", "B2")]["formula_raw"] == "LOG10(A2)*Rate1"
 
 
+def test_hidden_sheet_does_not_hide_its_cells(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "hidden-sheet.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="IFRS",
+                hidden=True,
+                cells=[
+                    CellSpec(addr="C2", value="Выручка от реализации", type="inlineStr"),
+                    CellSpec(addr="D1", value="2 кв. 2009", type="inlineStr"),
+                    CellSpec(addr="E1", value="3 кв. 2009", type="inlineStr"),
+                    CellSpec(addr="F1", value="4 кв. 2009", type="inlineStr"),
+                    CellSpec(addr="D2", value="10"),
+                    CellSpec(addr="E2", value="11"),
+                    CellSpec(addr="F2", value="12"),
+                ],
+            )
+        ],
+    )
+    meta = parse_workbook(source, dest)
+    by = _by_addr(load_cells(dest))
+    assert meta.sheets[0].hidden is True
+    assert by[("IFRS", "C2")]["hidden"] is False
+    assert by[("IFRS", "D1")]["hidden"] is False
+
+
 def test_hidden_row_and_column(tmp_path: Path, dest: Path) -> None:
     source = tmp_path / "hidden.xlsx"
     build_xlsx(
@@ -158,11 +188,13 @@ def test_hidden_row_and_column(tmp_path: Path, dest: Path) -> None:
             )
         ],
     )
-    parse_workbook(source, dest)
+    meta = parse_workbook(source, dest)
     by = _by_addr(load_cells(dest))
     assert by[("Sheet1", "A1")]["hidden"] is False
     assert by[("Sheet1", "B1")]["hidden"] is True
     assert by[("Sheet1", "A2")]["hidden"] is True
+    assert meta.sheets[0].hidden_rows == [2]
+    assert meta.sheets[0].hidden_cols == [2]
 
 
 def test_excel_error_cached_as_token(tmp_path: Path, dest: Path) -> None:

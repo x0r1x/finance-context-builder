@@ -9,6 +9,7 @@ from finance_context.layout.params import attach_stub_cells
 from finance_context.layout.periods import (
     LAYER_BOUNDS,
     LAYER_DATE,
+    LAYER_HALF,
     LAYER_MONTH,
     LAYER_QUARTER,
     LAYER_ROLE,
@@ -86,12 +87,18 @@ def _row_layers(row_cells: list[dict], date1904: bool) -> set[str]:
     years = sum(
         1
         for atom in atoms
-        if atom.year and atom.quarter is None and atom.month is None and atom.day is None
+        if atom.year
+        and atom.quarter is None
+        and atom.half is None
+        and atom.month is None
+        and atom.day is None
     )
     if years >= 1:
         layers.add(LAYER_YEAR)
     if sum(1 for atom in atoms if atom.quarter) >= 2:
         layers.add(LAYER_QUARTER)
+    if sum(1 for atom in atoms if atom.half) >= 2:
+        layers.add(LAYER_HALF)
     if sum(1 for atom in atoms if atom.month and atom.day is None) >= 2:
         layers.add(LAYER_MONTH)
     return layers
@@ -211,8 +218,13 @@ def _data_rows(
     date1904: bool,
     period_cols: set[int],
     seed: LayoutRow | None = None,
+    reveal_rows: set[int] | None = None,
+    summary_below: bool = True,
+    hidden_row_ids: set[int] | None = None,
 ) -> list[LayoutRow]:
+    revealed = reveal_rows or set()
     out: list[LayoutRow] = []
+    outlines: list[int] = []
     section_stack: list[LayoutRow] = [seed] if seed is not None else []
     for row_n in band_rows:
         if row_n in header_rows:
@@ -221,14 +233,20 @@ def _data_rows(
             continue
         if _is_counter_row(by_row[row_n], date1904):
             continue
-        label, depth, label_cell = _row_span_label(by_row[row_n], label_span, date1904)
+        reveal = row_n in revealed or _row_all_hidden(
+            row_n, by_row[row_n], hidden_row_ids
+        )
+        label, depth, label_cell = _row_span_label(
+            by_row[row_n], label_span, date1904, include_hidden=reveal
+        )
         if label is None or label_cell is None:
             label, depth, label_cell = _left_of_axis_label(
-                by_row[row_n], period_cols, date1904
+                by_row[row_n], period_cols, date1904, include_hidden=reveal
             )
         if label is None or label_cell is None:
             continue
-        indent = depth + _indent(label)
+        indent = depth + _indent(label) + _style_indent(label_cell)
+        outline = _outline_level(label_cell)
         check_row = bool(_CHECK.search(label))
         kind = _row_kind(
             by_row[row_n],
@@ -300,9 +318,86 @@ def _data_rows(
             floor_row=band_rows[0] if band_rows else None,
         )
         out.append(item)
+        outlines.append(outline)
         if kind == "abstract" and not is_unit_text(label):
             section_stack.append(item)
+    if any(level > 0 for level in outlines):
+        _apply_outline_parents(out, outlines, summary_below)
     return out
+
+
+def _style_indent(cell: dict) -> int:
+    return _nonneg_int(cell.get("style_indent"))
+
+
+def _outline_level(cell: dict) -> int:
+    return _nonneg_int(cell.get("outline_level"))
+
+
+def _nonneg_int(value: object) -> int:
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def _apply_outline_parents(
+    rows: list[LayoutRow], levels: list[int], summary_below: bool
+) -> None:
+    """A nested outline level hangs off the summary row inside the group.
+
+    Level 1 under a level 0 section is the collapsible band indent already
+    models, so that parent stays. Level 2 under level 1 (IaaS under CAPEX)
+    replaces the indent parent when the summary sits closer.
+    ``summaryBelow`` false looks upward; true looks downward.
+    """
+    for index, (row, level) in enumerate(zip(rows, levels, strict=True)):
+        if level <= 1 or is_unit_text(row.label):
+            continue
+        parent = _outline_parent(rows, levels, index, level, summary_below)
+        if parent is None:
+            continue
+        parent_level = levels[rows.index(parent)]
+        if parent_level <= 0:
+            continue
+        if row.parent_row is None:
+            row.parent_row = parent.row
+            continue
+        closer_above = not summary_below and parent.row > row.parent_row
+        closer_below = summary_below and parent.row < row.parent_row
+        if closer_above or closer_below:
+            row.parent_row = parent.row
+
+
+def _outline_parent(
+    rows: list[LayoutRow],
+    levels: list[int],
+    index: int,
+    level: int,
+    summary_below: bool,
+) -> LayoutRow | None:
+    span = range(index + 1, len(rows)) if summary_below else range(index - 1, -1, -1)
+    for other in span:
+        if is_unit_text(rows[other].label):
+            continue
+        if levels[other] < level:
+            return rows[other]
+    return None
+
+
+def _row_all_hidden(
+    row_n: int, row_cells: list[dict], hidden_row_ids: set[int] | None
+) -> bool:
+    """A row is hidden when the workbook lists it.
+
+    Cell flags alone are not enough: a visible row can hold text only in a
+    hidden column, and every cell is then flagged hidden. Callers that have no
+    workbook metadata still fall back to those flags.
+    """
+    if hidden_row_ids is not None:
+        return row_n in hidden_row_ids
+    return bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
 
 
 def _ancestors(rows: list[LayoutRow], indent: int) -> list[LayoutRow]:
@@ -360,10 +455,12 @@ def _row_span_label(
     row_cells: list[dict],
     label_span: list[int],
     date1904: bool,
+    *,
+    include_hidden: bool = False,
 ) -> tuple[str | None, int, dict | None]:
     for depth, col in enumerate(label_span):
         cell = _cell_at(row_cells, col)
-        if cell is None or cell.get("hidden"):
+        if cell is None or (cell.get("hidden") and not include_hidden):
             continue
         text = _text(cell, date1904)
         if not text or _is_number(text) or _is_column_header_text(text):
@@ -376,13 +473,15 @@ def _left_of_axis_label(
     row_cells: list[dict],
     period_cols: set[int],
     date1904: bool,
+    *,
+    include_hidden: bool = False,
 ) -> tuple[str | None, int, dict | None]:
     """First text left of the period axis when the label span is empty."""
     if not period_cols:
         return None, 0, None
     left_edge = min(period_cols)
     for cell in sorted(row_cells, key=lambda item: int(item["col"])):
-        if cell.get("hidden"):
+        if cell.get("hidden") and not include_hidden:
             continue
         if int(cell["col"]) >= left_edge:
             break
@@ -394,9 +493,11 @@ def _left_of_axis_label(
 
 
 def _is_column_header_text(text: str) -> bool:
-    """Year, scenario, and role headers are not row names. Total/Sum/Итого is."""
-    hit = classify_header(text)
-    return hit is not None and hit.period_key != "total"
+    """A period in the label column ("2024", "I кв. 2025") is not a row name.
+
+    "План", "Факт", "Budget" or "Base case" there is: the position says it is a row label.
+    """
+    return is_calendar_hit(classify_header(text))
 
 
 def _row_kind(

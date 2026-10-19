@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
@@ -8,8 +9,10 @@ from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import _cell_at, _is_int_text, _is_number, _text
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis
 from finance_context.layout.periods import (
+    _HALF_KEY,
     LAYER_BOUNDS,
     LAYER_DATE,
+    LAYER_HALF,
     LAYER_MONTH,
     LAYER_QUARTER,
     LAYER_ROLE,
@@ -26,6 +29,7 @@ from finance_context.layout.periods import (
     is_role_marker_text,
     is_start_period_label,
     normalize_header,
+    parse_period_key,
 )
 from finance_context.layout.rows import (
     _RELATIVE_LABEL,
@@ -43,7 +47,7 @@ _FLAG_LABEL = re.compile(
 )
 
 
-_CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_MONTH})
+_CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_HALF, LAYER_MONTH})
 
 
 _PERIOD_ROLES = frozenset({"historical", "forecast", "stub", "relative"})
@@ -65,20 +69,26 @@ def _axis_candidates(
     sheet: str,
     by_row: dict[int, list[dict]],
     date1904: bool,
+    hidden_cols: set[int] | None = None,
 ) -> list[tuple[list[int], TimeAxis]]:
+    known = set(hidden_cols or ()) | _inferred_hidden_columns(by_row)
     formula_cols = _formula_timeline_cols(by_row)
     candidates: list[tuple[list[int], TimeAxis]] = []
     for band_rows in _header_bands(by_row, date1904):
-        for axis in _axes_from_band(sheet, band_rows, by_row, date1904):
+        for axis in _axes_from_band(sheet, band_rows, by_row, date1904, known):
             if _period_count(axis) >= 2:
                 candidates.append((band_rows, axis))
     taken = {row_n for band_rows, _ in candidates for row_n in band_rows}
     for row_n in sorted(by_row):
         if row_n in taken:
             continue
-        labeled = _relative_run(by_row[row_n], date1904, require_label=True, min_len=3)
+        labeled = _relative_run(
+            by_row[row_n], date1904, require_label=True, min_len=3, hidden_cols=known
+        )
         if labeled:
-            axis = _axis_from_relative(sheet, row_n, labeled, by_row[row_n], date1904)
+            axis = _axis_from_relative(
+                sheet, row_n, labeled, by_row[row_n], date1904, hidden_cols=known
+            )
             candidates.append(([row_n], axis))
             taken.add(row_n)
             continue
@@ -87,6 +97,7 @@ def _axis_candidates(
             date1904,
             require_label=False,
             min_len=_UNLABELED_RELATIVE_MIN,
+            hidden_cols=known,
         )
         if not unlabeled or not formula_cols:
             continue
@@ -95,7 +106,9 @@ def _axis_candidates(
             continue
         if any(_same_timeline(run_cols, _axis_cols(axis)) for _, axis in candidates):
             continue
-        axis = _axis_from_relative(sheet, row_n, unlabeled, by_row[row_n], date1904)
+        axis = _axis_from_relative(
+            sheet, row_n, unlabeled, by_row[row_n], date1904, hidden_cols=known
+        )
         candidates.append(([row_n], axis))
         taken.add(row_n)
     return _keep_dominant(_fold_year_banners(candidates))
@@ -185,20 +198,43 @@ def _fold_year_banners(
             if not _same_timeline(cols, banner_cols):
                 continue
             by_col = {period.col: period.period_key for period in banner.periods}
-            periods = [
-                period.model_copy(update={"group_key": by_col[period.col]})
-                if period.col in by_col and period.group_key is None
-                else period
-                for period in updated.periods
-            ]
+            periods: list[AxisPeriod] = []
+            applied = False
+            comparable = 0
+            contradicted = 0
+            for period in updated.periods:
+                banner_year = by_col.get(period.col)
+                own_year = _key_year(period.period_key)
+                if banner_year is not None and own_year is not None:
+                    comparable += 1
+                    if own_year != banner_year:
+                        contradicted += 1
+                        periods.append(period)
+                        continue
+                if banner_year is not None and period.group_key is None:
+                    periods.append(period.model_copy(update={"group_key": banner_year}))
+                    applied = True
+                else:
+                    periods.append(period)
             updated = updated.model_copy(update={"periods": periods})
-            consumed.add(banner_index)
+            if applied or (comparable > 0 and contradicted == comparable):
+                consumed.add(banner_index)
         folded.append((band, updated))
     for banner_index, item in enumerate(banners):
         if banner_index not in consumed:
             folded.append(item)
     folded.sort(key=lambda item: (min(item[0]), min(_axis_cols(item[1]) or {0})))
     return folded
+
+
+def _key_year(period_key: str | None) -> str | None:
+    """Year already written into a composed key such as ``2014Q3`` or ``2020-01``."""
+    if period_key is None or len(period_key) < 4:
+        return None
+    head = period_key[:4]
+    if head.isdigit():
+        return head
+    return None
 
 
 def _same_timeline(left: set[int], right: set[int]) -> bool:
@@ -243,6 +279,10 @@ def _keep_dominant(
                 kept.append(item)
             continue
         if _same_timeline(cols, pcols):
+            kept.append(item)
+            continue
+        # A later header on the same columns is its own table, not a stub of the wider axis.
+        if item[1].header_row != primary[1].header_row and width >= 3:
             kept.append(item)
             continue
         if cols.isdisjoint(pcols) and (
@@ -303,12 +343,37 @@ def _formula_timeline_cols(by_row: dict[int, list[dict]]) -> set[int] | None:
     return set(range(start, end + 1))
 
 
+def _inferred_hidden_columns(by_row: dict[int, list[dict]]) -> set[int]:
+    """A column is hidden when a visible row still has a hidden cell in it.
+
+    A row whose every cell is hidden is a hidden row. Its cells do not mark columns.
+    """
+    found: set[int] = set()
+    for cells in by_row.values():
+        if not cells or not any(not cell.get("hidden") for cell in cells):
+            continue
+        for cell in cells:
+            if cell.get("hidden"):
+                found.add(int(cell["col"]))
+    return found
+
+
+def _cols_connected(left: int, right: int, hidden_cols: set[int]) -> bool:
+    """Adjacent columns, or a gap filled only by hidden columns."""
+    if right == left + 1:
+        return True
+    if right <= left + 1:
+        return False
+    return all(col in hidden_cols for col in range(left + 1, right))
+
+
 def _relative_run(
     row_cells: list[dict],
     date1904: bool,
     *,
     require_label: bool,
     min_len: int,
+    hidden_cols: set[int] | None = None,
 ) -> list[tuple[int, int]]:
     label = _row_label(row_cells, date1904)
     raw = normalize_header(label)
@@ -326,10 +391,19 @@ def _relative_run(
                 seq = []
             continue
         seq.append((int(cell["col"]), int(float(text.replace(",", ".")))))
+    bridge = hidden_cols or set()
     best: list[tuple[int, int]] = []
     run: list[tuple[int, int]] = []
     for col, value in seq:
-        if run and value == run[-1][1] + 1 and col == run[-1][0] + 1:
+        # The next integer is the continuation. A hidden-only prefix stays
+        # attached across an empty hidden column when that holds; a scratch
+        # value that is not the next integer starts a new run.
+        connected = (
+            bool(run)
+            and value == run[-1][1] + 1
+            and _cols_connected(run[-1][0], col, bridge)
+        )
+        if connected:
             run.append((col, value))
         else:
             run = [(col, value)]
@@ -357,14 +431,17 @@ def _axis_from_relative(
     run: list[tuple[int, int]],
     row_cells: list[dict],
     date1904: bool,
+    hidden_cols: set[int] | None = None,
 ) -> TimeAxis:
     prefix = _relative_prefix(_row_label(row_cells, date1904))
+    hidden = hidden_cols or set()
     periods = [
         AxisPeriod(
             col=col,
             text=str(value),
             role="relative",
             period_key=f"{prefix}{value}",
+            hidden=col in hidden,
         )
         for col, value in run
     ]
@@ -498,7 +575,7 @@ def _band_calendar_cols(
             atom = classify_atom(_text(cell, date1904))
             if atom is None or atom.kind in {"role_marker", "noise"}:
                 continue
-            if atom.kind == "full" or atom.year or atom.quarter or atom.month:
+            if atom.kind == "full" or atom.year or atom.quarter or atom.half or atom.month:
                 cols.add(int(cell["col"]))
     return cols
 
@@ -508,6 +585,7 @@ def _axes_from_band(
     band_rows: list[int],
     by_row: dict[int, list[dict]],
     date1904: bool,
+    hidden_cols: set[int] | None = None,
 ) -> list[TimeAxis]:
     header_row = max(band_rows)
     cols = sorted(
@@ -574,7 +652,8 @@ def _axes_from_band(
                 explicit_role=explicit_role,
             )
         )
-    runs = _split_header_runs(composed)
+    known_hidden = hidden_cols or set()
+    runs = _split_header_runs(composed, known_hidden)
     axes: list[TimeAxis] = []
     multi = len(runs) > 1
     for run in runs:
@@ -604,12 +683,62 @@ def _axes_from_band(
                         explicit_role=header.explicit_role,
                         start_date=bounds.get(header.col, (None, None))[0],
                         end_date=bounds.get(header.col, (None, None))[1],
+                        hidden=header.col in known_hidden,
                     )
                     for header in headers
                 ],
             )
         )
     return axes
+
+
+_RELATIVE_STEP = re.compile(r"^([YQMP])(\d+)$")
+
+
+def _period_continues(left: str, right: str) -> bool:
+    """True when ``right`` is the next period of the same grain as ``left``."""
+    left_rel = _RELATIVE_STEP.fullmatch(left)
+    right_rel = _RELATIVE_STEP.fullmatch(right)
+    if left_rel and right_rel and left_rel.group(1) == right_rel.group(1):
+        return int(right_rel.group(2)) == int(left_rel.group(2)) + 1
+    left_half = _HALF_KEY.fullmatch(left)
+    right_half = _HALF_KEY.fullmatch(right)
+    if left_half and right_half:
+        left_index = int(left_half.group(1)) * 2 + int(left_half.group(2))
+        right_index = int(right_half.group(1)) * 2 + int(right_half.group(2))
+        return right_index == left_index + 1
+    left_year, left_quarter, left_month, left_day = parse_period_key(left)
+    right_year, right_quarter, right_month, right_day = parse_period_key(right)
+    if left_year is None or right_year is None:
+        return False
+    if left_day and right_day and left_month and right_month:
+        try:
+            left_date = date(int(left_year), left_month, left_day)
+            right_date = date(int(right_year), right_month, right_day)
+        except ValueError:
+            return False
+        return (right_date - left_date).days in {1, 7, 14}
+    if left_quarter and right_quarter:
+        return int(right_year) * 4 + right_quarter == int(left_year) * 4 + left_quarter + 1
+    if left_month and right_month and not left_day and not right_day:
+        return int(right_year) * 12 + right_month == int(left_year) * 12 + left_month + 1
+    if (
+        left_quarter is None
+        and right_quarter is None
+        and left_month is None
+        and right_month is None
+        and left_day is None
+        and right_day is None
+    ):
+        return int(right_year) == int(left_year) + 1
+    return False
+
+
+def _run_continues(headers: list[AxisHeader]) -> bool:
+    return all(
+        _period_continues(left.period_key, right.period_key)
+        for left, right in zip(headers, headers[1:], strict=False)
+    )
 
 
 def _header_key_class(key: str) -> str:
@@ -622,13 +751,28 @@ def _header_key_class(key: str) -> str:
     return "other"
 
 
-def _split_header_runs(headers: list[AxisHeader]) -> list[list[AxisHeader]]:
+def _split_header_runs(
+    headers: list[AxisHeader], hidden_cols: set[int] | None = None
+) -> list[list[AxisHeader]]:
     if not headers:
         return []
+    bridge = hidden_cols or set()
     ordered = sorted(headers, key=lambda item: item.col)
     runs: list[list[AxisHeader]] = [[ordered[0]]]
     for prev, item in zip(ordered, ordered[1:], strict=False):
-        gap = item.col - prev.col > 1
+        # An empty hidden column keeps a run together. A prefix that lives only
+        # in hidden columns stays attached when the next header continues the
+        # sequence (2024, empty hidden column, 2025). Scratch that does not
+        # continue (1965 next to 1939) still starts a new run.
+        physical_gap = item.col - prev.col > 1
+        bridged = physical_gap and _cols_connected(prev.col, item.col, bridge)
+        hidden_only = all(header.col in bridge for header in runs[-1])
+        # 1938 then 1939 is a one-step continuation, but a hidden prefix of
+        # 1965, 1938 is not itself a sequence. Require both.
+        continues = _period_continues(prev.period_key, item.period_key) and (
+            not hidden_only or _run_continues(runs[-1])
+        )
+        gap = physical_gap and (not bridged or (hidden_only and not continues))
         left_cls = _header_key_class(prev.period_key)
         right_cls = _header_key_class(item.period_key)
         grain_break = (
@@ -721,9 +865,10 @@ def _role_runs(
         col
         for col in cols
         if any(
-            atom.kind in {"full", "quarter_token", "month_num"}
+            atom.kind in {"full", "quarter_token", "half_token", "month_num"}
             or atom.year
             or atom.quarter
+            or atom.half
             or atom.month
             for atom in _column_atoms(
                 col,
@@ -738,6 +883,9 @@ def _role_runs(
         )
     }
     assigned: dict[int, str] = {}
+    # Columns painted by a banner that sits off the calendar. An on-column marker
+    # under that banner overrides only its own column.
+    banner_cols: set[int] = set()
     for row_n in band_rows:
         markers: list[tuple[int, str]] = []
         for cell in sorted(by_row[row_n], key=lambda c: int(c["col"])):
@@ -748,18 +896,28 @@ def _role_runs(
                     markers.append((int(cell["col"]), hit.role))
         if not markers:
             continue
-        for index, (mcol, role) in enumerate(markers):
-            if mcol in calendar_cols:
-                assigned[mcol] = role
-                continue
-            right = markers[index + 1][0] if index + 1 < len(markers) else max(cols) + 1
+        off = [(col, role) for col, role in markers if col not in calendar_cols]
+        on = [(col, role) for col, role in markers if col in calendar_cols]
+        for index, (mcol, role) in enumerate(off):
+            right = off[index + 1][0] if index + 1 < len(off) else max(cols) + 1
             for col in cols:
                 if col >= mcol and col < right:
                     assigned[col] = role
-        if len(markers) == 1 and markers[0][0] not in calendar_cols:
-            _mcol, role = markers[0]
+                    banner_cols.add(col)
+        if len(off) == 1:
+            _mcol, role = off[0]
             for col in cols:
-                assigned.setdefault(col, role)
+                if col not in assigned:
+                    assigned[col] = role
+                    banner_cols.add(col)
+        for index, (mcol, role) in enumerate(on):
+            if mcol in banner_cols:
+                assigned[mcol] = role
+                continue
+            right = on[index + 1][0] if index + 1 < len(on) else max(cols) + 1
+            for col in cols:
+                if col >= mcol and col < right and col not in banner_cols:
+                    assigned[col] = role
     return assigned
 
 
