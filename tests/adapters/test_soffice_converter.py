@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -106,6 +107,7 @@ def test_no_output_file_is_a_conversion_failure(tmp_path: Path) -> None:
     assert ei.value.code == "conversion_failed"
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="prctl(PR_SET_PDEATHSIG) is Linux-only")
 def test_converter_dies_with_the_parent(tmp_path: Path) -> None:
     seen = tmp_path / "seen"
     prepared = build_xlsx(
