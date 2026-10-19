@@ -1109,6 +1109,35 @@ def test_hidden_sheet_flag_is_recorded_and_rows_stay(tmp_path: Path) -> None:
     assert [row.label for row in block.rows] == ["Выручка от реализации"]
 
 
+def test_hidden_year_row_groups_quarters_that_omit_the_year() -> None:
+    years = ["2009", "2009", "2009", "2010", "2010", "2010", "2010", "2011", "2011"]
+    quarters = ["2 кв.", "3 кв.", "4 кв.", "1 кв.", "2 кв.", "3 кв.", "4 кв.", "1 кв.", "2 кв."]
+    cols = list("BCDEFGHIJ")
+    cells = [
+        _c("МСФО", f"{col}28", year, hidden=True) for col, year in zip(cols, years, strict=True)
+    ]
+    cells += [
+        _c("МСФО", f"{col}29", quarter) for col, quarter in zip(cols, quarters, strict=True)
+    ]
+    cells.append(_c("МСФО", "A30", "Выручка"))
+    cells += [_c("МСФО", f"{col}30", "10") for col in cols]
+    sheet = detect_layout(cells).sheets[0]
+    quarter = next(axis for axis in sheet.axes if axis.grain == "quarter")
+    assert [period.period_key for period in quarter.periods] == [
+        "2009Q2",
+        "2009Q3",
+        "2009Q4",
+        "2010Q1",
+        "2010Q2",
+        "2010Q3",
+        "2010Q4",
+        "2011Q1",
+        "2011Q2",
+    ]
+    assert [period.group_key for period in quarter.periods] == years
+    assert [axis.header_row for axis in sheet.axes if axis.grain == "year"] == []
+
+
 def test_year_like_data_row_is_not_a_header() -> None:
     cells = [
         _c("Inputs", "A1", "Year"),

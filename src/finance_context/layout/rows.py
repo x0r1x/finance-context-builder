@@ -169,10 +169,16 @@ def _is_bare_year_text(text: str | None) -> bool:
 
 
 def _bare_year_values(row_cells: list[dict], date1904: bool) -> list[int]:
-    """Visible bare years. A non-year number means this is not a year ruler."""
+    """Bare years on the row. A non-year number means this is not a year ruler.
+
+    A hidden cell on a row that also has a visible cell is a hidden column, so
+    scratch years there stay out of the run. A row whose every cell is hidden
+    is a hidden year banner (the columns are not hidden) and those years count.
+    """
+    row_hidden = bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
     values: list[int] = []
     for cell in sorted(row_cells, key=lambda item: int(item["col"])):
-        if cell.get("hidden"):
+        if cell.get("hidden") and not row_hidden:
             continue
         text = _text(cell, date1904)
         if text is None:
@@ -202,6 +208,22 @@ def _year_run_is_header(values: list[int]) -> bool:
 
 def _bare_years_are_header(row_cells: list[dict], date1904: bool) -> bool:
     return _year_run_is_header(_bare_year_values(row_cells, date1904))
+
+
+def _year_banner_by_column(row_cells: list[dict], date1904: bool) -> dict[int, str]:
+    """Column → year for a real year banner, including a fully hidden row."""
+    if not _bare_years_are_header(row_cells, date1904):
+        return {}
+    row_hidden = bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
+    found: dict[int, str] = {}
+    for cell in row_cells:
+        if cell.get("hidden") and not row_hidden:
+            continue
+        text = _text(cell, date1904)
+        if not text or not _is_bare_year_text(text):
+            continue
+        found[int(cell["col"])] = str(int(float(text.replace(" ", "").replace(",", "."))))
+    return found
 
 
 def _year_layer(row_cells: list[dict], date1904: bool) -> bool:
