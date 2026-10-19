@@ -186,20 +186,43 @@ def _fold_year_banners(
             if not _same_timeline(cols, banner_cols):
                 continue
             by_col = {period.col: period.period_key for period in banner.periods}
-            periods = [
-                period.model_copy(update={"group_key": by_col[period.col]})
-                if period.col in by_col and period.group_key is None
-                else period
-                for period in updated.periods
-            ]
+            periods: list[AxisPeriod] = []
+            applied = False
+            comparable = 0
+            contradicted = 0
+            for period in updated.periods:
+                banner_year = by_col.get(period.col)
+                own_year = _key_year(period.period_key)
+                if banner_year is not None and own_year is not None:
+                    comparable += 1
+                    if own_year != banner_year:
+                        contradicted += 1
+                        periods.append(period)
+                        continue
+                if banner_year is not None and period.group_key is None:
+                    periods.append(period.model_copy(update={"group_key": banner_year}))
+                    applied = True
+                else:
+                    periods.append(period)
             updated = updated.model_copy(update={"periods": periods})
-            consumed.add(banner_index)
+            if applied or (comparable > 0 and contradicted == comparable):
+                consumed.add(banner_index)
         folded.append((band, updated))
     for banner_index, item in enumerate(banners):
         if banner_index not in consumed:
             folded.append(item)
     folded.sort(key=lambda item: (min(item[0]), min(_axis_cols(item[1]) or {0})))
     return folded
+
+
+def _key_year(period_key: str | None) -> str | None:
+    """Year already written into a composed key such as ``2014Q3`` or ``2020-01``."""
+    if period_key is None or len(period_key) < 4:
+        return None
+    head = period_key[:4]
+    if head.isdigit():
+        return head
+    return None
 
 
 def _same_timeline(left: set[int], right: set[int]) -> bool:
@@ -244,6 +267,10 @@ def _keep_dominant(
                 kept.append(item)
             continue
         if _same_timeline(cols, pcols):
+            kept.append(item)
+            continue
+        # A later header on the same columns is its own table, not a stub of the wider axis.
+        if item[1].header_row != primary[1].header_row and width >= 3:
             kept.append(item)
             continue
         if cols.isdisjoint(pcols) and (
@@ -740,6 +767,9 @@ def _role_runs(
         )
     }
     assigned: dict[int, str] = {}
+    # Columns painted by a banner that sits off the calendar. An on-column marker
+    # under that banner overrides only its own column.
+    banner_cols: set[int] = set()
     for row_n in band_rows:
         markers: list[tuple[int, str]] = []
         for cell in sorted(by_row[row_n], key=lambda c: int(c["col"])):
@@ -750,18 +780,28 @@ def _role_runs(
                     markers.append((int(cell["col"]), hit.role))
         if not markers:
             continue
-        for index, (mcol, role) in enumerate(markers):
-            if mcol in calendar_cols:
-                assigned[mcol] = role
-                continue
-            right = markers[index + 1][0] if index + 1 < len(markers) else max(cols) + 1
+        off = [(col, role) for col, role in markers if col not in calendar_cols]
+        on = [(col, role) for col, role in markers if col in calendar_cols]
+        for index, (mcol, role) in enumerate(off):
+            right = off[index + 1][0] if index + 1 < len(off) else max(cols) + 1
             for col in cols:
                 if col >= mcol and col < right:
                     assigned[col] = role
-        if len(markers) == 1 and markers[0][0] not in calendar_cols:
-            _mcol, role = markers[0]
+                    banner_cols.add(col)
+        if len(off) == 1:
+            _mcol, role = off[0]
             for col in cols:
-                assigned.setdefault(col, role)
+                if col not in assigned:
+                    assigned[col] = role
+                    banner_cols.add(col)
+        for index, (mcol, role) in enumerate(on):
+            if mcol in banner_cols:
+                assigned[mcol] = role
+                continue
+            right = on[index + 1][0] if index + 1 < len(on) else max(cols) + 1
+            for col in cols:
+                if col >= mcol and col < right and col not in banner_cols:
+                    assigned[col] = role
     return assigned
 
 

@@ -40,7 +40,7 @@ def detect_params_block(
     value_cols = [col for col, role in roles.items() if role in {"value", "scenario"}]
     if label_col is None or not value_cols:
         return None
-    header_rows, header_row = _header_rows(by_row, date1904, roles)
+    header_rows, header_row = _header_rows(by_row, date1904, roles, label_col)
     check_table = _is_check_table(by_row, header_rows, date1904)
     data_rows = _params_data_rows(
         by_row, date1904, label_col, roles, header_rows, check_table
@@ -338,24 +338,39 @@ def is_scenario_selector_label(text: str | None) -> bool:
 
 
 def _looks_like_grid(by_row: dict[int, list[dict]], date1904: bool) -> bool:
+    for cells in by_row.values():
+        if _text_captions(cells, date1904) >= 3:
+            return False
     numeric_labels = 0
     numeric_bodies = 0
     for _row_n, cells in by_row.items():
-        label = _left_text(cells, date1904)
+        visible = [cell for cell in cells if not cell.get("hidden")]
+        label = _left_text(visible, date1904)
         if not label or not _is_number(label):
             continue
         label_col = min(
-            int(cell["col"]) for cell in cells if _text(cell, date1904) == label
+            int(cell["col"]) for cell in visible if _text(cell, date1904) == label
         )
         right = [
             cell
-            for cell in cells
+            for cell in visible
             if _is_number(_text(cell, date1904) or "") and int(cell["col"]) > label_col
         ]
         if len(right) >= 3:
             numeric_labels += 1
             numeric_bodies += 1
     return numeric_labels >= 3 and numeric_bodies >= 3
+
+
+def _text_captions(cells: list[dict], date1904: bool) -> int:
+    count = 0
+    for cell in cells:
+        if cell.get("hidden"):
+            continue
+        text = _text(cell, date1904)
+        if text and not _is_number(text):
+            count += 1
+    return count
 
 
 def _grid_title_block(
@@ -401,6 +416,8 @@ def _column_roles(
     text_counts: Counter[int] = Counter()
     for _row_n, cells in by_row.items():
         for cell in cells:
+            if cell.get("hidden"):
+                continue
             col = int(cell["col"])
             text = _text(cell, date1904)
             if not text:
@@ -416,9 +433,10 @@ def _column_roles(
     for col, votes in header_votes.items():
         roles[col] = votes.most_common(1)[0][0]
     for cells in by_row.values():
-        if not any(_header_role(_text(cell, date1904) or "") for cell in cells):
+        visible = [cell for cell in cells if not cell.get("hidden")]
+        if not any(_header_role(_text(cell, date1904) or "") for cell in visible):
             continue
-        for cell in cells:
+        for cell in visible:
             col = int(cell["col"])
             if col in roles:
                 continue
@@ -426,7 +444,7 @@ def _column_roles(
             if text and not _is_number(text) and len(text) <= 24:
                 roles[col] = "scenario"
     graph_col = _active_value_col(edges, sheet)
-    if graph_col is not None:
+    if graph_col is not None and _column_caption(by_row, graph_col, date1904):
         roles[graph_col] = "value"
         for col, role in list(roles.items()):
             if role == "value" and col != graph_col:
@@ -434,9 +452,27 @@ def _column_roles(
     for col, count in numeric_counts.items():
         if col in roles:
             continue
-        if count >= _MIN_VALUE_ROWS:
+        if count < _MIN_VALUE_ROWS:
+            continue
+        caption = _column_caption(by_row, col, date1904)
+        if caption and _header_role(caption) is None and len(caption) <= 24:
             roles[col] = "scenario"
+        else:
+            roles[col] = "value"
     return roles
+
+
+def _column_caption(
+    by_row: dict[int, list[dict]], col: int, date1904: bool
+) -> str | None:
+    for row_n in sorted(by_row):
+        cell = _cell_at(by_row[row_n], col)
+        if cell is None or cell.get("hidden"):
+            continue
+        text = _text(cell, date1904)
+        if text and not _is_number(text):
+            return text
+    return None
 
 
 def _label_column(
@@ -464,7 +500,10 @@ def _label_column(
 
 
 def _header_rows(
-    by_row: dict[int, list[dict]], date1904: bool, roles: dict[int, str]
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    roles: dict[int, str],
+    label_col: int | None = None,
 ) -> tuple[set[int], int]:
     hits: list[int] = []
     for row_n in sorted(by_row):
@@ -473,19 +512,38 @@ def _header_rows(
             continue
         named = 0
         scenario_names = 0
+        numeric_cells = 0
         for cell in by_row[row_n]:
+            if cell.get("hidden"):
+                continue
             text = _text(cell, date1904)
             if not text:
+                continue
+            if _is_number(text):
+                numeric_cells += 1
                 continue
             if _header_role(text):
                 named += 1
             elif roles.get(int(cell["col"])) in {"scenario", "value"} and not _is_number(text):
                 scenario_names += 1
-        if named >= 1 or scenario_names >= 2:
+        # A data row can carry several short texts. It is a header only when it
+        # has no numbers, the way a scenario-name row does.
+        if named >= 1 or (scenario_names >= 2 and numeric_cells == 0):
             hits.append(row_n)
+    first = min(by_row)
     if not hits:
-        first = min(by_row)
-        return {first}, first
+        outside = 0
+        for cell in by_row[first]:
+            if cell.get("hidden"):
+                continue
+            if label_col is not None and int(cell["col"]) == label_col:
+                continue
+            text = _text(cell, date1904)
+            if text and not _is_number(text):
+                outside += 1
+        if outside >= 1:
+            return {first}, first
+        return set(), first
     return set(hits), max(hits)
 
 
@@ -560,6 +618,8 @@ def _row_cells(
 ) -> list[RowCell]:
     tagged: list[RowCell] = []
     for cell in cells:
+        if cell.get("hidden"):
+            continue
         col = int(cell["col"])
         if col == label_col:
             continue
@@ -592,11 +652,11 @@ def _axis_headers(
     names: dict[int, str] = {}
     for row_n in sorted(header_rows):
         for cell in by_row[row_n]:
+            if cell.get("hidden"):
+                continue
             col = int(cell["col"])
             text = _text(cell, date1904)
-            if not text:
-                continue
-            if roles.get(col) == "scenario" and _is_number(text):
+            if not text or _is_number(text):
                 continue
             if _header_role(text) in {None, "label"} and roles.get(col) not in {
                 "scenario",
@@ -610,7 +670,11 @@ def _axis_headers(
     for col, role in sorted(roles.items()):
         if role in {"label"}:
             continue
-        text = names.get(col) or role
+        text = names.get(col)
+        if not text:
+            if role != "value":
+                continue
+            text = ""
         headers.append(
             AxisHeader(
                 col=col,

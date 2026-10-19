@@ -71,6 +71,9 @@ def build_context(
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
     warnings: list[str] = []
+    for sheet in workbook_meta.get("sheets") or []:
+        if isinstance(sheet, dict) and sheet.get("hidden") and sheet.get("name"):
+            warnings.append(f"Hidden sheet {sheet['name']} is included")
     formula_count = 0
     missing_cached = 0
     unparsed = 0

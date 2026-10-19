@@ -372,7 +372,6 @@ def _parse_sheet(
                     comments=comments,
                     hidden_cols=hidden_cols,
                     row_hidden=row_hidden,
-                    sheet_hidden=sheet.info.hidden,
                 )
                 if cell_presence is not None:
                     presence.append(
@@ -453,7 +452,6 @@ def _pending_from_cell(
     comments: dict[str, str],
     hidden_cols: set[int],
     row_hidden: bool,
-    sheet_hidden: bool,
 ) -> tuple[_PendingCell | None, tuple[str, str] | None]:
     addr = cell_el.get("r")
     if not addr:
@@ -483,7 +481,8 @@ def _pending_from_cell(
         idx = int(style)
         if 0 <= idx < len(formats):
             number_format = formats[idx]
-    hidden = sheet_hidden or row_hidden or col in hidden_cols
+    # A hidden sheet stays in the workbook. Only a hidden row or column hides cells.
+    hidden = row_hidden or col in hidden_cols
     return (
         _PendingCell(
             addr=addr,

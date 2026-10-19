@@ -238,6 +238,56 @@ def test_yo_in_a_value_header_matches_the_lexicon_spelling() -> None:
     assert [(header.role, header.col) for header in block.axis.headers][0] == ("value", 2)
 
 
+def test_numeric_first_row_stays_data_and_amount_is_a_value_column() -> None:
+    cells = []
+    for row, (name, amount) in enumerate(
+        [
+            ("RINISPA", "13012.32"),
+            ("ВТБ", "3000"),
+            ("Сбербанк", "2001.27"),
+            ("ИММО-ПУШ", "216.48"),
+        ],
+        start=1,
+    ):
+        cells.append(_c("Portfolio", f"A{row}", name))
+        cells.append(_c("Portfolio", f"B{row}", amount))
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "params"
+    assert [row.label for row in block.rows] == ["RINISPA", "ВТБ", "Сбербанк", "ИММО-ПУШ"]
+    assert [(header.col, header.role, header.text) for header in block.axis.headers] == [
+        (2, "value", "")
+    ]
+    assert {cell.role for cell in block.rows[0].cells} == {"value"}
+
+
+def test_cover_with_hidden_option_list_is_not_a_params_block() -> None:
+    cells = [
+        _c("Cover", "J4", "СБЕРБАНК РОССИИ"),
+        _c("Cover", "S4", "41610"),
+        _c("Cover", "J5", "МОДЕЛЬ ДЕНЕЖНЫХ ПОТОКОВ"),
+        _c("Cover", "B14", "Структура модели"),
+        _c("Cover", "D16", "Вход в модель и настройка основных опций"),
+        _c("Cover", "D17", "Ввод данных"),
+        _c("Cover", "D18", "Дополнительные показатели"),
+        _c("Cover", "D19", "Денежные потоки"),
+        _c("Cover", "D22", "Для начала работы"),
+        _c("Cover", "W3", "В среднем", hidden=True),
+        _c("Cover", "Y3", "В среднем", hidden=True),
+        _c("Cover", "W18", "Maximum products", hidden=True),
+        _c("Cover", "Y18", "10", hidden=True),
+        _c("Cover", "Y19", "5", hidden=True),
+        _c("Cover", "Y20", "5", hidden=True),
+        _c("Cover", "Y21", "20", hidden=True),
+        _c("Cover", "Y22", "10", hidden=True),
+    ]
+    edges = [
+        {"source": "Other!B19", "target": "Cover!E35"},
+        {"source": "Other!J19", "target": "Cover!E36"},
+    ]
+    layout = detect_layout(cells, edges=edges)
+    assert layout.sheets[0].blocks == []
+
+
 def test_unknown_short_param_header_stays_a_scenario_column() -> None:
     heads = ["Параметр", "Значение", "Прочее"]
     cells = [_c("Допущения", f"{col}1", head) for col, head in zip("ABC", heads, strict=True)]

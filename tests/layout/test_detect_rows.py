@@ -300,6 +300,44 @@ def test_prose_and_shortcut_sheets_are_rejected() -> None:
     assert all(not sheet.blocks for sheet in layout.sheets)
 
 
+def test_numbered_rows_under_a_text_header_stay_a_table() -> None:
+    cells = [
+        _c("FLM", "F1", "Показатели Forward-Looking Monitoring"),
+        _c("FLM", "B5", "№ п/п"),
+        _c("FLM", "C5", "Отрасль"),
+        _c("FLM", "D5", "Показатель"),
+        _c("FLM", "E5", "Источник информации"),
+        _c("FLM", "H5", "Максимальное/минимальное значение на 31.12.2016"),
+        _c("FLM", "I5", "Максимальное/минимальное значение на 31.12.2017"),
+        _c("FLM", "J5", "Максимальное/минимальное значение на 31.12.2018"),
+    ]
+    for row, (number, name) in enumerate(
+        [("1", "Инфляция"), ("2", "Доходы"), ("3", "EBITDA")],
+        start=6,
+    ):
+        cells += [
+            _c("FLM", f"B{row}", number),
+            _c("FLM", f"C{row}", "Все"),
+            _c("FLM", f"D{row}", name),
+            _c("FLM", f"E{row}", "СМИ, прогноз ЦМИ"),
+            _c("FLM", f"H{row}", "0.05"),
+            _c("FLM", f"I{row}", "0.04"),
+            _c("FLM", f"J{row}", "0.04"),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "params"
+    assert block.label_col == 4
+    assert [row.label for row in block.rows if row.kind == "fact"] == [
+        "Инфляция",
+        "Доходы",
+        "EBITDA",
+    ]
+    texts = [header.text for header in block.axis.headers]
+    assert "Максимальное/минимальное значение на 31.12.2016" in texts
+    assert "value" not in texts
+    assert "scenario" not in texts
+
+
 def test_sensitivity_grid_keeps_title_only() -> None:
     cells = [
         _c("Sensitivity", "A1", "GRID 1: MO-12 CLOSING CASH"),

@@ -92,6 +92,7 @@ class Block(BaseModel):
 
 class SheetLayout(BaseModel):
     name: str
+    hidden: bool = False
     axes: list[TimeAxis] = Field(default_factory=list)
     blocks: list[Block]
 

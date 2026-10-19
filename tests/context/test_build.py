@@ -42,6 +42,25 @@ def _layout() -> Layout:
     )
 
 
+def test_hidden_sheet_is_included_with_a_warning() -> None:
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF", "hidden": True}]},
+        cells=[
+            {
+                "sheet": "CF",
+                "row": 2,
+                "col": 2,
+                "addr": "B2",
+                "cached_value": "1",
+            }
+        ],
+        layout=_layout(),
+    )
+    assert doc.blocks[0].rows[0].label == "Opening cash"
+    assert any(warning == "Hidden sheet CF is included" for warning in doc.warnings)
+
+
 def test_build_keeps_cached_value_and_cell_ref() -> None:
     cells = [
         {

@@ -218,7 +218,9 @@ def _data_rows(
     date1904: bool,
     period_cols: set[int],
     seed: LayoutRow | None = None,
+    reveal_rows: set[int] | None = None,
 ) -> list[LayoutRow]:
+    revealed = reveal_rows or set()
     out: list[LayoutRow] = []
     section_stack: list[LayoutRow] = [seed] if seed is not None else []
     for row_n in band_rows:
@@ -228,10 +230,13 @@ def _data_rows(
             continue
         if _is_counter_row(by_row[row_n], date1904):
             continue
-        label, depth, label_cell = _row_span_label(by_row[row_n], label_span, date1904)
+        reveal = row_n in revealed
+        label, depth, label_cell = _row_span_label(
+            by_row[row_n], label_span, date1904, include_hidden=reveal
+        )
         if label is None or label_cell is None:
             label, depth, label_cell = _left_of_axis_label(
-                by_row[row_n], period_cols, date1904
+                by_row[row_n], period_cols, date1904, include_hidden=reveal
             )
         if label is None or label_cell is None:
             continue
@@ -367,10 +372,12 @@ def _row_span_label(
     row_cells: list[dict],
     label_span: list[int],
     date1904: bool,
+    *,
+    include_hidden: bool = False,
 ) -> tuple[str | None, int, dict | None]:
     for depth, col in enumerate(label_span):
         cell = _cell_at(row_cells, col)
-        if cell is None or cell.get("hidden"):
+        if cell is None or (cell.get("hidden") and not include_hidden):
             continue
         text = _text(cell, date1904)
         if not text or _is_number(text) or _is_column_header_text(text):
@@ -383,13 +390,15 @@ def _left_of_axis_label(
     row_cells: list[dict],
     period_cols: set[int],
     date1904: bool,
+    *,
+    include_hidden: bool = False,
 ) -> tuple[str | None, int, dict | None]:
     """First text left of the period axis when the label span is empty."""
     if not period_cols:
         return None, 0, None
     left_edge = min(period_cols)
     for cell in sorted(row_cells, key=lambda item: int(item["col"])):
-        if cell.get("hidden"):
+        if cell.get("hidden") and not include_hidden:
             continue
         if int(cell["col"]) >= left_edge:
             break
