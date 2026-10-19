@@ -114,6 +114,28 @@ def test_stale_xlsx_is_not_reused_for_a_new_xls(tmp_path: Path, monkeypatch) -> 
     assert "Revenue" not in labels
 
 
+def test_missing_owner_digest_does_not_keep_a_stale_xlsx(
+    tmp_path: Path, monkeypatch
+) -> None:
+    first = _labeled(tmp_path / "first.xlsx", "Revenue")
+    result, dest, _meta = _build(tmp_path, first)
+    assert result.exit_code == 0, result.output
+    owner_path = dest / "owner.json"
+    owner = json.loads(owner_path.read_text(encoding="utf-8"))
+    del owner["content_sha256"]
+    owner_path.write_text(json.dumps(owner), encoding="utf-8")
+    tariff = _labeled(tmp_path / "tariff.xlsx", "Tariff")
+    monkeypatch.setenv("SOFFICE_BIN", str(_fake_soffice(tmp_path, tariff)))
+    source = write_ole2(tmp_path / "next.xls", XLS_STREAMS)
+    result, dest, meta = _build(tmp_path, source)
+    assert result.exit_code == 0, result.output
+    assert result.output.strip().splitlines()[-1] == "succeeded"
+    assert meta["status"] == "succeeded"
+    labels = (dest / "context.json").read_text(encoding="utf-8")
+    assert "Tariff" in labels
+    assert "Revenue" not in labels
+
+
 def test_xls_is_converted_by_soffice(tmp_path: Path, monkeypatch) -> None:
     soffice = _fake_soffice(tmp_path, _prepared(tmp_path / "prepared.xlsx"))
     monkeypatch.setenv("SOFFICE_BIN", str(soffice))

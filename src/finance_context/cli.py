@@ -72,7 +72,8 @@ def build(
     previous_sha = _read_owner(dest).get("content_sha256")
     kept = source_name(data)
     atomic_write_bytes(book / kept, data)
-    source_changed = isinstance(previous_sha, str) and previous_sha != digest
+    # A missing or invalid digest is not this workbook, so the old sibling is dropped.
+    source_changed = previous_sha != digest
     if source_changed:
         # `build -o` reuses the directory. Drop the other source name so a previous
         # `source.xlsx` is not parsed in place of this `source.xls`. A repeat of the
