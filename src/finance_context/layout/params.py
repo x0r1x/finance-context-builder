@@ -19,6 +19,14 @@ _HEADER_ROLES: dict[str, str] = {
 _SCENARIO_HEADER = re.compile(r"\b(case|scenario)s?\b", re.IGNORECASE)
 _PROSE_MIN = 80
 _MIN_VALUE_ROWS = 3
+_SCENARIO_EVIDENCE = re.compile(
+    r"\b(?:"
+    r"базов\w*|консервативн\w*|оптимистичн\w*|пессимистичн\w*|стресс\w*|"
+    r"сценари\w*|base|upside|downside|cases?|scenarios?"
+    r")\b",
+    re.IGNORECASE,
+)
+_INDEX_HEADER = re.compile(r"^(?:№(?:\s*п\s*/\s*п)?|#|no\.?)$", re.IGNORECASE)
 _CHECK = re.compile(r"check|проверк|контроль|tie[- ]?out", re.IGNORECASE)
 _CAPS_SECTION = re.compile(r"^[A-Z0-9][A-Z0-9 &/,'-]{2,}$")
 _SELECTOR_LABEL = re.compile(
@@ -441,25 +449,82 @@ def _column_roles(
             if col in roles:
                 continue
             text = _text(cell, date1904)
-            if text and not _is_number(text) and len(text) <= 24:
-                roles[col] = "scenario"
+            if not text or _is_number(text):
+                continue
+            named = _named_column_role(text)
+            if named is not None:
+                roles[col] = named
+            elif len(text) <= 24:
+                roles[col] = "unknown"
     graph_col = _active_value_col(edges, sheet)
     if graph_col is not None and _column_caption(by_row, graph_col, date1904):
         roles[graph_col] = "value"
-        for col, role in list(roles.items()):
-            if role == "value" and col != graph_col:
-                roles[col] = "scenario"
     for col, count in numeric_counts.items():
         if col in roles:
             continue
         if count < _MIN_VALUE_ROWS:
             continue
         caption = _column_caption(by_row, col, date1904)
-        if caption and _header_role(caption) is None and len(caption) <= 24:
-            roles[col] = "scenario"
+        named = _named_column_role(caption) if caption else None
+        if named is not None:
+            roles[col] = named
+        elif caption and _header_role(caption) is None and len(caption) <= 24:
+            roles[col] = "unknown"
         else:
             roles[col] = "value"
+    _promote_scenario_siblings(roles, by_row, date1904)
     return roles
+
+
+def _named_column_role(text: str) -> str | None:
+    """A caption with positive evidence: index, or a scenario word. Not a guess."""
+    if _is_index_header(text):
+        return "index"
+    if _is_scenario_header(text):
+        return "scenario"
+    return None
+
+
+def _is_index_header(text: str) -> bool:
+    compact = re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
+    return bool(_INDEX_HEADER.fullmatch(compact))
+
+
+def _is_scenario_header(text: str) -> bool:
+    folded = text.replace("Ё", "Е").replace("ё", "е")
+    return bool(_SCENARIO_EVIDENCE.search(folded))
+
+
+def _promote_scenario_siblings(
+    roles: dict[int, str],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> None:
+    """A short numeric column beside an evidenced scenario column is the same set.
+
+    «Bull» next to «Base», with numbers on the same parameter rows, is a case.
+    «Отрасль» with text in those rows is not.
+    """
+    evidenced = [col for col, role in roles.items() if role == "scenario"]
+    if not evidenced:
+        return
+    numeric_rows: dict[int, set[int]] = defaultdict(set)
+    for row_n, cells in by_row.items():
+        for cell in cells:
+            if cell.get("hidden"):
+                continue
+            text = _text(cell, date1904)
+            if text and _is_number(text):
+                numeric_rows[int(cell["col"])].add(int(row_n))
+    for col, role in list(roles.items()):
+        if role != "unknown":
+            continue
+        caption = _column_caption(by_row, col, date1904)
+        if not caption or len(caption) > 24 or _header_role(caption) or _is_index_header(caption):
+            continue
+        shared = numeric_rows.get(col, set())
+        if any(len(shared & numeric_rows.get(other, set())) >= 2 for other in evidenced):
+            roles[col] = "scenario"
 
 
 def _column_caption(
@@ -488,7 +553,7 @@ def _label_column(
                 continue
             text = _text(cell, date1904)
             col = int(cell["col"])
-            if roles.get(col) in {"value", "unit", "scenario", "note"}:
+            if roles.get(col) in {"value", "unit", "scenario", "note", "unknown", "index"}:
                 continue
             if not text or _is_number(text) or len(text) > _PROSE_MIN:
                 continue
@@ -571,7 +636,7 @@ def _params_data_rows(
         tagged = _row_cells(cells, roles, label_col, date1904, include_hidden=row_hidden)
         numeric_value = False
         for item in tagged:
-            if item.role not in {"value", "scenario"}:
+            if item.role not in {"value", "scenario", "unknown"}:
                 continue
             cell = _cell_at(cells, item.col)
             text = _text(cell, date1904) if cell else None
@@ -670,6 +735,8 @@ def _axis_headers(
                 "value",
                 "unit",
                 "note",
+                "unknown",
+                "index",
             }:
                 continue
             names[col] = text

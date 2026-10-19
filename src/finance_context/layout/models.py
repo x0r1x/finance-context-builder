@@ -15,6 +15,8 @@ ColumnRole = Literal[
     "value",
     "unit",
     "note",
+    "index",
+    "unknown",
 ]
 RowKind = Literal["fact", "abstract", "index", "helper", "flag"]
 BlockKind = Literal["timeline", "params"]

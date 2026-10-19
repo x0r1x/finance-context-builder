@@ -70,7 +70,10 @@ def build_context(
     )
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
-    warnings: list[str] = _hidden_warnings(workbook_meta)
+    warnings: list[str] = [
+        *_hidden_warnings(workbook_meta),
+        *_unknown_header_warnings(layout),
+    ]
     formula_count = 0
     missing_cached = 0
     unparsed = 0
@@ -315,7 +318,7 @@ def _block_views(
         headers = [
             header
             for header in (block.axis.headers if block.axis is not None else [])
-            if header.role in {"value", "scenario"}
+            if header.role in {"value", "scenario", "unknown"}
         ]
         return [(block.block_id, headers, {})]
     views: list[tuple[str, list[AxisHeader], dict[str, str | None]]] = []
@@ -560,6 +563,24 @@ def _role_cells(
             )
         )
     return out
+
+
+def _unknown_header_warnings(layout: Layout) -> list[str]:
+    warnings: list[str] = []
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            if block.axis is None:
+                continue
+            names = [
+                header.text
+                for header in block.axis.headers
+                if header.role == "unknown" and header.text
+            ]
+            if not names:
+                continue
+            quoted = ", ".join(f"«{name}»" for name in names)
+            warnings.append(f"Unrecognized column headers in {block.block_id}: {quoted}")
+    return warnings
 
 
 def _hidden_warnings(workbook_meta: dict) -> list[str]:

@@ -332,10 +332,12 @@ def test_numbered_rows_under_a_text_header_stay_a_table() -> None:
         "Доходы",
         "EBITDA",
     ]
-    texts = [header.text for header in block.axis.headers]
-    assert "Максимальное/минимальное значение на 31.12.2016" in texts
-    assert "value" not in texts
-    assert "scenario" not in texts
+    by_text = {header.text: header.role for header in block.axis.headers}
+    assert by_text["№ п/п"] == "index"
+    assert by_text["Отрасль"] == "unknown"
+    assert by_text["Источник информации"] == "unknown"
+    assert by_text["Максимальное/минимальное значение на 31.12.2016"] == "value"
+    assert "scenario" not in by_text.values()
 
 
 def test_sensitivity_grid_keeps_title_only() -> None:

@@ -309,7 +309,7 @@ def test_cover_with_hidden_option_list_is_not_a_params_block() -> None:
     assert layout.sheets[0].blocks == []
 
 
-def test_unknown_short_param_header_stays_a_scenario_column() -> None:
+def test_unknown_short_param_header_is_not_a_scenario_column() -> None:
     heads = ["Параметр", "Значение", "Прочее"]
     cells = [_c("Допущения", f"{col}1", head) for col, head in zip("ABC", heads, strict=True)]
     for r, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
@@ -321,5 +321,70 @@ def test_unknown_short_param_header_stays_a_scenario_column() -> None:
     block = detect_layout(cells).sheets[0].blocks[0]
     assert [(header.role, header.text) for header in block.axis.headers] == [
         ("value", "Значение"),
-        ("scenario", "Прочее"),
+        ("unknown", "Прочее"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "heads",
+    [
+        ["Параметр", "Базовый", "Консервативный", "Оптимистичный"],
+        ["Параметр", "Сценарий 1", "Сценарий 2", "Стресс"],
+        ["Параметр", "Базовый сценарий", "Пессимистичный", "2 сценарий"],
+        ["Parameter", "Base case", "Upside", "Downside"],
+    ],
+)
+def test_scenario_words_mark_scenario_columns(heads: list[str]) -> None:
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
+    for r, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells.append(_c("Cases", f"A{r}", label))
+        for col, amount in zip("BCD", ["10", "11", "12"], strict=True):
+            cells.append(_c("Cases", f"{col}{r}", amount))
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [header.role for header in headers] == ["scenario", "scenario", "scenario"]
+    assert [header.text for header in headers] == heads[1:]
+
+
+def test_numeric_siblings_of_a_scenario_column_stay_scenarios() -> None:
+    heads = ["Параметр", "Base", "Bull", "Отрасль"]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
+    body = [
+        ("Цена", "10", "12", "Все"),
+        ("Доля", "0.2", "0.3", "Все"),
+        ("Ставка", "0.1", "0.2", "Все"),
+    ]
+    for r, (label, base, bull, industry) in enumerate(body, start=2):
+        cells += [
+            _c("Cases", f"A{r}", label),
+            _c("Cases", f"B{r}", base),
+            _c("Cases", f"C{r}", bull),
+            _c("Cases", f"D{r}", industry),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    headers = {header.text: header.role for header in block.axis.headers}
+    assert headers["Base"] == "scenario"
+    assert headers["Bull"] == "scenario"
+    assert headers["Отрасль"] == "unknown"
+
+
+@pytest.mark.parametrize("caption", ["№ п/п", "№", "#", "No."])
+def test_row_number_caption_is_an_index_column(caption: str) -> None:
+    cells = [
+        _c("FLM", "A1", caption),
+        _c("FLM", "B1", "Показатель"),
+        _c("FLM", "C1", "Значение"),
+    ]
+    for r, (number, name, amount) in enumerate(
+        [("1", "Инфляция", "0.05"), ("2", "Доходы", "0.04"), ("3", "EBITDA", "0.03")],
+        start=2,
+    ):
+        cells += [
+            _c("FLM", f"A{r}", number),
+            _c("FLM", f"B{r}", name),
+            _c("FLM", f"C{r}", amount),
+        ]
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [(header.role, header.text) for header in headers] == [
+        ("index", caption),
+        ("value", "Значение"),
     ]

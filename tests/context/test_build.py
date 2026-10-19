@@ -190,6 +190,54 @@ def test_hidden_period_and_row_stay_flagged_in_context() -> None:
     assert "Hidden columns CF!C are included" in doc.warnings
 
 
+def test_unrecognized_column_headers_warn_once_per_block() -> None:
+    from finance_context.layout.detect import detect_layout
+
+    cells = []
+    for col, head in zip("ABCD", ["Показатель", "Отрасль", "Мероприятия", "Значение"], strict=True):
+        cells.append(
+            {
+                "sheet": "Показатели FLM",
+                "row": 5,
+                "col": ord(col) - ord("A") + 1,
+                "addr": f"{col}5",
+                "cached_value": head,
+                "hidden": False,
+            }
+        )
+    rows = [
+        ("Инфляция", "Все", "Мониторинг", "0.05"),
+        ("Доходы", "Все", "Мониторинг", "0.04"),
+        ("EBITDA", "Все", "Мониторинг", "0.03"),
+    ]
+    for row, (name, industry, action, amount) in enumerate(rows, start=6):
+        for col, value in zip("ABCD", [name, industry, action, amount], strict=True):
+            cells.append(
+                {
+                    "sheet": "Показатели FLM",
+                    "row": row,
+                    "col": ord(col) - ord("A") + 1,
+                    "addr": f"{col}{row}",
+                    "cached_value": value,
+                    "hidden": False,
+                }
+            )
+    layout = detect_layout(cells)
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "Показатели FLM"}]},
+        cells=cells,
+        layout=layout,
+    )
+    assert doc.warnings == [
+        "Unrecognized column headers in Показатели FLM!r5: «Отрасль», «Мероприятия»"
+    ]
+    roles = {header.text: header.role for header in layout.sheets[0].blocks[0].axis.headers}
+    assert roles["Отрасль"] == "unknown"
+    assert roles["Мероприятия"] == "unknown"
+    assert roles["Значение"] == "value"
+
+
 def test_hidden_sheet_is_included_with_a_warning() -> None:
     doc = build_context(
         job_id="abc",
