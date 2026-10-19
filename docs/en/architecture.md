@@ -47,7 +47,7 @@ Weekly dates keep distinct `YYYY-MM-DD` keys. Grain `week` / `biweek` does not c
 
 On a sheet, a short date pair that sits entirely left of the widest timeline is not a second block. Row labels are taken from a **span** of text columns left of the axis (not `min(col)`), so section headers in col 2 and articles in col 4 still become `abstract` + `fact`. Each `LayoutRow` may store its own `label_col` for provenance. Columns between the label span and the period axis are role-tagged (`total` / `unit` / `value`). Sheets without an axis become `params` or are rejected as prose/nav — they do not inflate completeness.
 
-Hints are written from the label and the unit cell: `nature`, `time_semantics`, `unit`, `unit_per`, `currency`, `scale`, `sign`. `k£` in a label or Units cell is money, GBP, and `k`. `тыс. руб.` / `млн ₽` / `млрд руб.` is money, RUB, and `k` / `m` / `bn`; `руб.` alone is `unit`. A currency known only from a number format (`[$₽-419]`) leaves `scale` empty; `[$-419]` names no currency.
+Hints are written from the label and the unit cell: `nature`, `time_semantics`, `unit`, `unit_per`, `currency`, `scale`, `sign`. `k£` in a label or Units cell is money, GBP, and `k`. `тыс. руб.` / `млн ₽` / `млрд руб.` is money, RUB, and `k` / `m` / `bn`; `руб.` alone is `unit`. `RURm` / `mRUB` / `RUB mn` is money, RUB, and `m`; `RUR` alone is RUB at `unit`; `USD bn`, `EURk`, and `RUB'000` carry `bn` / `k`. A unit caption in the period-header label applies to the block. A unit row inside a section applies until the next section. A unit cell on the row itself wins. A currency known only from a number format (`[$₽-419]`) leaves `scale` empty; `[$-419]` names no currency.
 
 ## Storage
 

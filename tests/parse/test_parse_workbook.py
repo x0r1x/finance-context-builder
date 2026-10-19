@@ -45,6 +45,9 @@ def test_raw_cell_schema_formula_and_cached_value(tmp_path: Path, dest: Path) ->
         "comment",
         "shared_si",
         "shared_master",
+        "style_indent",
+        "outline_level",
+        "col_outline_level",
     }
     assert cells[0]["shared_si"] is None
     assert cells[0]["shared_master"] is False

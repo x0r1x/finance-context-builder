@@ -219,9 +219,11 @@ def _data_rows(
     period_cols: set[int],
     seed: LayoutRow | None = None,
     reveal_rows: set[int] | None = None,
+    summary_below: bool = True,
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
     out: list[LayoutRow] = []
+    outlines: list[int] = []
     section_stack: list[LayoutRow] = [seed] if seed is not None else []
     for row_n in band_rows:
         if row_n in header_rows:
@@ -240,7 +242,8 @@ def _data_rows(
             )
         if label is None or label_cell is None:
             continue
-        indent = depth + _indent(label)
+        indent = depth + _indent(label) + _style_indent(label_cell)
+        outline = _outline_level(label_cell)
         check_row = bool(_CHECK.search(label))
         kind = _row_kind(
             by_row[row_n],
@@ -312,9 +315,72 @@ def _data_rows(
             floor_row=band_rows[0] if band_rows else None,
         )
         out.append(item)
+        outlines.append(outline)
         if kind == "abstract" and not is_unit_text(label):
             section_stack.append(item)
+    if any(level > 0 for level in outlines):
+        _apply_outline_parents(out, outlines, summary_below)
     return out
+
+
+def _style_indent(cell: dict) -> int:
+    return _nonneg_int(cell.get("style_indent"))
+
+
+def _outline_level(cell: dict) -> int:
+    return _nonneg_int(cell.get("outline_level"))
+
+
+def _nonneg_int(value: object) -> int:
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def _apply_outline_parents(
+    rows: list[LayoutRow], levels: list[int], summary_below: bool
+) -> None:
+    """A nested outline level hangs off the summary row inside the group.
+
+    Level 1 under a level 0 section is the collapsible band indent already
+    models, so that parent stays. Level 2 under level 1 (IaaS under CAPEX)
+    replaces the indent parent when the summary sits closer.
+    ``summaryBelow`` false looks upward; true looks downward.
+    """
+    for index, (row, level) in enumerate(zip(rows, levels, strict=True)):
+        if level <= 1 or is_unit_text(row.label):
+            continue
+        parent = _outline_parent(rows, levels, index, level, summary_below)
+        if parent is None:
+            continue
+        parent_level = levels[rows.index(parent)]
+        if parent_level <= 0:
+            continue
+        if row.parent_row is None:
+            row.parent_row = parent.row
+            continue
+        closer_above = not summary_below and parent.row > row.parent_row
+        closer_below = summary_below and parent.row < row.parent_row
+        if closer_above or closer_below:
+            row.parent_row = parent.row
+
+
+def _outline_parent(
+    rows: list[LayoutRow],
+    levels: list[int],
+    index: int,
+    level: int,
+    summary_below: bool,
+) -> LayoutRow | None:
+    span = range(index + 1, len(rows)) if summary_below else range(index - 1, -1, -1)
+    for other in span:
+        if is_unit_text(rows[other].label):
+            continue
+        if levels[other] < level:
+            return rows[other]
+    return None
 
 
 def _row_all_hidden(row_cells: list[dict]) -> bool:

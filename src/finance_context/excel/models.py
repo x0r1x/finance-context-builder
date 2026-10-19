@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 
 class SheetInfo(BaseModel):
@@ -11,6 +11,15 @@ class SheetInfo(BaseModel):
     hidden: bool = False
     hidden_rows: list[int] = Field(default_factory=list)
     hidden_cols: list[int] = Field(default_factory=list)
+    # Excel's default: the group summary sits below the detail rows.
+    summary_below: bool = True
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if data.get("summary_below", True):
+            data.pop("summary_below", None)
+        return data
 
 
 class DefinedName(BaseModel):
@@ -48,3 +57,6 @@ class RawCell(BaseModel):
     comment: str | None = None
     shared_si: int | None = None
     shared_master: bool = False
+    style_indent: int = 0
+    outline_level: int = 0
+    col_outline_level: int = 0

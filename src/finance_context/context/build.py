@@ -24,6 +24,7 @@ from finance_context.layout.periods import display_cell_text
 from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
 from finance_context.layout.roles import article_role
+from finance_context.layout.units import is_block_unit_caption
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
@@ -108,6 +109,14 @@ def build_context(
             ]
             rows: list[BlockRow] = []
             parent_by_row = {r.row: r.label for r in block.rows}
+            block_unit = _header_unit(
+                sheet,
+                block,
+                by_addr,
+                bool(workbook_meta.get("date1904")),
+            )
+            running_unit = block_unit
+            body_unit = False
             for layout_row in block.rows:
                 row_key = f"{sheet.name}|{layout_row.row}|{block.block_id}"
                 parent = None
@@ -122,13 +131,24 @@ def build_context(
                 role_cells = _role_cells(
                     sheet.name, layout_row, by_addr, bool(workbook_meta.get("date1904"))
                 )
-                unit_text = next(
+                own_unit = next(
                     (
                         item.cached_value
                         for item in role_cells
                         if item.role == "unit" and item.cached_value
                     ),
                     None,
+                )
+                if is_block_unit_caption(layout_row.label):
+                    running_unit = layout_row.label.strip()
+                    body_unit = True
+                elif body_unit and layout_row.kind == "abstract":
+                    # A caption inside a section (`% p.a.`) stops at the next section.
+                    # The header caption (`RURm` beside the years) stays for the block.
+                    running_unit = block_unit
+                    body_unit = False
+                unit_text = own_unit or (
+                    None if is_block_unit_caption(layout_row.label) else running_unit
                 )
                 formats = _row_number_formats(
                     sheet_name=sheet.name,
@@ -563,6 +583,35 @@ def _role_cells(
             )
         )
     return out
+
+
+def _header_unit(sheet, block, by_addr: dict, date1904: bool) -> str | None:
+    """The label cell of the period-header row when it is a unit caption.
+
+    ``RURm`` beside ``2020`` is that caption. ``Year`` in the same cell is the
+    timeline name, and a ``k£`` in the unit column is that row's own unit.
+    """
+    rows = {axis.header_row for axis in axes_for(sheet, block)}
+    if block.axis is not None:
+        rows.add(block.axis.row)
+    label_col = getattr(block, "label_col", None)
+    if not rows or label_col is None:
+        return None
+    found: list[tuple[int, str]] = []
+    for (name, row, col), cell in by_addr.items():
+        if name != sheet.name or row not in rows or int(col) != int(label_col):
+            continue
+        text = display_cell_text(
+            cell.get("cached_value"),
+            cell.get("number_format"),
+            date1904=date1904,
+        )
+        if text and is_block_unit_caption(text):
+            found.append((int(row), text.strip()))
+    if not found:
+        return None
+    found.sort()
+    return found[0][1]
 
 
 def _unknown_header_warnings(layout: Layout) -> list[str]:

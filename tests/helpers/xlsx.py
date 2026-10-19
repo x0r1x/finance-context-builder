@@ -42,6 +42,13 @@ class SheetSpec:
     hidden_rows: list[int] = field(default_factory=list)
     comments: dict[str, str] = field(default_factory=dict)
     macrosheet: bool = False
+    # Excel row outline (sheetData/row@outlineLevel) and column outline (cols/col@outlineLevel).
+    row_outline: dict[int, int] = field(default_factory=dict)
+    col_outline: list[tuple[int, int, int]] = field(default_factory=list)
+    # None omits the flag (Excel default: summary row below the detail).
+    summary_below: bool | None = None
+    # ``sheetPr`` is the OOXML location. ``sheetFormatPr`` is accepted too.
+    summary_below_parent: str = "sheetPr"
 
 
 def write_zip(path: Path, members: dict[str, str | bytes]) -> Path:
@@ -63,9 +70,13 @@ def build_xlsx(
     defined_names: list[tuple[str, str]] | None = None,
     num_formats: dict[int, str] | None = None,
     cell_xfs: list[int] | None = None,
+    xf_indents: list[int] | None = None,
     date1904: bool = False,
 ) -> Path:
-    """Write a minimal xlsx/xlsm. cell_xfs is a list of numFmtId per xf index."""
+    """Write a minimal xlsx/xlsm. cell_xfs is a list of numFmtId per xf index.
+
+    xf_indents is the alignment indent of each xf, same index as cell_xfs.
+    """
     shared_strings = list(shared_strings or [])
     externals = list(externals or [])
     defined_names = list(defined_names or [])
@@ -132,8 +143,13 @@ def build_xlsx(
         )
         rid += 1
 
-    if num_formats is not None or cell_xfs is not None:
-        members["xl/styles.xml"] = _styles_xml(num_formats or {}, cell_xfs or [0])
+    if num_formats is not None or cell_xfs is not None or xf_indents is not None:
+        fmt_ids = list(cell_xfs or [])
+        if xf_indents is not None and len(fmt_ids) < len(xf_indents):
+            fmt_ids.extend([0] * (len(xf_indents) - len(fmt_ids)))
+        if not fmt_ids:
+            fmt_ids = [0]
+        members["xl/styles.xml"] = _styles_xml(num_formats or {}, fmt_ids, xf_indents)
         overrides.append(
             _override(
                 "/xl/styles.xml",
@@ -281,21 +297,28 @@ def _sheet_xml(sheet: SheetSpec, shared_strings: list[str]) -> str:
     for cell in sheet.cells:
         _, row = col_row(cell.addr)
         by_row.setdefault(row, []).append(cell)
-    col_xml = ""
-    if sheet.hidden_cols:
-        bits = "".join(
-            f'<col min="{c}" max="{c}" hidden="1"/>' for c in sheet.hidden_cols
-        )
-        col_xml = f"<cols>{bits}</cols>"
+    sheet_pr = ""
+    if sheet.summary_below is not None:
+        flag = "1" if sheet.summary_below else "0"
+        parent = sheet.summary_below_parent
+        sheet_pr = f'<{parent}><outlinePr summaryBelow="{flag}"/></{parent}>'
+    bits = [f'<col min="{c}" max="{c}" hidden="1"/>' for c in sheet.hidden_cols]
+    bits.extend(
+        f'<col min="{start}" max="{end}" outlineLevel="{level}"/>'
+        for start, end, level in sheet.col_outline
+    )
+    col_xml = f"<cols>{''.join(bits)}</cols>" if bits else ""
     rows_xml = []
     for row in sorted(by_row):
         hidden = ' hidden="1"' if row in sheet.hidden_rows else ""
+        level = sheet.row_outline.get(row, 0)
+        outline = f' outlineLevel="{level}"' if level else ""
         cells_xml = "".join(_cell_xml(c, shared_strings) for c in by_row[row])
-        rows_xml.append(f'<row r="{row}"{hidden}>{cells_xml}</row>')
+        rows_xml.append(f'<row r="{row}"{hidden}{outline}>{cells_xml}</row>')
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<worksheet xmlns="{NS_MAIN}">'
-        f"{col_xml}<sheetData>{''.join(rows_xml)}</sheetData>"
+        f"{sheet_pr}{col_xml}<sheetData>{''.join(rows_xml)}</sheetData>"
         "</worksheet>"
     )
 
@@ -366,7 +389,11 @@ def _comments_xml(comments: dict[str, str]) -> str:
     )
 
 
-def _styles_xml(num_formats: dict[int, str], cell_xfs: list[int]) -> str:
+def _styles_xml(
+    num_formats: dict[int, str],
+    cell_xfs: list[int],
+    xf_indents: list[int] | None = None,
+) -> str:
     nf = ""
     if num_formats:
         body = "".join(
@@ -374,7 +401,13 @@ def _styles_xml(num_formats: dict[int, str], cell_xfs: list[int]) -> str:
             for fid, code in num_formats.items()
         )
         nf = f'<numFmts count="{len(num_formats)}">{body}</numFmts>'
-    xfs = "".join(f'<xf numFmtId="{fid}"/>' for fid in cell_xfs)
+    indents = list(xf_indents or [])
+    xfs_parts: list[str] = []
+    for index, fid in enumerate(cell_xfs):
+        indent = indents[index] if index < len(indents) else 0
+        alignment = f'<alignment indent="{indent}"/>' if indent else ""
+        xfs_parts.append(f'<xf numFmtId="{fid}">{alignment}</xf>')
+    xfs = "".join(xfs_parts)
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<styleSheet xmlns="{NS_MAIN}">'

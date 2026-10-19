@@ -23,16 +23,23 @@ def detect_layout(
     edges: list[dict] | None = None,
     hidden_sheets: set[str] | None = None,
     hidden_columns: dict[str, set[int]] | None = None,
+    summary_below: dict[str, bool] | None = None,
 ) -> Layout:
     hidden = hidden_sheets or set()
     columns = hidden_columns or {}
+    below = summary_below or {}
     by_sheet: dict[str, list[dict]] = {}
     for cell in cells:
         by_sheet.setdefault(cell["sheet"], []).append(cell)
     sheets = []
     for name, sheet_cells in by_sheet.items():
         blocks, axes = _blocks_for_sheet(
-            name, sheet_cells, date1904, edges, hidden_cols=set(columns.get(name, ()))
+            name,
+            sheet_cells,
+            date1904,
+            edges,
+            hidden_cols=set(columns.get(name, ())),
+            summary_below=below.get(name, True),
         )
         sheets.append(SheetLayout(name=name, blocks=blocks, axes=axes, hidden=name in hidden))
     layout = Layout(sheets=sheets)
@@ -46,6 +53,7 @@ def _blocks_for_sheet(
     date1904: bool,
     edges: list[dict] | None = None,
     hidden_cols: set[int] | None = None,
+    summary_below: bool = True,
 ) -> tuple[list[Block], list[TimeAxis]]:
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
@@ -93,6 +101,7 @@ def _blocks_for_sheet(
             period_cols,
             seed=_band_title(by_row, group_axes[0].header_row, span, period_cols, date1904),
             reveal_rows=reveal_rows,
+            summary_below=summary_below,
         )
         data_rows, carved = carve_params_regions(
             sheet, data_rows, by_row, date1904, period_cols, label_col
