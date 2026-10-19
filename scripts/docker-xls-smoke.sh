@@ -7,7 +7,20 @@ set -eu
 IMAGE="${1:-finance-context-builder}"
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 WORKDIR=$(mktemp -d)
-trap 'rm -rf "$WORKDIR"' EXIT
+# mktemp -d is mode 0700. uid 1000 must traverse and write this mount
+# when the host user is someone else.
+chmod 0777 "$WORKDIR"
+cleanup() {
+  if [ -d "${WORKDIR:-}" ]; then
+    # Nested files belong to uid 1000. Remove them as that user, then drop the dir.
+    docker run --rm -u 1000:1000 \
+      -v "$WORKDIR:/work" \
+      --entrypoint find \
+      "$IMAGE" /work -mindepth 1 -delete >/dev/null 2>&1 || true
+    rm -rf "$WORKDIR" || true
+  fi
+}
+trap cleanup EXIT
 
 cd "$ROOT"
 uv run python - "$WORKDIR/book.xlsx" <<'PY'
