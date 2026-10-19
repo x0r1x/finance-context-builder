@@ -7,16 +7,11 @@ set -eu
 IMAGE="${1:-finance-context-builder}"
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 WORKDIR=$(mktemp -d)
-# mktemp -d is mode 0700. uid 1000 must traverse and write this mount
-# when the host user is someone else.
-chmod 0777 "$WORKDIR"
+# mktemp -d is mode 0700. Run the containers as this user so they can write
+# the mount without making it world-writable, and so this process can delete it.
+HOST_USER=$(id -u):$(id -g)
 cleanup() {
   if [ -d "${WORKDIR:-}" ]; then
-    # Nested files belong to uid 1000. Remove them as that user, then drop the dir.
-    docker run --rm -u 1000:1000 \
-      -v "$WORKDIR:/work" \
-      --entrypoint find \
-      "$IMAGE" /work -mindepth 1 -delete >/dev/null 2>&1 || true
     rm -rf "$WORKDIR" || true
   fi
 }
@@ -48,10 +43,11 @@ build_xlsx(
 )
 PY
 
-# LibreOffice in the image turns the seed .xlsx into a real .xls, as uid 1000.
+# LibreOffice in the image turns the seed .xlsx into a real .xls.
+# HOME=/tmp is writable for whatever uid the host passes in; /app is not.
 docker run --rm \
-  -u 1000:1000 \
-  -e HOME=/app \
+  --user "$HOST_USER" \
+  -e HOME=/tmp \
   -e LANG=C.UTF-8 \
   -v "$WORKDIR:/work" \
   --entrypoint soffice \
@@ -62,8 +58,8 @@ test -s "$WORKDIR/book.xls"
 
 # The service converts that .xls back through the adapter and publishes context.
 docker run --rm \
-  -u 1000:1000 \
-  -e HOME=/app \
+  --user "$HOST_USER" \
+  -e HOME=/tmp \
   -e LANG=C.UTF-8 \
   -v "$WORKDIR:/work" \
   "$IMAGE" \
