@@ -178,7 +178,8 @@ def _scan_reference(text: str, i: int) -> tuple[dict[str, Any], int] | None:
     if sheet_match:
         body = _scan_range_body(text, sheet_match.end())
         if body is None:
-            return None
+            # Excel keeps the sheet on a deleted cell: Sheet1!#REF!.
+            return _scan_deleted_ref(text, sheet_match.end())
         node, j = body
         node["sheet"] = sheet_match.group(0)[:-1]
         return node, j
@@ -206,7 +207,7 @@ def _scan_quoted_ref(text: str, i: int) -> tuple[dict[str, Any], int] | None:
     quoted = "".join(buf)
     body = _scan_range_body(text, j)
     if body is None:
-        return None
+        return _scan_deleted_ref(text, j)
     node, k = body
     if quoted.startswith("[") and "]" in quoted:
         close = quoted.index("]")
@@ -230,16 +231,32 @@ def _scan_bracket_ref(text: str, i: int) -> tuple[dict[str, Any], int] | None:
     if sheet_match and (sheet_match.end() < len(text) and text[sheet_match.end()] == "!"):
         sheet = sheet_match.group(0)
         j = sheet_match.end()
+    bang = False
     if j < len(text) and text[j] == "!":
         j += 1
+        bang = True
     body = _scan_range_body(text, j)
     if body is None:
+        if bang:
+            return _scan_deleted_ref(text, j)
         return None
     node, k = body
     node["external"] = external
     if sheet:
         node["sheet"] = sheet
     return node, k
+
+
+def _scan_deleted_ref(text: str, i: int) -> tuple[dict[str, Any], int] | None:
+    """Sheet-qualified ``#REF!`` is the same error operand as a bare ``#REF!``.
+
+    The sheet and any external-book prefix are only how Excel spells a deleted
+    cell. They are not a reference, so the node carries no sheet and no edges.
+    """
+    token = "#REF!"
+    if text.startswith(token, i):
+        return {"op": "err", "value": token}, i + len(token)
+    return None
 
 
 def _cell_node(match: re.Match[str]) -> dict[str, Any]:
