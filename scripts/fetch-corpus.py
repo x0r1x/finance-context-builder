@@ -12,12 +12,15 @@ LOCK = ROOT / "resources" / "corpus.lock.json"
 DEST = ROOT / "resources" / "corpus"
 
 
-def main() -> int:
-    spec = json.loads(LOCK.read_text(encoding="utf-8"))
-    DEST.mkdir(parents=True, exist_ok=True)
+def fetch_books(spec: dict, dest: Path) -> int:
+    dest.mkdir(parents=True, exist_ok=True)
     errors = 0
     for book in spec["books"]:
-        path = DEST / book["filename"]
+        if book.get("available") is False:
+            reason = book.get("reason") or "marked unavailable"
+            print(f"skip {book['slug']}: {reason}")
+            continue
+        path = dest / book["filename"]
         urls = [book["url"]] if book.get("url") else list(book.get("urls") or [])
         data = None
         last_error: Exception | None = None
@@ -43,7 +46,12 @@ def main() -> int:
             continue
         path.write_bytes(data)
         print(f"  wrote {path} sha256={digest}")
-    return 1 if errors and not any(DEST.glob("*.xlsx")) else 0
+    return 1 if errors and not any(dest.glob("*.xlsx")) else 0
+
+
+def main() -> int:
+    spec = json.loads(LOCK.read_text(encoding="utf-8"))
+    return fetch_books(spec, DEST)
 
 
 if __name__ == "__main__":

@@ -105,6 +105,6 @@ Columns between the label zone and `min(period_col)` get roles on `LayoutRow.cel
 | No `D3` / Scenario Chosen among block rows | The control row landed in the params header (`params.py`) |
 | `Unparsed formula` on a header or a SUM | `formulas/engine.py` |
 
-Public corpus: Packt (year index + `Input Assumptions` as params) and RVI (calendar + sections in several columns; `Top Shortcuts` produces no rows). `three-statement.xlsx` may be unavailable — a corpus check skips it.
+Public corpus: Packt (year index + `Input Assumptions` as params) and RVI (calendar + sections in several columns; `Top Shortcuts` produces no rows). The `three-statement` lock entry is marked unavailable: the cited GitHub tree never contained the workbook and stored no checksum. `scripts/fetch-corpus.py` skips it.
 
 Detector tests: `tests/layout/`. On `cashflow.xlsx`, params blocks appear (Assumptions / Checks); Cover and Disclaimer still have no rows. Timeline `label_col` of the weekly blocks must not slide.
