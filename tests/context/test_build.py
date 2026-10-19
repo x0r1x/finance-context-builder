@@ -60,7 +60,15 @@ def test_hidden_rows_and_columns_warn_once_per_sheet() -> None:
                 {"name": "CF", "hidden": True, "hidden_rows": [2]},
             ]
         },
-        cells=[],
+        cells=[
+            {"sheet": "Предпосылки", "row": row, "col": 1, "cached_value": "x"}
+            for row in (17, 18, 20, 21, 22)
+        ]
+        + [
+            {"sheet": "Вход", "row": 1, "col": col, "cached_value": "x"}
+            for col in (23, 24, 25, 26, 27)
+        ]
+        + [{"sheet": "CF", "row": 2, "col": 1, "cached_value": "Opening"}],
         layout=Layout(sheets=[]),
     )
     assert doc.warnings == [
@@ -68,6 +76,40 @@ def test_hidden_rows_and_columns_warn_once_per_sheet() -> None:
         "Hidden columns Вход!W:AA are included",
         "Hidden sheet CF is included",
         "Hidden rows CF!2 are included",
+    ]
+
+
+def test_empty_hidden_rows_and_columns_do_not_warn() -> None:
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={
+            "sheets": [
+                {
+                    "name": "Input Assumptions",
+                    "hidden_rows": [40, 41],
+                    "hidden_cols": [19, *range(20, 16385)],
+                }
+            ]
+        },
+        cells=[
+            {"sheet": "Input Assumptions", "row": 1, "col": 1, "cached_value": "Year"},
+            {"sheet": "Input Assumptions", "row": 2, "col": 19, "cached_value": "  "},
+            {
+                "sheet": "Input Assumptions",
+                "row": 3,
+                "col": 20,
+                "addr": "T3",
+                "cached_value": None,
+                "formula_raw": "=B3",
+            },
+            {"sheet": "Input Assumptions", "row": 40, "col": 2, "cached_value": ""},
+            {"sheet": "Input Assumptions", "row": 8, "col": 4, "cached_value": 0},
+        ],
+        layout=Layout(sheets=[]),
+    )
+    assert doc.warnings == [
+        "Hidden columns Input Assumptions!T are included",
+        "1 formula cell(s) missing cached values (e.g. Input Assumptions!T3)",
     ]
 
 
@@ -230,11 +272,11 @@ def test_unrecognized_column_headers_warn_once_per_block() -> None:
         layout=layout,
     )
     assert doc.warnings == [
-        "Unrecognized column headers in Показатели FLM!r5: «Отрасль», «Мероприятия»"
+        "Unrecognized column headers in Показатели FLM!r5: «Отрасль»"
     ]
     roles = {header.text: header.role for header in layout.sheets[0].blocks[0].axis.headers}
     assert roles["Отрасль"] == "unknown"
-    assert roles["Мероприятия"] == "unknown"
+    assert roles["Мероприятия"] == "note"
     assert roles["Значение"] == "value"
 
 

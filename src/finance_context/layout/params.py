@@ -838,12 +838,35 @@ def _is_check_table(
     return False
 
 
+_HEADER_QUALIFIER_WORDS = 2
+_HEADER_QUALIFIER_WORD_CHARS = 20
+
+
 def _header_role(text: str) -> str | None:
+    """Lexicon role of a header cell.
+
+    An exact normalized caption wins. Otherwise the first word may carry the role
+    when at most two short qualifiers follow it (``Комментарии КП``,
+    ``Источник информации``, ``Source of information``). A value, label, or unit
+    head whose qualifier is a scenario word stays unmatched, so that caption can
+    still be a scenario column.
+    """
     folded = text.replace("Ё", "Е").replace("ё", "е")
     n = re.sub(r"[\W_]+", " ", folded.casefold()).strip()
     if n in _HEADER_ROLES:
         return _HEADER_ROLES[n]
-    return None
+    parts = n.split()
+    if len(parts) < 2 or len(parts) > _HEADER_QUALIFIER_WORDS + 1:
+        return None
+    role = _HEADER_ROLES.get(parts[0])
+    if role is None:
+        return None
+    tail = parts[1:]
+    if any(len(word) > _HEADER_QUALIFIER_WORD_CHARS for word in tail):
+        return None
+    if role != "note" and _SCENARIO_EVIDENCE.search(" ".join(tail)):
+        return None
+    return role
 
 
 def _is_section_label(label: str, has_value: bool) -> bool:

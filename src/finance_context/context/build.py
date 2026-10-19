@@ -71,7 +71,7 @@ def build_context(
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
     warnings: list[str] = [
-        *_hidden_warnings(workbook_meta),
+        *_hidden_warnings(workbook_meta, cells),
         *_unknown_header_warnings(layout),
     ]
     formula_count = 0
@@ -583,7 +583,8 @@ def _unknown_header_warnings(layout: Layout) -> list[str]:
     return warnings
 
 
-def _hidden_warnings(workbook_meta: dict) -> list[str]:
+def _hidden_warnings(workbook_meta: dict, cells: list[dict]) -> list[str]:
+    occupied_rows, occupied_cols = _occupied_hidden_indexes(cells)
     warnings: list[str] = []
     for sheet in workbook_meta.get("sheets") or []:
         if not isinstance(sheet, dict) or not sheet.get("name"):
@@ -591,13 +592,51 @@ def _hidden_warnings(workbook_meta: dict) -> list[str]:
         name = str(sheet["name"])
         if sheet.get("hidden"):
             warnings.append(f"Hidden sheet {name} is included")
-        rows = _span_list(sheet.get("hidden_rows") or [])
+        rows = _span_list(
+            row
+            for row in sheet.get("hidden_rows") or []
+            if int(row) in occupied_rows.get(name, ())
+        )
         if rows:
             warnings.append(f"Hidden rows {name}!{rows} are included")
-        cols = _span_list(sheet.get("hidden_cols") or [], index_to_col)
+        cols = _span_list(
+            (
+                col
+                for col in sheet.get("hidden_cols") or []
+                if int(col) in occupied_cols.get(name, ())
+            ),
+            index_to_col,
+        )
         if cols:
             warnings.append(f"Hidden columns {name}!{cols} are included")
     return warnings
+
+
+def _occupied_hidden_indexes(
+    cells: list[dict],
+) -> tuple[dict[str, set[int]], dict[str, set[int]]]:
+    """Rows and columns that hold a value or a formula."""
+    rows: dict[str, set[int]] = {}
+    cols: dict[str, set[int]] = {}
+    for cell in cells:
+        if not _cell_has_content(cell):
+            continue
+        sheet = str(cell.get("sheet") or "")
+        rows.setdefault(sheet, set()).add(int(cell["row"]))
+        cols.setdefault(sheet, set()).add(int(cell["col"]))
+    return rows, cols
+
+
+def _cell_has_content(cell: dict) -> bool:
+    formula = cell.get("formula_raw")
+    if isinstance(formula, str) and formula.strip():
+        return True
+    value = cell.get("cached_value")
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
 
 
 def _span_list(values: list, render=str) -> str:

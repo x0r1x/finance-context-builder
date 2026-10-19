@@ -335,7 +335,7 @@ def test_numbered_rows_under_a_text_header_stay_a_table() -> None:
     by_text = {header.text: header.role for header in block.axis.headers}
     assert by_text["№ п/п"] == "index"
     assert by_text["Отрасль"] == "unknown"
-    assert by_text["Источник информации"] == "unknown"
+    assert by_text["Источник информации"] == "note"
     assert by_text["Максимальное/минимальное значение на 31.12.2016"] == "value"
     assert "scenario" not in by_text.values()
 

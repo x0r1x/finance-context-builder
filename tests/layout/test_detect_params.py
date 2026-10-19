@@ -388,3 +388,52 @@ def test_row_number_caption_is_an_index_column(caption: str) -> None:
         ("index", caption),
         ("value", "Значение"),
     ]
+
+
+def test_note_head_word_keeps_a_short_qualifier() -> None:
+    from finance_context.layout.params import _header_role
+
+    assert _header_role("Комментарии КП") == "note"
+    assert _header_role("Комментарий руководителя") == "note"
+    assert _header_role("Источник информации") == "note"
+    assert _header_role("Примечания ПМ") == "note"
+    assert _header_role("Note(s)") == "note"
+    assert _header_role("Source of information") == "note"
+    assert _header_role("Sources of information") == "note"
+    assert _header_role("Comments (KP)") == "note"
+    assert _header_role("Выводы ПМ") == "note"
+    assert _header_role("Мероприятия") == "note"
+    assert _header_role("Отрасль") is None
+    assert _header_role("Периодичность") is None
+    assert _header_role("Значение, руб.") == "value"
+    assert _header_role("Источник информации для всей модели и всех приложений") is None
+    assert _header_role("Значение базовое") is None
+    assert _header_role("Value upside") is None
+
+
+def test_qualified_note_columns_stay_notes_and_scenario_captions_stay_scenarios() -> None:
+    heads = ["Параметр", "Комментарии КП", "Источник информации", "Значение базовое", "Отрасль"]
+    cells = [_c("FLM", f"{col}1", head) for col, head in zip("ABCDE", heads, strict=True)]
+    for row, (label, comment, source, amount, industry) in enumerate(
+        [
+            ("Инфляция", "прогноз ЦМИ", "СМИ", "0.05", "Все"),
+            ("Доходы", "прогноз ЦМИ", "СМИ", "0.04", "Все"),
+            ("EBITDA", "отчётность", "РСБУ", "0.03", "Все"),
+        ],
+        start=2,
+    ):
+        cells += [
+            _c("FLM", f"A{row}", label),
+            _c("FLM", f"B{row}", comment),
+            _c("FLM", f"C{row}", source),
+            _c("FLM", f"D{row}", amount),
+            _c("FLM", f"E{row}", industry),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Комментарии КП"] == "note"
+    assert headers["Источник информации"] == "note"
+    assert headers["Значение базовое"] == "scenario"
+    assert headers["Отрасль"] == "unknown"
