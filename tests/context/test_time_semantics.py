@@ -138,6 +138,15 @@ def test_russian_input_vat_is_still_a_flow() -> None:
     assert _time(_row("НДС входящий")) == ("flow", "during_period", "sum")
 
 
+def test_index_at_beginning_of_period_stays_bop() -> None:
+    row = _row("Index at beginning of period", unit="Index")
+    assert _time(row) == ("bop", "beginning", "first")
+
+
+def test_revenue_from_beginning_of_year_is_a_flow() -> None:
+    assert _time(_row("Revenue from beginning of year")) == ("flow", "during_period", "sum")
+
+
 def test_english_beginning_and_end_of_period() -> None:
     assert _time(_row("Undrawn funds beginning of period")) == ("bop", "beginning", "first")
     assert _time(_row("Cash at end of period")) == ("eop", "end", "last")

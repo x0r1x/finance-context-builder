@@ -29,7 +29,8 @@ _SERIES_KINDS = {"fact", "flag", "helper"}
 _RU_PERIOD = r"(?:периода|года|месяца|квартала)"
 _RU_BALANCE_WORD = r"остат(?:ок|ки|ка|ков|ке)"
 _BOP_TEXT = re.compile(
-    r"\b(?:beginning|start) of (?:the )?(?:period|year|month|quarter)\b"
+    # "from beginning of year" is a period-to-date flow, not an opening balance.
+    r"(?<!from )(?<!from the )\b(?:beginning|start) of (?:the )?(?:period|year|month|quarter)\b"
     r"|\bbeginning balance\b|\bb/f(?:wd)?\b|\bbrought forward\b"
     rf"|\bна начало(?:\s+\w+){{0,2}}?\s+{_RU_PERIOD}\b"
     rf"|\b(?:входящ|начальн)\w*\s+(?:{_RU_BALANCE_WORD}|сальдо)\b"
@@ -293,7 +294,9 @@ def _hints_for(
     elif layout_row.kind == "fact" and time_semantics is None:
         time_semantics = "flow"
     if _is_index_unit(unit_text):
-        time_semantics = "stock"
+        # An index is a level, except when the label already names the period start.
+        if time_semantics != "bop":
+            time_semantics = "stock"
         nature = nature or "balance"
     if time_semantics == "flow" and _in_balance_sheet(layout_row, sheet):
         nature = nature or "balance"
