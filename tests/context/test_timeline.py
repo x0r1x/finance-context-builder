@@ -508,6 +508,22 @@ def test_start_of_operation_stays_an_event() -> None:
     assert _phases_for("Начало строительства") == [None, None, None, None]
 
 
+def test_flag_word_without_a_phase_warns_and_stays_empty() -> None:
+    cells = _ru_timeline(("Флаг прочее", ["1", "0", "0", "0"]))
+    axes, warnings = build_axes(detect_layout(cells), cells)
+    assert [period.phase for period in axes[0].periods] == [None, None, None, None]
+    assert any(item.startswith("Flag row has no phase on Модель:") for item in warnings)
+
+
+def test_unparsed_period_header_warns_without_becoming_a_period() -> None:
+    cells = _ru_timeline(("Выручка", ["1", "2", "3", "4"]))
+    cells.append(_c("Модель", "F1", "Q5 2025"))
+    cells.append(_c("Модель", "G1", "1.2025"))
+    _axes, warnings = build_axes(detect_layout(cells), cells)
+    assert any("Q5 2025" in item and item.startswith("Unparsed period header") for item in warnings)
+    assert any("1.2025" in item for item in warnings)
+
+
 def test_yo_in_a_phase_stem_matches_the_lexicon_spelling() -> None:
     assert _phases_for("Опёрационный период") == ["operation", "operation", None, None]
 

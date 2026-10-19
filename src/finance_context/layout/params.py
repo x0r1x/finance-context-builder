@@ -4,28 +4,17 @@ import re
 from collections import Counter, defaultdict
 
 from finance_context.excel.a1 import index_to_col, parse_addr
-from finance_context.layout.lexicon import words
+from finance_context.layout.lexicon import has_scenario_evidence, header_role_map, searcher
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text
 from finance_context.layout.units import is_unit_text
 from finance_context.layout.units import unit_kind_from_text as unit_kind_from_text
 
 # "Parameter / Value / Units / Notes" and "Параметр / Значение / Ед. изм. / Примечание".
-_HEADER_ROLES: dict[str, str] = {
-    word: role
-    for role in ("label", "value", "unit", "note")
-    for word in words("header_roles", role)
-}
-_SCENARIO_HEADER = re.compile(r"\b(case|scenario)s?\b", re.IGNORECASE)
 _PROSE_MIN = 80
 _MIN_VALUE_ROWS = 3
-_SCENARIO_EVIDENCE = re.compile(
-    r"\b(?:"
-    r"базов\w*|консервативн\w*|оптимистичн\w*|пессимистичн\w*|стресс\w*|"
-    r"сценари\w*|base|upside|downside|cases?|scenarios?"
-    r")\b",
-    re.IGNORECASE,
-)
+_VALUE_SHARE = 0.6
+_NOTE_TEXT_MIN = 24
 _INDEX_HEADER = re.compile(r"^(?:№(?:\s*п\s*/\s*п)?|#|no\.?)$", re.IGNORECASE)
 _CHECK = re.compile(r"check|проверк|контроль|tie[- ]?out", re.IGNORECASE)
 _CAPS_SECTION = re.compile(r"^[A-Z0-9][A-Z0-9 &/,'-]{2,}$")
@@ -207,7 +196,7 @@ def _scenario_header(
     period_cols: set[int],
 ) -> tuple[LayoutRow, list[int]] | None:
     for row in rows:
-        if not _SCENARIO_HEADER.search(row.label):
+        if searcher("structural", "scenario_header").search(row.label) is None:
             continue
         run: list[int] = []
         for cell in sorted(by_row[row.row], key=lambda item: int(item["col"])):
@@ -472,8 +461,69 @@ def _column_roles(
             roles[col] = "unknown"
         else:
             roles[col] = "value"
+    _apply_value_column_roles(roles, by_row, date1904)
     _promote_scenario_siblings(roles, by_row, date1904)
     return roles
+
+
+def _apply_value_column_roles(
+    roles: dict[int, str],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> None:
+    """A column of unit tokens or prose is ``unit`` or ``note`` even with a weak header.
+
+    The header lexicon is a boost. A strong value signal wins over it. Scenario,
+    index, label and numeric value columns stay as they are.
+    """
+    for col, texts in _column_bodies(by_row, date1904).items():
+        role = roles.get(col)
+        if role in {"scenario", "index", "label", "value"}:
+            continue
+        kind = _value_column_kind(texts)
+        if kind is None:
+            continue
+        roles[col] = kind
+
+
+def _column_bodies(
+    by_row: dict[int, list[dict]], date1904: bool
+) -> dict[int, list[str]]:
+    bodies: dict[int, list[str]] = defaultdict(list)
+    seen: set[int] = set()
+    for row_n in sorted(by_row):
+        for cell in by_row[row_n]:
+            if cell.get("hidden"):
+                continue
+            text = _text(cell, date1904)
+            if not text:
+                continue
+            col = int(cell["col"])
+            if col not in seen and not _is_number(text):
+                seen.add(col)
+                continue
+            if col in seen:
+                bodies[col].append(text)
+    return bodies
+
+
+def _value_column_kind(texts: list[str]) -> str | None:
+    if len(texts) < 2:
+        return None
+    units = sum(1 for text in texts if is_unit_text(text))
+    notes = sum(1 for text in texts if _is_free_text(text))
+    if units / len(texts) >= _VALUE_SHARE and units >= 2:
+        return "unit"
+    if notes / len(texts) >= _VALUE_SHARE and notes >= 2:
+        return "note"
+    return None
+
+
+def _is_free_text(text: str) -> bool:
+    """Long prose. A row label with a space is not a note."""
+    if _is_number(text) or is_unit_text(text):
+        return False
+    return " " in text and len(text) >= _NOTE_TEXT_MIN
 
 
 def _named_column_role(text: str) -> str | None:
@@ -491,8 +541,7 @@ def _is_index_header(text: str) -> bool:
 
 
 def _is_scenario_header(text: str) -> bool:
-    folded = text.replace("Ё", "Е").replace("ё", "е")
-    return bool(_SCENARIO_EVIDENCE.search(folded))
+    return has_scenario_evidence(text)
 
 
 def _promote_scenario_siblings(
@@ -853,18 +902,19 @@ def _header_role(text: str) -> str | None:
     """
     folded = text.replace("Ё", "Е").replace("ё", "е")
     n = re.sub(r"[\W_]+", " ", folded.casefold()).strip()
-    if n in _HEADER_ROLES:
-        return _HEADER_ROLES[n]
+    roles = header_role_map()
+    if n in roles:
+        return roles[n]
     parts = n.split()
     if len(parts) < 2 or len(parts) > _HEADER_QUALIFIER_WORDS + 1:
         return None
-    role = _HEADER_ROLES.get(parts[0])
+    role = roles.get(parts[0])
     if role is None:
         return None
     tail = parts[1:]
     if any(len(word) > _HEADER_QUALIFIER_WORD_CHARS for word in tail):
         return None
-    if role != "note" and _SCENARIO_EVIDENCE.search(" ".join(tail)):
+    if role != "note" and has_scenario_evidence(" ".join(tail)):
         return None
     return role
 

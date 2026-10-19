@@ -5,7 +5,11 @@ from collections import Counter
 from finance_context.layout.lexicon import searcher
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis
 from finance_context.layout.normalize import normalize_label
-from finance_context.layout.periods import display_cell_text, is_calendar_key
+from finance_context.layout.periods import (
+    display_cell_text,
+    is_calendar_key,
+    unparsed_period_shape,
+)
 from finance_context.layout.resolve import axes_for
 from finance_context.models.context import ContextAxis, ContextPeriod, TimelinePhase
 
@@ -41,10 +45,59 @@ def build_axes(
             if any(item.phase for item in built.periods):
                 phased.append(built)
     warnings: list[str] = []
+    warnings.extend(_flag_phase_warnings(layout))
     if phased:
         master = max(phased, key=lambda item: sum(1 for period in item.periods if period.phase))
         warnings.extend(_duration_warnings(layout, master.periods, by_addr, date1904))
+    warnings.extend(_unparsed_period_warnings(cells, date1904))
     return axes, warnings
+
+
+def _flag_phase_warnings(layout: Layout) -> list[str]:
+    """A flag-shaped row with no phase stays phase-less and says so."""
+    out: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            if getattr(block, "kind", "timeline") != "timeline":
+                continue
+            for row in block.rows:
+                if row.kind != "flag" or _phase_kind(row.label) is not None:
+                    continue
+                folded = normalize_label(row.label)
+                if searcher("phase_events").search(folded) or searcher("operation_duration").search(
+                    folded
+                ):
+                    continue
+                if searcher("structural", "flag").search(folded) is None:
+                    continue
+                key = (sheet.name, row.label)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(f"Flag row has no phase on {sheet.name}: «{row.label}»")
+    return out
+
+
+def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
+    out: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for cell in cells:
+        text = display_cell_text(
+            cell.get("cached_value") if cell.get("cached_value") is not None else None,
+            cell.get("number_format"),
+            date1904=date1904,
+        )
+        if text is None and cell.get("cached_value") is not None:
+            text = str(cell.get("cached_value"))
+        if not text or not unparsed_period_shape(text):
+            continue
+        key = (str(cell.get("sheet")), text)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f"Unparsed period header {cell.get('sheet')}!{cell.get('addr')}: «{text}»")
+    return out
 
 
 def _published_axis_ids(layout: Layout) -> set[str]:

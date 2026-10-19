@@ -1,54 +1,35 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, replace
 from datetime import date
 
 from finance_context.excel.dates import is_date_format, serial_to_date
-from finance_context.layout.lexicon import pattern
+from finance_context.layout.lexicon import (
+    accepts,
+    data_token,
+    is_scenario_caption,
+    matches_entry,
+    month_numbers,
+    pattern,
+    searcher,
+    words,
+)
 from finance_context.layout.models import ColumnRole, PeriodHit
 
-_YEAR_WORD = rf"(?:\s*{pattern('period_words', 'year')}\.?)?"
 # One suffix class for a year and for a quarter, half, month or date of that year.
 # E/F/P, Cyrillic Е/П, and Cyrillic Р (the lookalike of P) are forecast.
 # П is the Russian plan letter, not a P-lookalike, and stays forecast.
 # A/a and Cyrillic А/а are actual. Ф stays explicit historical.
 _ROLE_SUFFIX = r"[EFAPеЕфФпПaAАаРр]"
 _H_MARK = r"[HН]"
-_YEAR = re.compile(
-    rf"^(?:FY\s*)?((?:19|20)\d{{2}}){_YEAR_WORD}({_ROLE_SUFFIX})?$", re.IGNORECASE
-)
 _YEAR_FLOAT = re.compile(r"^((?:19|20)\d{2})(?:\.0+)?$")
 # Quarter and half-year headers: "1 кв. 2025", "I кв. 2025", "1-й квартал 2025", "Кв.1 2025",
 # "Q1 2025", "1Q25", "Q2'25", "1 полугодие 2025", "H1 2025", "2H25". The year may be missing
 # (a year row above) or two digits; "2025 г." is the same year.
-_QUARTER_WORD = rf"{pattern('period_words', 'quarter')}\.?"
-_HALF_WORD = rf"{pattern('period_words', 'half')}\.?"
 _ORDINAL = r"(?:\s*[-–—−]?\s*(?:й|ый|ой|е|ое))?"
-_PART_YEAR = (
-    rf"(?:(?:\s*[-/]\s*|\s*'?\s*)(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
-    rf"{_YEAR_WORD}(?P<sfx>{_ROLE_SUFFIX})?)?"
-)
-_QUARTER_FORMS = tuple(
-    re.compile(rf"^{body}{_PART_YEAR}$", re.IGNORECASE)
-    for body in (
-        rf"(?P<num>[1-4]|IV|I{{1,3}}){_ORDINAL}\s*{_QUARTER_WORD}",
-        rf"{_QUARTER_WORD}\s*(?P<num>[1-4]|IV|I{{1,3}})",
-        r"Q(?P<num>[1-4])",
-        r"(?P<num>[1-4])\s*Q",
-    )
-)
-_HALF_FORMS = tuple(
-    re.compile(rf"^{body}{_PART_YEAR}$", re.IGNORECASE)
-    for body in (
-        rf"(?P<num>[12]|I{{1,2}}){_ORDINAL}\s*{_HALF_WORD}",
-        rf"{_HALF_WORD}\s*(?P<num>[12]|I{{1,2}})",
-        r"(?P<num>[12])\s*п\s*/\s*г\.?",
-        rf"{_H_MARK}(?P<num>[12])",
-        rf"(?P<num>[12])\s*{_H_MARK}",
-    )
-)
-# "2025 Q1" / "2025Q1" / "2025 H1". A second year group cannot sit in _PART_YEAR.
+# "2025 Q1" / "2025Q1" / "2025 H1". A second year group cannot sit in the optional year.
 _YEAR_FIRST_QUARTER = re.compile(
     rf"^(?P<year>(?:19|20)\d{{2}})\s*[-/]?\s*Q(?P<num>[1-4])(?P<sfx>{_ROLE_SUFFIX})?$",
     re.IGNORECASE,
@@ -57,40 +38,9 @@ _YEAR_FIRST_HALF = re.compile(
     rf"^(?P<year>(?:19|20)\d{{2}})\s*[-/]?\s*{_H_MARK}(?P<num>[12])(?P<sfx>{_ROLE_SUFFIX})?$",
     re.IGNORECASE,
 )
-# "2П25" / "1П2025" only, with the year required. Bare "2П" is not a half.
-_CYRILLIC_HALF = re.compile(
-    rf"^(?P<num>[12])\s*[Пп]\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
-    rf"{_YEAR_WORD}(?P<sfx>{_ROLE_SUFFIX})?$",
-    re.IGNORECASE,
-)
 _ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4}
 _MONTH_YEAR = re.compile(
     rf"^(0[1-9]|1[0-2])[./]((?:19|20)\d{{2}})({_ROLE_SUFFIX})?$"
-)
-_TOTAL = re.compile(r"^(итого|всего|total|sum)$", re.IGNORECASE)
-_STUB = re.compile(r"^(stub|частичн\w*|partial)$", re.IGNORECASE)
-_SCENARIO_NOUN = r"сценари(?:й|я|ю|ем|и)"
-_SCENARIO_ADJ = (
-    r"(?:базов|пессимистичн|оптимистичн|негативн|позитивн|консервативн|стрессов)\w*"
-)
-_SCENARIO = re.compile(
-    rf"^(?:base(?:\s*case)?|upside|downside|stress|негативн\w*|позитивн\w*"
-    rf"|{_SCENARIO_NOUN}(?:(?:\s*[:\-–—]\s*|\s+)\w+)?"
-    rf"|{_SCENARIO_ADJ}\s+{_SCENARIO_NOUN})$",
-    re.IGNORECASE,
-)
-_HISTORICAL_WORD = pattern("period_roles", "historical")
-_FORECAST_WORD = pattern("period_roles", "forecast")
-_FACT = re.compile(rf"^({_HISTORICAL_WORD})\.?$", re.IGNORECASE)
-_PLAN = re.compile(rf"^({_FORECAST_WORD})\.?$", re.IGNORECASE)
-# "2024 факт", "2025 (факт)" and "Факт 2025", "План I кв. 2026".
-_TAG = re.compile(
-    rf"^(.*?)\s+\(?({_HISTORICAL_WORD}|{_FORECAST_WORD})\)?$",
-    re.IGNORECASE,
-)
-_TAG_FIRST = re.compile(
-    rf"^({_HISTORICAL_WORD}|{_FORECAST_WORD})\.?\s+(.+)$",
-    re.IGNORECASE,
 )
 _FORECAST_SFX = {"E", "F", "P", "Е", "П", "Р"}
 _FY_SHORT = re.compile(rf"^FY\s*(\d{{2}})({_ROLE_SUFFIX})?$", re.IGNORECASE)
@@ -110,71 +60,76 @@ _HALF_KEY = re.compile(r"^((?:19|20)\d{2})H([12])$")
 _MONTH_KEY = re.compile(r"^((?:19|20)\d{2})-(\d{2})$")
 _YEAR_KEY = re.compile(r"^((?:19|20)\d{2})$")
 _DATE_KEY = re.compile(r"^((?:19|20)\d{2})-(\d{2})-(\d{2})$")
-_QUARTER_LABEL = re.compile(r"квартал|quarter", re.IGNORECASE)
-_MONTH_LABEL = re.compile(r"месяц|month", re.IGNORECASE)
-_START_PERIOD = re.compile(
-    r"начал[оа]\s+период|start\s+of\s+period|period\s+start",
-    re.IGNORECASE,
-)
-_END_PERIOD = re.compile(
-    r"конец\s+период|end\s+of\s+period|period\s+end",
-    re.IGNORECASE,
-)
+# Rebuilt when the lexicon token changes, including a user overlay.
+_BOUND: str | None = None
+_YEAR: re.Pattern[str]
+_CYRILLIC_HALF: re.Pattern[str]
+_FACT: re.Pattern[str]
+_PLAN: re.Pattern[str]
+_TAG: re.Pattern[str]
+_TAG_FIRST: re.Pattern[str]
+_QUARTER_WORD_FORMS: tuple[re.Pattern[str], ...]
+_QUARTER_CODE_FORMS: tuple[re.Pattern[str], ...]
+_HALF_WORD_FORMS: tuple[re.Pattern[str], ...]
+_HALF_CODE_FORMS: tuple[re.Pattern[str], ...]
 
 
-def _ru_month(num: int, abbr: str, name: str) -> dict[str, int]:
-    """Abbreviation plus the case forms of one Russian month. ё is folded by the caller."""
-    if name.endswith(("ь", "й")):
-        stem = name[:-1]
-        endings = ("я", "ю", "ем", "е")
-    else:
-        stem = name
-        endings = ("а", "у", "ом", "е")
-    forms = {abbr, name, *(f"{stem}{ending}" for ending in endings)}
-    return {form: num for form in forms}
+def _bind() -> None:
+    """Compile lexicon words into the period patterns. An overlay rebuilds them."""
+    global _BOUND, _YEAR, _CYRILLIC_HALF, _FACT, _PLAN, _TAG, _TAG_FIRST
+    global _QUARTER_WORD_FORMS, _QUARTER_CODE_FORMS, _HALF_WORD_FORMS, _HALF_CODE_FORMS
+    token = data_token()
+    if _BOUND == token:
+        return
+    year_word = rf"(?:\s*{pattern('period_words', 'year')}\.?)?"
+    quarter_word = rf"{pattern('period_words', 'quarter')}\.?"
+    half_word = rf"{pattern('period_words', 'half')}\.?"
+    part_year = (
+        rf"(?:(?:\s*[-/]\s*|\s*'?\s*)(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
+        rf"{year_word}(?P<sfx>{_ROLE_SUFFIX})?)?"
+    )
+    historical = pattern("period_roles", "historical")
+    forecast = pattern("period_roles", "forecast")
+    role_word = rf"(?:{historical}|{forecast})"
+    _YEAR = re.compile(
+        rf"^(?:FY\s*)?((?:19|20)\d{{2}}){year_word}({_ROLE_SUFFIX})?$",
+        re.IGNORECASE,
+    )
+    _CYRILLIC_HALF = re.compile(
+        rf"^(?P<num>[12])\s*[Пп]\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
+        rf"{year_word}(?P<sfx>{_ROLE_SUFFIX})?$",
+        re.IGNORECASE,
+    )
+    _FACT = re.compile(rf"^({historical})\.?$", re.IGNORECASE)
+    _PLAN = re.compile(rf"^({forecast})\.?$", re.IGNORECASE)
+    _TAG = re.compile(rf"^(.*?)\s+\(?({role_word})\)?$", re.IGNORECASE)
+    _TAG_FIRST = re.compile(rf"^({role_word})\.?\s+(.+)$", re.IGNORECASE)
 
+    def compile_forms(bodies: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+        return tuple(re.compile(rf"^{body}{part_year}$", re.IGNORECASE) for body in bodies)
 
-_MONTH_NUM = {
-    "jan": 1,
-    "january": 1,
-    "feb": 2,
-    "february": 2,
-    "mar": 3,
-    "march": 3,
-    "apr": 4,
-    "april": 4,
-    "may": 5,
-    "jun": 6,
-    "june": 6,
-    "jul": 7,
-    "july": 7,
-    "aug": 8,
-    "august": 8,
-    "sep": 9,
-    "sept": 9,
-    "september": 9,
-    "oct": 10,
-    "october": 10,
-    "nov": 11,
-    "november": 11,
-    "dec": 12,
-    "december": 12,
-}
-_MONTH_NUM.update(_ru_month(1, "янв", "январь"))
-_MONTH_NUM.update(_ru_month(2, "фев", "февраль"))
-_MONTH_NUM.update(_ru_month(3, "мар", "март"))
-_MONTH_NUM.update(_ru_month(4, "апр", "апрель"))
-_MONTH_NUM.update(_ru_month(5, "май", "май"))
-_MONTH_NUM.update(_ru_month(6, "июн", "июнь"))
-_MONTH_NUM.update(_ru_month(7, "июл", "июль"))
-_MONTH_NUM.update(_ru_month(8, "авг", "август"))
-_MONTH_NUM.update(_ru_month(9, "сен", "сентябрь"))
-_MONTH_NUM.update(_ru_month(10, "окт", "октябрь"))
-_MONTH_NUM.update(_ru_month(11, "ноя", "ноябрь"))
-_MONTH_NUM.update(_ru_month(12, "дек", "декабрь"))
-_MONTH_NUM["сент"] = 9
-_MONTH_NUM["февр"] = 2
-_MONTH_NUM["нояб"] = 11
+    _QUARTER_WORD_FORMS = compile_forms(
+        (
+            rf"(?P<num>[1-4]|IV|I{{1,3}}){_ORDINAL}\s*{quarter_word}",
+            rf"{quarter_word}\s*(?P<num>[1-4]|IV|I{{1,3}})",
+        )
+    )
+    _QUARTER_CODE_FORMS = compile_forms((r"Q(?P<num>[1-4])", r"(?P<num>[1-4])\s*Q"))
+    _HALF_WORD_FORMS = compile_forms(
+        (
+            rf"(?P<num>[12]|I{{1,2}}){_ORDINAL}\s*{half_word}",
+            rf"{half_word}\s*(?P<num>[12]|I{{1,2}})",
+        )
+    )
+    _HALF_CODE_FORMS = compile_forms(
+        (
+            r"(?P<num>[12])\s*п\s*/\s*г\.?",
+            rf"{_H_MARK}(?P<num>[12])",
+            rf"(?P<num>[12])\s*{_H_MARK}",
+        )
+    )
+    _BOUND = token
+
 
 LAYER_DATE = "date"
 LAYER_YEAR = "year"
@@ -198,28 +153,85 @@ class HeaderAtom:
     half: int | None = None
 
 
+# Lookalikes folded only inside a token that already contains a digit.
+# Ф/П stay themselves: Ф is historical, П is the Russian plan letter.
+_LOOKALIKE_TO_LATIN = str.maketrans(
+    {
+        "А": "A",
+        "а": "a",
+        "В": "B",
+        "в": "b",
+        "С": "C",
+        "с": "c",
+        "Е": "E",
+        "е": "e",
+        "Н": "H",
+        "н": "h",
+        "К": "K",
+        "к": "k",
+        "М": "M",
+        "м": "m",
+        "О": "O",
+        "о": "o",
+        "Р": "P",
+        "р": "p",
+        "Т": "T",
+        "т": "t",
+        "Х": "X",
+        "х": "x",
+    }
+)
+_LOOKALIKE_TO_CYRILLIC = str.maketrans({value: key for key, value in _LOOKALIKE_TO_LATIN.items()})
+_ORDINAL_TOKEN = re.compile(r"^[1-4]\s*[-–—−]?\s*(?:[еЕйЙ]|[оеОЕ]{1,2})$")
+_ROLE_GLUE = re.compile(rf"((?:19|20)\d{{2}})\s+({_ROLE_SUFFIX})(?!\S)")
+
+
 def normalize_header(text: str | None) -> str | None:
     if text is None:
         return None
-    raw = re.sub(r"\s+", " ", str(text).replace("\xa0", " ")).strip()
+    raw = unicodedata.normalize("NFKC", str(text))
+    raw = raw.replace("Ё", "Е").replace("ё", "е").replace("\xa0", " ")
+    raw = re.sub(r"\s+", " ", raw).strip()
     if not raw:
         return None
-    return re.sub(r"(?<=\d)\s+(?=\d)", "", raw)
+    raw = re.sub(r"(?<=\d)\s+(?=\d)", "", raw)
+    raw = _ROLE_GLUE.sub(r"\1\2", raw)
+    return " ".join(_fold_period_token(token) for token in raw.split(" "))
+
+
+def _fold_period_token(token: str) -> str:
+    """Fold Н/H, А/A, Р/P, Е/E and the other lookalike pairs on a period code."""
+    if _ORDINAL_TOKEN.match(token) or not re.search(r"\d", token):
+        return token
+    letters = [char for char in token if char.isalpha()]
+    if not letters:
+        return token
+    cyrillic = [char for char in letters if "\u0400" <= char <= "\u04FF"]
+    latin = [char for char in letters if char.isascii()]
+    if len(letters) == 1:
+        return token.translate(_LOOKALIKE_TO_LATIN)
+    if cyrillic and latin and len(latin) == 1 and len(cyrillic) >= 2:
+        return token.translate(_LOOKALIKE_TO_CYRILLIC)
+    if cyrillic and latin and len(cyrillic) == 1 and len(latin) >= 2:
+        return token.translate(_LOOKALIKE_TO_LATIN)
+    return token
 
 
 def classify_header(text: str | None) -> PeriodHit | None:
+    _bind()
     raw = normalize_header(text)
     if not raw:
         return None
-    if _TOTAL.fullmatch(raw):
+    if _listed(raw, "structural", "total"):
         return PeriodHit(role="total", period_key="total", explicit_role=True)
-    if _STUB.fullmatch(raw):
+    if _listed(raw, "structural", "stub"):
         return PeriodHit(role="stub", period_key="stub", explicit_role=True)
-    if _SCENARIO.fullmatch(raw):
-        return PeriodHit(role="scenario", period_key=raw.lower(), explicit_role=True)
-    if _FACT.fullmatch(raw):
+    if is_scenario_caption(raw):
+        return PeriodHit(role="scenario", period_key=raw.casefold(), explicit_role=True)
+    role = _role_word(raw)
+    if role == "historical":
         return PeriodHit(role="historical", period_key="actual", explicit_role=True)
-    if _PLAN.fullmatch(raw):
+    if role == "forecast":
         return PeriodHit(role="forecast", period_key="plan", explicit_role=True)
     tagged = _tagged_hit(raw)
     if tagged is not None:
@@ -280,7 +292,7 @@ def classify_header(text: str | None) -> PeriodHit | None:
             explicit_role=bool(fy.group(2)),
         )
     year = _YEAR.fullmatch(raw)
-    if year:
+    if year and _year_words_ok(raw):
         return PeriodHit(
             role=_suffix_role(year.group(2)),
             period_key=year.group(1),
@@ -290,6 +302,22 @@ def classify_header(text: str | None) -> PeriodHit | None:
     if as_year:
         return PeriodHit(role="historical", period_key=as_year.group(1))
     return None
+
+
+def unparsed_period_shape(text: str | None) -> bool:
+    """A header that looks like a period and did not parse. Not a silent default."""
+    raw = normalize_header(text)
+    if not raw or len(raw) > 40 or classify_header(raw) is not None:
+        return False
+    if re.fullmatch(r"(?:0?\d|1\d)[./](?:19|20)\d{2}", raw):
+        return True
+    if re.search(r"(?i)(?:^|\s)[QHН]\s*[0-9]|[0-9]\s*[QHН](?:\s|$)", raw):
+        return True
+    grain = re.search(
+        r"(?i)(?<![^\W\d_])(?:q|h|кв|квартал\w*|полугод\w*)(?![^\W\d_])",
+        raw,
+    )
+    return bool(grain and re.search(r"(?:19|20)\d{2}", raw))
 
 
 def classify_atom(
@@ -562,23 +590,24 @@ def display_cell_text(
 
 
 def is_quarter_label(text: str | None) -> bool:
-    raw = normalize_header(text)
-    return bool(raw and _QUARTER_LABEL.search(raw))
+    return _label_has(text, "structural", "quarter_label")
 
 
 def is_month_label(text: str | None) -> bool:
-    raw = normalize_header(text)
-    return bool(raw and _MONTH_LABEL.search(raw))
+    return _label_has(text, "structural", "month_label")
 
 
 def is_start_period_label(text: str | None) -> bool:
-    raw = normalize_header(text)
-    return bool(raw and _START_PERIOD.search(raw))
+    return _label_has(text, "structural", "period_start")
 
 
 def is_end_period_label(text: str | None) -> bool:
+    return _label_has(text, "structural", "period_end")
+
+
+def _label_has(text: str | None, *path: str) -> bool:
     raw = normalize_header(text)
-    return bool(raw and _END_PERIOD.search(raw))
+    return bool(raw and searcher(*path).search(raw))
 
 
 def is_role_marker_text(text: str | None) -> bool:
@@ -588,17 +617,44 @@ def is_role_marker_text(text: str | None) -> bool:
 
 def _role_tag(raw: str) -> tuple[str, str] | None:
     """Period text and role word of "2024 факт", "2025 (план)" or "Факт 2025"."""
+    _bind()
     match = _TAG.fullmatch(raw)
-    if match is not None:
+    if match is not None and _role_word(match.group(2)):
         return match.group(1), match.group(2)
     match = _TAG_FIRST.fullmatch(raw)
-    if match is not None:
+    if match is not None and _role_word(match.group(1)):
         return match.group(2), match.group(1)
     return None
 
 
 def _tag_role(tag: str) -> ColumnRole:
-    return "historical" if _FACT.fullmatch(tag) else "forecast"
+    return _role_word(tag) or "forecast"
+
+
+def _role_word(raw: str) -> ColumnRole | None:
+    _bind()
+    match = _FACT.fullmatch(raw)
+    if match and accepts("period_roles", "historical", surface=match.group(1)):
+        return "historical"
+    match = _PLAN.fullmatch(raw)
+    if match and accepts("period_roles", "forecast", surface=match.group(1)):
+        return "forecast"
+    return None
+
+
+def _listed(raw: str, *path: str) -> bool:
+    return any(matches_entry(raw, entry) for entry in words(*path))
+
+
+def _year_words_ok(raw: str) -> bool:
+    for token in re.findall(r"[^\W\d_]+", raw):
+        if token.casefold() == "fy":
+            continue
+        if len(token) == 1 and re.fullmatch(_ROLE_SUFFIX, token, re.IGNORECASE):
+            continue
+        if not accepts("period_words", "year", surface=token):
+            return False
+    return True
 
 
 def _tagged_hit(raw: str) -> PeriodHit | None:
@@ -623,6 +679,7 @@ def _part_token(raw: str) -> HeaderAtom | None:
 
 def _part_of_year(raw: str) -> tuple[str, int, str | None, str | None] | None:
     """Quarter ("Q") or half ("H") header: grain, its number, the year if any, a role suffix."""
+    _bind()
     cyr = _CYRILLIC_HALF.fullmatch(raw)
     if cyr is not None:
         return "H", int(cyr.group("num")), cyr.group("year"), cyr.group("sfx")
@@ -632,16 +689,35 @@ def _part_of_year(raw: str) -> tuple[str, int, str | None, str | None] | None:
             num = int(match.group("num"))
             if 1 <= num <= top:
                 return grain, num, match.group("year"), match.group("sfx")
-    for grain, forms, top in (("Q", _QUARTER_FORMS, 4), ("H", _HALF_FORMS, 2)):
+    found = _word_or_code_part(raw)
+    if found is not None:
+        return found
+    return None
+
+
+def _word_or_code_part(raw: str) -> tuple[str, int, str | None, str | None] | None:
+    groups = (
+        ("Q", _QUARTER_CODE_FORMS, 4, None),
+        ("H", _HALF_CODE_FORMS, 2, None),
+        ("Q", _QUARTER_WORD_FORMS, 4, ("period_words", "quarter")),
+        ("H", _HALF_WORD_FORMS, 2, ("period_words", "half")),
+    )
+    for grain, forms, top, path in groups:
         for form in forms:
             match = form.fullmatch(raw)
             if match is None:
+                continue
+            if path is not None and not _confirmed(raw, *path):
                 continue
             token = match.group("num").upper()
             num = _ROMAN[token] if token in _ROMAN else int(token)
             if 1 <= num <= top:
                 return grain, num, match.group("year"), match.group("sfx")
     return None
+
+
+def _confirmed(raw: str, *path: str) -> bool:
+    return any(accepts(*path, surface=token) for token in re.findall(r"[^\W\d_]+", raw))
 
 
 def _month_hit(raw: str) -> PeriodHit | None:
@@ -672,8 +748,8 @@ def _ymd_hit(year: int, month: int, day: int, suffix: str | None) -> PeriodHit |
 
 
 def _month_number(token: str) -> int | None:
-    stem = token.lower().replace("ё", "е").rstrip(".")
-    return _MONTH_NUM.get(stem)
+    stem = token.casefold().replace("ё", "е").rstrip(".")
+    return month_numbers().get(stem)
 
 
 def _full_year(raw: str) -> str:

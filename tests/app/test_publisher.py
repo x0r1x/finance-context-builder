@@ -132,6 +132,23 @@ def test_layout_lexicon_edit_restales_the_layout_stage(tmp_path, monkeypatch) ->
     assert before["compile"] == after["compile"]
 
 
+def test_lexicon_overlay_restales_the_layout_stage(tmp_path, monkeypatch) -> None:
+    from finance_context.app import publisher
+
+    (tmp_path / "layout").mkdir()
+    (tmp_path / "layout" / "rows.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text('{"period_words": {"year": ["annum"]}}\n', encoding="utf-8")
+    monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
+    monkeypatch.setenv("FINANCE_CONTEXT_LEXICON", str(overlay))
+    before = publisher._compute_stages()
+    overlay.write_text('{"period_words": {"year": ["annum", "fyword"]}}\n', encoding="utf-8")
+    after = publisher._compute_stages()
+    assert before["layout"] != after["layout"]
+    assert before["compile"] == after["compile"]
+
+
 def test_stray_package_json_does_not_restale_layout(tmp_path, monkeypatch) -> None:
     from finance_context.app import publisher
 

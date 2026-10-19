@@ -437,3 +437,39 @@ def test_qualified_note_columns_stay_notes_and_scenario_captions_stay_scenarios(
     assert headers["Источник информации"] == "note"
     assert headers["Значение базовое"] == "scenario"
     assert headers["Отрасль"] == "unknown"
+
+
+def test_unit_and_note_columns_follow_the_values_under_an_unknown_header() -> None:
+    heads = ["Параметр", "Base", "Bull", "Мера", "Пояснение"]
+    cells = [_c("FLM", f"{col}1", head) for col, head in zip("ABCDE", heads, strict=True)]
+    notes = [
+        "допущение взято из бизнес-плана",
+        "смотри приложение к этой модели",
+        "пояснение для инвестиционного комитета",
+    ]
+    for row, (label, base, bull, unit, note) in enumerate(
+        zip(
+            ["Цена", "Объём", "Ставка"],
+            ["10", "11", "12"],
+            ["20", "21", "22"],
+            ["руб.", "тыс. руб.", "EUR"],
+            notes,
+            strict=True,
+        ),
+        start=2,
+    ):
+        cells += [
+            _c("FLM", f"A{row}", label),
+            _c("FLM", f"B{row}", base),
+            _c("FLM", f"C{row}", bull),
+            _c("FLM", f"D{row}", unit),
+            _c("FLM", f"E{row}", note),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Base"] == "scenario"
+    assert headers["Bull"] == "scenario"
+    assert headers["Мера"] == "unit"
+    assert headers["Пояснение"] == "note"
