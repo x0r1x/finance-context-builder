@@ -260,6 +260,27 @@ def test_numeric_first_row_stays_data_and_amount_is_a_value_column() -> None:
     assert {cell.role for cell in block.rows[0].cells} == {"value"}
 
 
+def test_hidden_param_row_joins_the_table() -> None:
+    cells = [
+        _c("Inputs", "A1", "Параметр"),
+        _c("Inputs", "B1", "Значение"),
+        _c("Inputs", "A2", "Цена"),
+        _c("Inputs", "B2", "10"),
+        _c("Inputs", "A3", "Доля", hidden=True),
+        _c("Inputs", "B3", "0.2", hidden=True),
+        _c("Inputs", "A4", "Ставка"),
+        _c("Inputs", "B4", "5"),
+        _c("Inputs", "A5", "Налог"),
+        _c("Inputs", "B5", "20"),
+    ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    by_label = {row.label: row for row in block.rows}
+    assert by_label["Доля"].hidden is True
+    assert by_label["Доля"].kind == "fact"
+    assert by_label["Цена"].hidden is False
+    assert {cell.role for cell in by_label["Доля"].cells} == {"value"}
+
+
 def test_cover_with_hidden_option_list_is_not_a_params_block() -> None:
     cells = [
         _c("Cover", "J4", "СБЕРБАНК РОССИИ"),

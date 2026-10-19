@@ -20,15 +20,26 @@ def layout_workbook(
         edges = _read_edges(dest_dir)
     date1904 = False
     hidden_sheets: set[str] = set()
+    hidden_columns: dict[str, set[int]] = {}
     meta_path = dest_dir / "raw" / "workbook.json"
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         date1904 = bool(meta.get("date1904"))
         for sheet in meta.get("sheets") or []:
-            if isinstance(sheet, dict) and sheet.get("hidden") and sheet.get("name"):
-                hidden_sheets.add(str(sheet["name"]))
+            if not isinstance(sheet, dict) or not sheet.get("name"):
+                continue
+            name = str(sheet["name"])
+            if sheet.get("hidden"):
+                hidden_sheets.add(name)
+            cols = {int(col) for col in sheet.get("hidden_cols") or []}
+            if cols:
+                hidden_columns[name] = cols
     layout = detect_layout(
-        cells, date1904=date1904, edges=edges, hidden_sheets=hidden_sheets
+        cells,
+        date1904=date1904,
+        edges=edges,
+        hidden_sheets=hidden_sheets,
+        hidden_columns=hidden_columns,
     )
     write_json(dest_dir / "layout.json", layout.model_dump(mode="json"))
     return layout

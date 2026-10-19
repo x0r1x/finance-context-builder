@@ -356,6 +356,7 @@ def _parse_sheet(
     root = parse_xml(read_part(zf, member))
     comments = _load_comments(zf, sheet.part)
     hidden_cols = _hidden_cols(root)
+    hidden_rows: list[int] = []
     pending: list[_PendingCell] = []
     presence: list[CellPresence] = []
     masters: dict[int, tuple[int, int, str]] = {}
@@ -364,6 +365,10 @@ def _parse_sheet(
     if sheet_data is not None:
         for row_el in children(sheet_data, "row"):
             row_hidden = as_bool(row_el.get("hidden"))
+            if row_hidden:
+                row_n = int(row_el.get("r") or "0")
+                if row_n:
+                    hidden_rows.append(row_n)
             for cell_el in children(row_el, "c"):
                 built, cell_presence = _pending_from_cell(
                     cell_el,
@@ -409,6 +414,8 @@ def _parse_sheet(
                 shared_master=is_master,
             )
         )
+    sheet.info.hidden_rows = hidden_rows
+    sheet.info.hidden_cols = sorted(hidden_cols)
     return cells, presence
 
 

@@ -561,13 +561,14 @@ def _params_data_rows(
         if row_n in header_rows:
             continue
         cells = by_row[row_n]
+        row_hidden = bool(cells) and all(cell.get("hidden") for cell in cells)
         label_cell = _cell_at(cells, label_col)
         label = _text(label_cell, date1904) if label_cell else _left_text(cells, date1904)
         if not label:
             continue
         if _is_number(label):
             continue
-        tagged = _row_cells(cells, roles, label_col, date1904)
+        tagged = _row_cells(cells, roles, label_col, date1904, include_hidden=row_hidden)
         numeric_value = False
         for item in tagged:
             if item.role not in {"value", "scenario"}:
@@ -604,6 +605,7 @@ def _params_data_rows(
             parent_row=parent_row,
             indent=indent,
             check_row=check_row and kind != "abstract",
+            hidden=row_hidden,
             kind=kind,
             section_path=[section_stack[-1].label] if section_stack and kind != "abstract" else [],
             label_col=int(label_cell["col"]) if label_cell else label_col,
@@ -614,11 +616,16 @@ def _params_data_rows(
 
 
 def _row_cells(
-    cells: list[dict], roles: dict[int, str], label_col: int, date1904: bool
+    cells: list[dict],
+    roles: dict[int, str],
+    label_col: int,
+    date1904: bool,
+    *,
+    include_hidden: bool = False,
 ) -> list[RowCell]:
     tagged: list[RowCell] = []
     for cell in cells:
-        if cell.get("hidden"):
+        if cell.get("hidden") and not include_hidden:
             continue
         col = int(cell["col"])
         if col == label_col:

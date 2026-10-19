@@ -22,14 +22,18 @@ def detect_layout(
     date1904: bool = False,
     edges: list[dict] | None = None,
     hidden_sheets: set[str] | None = None,
+    hidden_columns: dict[str, set[int]] | None = None,
 ) -> Layout:
     hidden = hidden_sheets or set()
+    columns = hidden_columns or {}
     by_sheet: dict[str, list[dict]] = {}
     for cell in cells:
         by_sheet.setdefault(cell["sheet"], []).append(cell)
     sheets = []
     for name, sheet_cells in by_sheet.items():
-        blocks, axes = _blocks_for_sheet(name, sheet_cells, date1904, edges)
+        blocks, axes = _blocks_for_sheet(
+            name, sheet_cells, date1904, edges, hidden_cols=set(columns.get(name, ()))
+        )
         sheets.append(SheetLayout(name=name, blocks=blocks, axes=axes, hidden=name in hidden))
     layout = Layout(sheets=sheets)
     link_workbook_timelines(layout, cells, date1904)
@@ -41,12 +45,13 @@ def _blocks_for_sheet(
     cells: list[dict],
     date1904: bool,
     edges: list[dict] | None = None,
+    hidden_cols: set[int] | None = None,
 ) -> tuple[list[Block], list[TimeAxis]]:
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
         by_row[int(cell["row"])].append(cell)
     row_ids = sorted(by_row)
-    candidates = _axis_candidates(sheet, by_row, date1904)
+    candidates = _axis_candidates(sheet, by_row, date1904, hidden_cols)
     groups = _table_groups(candidates)
     blocks: list[Block] = []
     params_blocks: list[Block] = []

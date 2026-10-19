@@ -66,20 +66,26 @@ def _axis_candidates(
     sheet: str,
     by_row: dict[int, list[dict]],
     date1904: bool,
+    hidden_cols: set[int] | None = None,
 ) -> list[tuple[list[int], TimeAxis]]:
+    known = set(hidden_cols or ()) | _inferred_hidden_columns(by_row)
     formula_cols = _formula_timeline_cols(by_row)
     candidates: list[tuple[list[int], TimeAxis]] = []
     for band_rows in _header_bands(by_row, date1904):
-        for axis in _axes_from_band(sheet, band_rows, by_row, date1904):
+        for axis in _axes_from_band(sheet, band_rows, by_row, date1904, known):
             if _period_count(axis) >= 2:
                 candidates.append((band_rows, axis))
     taken = {row_n for band_rows, _ in candidates for row_n in band_rows}
     for row_n in sorted(by_row):
         if row_n in taken:
             continue
-        labeled = _relative_run(by_row[row_n], date1904, require_label=True, min_len=3)
+        labeled = _relative_run(
+            by_row[row_n], date1904, require_label=True, min_len=3, hidden_cols=known
+        )
         if labeled:
-            axis = _axis_from_relative(sheet, row_n, labeled, by_row[row_n], date1904)
+            axis = _axis_from_relative(
+                sheet, row_n, labeled, by_row[row_n], date1904, hidden_cols=known
+            )
             candidates.append(([row_n], axis))
             taken.add(row_n)
             continue
@@ -88,6 +94,7 @@ def _axis_candidates(
             date1904,
             require_label=False,
             min_len=_UNLABELED_RELATIVE_MIN,
+            hidden_cols=known,
         )
         if not unlabeled or not formula_cols:
             continue
@@ -96,7 +103,9 @@ def _axis_candidates(
             continue
         if any(_same_timeline(run_cols, _axis_cols(axis)) for _, axis in candidates):
             continue
-        axis = _axis_from_relative(sheet, row_n, unlabeled, by_row[row_n], date1904)
+        axis = _axis_from_relative(
+            sheet, row_n, unlabeled, by_row[row_n], date1904, hidden_cols=known
+        )
         candidates.append(([row_n], axis))
         taken.add(row_n)
     return _keep_dominant(_fold_year_banners(candidates))
@@ -331,12 +340,37 @@ def _formula_timeline_cols(by_row: dict[int, list[dict]]) -> set[int] | None:
     return set(range(start, end + 1))
 
 
+def _inferred_hidden_columns(by_row: dict[int, list[dict]]) -> set[int]:
+    """A column is hidden when a visible row still has a hidden cell in it.
+
+    A row whose every cell is hidden is a hidden row. Its cells do not mark columns.
+    """
+    found: set[int] = set()
+    for cells in by_row.values():
+        if not cells or not any(not cell.get("hidden") for cell in cells):
+            continue
+        for cell in cells:
+            if cell.get("hidden"):
+                found.add(int(cell["col"]))
+    return found
+
+
+def _cols_connected(left: int, right: int, hidden_cols: set[int]) -> bool:
+    """Adjacent columns, or a gap filled only by hidden columns."""
+    if right == left + 1:
+        return True
+    if right <= left + 1:
+        return False
+    return all(col in hidden_cols for col in range(left + 1, right))
+
+
 def _relative_run(
     row_cells: list[dict],
     date1904: bool,
     *,
     require_label: bool,
     min_len: int,
+    hidden_cols: set[int] | None = None,
 ) -> list[tuple[int, int]]:
     label = _row_label(row_cells, date1904)
     raw = normalize_header(label)
@@ -354,10 +388,19 @@ def _relative_run(
                 seq = []
             continue
         seq.append((int(cell["col"]), int(float(text.replace(",", ".")))))
+    bridge = hidden_cols or set()
     best: list[tuple[int, int]] = []
     run: list[tuple[int, int]] = []
     for col, value in seq:
-        if run and value == run[-1][1] + 1 and col == run[-1][0] + 1:
+        physical_gap = bool(run) and col > run[-1][0] + 1
+        hidden_only = bool(run) and all(prev_col in bridge for prev_col, _value in run)
+        connected = (
+            bool(run)
+            and value == run[-1][1] + 1
+            and _cols_connected(run[-1][0], col, bridge)
+            and not (physical_gap and hidden_only)
+        )
+        if connected:
             run.append((col, value))
         else:
             run = [(col, value)]
@@ -385,14 +428,17 @@ def _axis_from_relative(
     run: list[tuple[int, int]],
     row_cells: list[dict],
     date1904: bool,
+    hidden_cols: set[int] | None = None,
 ) -> TimeAxis:
     prefix = _relative_prefix(_row_label(row_cells, date1904))
+    hidden = hidden_cols or set()
     periods = [
         AxisPeriod(
             col=col,
             text=str(value),
             role="relative",
             period_key=f"{prefix}{value}",
+            hidden=col in hidden,
         )
         for col, value in run
     ]
@@ -536,6 +582,7 @@ def _axes_from_band(
     band_rows: list[int],
     by_row: dict[int, list[dict]],
     date1904: bool,
+    hidden_cols: set[int] | None = None,
 ) -> list[TimeAxis]:
     header_row = max(band_rows)
     cols = sorted(
@@ -602,7 +649,8 @@ def _axes_from_band(
                 explicit_role=explicit_role,
             )
         )
-    runs = _split_header_runs(composed)
+    known_hidden = hidden_cols or set()
+    runs = _split_header_runs(composed, known_hidden)
     axes: list[TimeAxis] = []
     multi = len(runs) > 1
     for run in runs:
@@ -632,6 +680,7 @@ def _axes_from_band(
                         explicit_role=header.explicit_role,
                         start_date=bounds.get(header.col, (None, None))[0],
                         end_date=bounds.get(header.col, (None, None))[1],
+                        hidden=header.col in known_hidden,
                     )
                     for header in headers
                 ],
@@ -650,13 +699,22 @@ def _header_key_class(key: str) -> str:
     return "other"
 
 
-def _split_header_runs(headers: list[AxisHeader]) -> list[list[AxisHeader]]:
+def _split_header_runs(
+    headers: list[AxisHeader], hidden_cols: set[int] | None = None
+) -> list[list[AxisHeader]]:
     if not headers:
         return []
+    bridge = hidden_cols or set()
     ordered = sorted(headers, key=lambda item: item.col)
     runs: list[list[AxisHeader]] = [[ordered[0]]]
     for prev, item in zip(ordered, ordered[1:], strict=False):
-        gap = item.col - prev.col > 1
+        # An empty hidden column keeps a run together. It does not attach a
+        # run that lives only in hidden columns to the next visible header:
+        # those cells are scratch values under the real axis (1965 next to 1939).
+        physical_gap = item.col - prev.col > 1
+        bridged = physical_gap and _cols_connected(prev.col, item.col, bridge)
+        hidden_only = all(header.col in bridge for header in runs[-1])
+        gap = physical_gap and (not bridged or hidden_only)
         left_cls = _header_key_class(prev.period_key)
         right_cls = _header_key_class(item.period_key)
         grain_break = (

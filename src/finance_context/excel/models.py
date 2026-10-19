@@ -9,6 +9,8 @@ class SheetInfo(BaseModel):
     name: str
     sheet_id: int
     hidden: bool = False
+    hidden_rows: list[int] = Field(default_factory=list)
+    hidden_cols: list[int] = Field(default_factory=list)
 
 
 class DefinedName(BaseModel):

@@ -75,6 +75,134 @@ def test_hidden_column_is_not_label_column() -> None:
     block = layout.sheets[0].blocks[0]
     assert block.label_col == 2
     assert block.rows[0].label == "Revenue"
+    assert block.rows[0].hidden is False
+
+
+def test_hidden_data_rows_join_their_block() -> None:
+    cells = [
+        _c("Assumptions", "B15", "2015"),
+        _c("Assumptions", "C15", "2016"),
+        _c("Assumptions", "D15", "2017"),
+        _c("Assumptions", "B16", "A. ПРОДАЖИ"),
+        _c("Assumptions", "B19", "Продажи продукта 1, ед."),
+        _c("Assumptions", "C19", "10"),
+        _c("Assumptions", "D19", "11"),
+        _c("Assumptions", "B20", "Продажи продукта 2, ед.", hidden=True),
+        _c("Assumptions", "C20", "12", hidden=True),
+        _c("Assumptions", "D20", "13", hidden=True),
+        _c("Assumptions", "B21", "Продажи продукта 3, ед.", hidden=True),
+        _c("Assumptions", "C21", "14", hidden=True),
+        _c("Assumptions", "D21", "15", hidden=True),
+        _c("Assumptions", "B34", "B. РАСХОДЫ НА СЫРЬЕ"),
+        _c("Assumptions", "B37", "Расходы на сырье 1"),
+        _c("Assumptions", "C37", "1"),
+        _c("Assumptions", "D37", "2"),
+        _c("Assumptions", "B38", "Расходы на сырье 2", hidden=True),
+        _c("Assumptions", "C38", "3", hidden=True),
+        _c("Assumptions", "D38", "4", hidden=True),
+    ]
+    for col, year in zip("BCD", ["2015", "2016", "2017"], strict=True):
+        cells.append(_c("Assumptions", f"{col}33", year))
+    blocks = detect_layout(cells).sheets[0].blocks
+    sales = next(block for block in blocks if any("продукта 1" in row.label for row in block.rows))
+    assert sales.label_col == 2
+    by_label = {row.label: row for row in sales.rows}
+    assert by_label["Продажи продукта 1, ед."].hidden is False
+    assert by_label["Продажи продукта 2, ед."].hidden is True
+    assert by_label["Продажи продукта 3, ед."].hidden is True
+    assert by_label["Продажи продукта 2, ед."].kind == "fact"
+    materials = next(
+        block for block in blocks if any(row.label == "Расходы на сырье 2" for row in block.rows)
+    )
+    raw = next(row for row in materials.rows if row.label == "Расходы на сырье 2")
+    assert raw.hidden is True
+    assert raw.kind == "fact"
+
+
+def test_hidden_period_column_stays_in_the_run() -> None:
+    cells = [
+        _c("CF", "A1", "Item"),
+        _c("CF", "B1", "2023"),
+        _c("CF", "C1", "2024", hidden=True),
+        _c("CF", "D1", "2025E"),
+        _c("CF", "A2", "Revenue"),
+        _c("CF", "B2", "1"),
+        _c("CF", "C2", "2", hidden=True),
+        _c("CF", "D2", "3"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    periods = sheet.axes[0].periods
+    assert [period.period_key for period in periods] == ["2023", "2024", "2025"]
+    assert [period.hidden for period in periods] == [False, True, False]
+    assert sheet.blocks[0].rows[0].label == "Revenue"
+    assert sheet.blocks[0].rows[0].hidden is False
+
+
+def test_empty_hidden_column_does_not_split_the_period_run() -> None:
+    cells = [
+        _c("CF", "A1", "Item"),
+        _c("CF", "B1", "2023"),
+        _c("CF", "D1", "2024"),
+        _c("CF", "E1", "2025E"),
+        _c("CF", "A2", "Revenue"),
+        _c("CF", "B2", "1"),
+        _c("CF", "D2", "2"),
+        _c("CF", "E2", "3"),
+    ]
+    sheet = detect_layout(cells, hidden_columns={"CF": {3}}).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == ["2023", "2024", "2025"]
+    assert [period.hidden for period in sheet.axes[0].periods] == [False, False, False]
+
+
+def test_hidden_scratch_prices_do_not_open_an_axis() -> None:
+    cells = [
+        _c("Inputs", "A1", "Item"),
+        _c("Inputs", "A2", "Zinc"),
+        _c("Inputs", "A3", "Отраслевые"),
+        _c("Inputs", "J3", "1965", hidden=True),
+        _c("Inputs", "K3", "1938", hidden=True),
+        _c("Inputs", "L3", "2166", hidden=True),
+        _c("Inputs", "M3", "1939"),
+        _c("Inputs", "N3", "2101"),
+    ]
+    for col, year in zip("JKLMN", ["2012", "2013", "2014", "2015", "2016"], strict=True):
+        hidden = col in "JKL"
+        cells.append(_c("Inputs", f"{col}1", year, hidden=hidden))
+        cells.append(_c("Inputs", f"{col}2", "1", hidden=hidden))
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.header_row for axis in sheet.axes] == [1]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2012",
+        "2013",
+        "2014",
+        "2015",
+        "2016",
+    ]
+    assert [period.hidden for period in sheet.axes[0].periods] == [
+        True,
+        True,
+        True,
+        False,
+        False,
+    ]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Zinc", "Отраслевые"]
+
+
+def test_visible_gap_still_splits_the_period_run() -> None:
+    cells = [
+        _c("CF", "A1", "Item"),
+        _c("CF", "B1", "2023"),
+        _c("CF", "D1", "2024"),
+        _c("CF", "E1", "2025E"),
+        _c("CF", "A2", "Revenue"),
+        _c("CF", "B2", "1"),
+        _c("CF", "D2", "2"),
+        _c("CF", "E2", "3"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == ["2024", "2025"]
 
 
 def test_period_role_is_not_article_role() -> None:

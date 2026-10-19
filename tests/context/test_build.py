@@ -42,6 +42,154 @@ def _layout() -> Layout:
     )
 
 
+def test_hidden_rows_and_columns_warn_once_per_sheet() -> None:
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={
+            "sheets": [
+                {
+                    "name": "Предпосылки",
+                    "hidden_rows": [17, 18, 20, 21, 22],
+                    "hidden_cols": [],
+                },
+                {
+                    "name": "Вход",
+                    "hidden_rows": [],
+                    "hidden_cols": [23, 24, 25, 26, 27],
+                },
+                {"name": "CF", "hidden": True, "hidden_rows": [2]},
+            ]
+        },
+        cells=[],
+        layout=Layout(sheets=[]),
+    )
+    assert doc.warnings == [
+        "Hidden rows Предпосылки!17:18,20:22 are included",
+        "Hidden columns Вход!W:AA are included",
+        "Hidden sheet CF is included",
+        "Hidden rows CF!2 are included",
+    ]
+
+
+def test_hidden_period_and_row_stay_flagged_in_context() -> None:
+    from finance_context.layout.detect import detect_layout
+
+    cells = [
+        {
+            "sheet": "CF",
+            "row": 1,
+            "col": 1,
+            "addr": "A1",
+            "cached_value": "Item",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 1,
+            "col": 2,
+            "addr": "B1",
+            "cached_value": "2023",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 1,
+            "col": 3,
+            "addr": "C1",
+            "cached_value": "2024",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 1,
+            "col": 4,
+            "addr": "D1",
+            "cached_value": "2025E",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 1,
+            "addr": "A2",
+            "cached_value": "Revenue",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 2,
+            "addr": "B2",
+            "cached_value": "1",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 3,
+            "addr": "C2",
+            "cached_value": "2",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 2,
+            "col": 4,
+            "addr": "D2",
+            "cached_value": "3",
+            "hidden": False,
+        },
+        {
+            "sheet": "CF",
+            "row": 3,
+            "col": 1,
+            "addr": "A3",
+            "cached_value": "Продажи продукта 2",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 3,
+            "col": 2,
+            "addr": "B3",
+            "cached_value": "4",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 3,
+            "col": 3,
+            "addr": "C3",
+            "cached_value": "5",
+            "hidden": True,
+        },
+        {
+            "sheet": "CF",
+            "row": 3,
+            "col": 4,
+            "addr": "D3",
+            "cached_value": "6",
+            "hidden": True,
+        },
+    ]
+    layout = detect_layout(cells)
+    doc = build_context(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF", "hidden_cols": [3]}]},
+        cells=cells,
+        layout=layout,
+    )
+    periods = {period.period_key: period for period in doc.axes[0].periods}
+    assert periods["2024"].hidden is True
+    assert "hidden" not in periods["2023"].model_dump(mode="json")
+    assert periods["2024"].model_dump(mode="json")["hidden"] is True
+    rows = {row.label: row for row in doc.blocks[0].rows}
+    assert rows["Revenue"].hidden is False
+    assert rows["Продажи продукта 2"].hidden is True
+    assert rows["Продажи продукта 2"].values == ["4", "5", "6"]
+    assert "Hidden columns CF!C are included" in doc.warnings
+
+
 def test_hidden_sheet_is_included_with_a_warning() -> None:
     doc = build_context(
         job_id="abc",

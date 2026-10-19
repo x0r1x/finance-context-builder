@@ -230,7 +230,7 @@ def _data_rows(
             continue
         if _is_counter_row(by_row[row_n], date1904):
             continue
-        reveal = row_n in revealed
+        reveal = row_n in revealed or _row_all_hidden(by_row[row_n])
         label, depth, label_cell = _row_span_label(
             by_row[row_n], label_span, date1904, include_hidden=reveal
         )
@@ -315,6 +315,11 @@ def _data_rows(
         if kind == "abstract" and not is_unit_text(label):
             section_stack.append(item)
     return out
+
+
+def _row_all_hidden(row_cells: list[dict]) -> bool:
+    """Every populated cell is hidden: the row is hidden, not a hidden column on a visible row."""
+    return bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
 
 
 def _ancestors(rows: list[LayoutRow], indent: int) -> list[LayoutRow]:

@@ -204,6 +204,7 @@ def _annotate_axis(
                 start_date=getattr(header, "start_date", None),
                 end_date=getattr(header, "end_date", None),
                 flags=flag_map,
+                hidden=bool(getattr(header, "hidden", False)),
             )
         )
     live = {name for period in periods for name, on in period.flags.items() if on}

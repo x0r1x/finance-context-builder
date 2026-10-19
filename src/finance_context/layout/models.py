@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 ColumnRole = Literal[
     "historical",
@@ -32,6 +32,14 @@ class AxisHeader(BaseModel):
     role: ColumnRole
     period_key: str
     explicit_role: bool = False
+    hidden: bool = False
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("hidden"):
+            data.pop("hidden", None)
+        return data
 
 
 class Axis(BaseModel):
@@ -49,6 +57,14 @@ class AxisPeriod(BaseModel):
     group_key: str | None = None
     start_date: str | None = None
     end_date: str | None = None
+    hidden: bool = False
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("hidden"):
+            data.pop("hidden", None)
+        return data
 
 
 class TimeAxis(BaseModel):

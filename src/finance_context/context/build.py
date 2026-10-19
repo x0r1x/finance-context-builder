@@ -16,7 +16,7 @@ from finance_context.context.series import (
     value_status,
 )
 from finance_context.context.timeline import build_axes
-from finance_context.excel.a1 import format_addr
+from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.layout.adjacency import row_adjacency
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow
 from finance_context.layout.params import is_scenario_selector_label
@@ -70,10 +70,7 @@ def build_context(
     )
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
-    warnings: list[str] = []
-    for sheet in workbook_meta.get("sheets") or []:
-        if isinstance(sheet, dict) and sheet.get("hidden") and sheet.get("name"):
-            warnings.append(f"Hidden sheet {sheet['name']} is included")
+    warnings: list[str] = _hidden_warnings(workbook_meta)
     formula_count = 0
     missing_cached = 0
     unparsed = 0
@@ -102,12 +99,7 @@ def build_context(
                 else []
             )
             periods = _local_periods(views, axes_by_id) if axis_ids else [
-                {
-                    "col": header.col,
-                    "text": header.text,
-                    "role": header.role,
-                    "period_key": header.period_key,
-                }
+                _period_dict(header)
                 for _axis_id, headers, _phases in views
                 for header in headers
             ]
@@ -310,15 +302,7 @@ def _local_periods(
     canon = {period.period_key: period.col for period in shared.periods}
     if all(canon.get(header.period_key) == header.col for header in headers):
         return []
-    return [
-        {
-            "col": header.col,
-            "text": header.text,
-            "role": header.role,
-            "period_key": header.period_key,
-        }
-        for header in headers
-    ]
+    return [_period_dict(header) for header in headers]
 
 
 def _block_views(
@@ -357,6 +341,7 @@ def _block_views(
                     text=period.text,
                     role=role,
                     period_key=period.period_key,
+                    hidden=bool(getattr(period, "hidden", False)),
                 )
             )
             phases[period.period_key] = getattr(canon, "phase", None) if canon is not None else None
@@ -571,9 +556,61 @@ def _role_cells(
                 role=item.role,
                 cached_value=displayed if displayed is not None else cached,
                 header=item.header,
+                hidden=bool(cell and cell.get("hidden")),
             )
         )
     return out
+
+
+def _hidden_warnings(workbook_meta: dict) -> list[str]:
+    warnings: list[str] = []
+    for sheet in workbook_meta.get("sheets") or []:
+        if not isinstance(sheet, dict) or not sheet.get("name"):
+            continue
+        name = str(sheet["name"])
+        if sheet.get("hidden"):
+            warnings.append(f"Hidden sheet {name} is included")
+        rows = _span_list(sheet.get("hidden_rows") or [])
+        if rows:
+            warnings.append(f"Hidden rows {name}!{rows} are included")
+        cols = _span_list(sheet.get("hidden_cols") or [], index_to_col)
+        if cols:
+            warnings.append(f"Hidden columns {name}!{cols} are included")
+    return warnings
+
+
+def _span_list(values: list, render=str) -> str:
+    nums = sorted({int(value) for value in values})
+    if not nums:
+        return ""
+    spans: list[str] = []
+    start = prev = nums[0]
+    for num in nums[1:]:
+        if num == prev + 1:
+            prev = num
+            continue
+        spans.append(_one_span(start, prev, render))
+        start = prev = num
+    spans.append(_one_span(start, prev, render))
+    return ",".join(spans)
+
+
+def _one_span(start: int, end: int, render) -> str:
+    if start == end:
+        return str(render(start))
+    return f"{render(start)}:{render(end)}"
+
+
+def _period_dict(header: AxisHeader) -> dict[str, object]:
+    item: dict[str, object] = {
+        "col": header.col,
+        "text": header.text,
+        "role": header.role,
+        "period_key": header.period_key,
+    }
+    if header.hidden:
+        item["hidden"] = True
+    return item
 
 
 def _is_static_row(

@@ -185,11 +185,13 @@ def test_hidden_row_and_column(tmp_path: Path, dest: Path) -> None:
             )
         ],
     )
-    parse_workbook(source, dest)
+    meta = parse_workbook(source, dest)
     by = _by_addr(load_cells(dest))
     assert by[("Sheet1", "A1")]["hidden"] is False
     assert by[("Sheet1", "B1")]["hidden"] is True
     assert by[("Sheet1", "A2")]["hidden"] is True
+    assert meta.sheets[0].hidden_rows == [2]
+    assert meta.sheets[0].hidden_cols == [2]
 
 
 def test_excel_error_cached_as_token(tmp_path: Path, dest: Path) -> None:
