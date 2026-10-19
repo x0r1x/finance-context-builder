@@ -13,7 +13,7 @@ Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2
 ## Input
 
 - `.xlsx` and `.xlsm` are accepted.
-- Legacy `.xls` (BIFF8, OLE2) is accepted when LibreOffice is installed: the job converts it once with `soffice --headless --convert-to xlsx` (fresh profile, `XLS_CONVERT_TIMEOUT_SEC`) and parses the `.xlsx`. The Docker image ships headless LibreOffice, so `soffice` is on `PATH` in the container. A machine without `soffice` on `PATH` or in `SOFFICE_BIN` rejects the upload as `unsupported_media_type`.
+- Legacy `.xls` (BIFF8, OLE2) is accepted when LibreOffice is installed: the job converts it once with `soffice --headless --convert-to xlsx` (fresh profile, `XLS_CONVERT_TIMEOUT_SEC`), then copies cached values from the `.xls` with `xlrd` so a LibreOffice recalculation does not replace the Excel cache. The Docker image ships headless LibreOffice, so `soffice` is on `PATH` in the container. A machine without `soffice` on `PATH` or in `SOFFICE_BIN` rejects the upload as `unsupported_media_type`.
 - `.xlsb` and encrypted workbooks are rejected. An encrypted `.xlsx` is an OLE2 file too; it is `encrypted_workbook`, not a legacy `.xls`.
 - Cached formula values must already be in the file.
 

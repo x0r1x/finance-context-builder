@@ -13,6 +13,7 @@ from typing import Protocol
 
 from finance_context.errors import ContextError
 from finance_context.excel.ole2 import is_ole2, is_ole2_file, ole2_kind
+from finance_context.excel.xls_cache import overlay_xls_cache
 from finance_context.excel.zip_guard import open_xlsx_zip
 
 SOURCE = "source.xlsx"
@@ -71,5 +72,7 @@ def ensure_xlsx(book: Path, converter: XlsConverter) -> Path:
     with tempfile.TemporaryDirectory(dir=book, prefix=".convert-") as tmp:
         converted = converter.convert(legacy, Path(tmp))
         open_xlsx_zip(converted).close()
+        # LibreOffice recalculates. Put Excel's cached values back before parse.
+        overlay_xls_cache(legacy, converted)
         os.replace(converted, target)
     return target

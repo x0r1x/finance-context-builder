@@ -13,7 +13,7 @@
 ## Вход
 
 - Принимаются `.xlsx` и `.xlsm`.
-- Старый `.xls` (BIFF8, OLE2) принимается, если установлен LibreOffice: джоба один раз конвертирует его через `soffice --headless --convert-to xlsx` (чистый профиль, `XLS_CONVERT_TIMEOUT_SEC`) и разбирает `.xlsx`. Docker-образ содержит headless LibreOffice, поэтому в контейнере `soffice` есть в `PATH`. На машине без `soffice` в `PATH` или в `SOFFICE_BIN` загрузка — `unsupported_media_type`.
+- Старый `.xls` (BIFF8, OLE2) принимается, если установлен LibreOffice: джоба один раз конвертирует его через `soffice --headless --convert-to xlsx` (чистый профиль, `XLS_CONVERT_TIMEOUT_SEC`), затем переносит кэш из `.xls` через `xlrd`, чтобы пересчёт LibreOffice не подменил кэш Excel. Docker-образ содержит headless LibreOffice, поэтому в контейнере `soffice` есть в `PATH`. На машине без `soffice` в `PATH` или в `SOFFICE_BIN` загрузка — `unsupported_media_type`.
 - `.xlsb` и зашифрованная книга отклоняются. Зашифрованный `.xlsx` — тоже OLE2-файл; это `encrypted_workbook`, а не старый `.xls`.
 - Кэш формул уже должен лежать в файле.
 
