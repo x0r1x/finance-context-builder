@@ -9,7 +9,9 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 WORKDIR=$(mktemp -d)
 # mktemp -d is mode 0700. Run the containers as this user so they can write
 # the mount without making it world-writable, and so this process can delete it.
-HOST_USER=$(id -u):$(id -g)
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+HOST_USER=$HOST_UID:$HOST_GID
 cleanup() {
   if [ -d "${WORKDIR:-}" ]; then
     rm -rf "$WORKDIR" || true
@@ -43,12 +45,20 @@ build_xlsx(
 )
 PY
 
-# LibreOffice in the image turns the seed .xlsx into a real .xls.
+# LibreOffice refuses to start when this uid is missing from /etc/passwd.
+# The image only has uid 1000; Docker Desktop on macOS often uses another.
+PASSWD="$WORKDIR/passwd"
+docker run --rm --entrypoint cat "$IMAGE" /etc/passwd > "$PASSWD"
+if ! cut -d: -f3 "$PASSWD" | grep -qx "$HOST_UID"; then
+  printf 'smoke:x:%s:%s::/tmp:/usr/sbin/nologin\n' "$HOST_UID" "$HOST_GID" >> "$PASSWD"
+fi
+
 # HOME=/tmp is writable for whatever uid the host passes in; /app is not.
 docker run --rm \
   --user "$HOST_USER" \
   -e HOME=/tmp \
   -e LANG=C.UTF-8 \
+  -v "$PASSWD:/etc/passwd:ro" \
   -v "$WORKDIR:/work" \
   --entrypoint soffice \
   "$IMAGE" \
@@ -61,6 +71,7 @@ docker run --rm \
   --user "$HOST_USER" \
   -e HOME=/tmp \
   -e LANG=C.UTF-8 \
+  -v "$PASSWD:/etc/passwd:ro" \
   -v "$WORKDIR:/work" \
   "$IMAGE" \
   finance-context build /work/book.xls -o /work/out
