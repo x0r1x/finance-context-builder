@@ -18,18 +18,26 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.12-slim-bookworm
 
+# Headless Calc only. `--no-install-recommends` leaves out Java and the GUI stack.
+# `/usr/bin/soffice` is on PATH, so the adapter finds it without SOFFICE_BIN.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libreoffice-calc-nogui \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 RUN groupadd --system --gid 1000 app \
     && useradd --system --uid 1000 --gid app --home /app app \
     && mkdir -p /app/data \
-    && chown app:app /app/data
+    && chown app:app /app /app/data
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 USER app
 
 ENV PATH="/app/.venv/bin:$PATH"
+ENV HOME=/app
+ENV LANG=C.UTF-8
 ENV DATA_DIR=/app/data
 ENV PYTHONUNBUFFERED=1
 

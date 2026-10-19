@@ -13,7 +13,7 @@ Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2
 ## Input
 
 - `.xlsx` and `.xlsm` are accepted.
-- Legacy `.xls` (BIFF8, OLE2) is accepted when LibreOffice is installed: the job converts it once with `soffice --headless --convert-to xlsx` (fresh profile, no proxy, `XLS_CONVERT_TIMEOUT_SEC`) and parses the `.xlsx`. Without `soffice` on `PATH` or in `SOFFICE_BIN` the upload is `unsupported_media_type`. The Docker image does not ship LibreOffice.
+- Legacy `.xls` (BIFF8, OLE2) is accepted when LibreOffice is installed: the job converts it once with `soffice --headless --convert-to xlsx` (fresh profile, `XLS_CONVERT_TIMEOUT_SEC`) and parses the `.xlsx`. The Docker image ships headless LibreOffice, so `soffice` is on `PATH` in the container. A machine without `soffice` on `PATH` or in `SOFFICE_BIN` rejects the upload as `unsupported_media_type`.
 - `.xlsb` and encrypted workbooks are rejected. An encrypted `.xlsx` is an OLE2 file too; it is `encrypted_workbook`, not a legacy `.xls`.
 - Cached formula values must already be in the file.
 
@@ -131,6 +131,8 @@ docker compose up --build
 ```
 
 Leave Compose running. The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`.
+
+The image runs as `app` (uid 1000) with `HOME=/app` and includes `libreoffice-calc-nogui`. A `.xls` upload converts inside the container. Conversion writes a temporary profile under the book directory, not into the image home. `XLS_CONVERT_TIMEOUT_SEC` (default 300) stays below `JOB_TIMEOUT_SEC` (default 3600) so a hung conversion fails the job before the server stops the process. `.env` can still set `SOFFICE_BIN` and `XLS_CONVERT_TIMEOUT_SEC`; Compose does not override them. `scripts/docker-xls-smoke.sh` checks that path against a real `.xls`. It needs Docker and is not part of `uv run pytest`.
 
 API container without Compose. The image command is `finance-context serve`:
 

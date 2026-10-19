@@ -13,7 +13,7 @@
 ## Вход
 
 - Принимаются `.xlsx` и `.xlsm`.
-- Старый `.xls` (BIFF8, OLE2) принимается, если установлен LibreOffice: джоба один раз конвертирует его через `soffice --headless --convert-to xlsx` (чистый профиль, без прокси, `XLS_CONVERT_TIMEOUT_SEC`) и разбирает `.xlsx`. Без `soffice` в `PATH` или в `SOFFICE_BIN` загрузка — `unsupported_media_type`. В Docker-образе LibreOffice нет.
+- Старый `.xls` (BIFF8, OLE2) принимается, если установлен LibreOffice: джоба один раз конвертирует его через `soffice --headless --convert-to xlsx` (чистый профиль, `XLS_CONVERT_TIMEOUT_SEC`) и разбирает `.xlsx`. Docker-образ содержит headless LibreOffice, поэтому в контейнере `soffice` есть в `PATH`. На машине без `soffice` в `PATH` или в `SOFFICE_BIN` загрузка — `unsupported_media_type`.
 - `.xlsb` и зашифрованная книга отклоняются. Зашифрованный `.xlsx` — тоже OLE2-файл; это `encrypted_workbook`, а не старый `.xls`.
 - Кэш формул уже должен лежать в файле.
 
@@ -128,6 +128,8 @@ docker compose up --build
 ```
 
 Оставьте Compose запущенным. API опубликован только на `127.0.0.1:8080`. Общий кэш книг и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`.
+
+Образ работает от пользователя `app` (uid 1000) с `HOME=/app` и содержит `libreoffice-calc-nogui`. Загрузка `.xls` конвертируется внутри контейнера. Конвертация пишет временный профиль в каталог книги, а не в домашний каталог образа. `XLS_CONVERT_TIMEOUT_SEC` (по умолчанию 300) меньше `JOB_TIMEOUT_SEC` (по умолчанию 3600), поэтому зависшая конвертация роняет джобу раньше, чем сервер остановит процесс. `.env` по-прежнему может задать `SOFFICE_BIN` и `XLS_CONVERT_TIMEOUT_SEC`; Compose их не перезаписывает. `scripts/docker-xls-smoke.sh` проверяет этот путь на настоящем `.xls`. Скрипту нужен Docker, и он не входит в `uv run pytest`.
 
 Контейнер API без Compose. Команда образа — `finance-context serve`:
 

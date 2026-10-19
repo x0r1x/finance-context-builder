@@ -6,6 +6,10 @@ services:
     env_file:
       - path: .env
         required: false
+    # `.env` already passes SOFFICE_BIN and XLS_CONVERT_TIMEOUT_SEC through.
+    # The image has `soffice` on PATH. Keep the conversion timeout below
+    # JOB_TIMEOUT_SEC (defaults 300 and 3600) so a hung soffice fails the job
+    # before the server stops the process.
     environment:
       DATA_DIR: /app/data
     volumes:
