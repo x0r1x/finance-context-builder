@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -25,9 +26,21 @@ def test_source_name_follows_the_bytes_not_the_suffix() -> None:
 
 def test_existing_xlsx_is_used_as_is(tmp_path: Path) -> None:
     _xlsx(tmp_path / "source.xlsx")
+    assert not (tmp_path / "source.xls").exists()
     converter = FakeConverter(available=False)
     assert ensure_xlsx(tmp_path, converter) == tmp_path / "source.xlsx"
     assert converter.calls == []
+
+
+def test_newer_xls_beside_a_stale_xlsx_is_reconverted(tmp_path: Path) -> None:
+    stale = _xlsx(tmp_path / "source.xlsx")
+    write_ole2(tmp_path / "source.xls", XLS_STREAMS)
+    os.utime(stale, ns=(1_000_000_000, 1_000_000_000))
+    prepared = _xlsx(tmp_path / "prepared.xlsx")
+    converter = FakeConverter(prepared)
+    target = ensure_xlsx(tmp_path, converter)
+    assert converter.calls == [tmp_path / "source.xls"]
+    assert target.read_bytes() == prepared.read_bytes()
 
 
 def test_legacy_xls_is_converted_once(tmp_path: Path) -> None:

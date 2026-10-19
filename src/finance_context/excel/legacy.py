@@ -56,9 +56,13 @@ def check_legacy_workbook(path: Path, converter: XlsConverter) -> None:
 def ensure_xlsx(book: Path, converter: XlsConverter) -> Path:
     target = book / SOURCE
     legacy = book / LEGACY_SOURCE
-    if target.is_file():
-        if not is_ole2_file(target):
+    if target.is_file() and not is_ole2_file(target):
+        # A converted book keeps both names, with source.xlsx written last.
+        # A newer source.xls beside an older zip is a different workbook
+        # (`build -o` used to leave the previous xlsx in place).
+        if not legacy.is_file() or legacy.stat().st_mtime_ns <= target.stat().st_mtime_ns:
             return target
+    elif target.is_file():
         # Older builds stored `.xls` bytes under the `.xlsx` name.
         os.replace(target, legacy)
     if not legacy.is_file():

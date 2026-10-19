@@ -77,6 +77,43 @@ def test_xls_without_libreoffice_fails_with_a_code(tmp_path: Path) -> None:
     assert not (dest / "source.xlsx").exists()
 
 
+def _labeled(path: Path, label: str) -> Path:
+    return build_xlsx(
+        path,
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="C1", value="2024E", type="s"),
+                    CellSpec(addr="A2", value=label, type="s"),
+                    CellSpec(addr="B2", value="100"),
+                    CellSpec(addr="C2", value="110"),
+                ],
+            )
+        ],
+        shared_strings=["Item", "2023", "2024E", label],
+    )
+
+
+def test_stale_xlsx_is_not_reused_for_a_new_xls(tmp_path: Path, monkeypatch) -> None:
+    first = _labeled(tmp_path / "first.xlsx", "Revenue")
+    result, dest, _meta = _build(tmp_path, first)
+    assert result.exit_code == 0, result.output
+    assert "Revenue" in (dest / "context.json").read_text(encoding="utf-8")
+    tariff = _labeled(tmp_path / "tariff.xlsx", "Tariff")
+    monkeypatch.setenv("SOFFICE_BIN", str(_fake_soffice(tmp_path, tariff)))
+    source = write_ole2(tmp_path / "model.xls", XLS_STREAMS)
+    result, dest, meta = _build(tmp_path, source)
+    assert result.exit_code == 0, result.output
+    assert result.output.strip().splitlines()[-1] == "succeeded"
+    assert meta["status"] == "succeeded"
+    labels = (dest / "context.json").read_text(encoding="utf-8")
+    assert "Tariff" in labels
+    assert "Revenue" not in labels
+
+
 def test_xls_is_converted_by_soffice(tmp_path: Path, monkeypatch) -> None:
     soffice = _fake_soffice(tmp_path, _prepared(tmp_path / "prepared.xlsx"))
     monkeypatch.setenv("SOFFICE_BIN", str(soffice))
@@ -87,6 +124,11 @@ def test_xls_is_converted_by_soffice(tmp_path: Path, monkeypatch) -> None:
     assert meta["status"] == "succeeded"
     assert (dest / "source.xlsx").is_file()
     assert (dest / "context.json").is_file()
+    again, dest, _meta = _build(tmp_path, source)
+    assert again.exit_code == 0, again.output
+    assert again.output.strip().splitlines()[-1] == "reused"
+    assert (dest / "source.xlsx").is_file()
+    assert (dest / "source.xls").is_file()
 
 
 def test_encrypted_book_fails_with_a_code(tmp_path: Path) -> None:
