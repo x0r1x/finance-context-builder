@@ -51,6 +51,14 @@ class RoleCell(BaseModel):
     role: str
     cached_value: str | None = None
     header: str | None = None
+    hidden: bool = False
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("hidden"):
+            data.pop("hidden", None)
+        return data
 
 
 class RowSeries(BaseModel):
@@ -119,6 +127,7 @@ class ContextPeriod(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     flags: dict[str, bool] = Field(default_factory=dict)
+    hidden: bool = False
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
@@ -126,6 +135,8 @@ class ContextPeriod(BaseModel):
         for key in ("start_date", "end_date"):
             if data.get(key) is None:
                 data.pop(key, None)
+        if not data.get("hidden"):
+            data.pop("hidden", None)
         if data.get("phase") is None:
             data.pop("phase", None)
             data.pop("phase_year", None)

@@ -12,6 +12,8 @@ _CACHE_STAGES: dict[str, str] | None = None
 _CACHE_FINGERPRINT: str | None = None
 
 STAGE_ORDER = ("compile", "layout", "graph", "publish")
+# Package data that is part of a stage. Other JSON (notes, fixtures) is not.
+_DATA_FILES = {"layout/lexicon.json"}
 _STAGE_DIRS = {
     "compile": {"excel", "formulas"},
     "layout": {"layout"},
@@ -25,7 +27,8 @@ def _sources() -> list[Path]:
     for path in _PACKAGE.rglob("*"):
         if not path.is_file() or "__pycache__" in path.parts:
             continue
-        if path.suffix == ".py":
+        rel = path.relative_to(_PACKAGE).as_posix()
+        if path.suffix == ".py" or rel in _DATA_FILES:
             found.append(path)
     found.sort(key=lambda item: item.relative_to(_PACKAGE).as_posix())
     return found
@@ -62,16 +65,37 @@ def _compute_stages() -> dict[str, str]:
         stage = _stage_of(path.relative_to(_PACKAGE).as_posix())
         if stage is not None:
             buckets[stage].append(path)
-    return {name: _hash_files(buckets[name]) for name in STAGE_ORDER}
+    stages = {name: _hash_files(buckets[name]) for name in STAGE_ORDER}
+    overlay = _overlay_bytes()
+    if overlay is not None:
+        digest = hashlib.sha256()
+        digest.update(stages["layout"].encode())
+        digest.update(b"\0lexicon-overlay\0")
+        digest.update(overlay)
+        stages["layout"] = digest.hexdigest()
+    return stages
+
+
+def _overlay_bytes() -> bytes | None:
+    from finance_context.layout.lexicon import overlay_path
+
+    path = overlay_path()
+    if path is None:
+        return None
+    return path.read_bytes()
 
 
 def _live() -> tuple[dict[str, str], str]:
     """Stage hashes and the combined fingerprint. Cached until a source mtime changes."""
     global _CACHE_KEY, _CACHE_STAGES, _CACHE_FINGERPRINT
     files = _sources()
-    key = tuple(
-        (path.relative_to(_PACKAGE).as_posix(), path.stat().st_mtime_ns) for path in files
-    )
+    key_parts = [(path.relative_to(_PACKAGE).as_posix(), path.stat().st_mtime_ns) for path in files]
+    from finance_context.layout.lexicon import overlay_path
+
+    overlay = overlay_path()
+    if overlay is not None:
+        key_parts.append((f"overlay:{overlay}", overlay.stat().st_mtime_ns))
+    key = tuple(key_parts)
     if key == _CACHE_KEY and _CACHE_STAGES is not None and _CACHE_FINGERPRINT is not None:
         return _CACHE_STAGES, _CACHE_FINGERPRINT
     stages = _compute_stages()

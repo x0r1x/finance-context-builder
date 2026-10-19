@@ -184,6 +184,17 @@ def _axis_signature(axis: TimeAxis) -> tuple:
     )
 
 
+def _column_signature(axis: TimeAxis) -> tuple:
+    return (
+        axis.grain,
+        tuple((period.col, period.period_key) for period in axis.periods),
+    )
+
+
+def _has_explicit_role(axis: TimeAxis) -> bool:
+    return any(period.explicit_role for period in axis.periods)
+
+
 def _flag_bit(cell: dict | None, date1904: bool) -> bool:
     if cell is None:
         return False
@@ -218,6 +229,19 @@ def _flag_fingerprint(
     return tuple(items)
 
 
+def _remember_flags(
+    table: dict[tuple, list[tuple[TimeAxis, tuple]]],
+    axis_id: str,
+    fingerprint: tuple,
+) -> None:
+    """Fill an empty fingerprint so a later conflicting alias is rejected."""
+    for key, items in table.items():
+        table[key] = [
+            (item, fingerprint if item.id == axis_id and not flags else flags)
+            for item, flags in items
+        ]
+
+
 def _flags_compatible(left: tuple, right: tuple) -> bool:
     if not left or not right:
         return True
@@ -236,6 +260,7 @@ def _share_repeated_axes(
         for axis_id in block.axis_ids:
             owner.setdefault(axis_id, block)
     buckets: dict[tuple, list[tuple[TimeAxis, tuple]]] = {}
+    by_columns: dict[tuple, list[tuple[TimeAxis, tuple]]] = {}
     alias: dict[str, str] = {}
     kept: list[TimeAxis] = []
     for axis in axes:
@@ -245,6 +270,22 @@ def _share_repeated_axes(
             continue
         signature = _axis_signature(axis)
         fingerprint = _flag_fingerprint(owner.get(axis.id), axis, by_row, date1904)
+        if not _has_explicit_role(axis):
+            painted: TimeAxis | None = None
+            painted_flags: tuple = ()
+            for previous, previous_flags in by_columns.get(_column_signature(axis), []):
+                if _has_explicit_role(previous) and _flags_compatible(
+                    previous_flags, fingerprint
+                ):
+                    painted = previous
+                    painted_flags = previous_flags
+                    break
+            if painted is not None:
+                if not painted_flags and fingerprint:
+                    _remember_flags(by_columns, painted.id, fingerprint)
+                    _remember_flags(buckets, painted.id, fingerprint)
+                alias[axis.id] = painted.id
+                continue
         match: TimeAxis | None = None
         for previous, previous_flags in buckets.get(signature, []):
             if _flags_compatible(previous_flags, fingerprint):
@@ -259,6 +300,7 @@ def _share_repeated_axes(
             alias[axis.id] = match.id
             continue
         buckets.setdefault(signature, []).append((axis, fingerprint))
+        by_columns.setdefault(_column_signature(axis), []).append((axis, fingerprint))
         kept.append(axis)
     if not alias:
         return blocks, axes

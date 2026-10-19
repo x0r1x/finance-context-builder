@@ -20,7 +20,7 @@ from finance_context.models.observation import (
 from finance_context.vocab import ValueStatus
 
 PrecedentLookup = Callable[[str, int], Sequence[ObservationPrecedent]]
-_VALUE_ROLES = frozenset({"value", "scenario"})
+_VALUE_ROLES = frozenset({"value", "scenario", "unknown"})
 
 
 def build_observations(
@@ -310,7 +310,7 @@ def _params_row(
                 scale_factor=row.scale_factor,
                 period_position=row.period_position,
                 aggregation=row.aggregation,
-                scenario=cell.header or None,
+                scenario=cell.header or None if cell.role in {"value", "scenario"} else None,
                 unit=_unit(row),
                 formula=_formula(row, period_id, addr, by_pair),
                 source=ObservationSource(sheet=row.sheet, cell=addr),

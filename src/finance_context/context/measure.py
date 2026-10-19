@@ -60,6 +60,26 @@ _COUNT_PER = re.compile(r"^\s*(months?|days?|hours?|weeks?)\s+(per|in a|/)\s+", 
 _PER_UNIT = re.compile(r"/\s*(mwh|mw|mwp|kwh|kw|gwh|unit|veh|tonne|t|bbl|m3)\b", re.I)
 _THOUSANDS = re.compile(r"'000(?!')|\b000s\b|\(000\)", re.I)
 _MILLIONS = re.compile(r"'000'000|\bmn\b|\bmm\b", re.I)
+# ISO codes that are not ordinary English words. RUR is the old rouble code.
+# TRY/ALL/PEN and the other word-like codes are recognized only next to a scale.
+_SAFE_ISO = (
+    "USD|EUR|GBP|RUB|RUR|CHF|JPY|CNY|CNH|CAD|AUD|NZD|SEK|NOK|DKK|PLN|CZK|HUF|"
+    "RON|BGN|UAH|KZT|BYN|AZN|AMD|INR|IDR|MYR|THB|VND|PHP|SGD|HKD|TWD|KRW|AED|"
+    "SAR|QAR|ILS|EGP|ZAR|BRL|MXN|ARS|CLP|ISK|RSD|XAU|XAG"
+)
+_SCALED_ISO = _SAFE_ISO + "|TRY|ALL|PEN|COP|GEL|MAD|TOP|SOS|CUP"
+# Bare `000` is a number (`1000 USD`), not a scale. The quoted form is `RUB'000`.
+_SCALE_TOKEN = r"mn|mm|bn|k|m|'000"
+_ISO_SCALED = re.compile(
+    rf"(?<![A-Za-z])(?:(?P<pre>{_SCALE_TOKEN})\s*)?(?P<code>{_SCALED_ISO})"
+    rf"(?:\s*(?P<post>{_SCALE_TOKEN}))(?![A-Za-z0-9])"
+    rf"|(?<![A-Za-z])(?P<pre2>{_SCALE_TOKEN})\s*(?P<code2>{_SCALED_ISO})(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_ISO_BARE = re.compile(
+    rf"(?<![A-Za-z])(?P<code>{_SAFE_ISO})(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 # "тыс. руб.", "т.р.", "млн ₽", "в тысячах рублей": the multiplier stands before the currency.
 # Whole words only: "тысячная доля" and "миллионер" are not a scale.
 _RU_THOUSANDS = re.compile(r"\bтыс\b|\bтысяч(?:а|и|ах)?\b|\bт(?:\.\s*|\s+)(?=руб|р\.)", re.I)
@@ -226,6 +246,43 @@ def _currency_code(text: str) -> str | None:
     for code, pattern in _CURRENCY_PATTERNS:
         if pattern.search(text):
             return code
+    scaled = _ISO_SCALED.search(text)
+    if scaled:
+        return _normalize_iso(scaled.group("code") or scaled.group("code2") or "")
+    bare = _ISO_BARE.search(text)
+    if bare:
+        return _normalize_iso(bare.group("code"))
+    return None
+
+
+def _normalize_iso(code: str) -> str:
+    upper = code.upper()
+    if upper == "RUR":
+        return "RUB"
+    return upper
+
+
+def is_iso_unit_caption(text: str | None) -> bool:
+    """A cell that is only an ISO currency, optionally with a scale (`RURm`, `USD bn`)."""
+    blob = (text or "").strip()
+    if not blob:
+        return False
+    return bool(_ISO_SCALED.fullmatch(blob) or _ISO_BARE.fullmatch(blob))
+
+
+def _iso_scale(text: str) -> str | None:
+    match = _ISO_SCALED.search(text)
+    if match is None:
+        return None
+    token = (
+        match.group("pre") or match.group("post") or match.group("pre2") or ""
+    ).casefold()
+    if token in {"m", "mn", "mm"}:
+        return "m"
+    if token in {"k", "'000", "000"}:
+        return "k"
+    if token == "bn":
+        return "bn"
     return None
 
 
@@ -250,7 +307,7 @@ def _scale_from(text: str) -> str | None:
         return "k"
     if _RU_THOUSANDS.search(blob):
         return "k"
-    return None
+    return _iso_scale(text)
 
 
 def _unit_from(text: str, currency: str | None) -> str | None:

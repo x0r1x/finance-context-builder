@@ -115,3 +115,48 @@ def test_compile_change_drops_raw_and_formula_ir(tmp_path) -> None:
     assert not (dest / "ir" / "cells.parquet").exists()
     assert not (dest / "raw" / "workbook.json").exists()
     assert not (dest / "layout.json").exists()
+
+
+def test_layout_lexicon_edit_restales_the_layout_stage(tmp_path, monkeypatch) -> None:
+    from finance_context.app import publisher
+
+    (tmp_path / "layout").mkdir()
+    (tmp_path / "layout" / "rows.py").write_text("x = 1\n", encoding="utf-8")
+    lexicon = tmp_path / "layout" / "lexicon.json"
+    lexicon.write_text('{"phases": {}}', encoding="utf-8")
+    monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
+    before = publisher._compute_stages()
+    lexicon.write_text('{"phases": {"construction": ["строител*"]}}', encoding="utf-8")
+    after = publisher._compute_stages()
+    assert before["layout"] != after["layout"]
+    assert before["compile"] == after["compile"]
+
+
+def test_lexicon_overlay_restales_the_layout_stage(tmp_path, monkeypatch) -> None:
+    from finance_context.app import publisher
+
+    (tmp_path / "layout").mkdir()
+    (tmp_path / "layout" / "rows.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text('{"period_words": {"year": ["annum"]}}\n', encoding="utf-8")
+    monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
+    monkeypatch.setenv("FINANCE_CONTEXT_LEXICON", str(overlay))
+    before = publisher._compute_stages()
+    overlay.write_text('{"period_words": {"year": ["annum", "fyword"]}}\n', encoding="utf-8")
+    after = publisher._compute_stages()
+    assert before["layout"] != after["layout"]
+    assert before["compile"] == after["compile"]
+
+
+def test_stray_package_json_does_not_restale_layout(tmp_path, monkeypatch) -> None:
+    from finance_context.app import publisher
+
+    (tmp_path / "layout").mkdir()
+    (tmp_path / "layout" / "rows.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
+    before = publisher._compute_stages()
+    (tmp_path / "layout" / "notes.json").write_text("{}\n", encoding="utf-8")
+    after = publisher._compute_stages()
+    assert before == after

@@ -76,6 +76,9 @@ class _PendingCell:
     hidden: bool
     number_format: str | None
     comment: str | None
+    style_indent: int = 0
+    outline_level: int = 0
+    col_outline_level: int = 0
 
 
 @dataclass
@@ -203,7 +206,7 @@ def parse_ooxml(
     wb_rels = parse_rels(zf, rels_path_for(wb_part))
 
     sst = _load_sst(zf, wb_rels)
-    formats = _load_formats(zf, wb_rels)
+    formats, indents = _load_styles(zf, wb_rels)
     externals = _load_externals(zf, wb_rels, wb_root)
     names, iterate = _load_names_and_iterate(wb_root)
     date1904 = False
@@ -241,7 +244,7 @@ def parse_ooxml(
     cells: list[RawCell] = []
     presence: list[CellPresence] = []
     for sheet in sheets:
-        parsed, sheet_presence = _parse_sheet(zf, sheet, sst, formats)
+        parsed, sheet_presence = _parse_sheet(zf, sheet, sst, formats, indents)
         cells.extend(parsed)
         presence.extend(sheet_presence)
 
@@ -275,14 +278,16 @@ def _load_sst(zf: zipfile.ZipFile, wb_rels: dict[str, Rel]) -> list[str]:
     return out
 
 
-def _load_formats(zf: zipfile.ZipFile, wb_rels: dict[str, Rel]) -> list[str | None]:
+def _load_styles(
+    zf: zipfile.ZipFile, wb_rels: dict[str, Rel]
+) -> tuple[list[str | None], list[int]]:
     part = next(
         (rel.target for rel in wb_rels.values() if rel.type.endswith("/styles")),
         "xl/styles.xml",
     )
     member = zip_member(zf, part)
     if member is None:
-        return []
+        return [], []
     root = parse_xml(read_part(zf, member))
     custom = dict(BUILTIN_FORMATS)
     num_fmts = find_child(root, "numFmts")
@@ -292,13 +297,20 @@ def _load_formats(zf: zipfile.ZipFile, wb_rels: dict[str, Rel]) -> list[str | No
             custom[fid] = node.get("formatCode") or custom.get(fid, "")
     xfs_parent = find_child(root, "cellXfs")
     if xfs_parent is None:
-        return []
-    out: list[str | None] = []
+        return [], []
+    formats: list[str | None] = []
+    indents: list[int] = []
     for xf in children(xfs_parent, "xf"):
         fid = int(xf.get("numFmtId") or "0")
         code = custom.get(fid)
-        out.append(None if not code or code == "General" else code)
-    return out
+        formats.append(None if not code or code == "General" else code)
+        alignment = find_child(xf, "alignment")
+        raw_indent = alignment.get("indent") if alignment is not None else None
+        try:
+            indents.append(int(raw_indent or 0))
+        except ValueError:
+            indents.append(0)
+    return formats, indents
 
 
 def _load_externals(
@@ -349,6 +361,7 @@ def _parse_sheet(
     sheet: _SheetParse,
     sst: list[str],
     formats: list[str | None],
+    indents: list[int],
 ) -> tuple[list[RawCell], list[CellPresence]]:
     member = zip_member(zf, sheet.part)
     if member is None:
@@ -356,6 +369,9 @@ def _parse_sheet(
     root = parse_xml(read_part(zf, member))
     comments = _load_comments(zf, sheet.part)
     hidden_cols = _hidden_cols(root)
+    col_outline = _col_outline_spans(root)
+    sheet.info.summary_below = _summary_below(root)
+    hidden_rows: list[int] = []
     pending: list[_PendingCell] = []
     presence: list[CellPresence] = []
     masters: dict[int, tuple[int, int, str]] = {}
@@ -364,15 +380,22 @@ def _parse_sheet(
     if sheet_data is not None:
         for row_el in children(sheet_data, "row"):
             row_hidden = as_bool(row_el.get("hidden"))
+            row_outline = _int_attr(row_el.get("outlineLevel"))
+            if row_hidden:
+                row_n = int(row_el.get("r") or "0")
+                if row_n:
+                    hidden_rows.append(row_n)
             for cell_el in children(row_el, "c"):
                 built, cell_presence = _pending_from_cell(
                     cell_el,
                     sst=sst,
                     formats=formats,
+                    indents=indents,
                     comments=comments,
                     hidden_cols=hidden_cols,
                     row_hidden=row_hidden,
-                    sheet_hidden=sheet.info.hidden,
+                    row_outline=row_outline,
+                    col_outline=col_outline,
                 )
                 if cell_presence is not None:
                     presence.append(
@@ -408,9 +431,59 @@ def _parse_sheet(
                 comment=item.comment,
                 shared_si=item.shared_si,
                 shared_master=is_master,
+                style_indent=item.style_indent,
+                outline_level=item.outline_level,
+                col_outline_level=item.col_outline_level,
             )
         )
+    sheet.info.hidden_rows = hidden_rows
+    sheet.info.hidden_cols = sorted(hidden_cols)
     return cells, presence
+
+
+def _summary_below(root: etree._Element) -> bool:
+    """Excel default is true: the group summary row sits under the detail.
+
+    The flag is ``sheetPr/outlinePr@summaryBelow``. A producer that hangs
+    ``outlinePr`` under ``sheetFormatPr`` is read the same way.
+    """
+    for parent_name in ("sheetPr", "sheetFormatPr"):
+        parent = find_child(root, parent_name)
+        if parent is None:
+            continue
+        outline = find_child(parent, "outlinePr")
+        if outline is not None and outline.get("summaryBelow") is not None:
+            return as_bool(outline.get("summaryBelow"))
+    return True
+
+
+def _col_outline_spans(root: etree._Element) -> list[tuple[int, int, int]]:
+    spans: list[tuple[int, int, int]] = []
+    cols = find_child(root, "cols")
+    if cols is None:
+        return spans
+    for col in children(cols, "col"):
+        level = _int_attr(col.get("outlineLevel"))
+        if level <= 0:
+            continue
+        start = int(col.get("min") or "1")
+        end = int(col.get("max") or start)
+        spans.append((start, end, level))
+    return spans
+
+
+def _outline_at(col: int, spans: list[tuple[int, int, int]]) -> int:
+    for start, end, level in spans:
+        if start <= col <= end:
+            return level
+    return 0
+
+
+def _int_attr(value: str | None) -> int:
+    try:
+        return int(value or 0)
+    except ValueError:
+        return 0
 
 
 def _hidden_cols(root: etree._Element) -> set[int]:
@@ -450,10 +523,12 @@ def _pending_from_cell(
     *,
     sst: list[str],
     formats: list[str | None],
+    indents: list[int],
     comments: dict[str, str],
     hidden_cols: set[int],
     row_hidden: bool,
-    sheet_hidden: bool,
+    row_outline: int,
+    col_outline: list[tuple[int, int, int]],
 ) -> tuple[_PendingCell | None, tuple[str, str] | None]:
     addr = cell_el.get("r")
     if not addr:
@@ -479,11 +554,15 @@ def _pending_from_cell(
         return None, (addr, "styled_blank")
     style = cell_el.get("s")
     number_format = None
+    style_indent = 0
     if style is not None:
         idx = int(style)
         if 0 <= idx < len(formats):
             number_format = formats[idx]
-    hidden = sheet_hidden or row_hidden or col in hidden_cols
+        if 0 <= idx < len(indents):
+            style_indent = indents[idx]
+    # A hidden sheet stays in the workbook. Only a hidden row or column hides cells.
+    hidden = row_hidden or col in hidden_cols
     return (
         _PendingCell(
             addr=addr,
@@ -495,6 +574,9 @@ def _pending_from_cell(
             hidden=hidden,
             number_format=number_format,
             comment=comment,
+            style_indent=style_indent,
+            outline_level=row_outline,
+            col_outline_level=_outline_at(col, col_outline),
         ),
         (addr, "populated"),
     )

@@ -1,0 +1,114 @@
+{
+  "header_roles": {
+    "label": [
+      "parameter", "parameters", "item", "check", "assumption", "assumptions",
+      "параметр", "параметры", "параметры проекта", "показатель", "показатели",
+      "статья", "статья затрат", "наименование", "наименование показателя",
+      "допущение", "допущения", "предпосылка", "предпосылки", "проверка",
+      "исходные данные"
+    ],
+    "value": [
+      "value", "values", "active", "result", "chosen",
+      "значение", "значения", "значение руб", "величина", "результат"
+    ],
+    "unit": [
+      "unit", "units", "unit of measure", "uom",
+      "ед", "ед изм", "ед измерения", "единица", "единицы", "единица изм",
+      "единица измерения", "единицы измерения", "размерность"
+    ],
+    "note": [
+      "note", "notes", "comment", "comments", "comment s", "source", "sources",
+      "примечание", "примечания", "комментарий", "комментарии",
+      "источник", "описание", "мероприятие", "мероприятия", "вывод", "выводы"
+    ]
+  },
+  "phases": {
+    "construction": [
+      "construction", "constructions", "constr",
+      "строительство", "строительный", "стройка", "строит", "смр",
+      "инвестиционный", "инвестиции"
+    ],
+    "operation": [
+      "operation", "operations", "operational", "op", "operating",
+      "эксплуатация", "эксплуатационный", "эксп",
+      "операционный", "операция", "производство", "производственный"
+    ]
+  },
+  "phase_events": [
+    "beginning", "end of", "start date", "end date",
+    "начало", "начала", "начале",
+    "окончание", "конец", "конца", "завершение", "дата", "даты", "ввод"
+  ],
+  "operation_duration": ["duration", "продолжительность", "длительность", "срок"],
+  "period_roles": {
+    "historical": ["факт", "фактический", "actual", "actuals", "hist", "historical"],
+    "forecast": [
+      "план", "плановый", "прогноз", "прогнозный", "forecast",
+      "budget", "бюджет", "бюджетный", "plan", "оценка", "ожидание", "ожидаемый", "ожид"
+    ]
+  },
+  "period_words": {
+    "quarter": ["кв", "квартал", "quarter"],
+    "half": ["полугодие", "half", "пол"],
+    "year": ["г", "гг", "год", "года", "году"]
+  },
+  "structural": {
+    "total": ["итого", "всего", "total", "sum"],
+    "stub": ["stub", "частичный", "partial"],
+    "scenario": [
+      "base", "base case", "upside", "downside", "stress",
+      "негативный", "позитивный", "сценарий"
+    ],
+    "scenario_adjectives": [
+      "базовый", "пессимистичный", "оптимистичный", "негативный", "позитивный",
+      "консервативный", "стрессовый"
+    ],
+    "scenario_evidence": [
+      "базовый", "консервативный", "оптимистичный", "пессимистичный",
+      "стрессовый", "стресс", "сценарий",
+      "base", "upside", "downside", "case", "scenario", "stress"
+    ],
+    "scenario_header": ["case", "scenario"],
+    "flag": ["flag", "флаг"],
+    "months": {
+      "1": ["jan", "january", "янв", "январь"],
+      "2": ["feb", "february", "фев", "февр", "февраль"],
+      "3": ["mar", "march", "мар", "март"],
+      "4": ["apr", "april", "апр", "апрель"],
+      "5": ["may", "май"],
+      "6": ["jun", "june", "июн", "июнь"],
+      "7": ["jul", "july", "июл", "июль"],
+      "8": ["aug", "august", "авг", "август"],
+      "9": ["sep", "sept", "september", "сен", "сент", "сентябрь"],
+      "10": ["oct", "october", "окт", "октябрь"],
+      "11": ["nov", "november", "ноя", "нояб", "ноябрь"],
+      "12": ["dec", "december", "дек", "декабрь"]
+    },
+    "quarter_label": ["квартал", "квартальный", "quarter", "quarterly"],
+    "month_label": ["месяц", "month"],
+    "period_start": [
+      "начало периода", "начала периода", "start of period", "period start"
+    ],
+    "period_end": [
+      "конец периода", "конца периода", "end of period", "period end"
+    ]
+  },
+  "stem_block": {
+    "кв": ["квт", "квота", "квот", "квм", "квартира"],
+    "г": ["график", "группа"],
+    "год": ["график", "группа", "годовой"],
+    "hist": ["history", "histogram"],
+    "факт": ["фактор", "фактура"],
+    "план": ["планета", "планка", "planning", "plant", "plants"],
+    "plan": ["planning", "plant", "plants", "планета", "планка"],
+    "budget": ["budgets", "budgeting"],
+    "actual": ["actually"],
+    "base": ["based", "basement"],
+    "stress": ["stressed"],
+    "начало": ["начальный"],
+    "flag": ["flagged", "flagship"],
+    "construction": ["constructing", "constraint"],
+    "operation": ["operate", "operates", "operated"],
+    "quarter": ["quarterly"]
+  }
+}

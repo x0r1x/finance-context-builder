@@ -22,6 +22,7 @@ def time_axis_from_embedded(axis: Axis, grain: str | None = None) -> TimeAxis:
                 role=header.role,
                 period_key=header.period_key,
                 explicit_role=header.explicit_role,
+                hidden=header.hidden,
             )
             for header in axis.headers
         ],
@@ -38,6 +39,7 @@ def project_axis(axis: TimeAxis) -> Axis:
                 text=period.text,
                 role=period.role,
                 period_key=period.period_key,
+                hidden=period.hidden,
             )
             for period in axis.periods
         ],
@@ -67,6 +69,7 @@ def period_headers(sheet: SheetLayout, block: Block) -> list[AxisHeader]:
                 text=period.text,
                 role=period.role,
                 period_key=period.period_key,
+                hidden=period.hidden,
             )
             for period in axis.periods
         )

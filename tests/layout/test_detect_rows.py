@@ -300,6 +300,46 @@ def test_prose_and_shortcut_sheets_are_rejected() -> None:
     assert all(not sheet.blocks for sheet in layout.sheets)
 
 
+def test_numbered_rows_under_a_text_header_stay_a_table() -> None:
+    cells = [
+        _c("FLM", "F1", "Показатели Forward-Looking Monitoring"),
+        _c("FLM", "B5", "№ п/п"),
+        _c("FLM", "C5", "Отрасль"),
+        _c("FLM", "D5", "Показатель"),
+        _c("FLM", "E5", "Источник информации"),
+        _c("FLM", "H5", "Максимальное/минимальное значение на 31.12.2016"),
+        _c("FLM", "I5", "Максимальное/минимальное значение на 31.12.2017"),
+        _c("FLM", "J5", "Максимальное/минимальное значение на 31.12.2018"),
+    ]
+    for row, (number, name) in enumerate(
+        [("1", "Инфляция"), ("2", "Доходы"), ("3", "EBITDA")],
+        start=6,
+    ):
+        cells += [
+            _c("FLM", f"B{row}", number),
+            _c("FLM", f"C{row}", "Все"),
+            _c("FLM", f"D{row}", name),
+            _c("FLM", f"E{row}", "СМИ, прогноз ЦМИ"),
+            _c("FLM", f"H{row}", "0.05"),
+            _c("FLM", f"I{row}", "0.04"),
+            _c("FLM", f"J{row}", "0.04"),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "params"
+    assert block.label_col == 4
+    assert [row.label for row in block.rows if row.kind == "fact"] == [
+        "Инфляция",
+        "Доходы",
+        "EBITDA",
+    ]
+    by_text = {header.text: header.role for header in block.axis.headers}
+    assert by_text["№ п/п"] == "index"
+    assert by_text["Отрасль"] == "unknown"
+    assert by_text["Источник информации"] == "note"
+    assert by_text["Максимальное/минимальное значение на 31.12.2016"] == "value"
+    assert "scenario" not in by_text.values()
+
+
 def test_sensitivity_grid_keeps_title_only() -> None:
     cells = [
         _c("Sensitivity", "A1", "GRID 1: MO-12 CLOSING CASH"),
@@ -494,3 +534,27 @@ def test_rub_unit_captions_are_unit_text(text: str) -> None:
     from finance_context.layout.params import is_unit_text
 
     assert is_unit_text(text)
+
+
+def test_plan_fact_and_scenario_labels_stay_rows_under_a_year_axis() -> None:
+    labels = ["План", "Факт", "Отклонение", "Budget", "Base case"]
+    cells = [_c("ПФ", "A2", "Показатель")]
+    years = ["2023", "2024", "2025"]
+    cells += [_c("ПФ", f"{col}2", y) for col, y in zip("BCD", years, strict=True)]
+    for r, label in enumerate(labels, start=3):
+        cells.append(_c("ПФ", f"A{r}", label))
+        cells += [_c("ПФ", f"{col}{r}", str(r + i)) for i, col in enumerate("BCD")]
+    rows = detect_layout(cells).sheets[0].blocks[0].rows
+    assert [row.label for row in rows] == labels
+
+
+def test_year_in_the_label_column_is_still_not_a_row_name() -> None:
+    cells = [_c("ПФ", "A2", "Показатель")]
+    years = ["2023", "2024", "2025"]
+    cells += [_c("ПФ", f"{col}2", y) for col, y in zip("BCD", years, strict=True)]
+    cells += [_c("ПФ", "A3", "Выручка")]
+    cells += [_c("ПФ", f"{col}3", v) for col, v in zip("BCD", ["1", "2", "3"], strict=True)]
+    cells += [_c("ПФ", "A4", "2024")]
+    cells += [_c("ПФ", f"{col}4", v) for col, v in zip("BCD", ["4", "5", "6"], strict=True)]
+    rows = detect_layout(cells).sheets[0].blocks[0].rows
+    assert "2024" not in [row.label for row in rows]

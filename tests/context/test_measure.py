@@ -252,3 +252,82 @@ def test_word_built_on_a_multiplier_is_not_a_scale(label: str) -> None:
 def test_rub_label_in_thousands_phrase_is_scaled() -> None:
     measure = parse_measure(label="Выручка, в тысячах рублей")
     assert (measure.unit, measure.currency, measure.scale) == ("money", "RUB", "k")
+
+
+@pytest.mark.parametrize(
+    ("text", "currency", "scale"),
+    [
+        ("RURm", "RUB", "m"),
+        ("rurm", "RUB", "m"),
+        ("RUR", "RUB", "unit"),
+        ("RUBm", "RUB", "m"),
+        ("mRUB", "RUB", "m"),
+        ("RUB m", "RUB", "m"),
+        ("RUB mn", "RUB", "m"),
+        ("RUB'000", "RUB", "k"),
+        ("USDm", "USD", "m"),
+        ("USD bn", "USD", "bn"),
+        ("mUSD", "USD", "m"),
+        ("GBPm", "GBP", "m"),
+        ("EURk", "EUR", "k"),
+        ("EUR k", "EUR", "k"),
+        ("CHF", "CHF", "unit"),
+        ("TRYm", "TRY", "m"),
+        ("mTRY", "TRY", "m"),
+    ],
+)
+def test_iso_currency_with_scale_suffix_or_prefix(text: str, currency: str, scale: str) -> None:
+    measure = parse_measure(unit_text=text)
+    assert (measure.unit, measure.currency, measure.scale) == ("money", currency, scale)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "from",
+        "summary",
+        "margin",
+        "% Margin",
+        "try again",
+        "CAPEX",
+        "Value upside",
+        "all",
+        "pen",
+        "cup",
+        "top",
+        "mad",
+        "gel",
+        "sos",
+        "cop",
+        "Cash Flow Summary",
+        "CF from Operations",
+        "CF from Investing Activities",
+    ],
+)
+def test_ordinary_words_are_not_iso_currencies(text: str) -> None:
+    measure = parse_measure(label=text)
+    assert measure.currency is None
+    assert measure.scale is None
+
+
+def test_margin_after_a_currency_code_is_not_a_millions_suffix() -> None:
+    measure = parse_measure(label="RUB margin")
+    assert (measure.currency, measure.scale) == ("RUB", "unit")
+
+
+def test_a_number_glued_to_a_currency_code_is_not_a_thousands_scale() -> None:
+    measure = parse_measure(unit_text="1000 USD")
+    assert (measure.currency, measure.scale) == ("USD", "unit")
+
+
+def test_iso_unit_caption_is_unit_text() -> None:
+    from finance_context.layout.units import is_unit_text, unit_kind_from_text
+
+    assert is_unit_text("RURm")
+    assert is_unit_text("RUR")
+    assert is_unit_text("USD bn")
+    assert is_unit_text("mRUB")
+    assert unit_kind_from_text("RURm") == "money"
+    assert not is_unit_text("Cash Flow Summary")
+    assert not is_unit_text("% Margin")
+    assert not is_unit_text("try again")

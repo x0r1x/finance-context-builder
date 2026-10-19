@@ -16,7 +16,7 @@ from finance_context.context.series import (
     value_status,
 )
 from finance_context.context.timeline import build_axes
-from finance_context.excel.a1 import format_addr
+from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.layout.adjacency import row_adjacency
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow
 from finance_context.layout.params import is_scenario_selector_label
@@ -24,6 +24,7 @@ from finance_context.layout.periods import display_cell_text
 from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
 from finance_context.layout.roles import article_role
+from finance_context.layout.units import is_block_unit_caption
 from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
@@ -70,7 +71,8 @@ def build_context(
     )
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
-    warnings: list[str] = []
+    hidden_warnings = _hidden_warnings(workbook_meta, cells)
+    warnings: list[str] = [*_unknown_header_warnings(layout)]
     formula_count = 0
     missing_cached = 0
     unparsed = 0
@@ -99,17 +101,20 @@ def build_context(
                 else []
             )
             periods = _local_periods(views, axes_by_id) if axis_ids else [
-                {
-                    "col": header.col,
-                    "text": header.text,
-                    "role": header.role,
-                    "period_key": header.period_key,
-                }
+                _period_dict(header)
                 for _axis_id, headers, _phases in views
                 for header in headers
             ]
             rows: list[BlockRow] = []
             parent_by_row = {r.row: r.label for r in block.rows}
+            block_unit = _header_unit(
+                sheet,
+                block,
+                by_addr,
+                bool(workbook_meta.get("date1904")),
+            )
+            running_unit = block_unit
+            body_unit = False
             for layout_row in block.rows:
                 row_key = f"{sheet.name}|{layout_row.row}|{block.block_id}"
                 parent = None
@@ -124,13 +129,24 @@ def build_context(
                 role_cells = _role_cells(
                     sheet.name, layout_row, by_addr, bool(workbook_meta.get("date1904"))
                 )
-                unit_text = next(
+                own_unit = next(
                     (
                         item.cached_value
                         for item in role_cells
                         if item.role == "unit" and item.cached_value
                     ),
                     None,
+                )
+                if is_block_unit_caption(layout_row.label):
+                    running_unit = layout_row.label.strip()
+                    body_unit = True
+                elif body_unit and layout_row.kind == "abstract":
+                    # A caption inside a section (`% p.a.`) stops at the next section.
+                    # The header caption (`RURm` beside the years) stays for the block.
+                    running_unit = block_unit
+                    body_unit = False
+                unit_text = own_unit or (
+                    None if is_block_unit_caption(layout_row.label) else running_unit
                 )
                 formats = _row_number_formats(
                     sheet_name=sheet.name,
@@ -250,6 +266,7 @@ def build_context(
         warnings.append(
             f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
         )
+    warnings.extend(hidden_warnings)
 
     sheets = [
         s["name"] if isinstance(s, dict) else getattr(s, "name", str(s))
@@ -308,15 +325,7 @@ def _local_periods(
     canon = {period.period_key: period.col for period in shared.periods}
     if all(canon.get(header.period_key) == header.col for header in headers):
         return []
-    return [
-        {
-            "col": header.col,
-            "text": header.text,
-            "role": header.role,
-            "period_key": header.period_key,
-        }
-        for header in headers
-    ]
+    return [_period_dict(header) for header in headers]
 
 
 def _block_views(
@@ -329,7 +338,7 @@ def _block_views(
         headers = [
             header
             for header in (block.axis.headers if block.axis is not None else [])
-            if header.role in {"value", "scenario"}
+            if header.role in {"value", "scenario", "unknown"}
         ]
         return [(block.block_id, headers, {})]
     views: list[tuple[str, list[AxisHeader], dict[str, str | None]]] = []
@@ -355,6 +364,7 @@ def _block_views(
                     text=period.text,
                     role=role,
                     period_key=period.period_key,
+                    hidden=bool(getattr(period, "hidden", False)),
                 )
             )
             phases[period.period_key] = getattr(canon, "phase", None) if canon is not None else None
@@ -569,9 +579,147 @@ def _role_cells(
                 role=item.role,
                 cached_value=displayed if displayed is not None else cached,
                 header=item.header,
+                hidden=bool(cell and cell.get("hidden")),
             )
         )
     return out
+
+
+def _header_unit(sheet, block, by_addr: dict, date1904: bool) -> str | None:
+    """The label cell of the period-header row when it is a unit caption.
+
+    ``RURm`` beside ``2020`` is that caption. ``Year`` in the same cell is the
+    timeline name, and a ``k£`` in the unit column is that row's own unit.
+    """
+    rows = {axis.header_row for axis in axes_for(sheet, block)}
+    if block.axis is not None:
+        rows.add(block.axis.row)
+    label_col = getattr(block, "label_col", None)
+    if not rows or label_col is None:
+        return None
+    found: list[tuple[int, str]] = []
+    for (name, row, col), cell in by_addr.items():
+        if name != sheet.name or row not in rows or int(col) != int(label_col):
+            continue
+        text = display_cell_text(
+            cell.get("cached_value"),
+            cell.get("number_format"),
+            date1904=date1904,
+        )
+        if text and is_block_unit_caption(text):
+            found.append((int(row), text.strip()))
+    if not found:
+        return None
+    found.sort()
+    return found[0][1]
+
+
+def _unknown_header_warnings(layout: Layout) -> list[str]:
+    warnings: list[str] = []
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            if block.axis is None:
+                continue
+            names = [
+                header.text
+                for header in block.axis.headers
+                if header.role == "unknown" and header.text
+            ]
+            if not names:
+                continue
+            quoted = ", ".join(f"«{name}»" for name in names)
+            warnings.append(f"Unrecognized column headers in {block.block_id}: {quoted}")
+    return warnings
+
+
+def _hidden_warnings(workbook_meta: dict, cells: list[dict]) -> list[str]:
+    occupied_rows, occupied_cols = _occupied_hidden_indexes(cells)
+    warnings: list[str] = []
+    for sheet in workbook_meta.get("sheets") or []:
+        if not isinstance(sheet, dict) or not sheet.get("name"):
+            continue
+        name = str(sheet["name"])
+        if sheet.get("hidden"):
+            warnings.append(f"Hidden sheet {name} is included")
+        rows = _span_list(
+            row
+            for row in sheet.get("hidden_rows") or []
+            if int(row) in occupied_rows.get(name, ())
+        )
+        if rows:
+            warnings.append(f"Hidden rows {name}!{rows} are included")
+        cols = _span_list(
+            (
+                col
+                for col in sheet.get("hidden_cols") or []
+                if int(col) in occupied_cols.get(name, ())
+            ),
+            index_to_col,
+        )
+        if cols:
+            warnings.append(f"Hidden columns {name}!{cols} are included")
+    return warnings
+
+
+def _occupied_hidden_indexes(
+    cells: list[dict],
+) -> tuple[dict[str, set[int]], dict[str, set[int]]]:
+    """Rows and columns that hold a value or a formula."""
+    rows: dict[str, set[int]] = {}
+    cols: dict[str, set[int]] = {}
+    for cell in cells:
+        if not _cell_has_content(cell):
+            continue
+        sheet = str(cell.get("sheet") or "")
+        rows.setdefault(sheet, set()).add(int(cell["row"]))
+        cols.setdefault(sheet, set()).add(int(cell["col"]))
+    return rows, cols
+
+
+def _cell_has_content(cell: dict) -> bool:
+    formula = cell.get("formula_raw")
+    if isinstance(formula, str) and formula.strip():
+        return True
+    value = cell.get("cached_value")
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _span_list(values: list, render=str) -> str:
+    nums = sorted({int(value) for value in values})
+    if not nums:
+        return ""
+    spans: list[str] = []
+    start = prev = nums[0]
+    for num in nums[1:]:
+        if num == prev + 1:
+            prev = num
+            continue
+        spans.append(_one_span(start, prev, render))
+        start = prev = num
+    spans.append(_one_span(start, prev, render))
+    return ",".join(spans)
+
+
+def _one_span(start: int, end: int, render) -> str:
+    if start == end:
+        return str(render(start))
+    return f"{render(start)}:{render(end)}"
+
+
+def _period_dict(header: AxisHeader) -> dict[str, object]:
+    item: dict[str, object] = {
+        "col": header.col,
+        "text": header.text,
+        "role": header.role,
+        "period_key": header.period_key,
+    }
+    if header.hidden:
+        item["hidden"] = True
+    return item
 
 
 def _is_static_row(

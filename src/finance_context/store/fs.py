@@ -23,6 +23,9 @@ _CELL_COLUMNS = (
     "comment",
     "shared_si",
     "shared_master",
+    "style_indent",
+    "outline_level",
+    "col_outline_level",
 )
 
 
@@ -122,6 +125,9 @@ def write_cells_parquet(path: Path, rows: list[dict[str, Any]]) -> None:
         ("comment", "VARCHAR"),
         ("shared_si", "INTEGER"),
         ("shared_master", "BOOLEAN"),
+        ("style_indent", "INTEGER"),
+        ("outline_level", "INTEGER"),
+        ("col_outline_level", "INTEGER"),
     ]
     write_parquet(
         path,
