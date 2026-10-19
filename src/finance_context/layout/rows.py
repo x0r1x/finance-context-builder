@@ -7,6 +7,7 @@ from finance_context.layout.cells import _cell_at, _is_int_text, _is_number, _te
 from finance_context.layout.models import LayoutRow
 from finance_context.layout.params import attach_stub_cells
 from finance_context.layout.periods import (
+    _YEAR_KEY,
     LAYER_BOUNDS,
     LAYER_DATE,
     LAYER_HALF,
@@ -84,16 +85,7 @@ def _row_layers(row_cells: list[dict], date1904: bool) -> set[str]:
         layers.add(LAYER_ROLE)
     if sum(1 for atom in atoms if atom.kind == "full" and atom.day) >= 1:
         layers.add(LAYER_DATE)
-    years = sum(
-        1
-        for atom in atoms
-        if atom.year
-        and atom.quarter is None
-        and atom.half is None
-        and atom.month is None
-        and atom.day is None
-    )
-    if years >= 1:
+    if _year_layer(row_cells, date1904):
         layers.add(LAYER_YEAR)
     if sum(1 for atom in atoms if atom.quarter) >= 2:
         layers.add(LAYER_QUARTER)
@@ -105,10 +97,22 @@ def _row_layers(row_cells: list[dict], date1904: bool) -> set[str]:
 
 
 def _is_starter_row(row_cells: list[dict], date1904: bool) -> bool:
-    return (
-        sum(1 for cell in row_cells if is_calendar_hit(classify_header(_text(cell, date1904))))
-        >= 2
-    )
+    calendar = 0
+    bare_only = True
+    for cell in row_cells:
+        text = _text(cell, date1904)
+        if not is_calendar_hit(classify_header(text)):
+            continue
+        calendar += 1
+        if not _is_bare_year_text(text):
+            bare_only = False
+    if calendar < 2:
+        return False
+    # Dates, quarters and "2025E" are headers. Bare years are a header only when
+    # the visible run is non-decreasing, with one positive step if it advances.
+    if not bare_only:
+        return True
+    return _bare_years_are_header(row_cells, date1904)
 
 
 def _is_data_row(row_cells: list[dict], date1904: bool) -> bool:
@@ -150,6 +154,88 @@ def _is_counter_row(row_cells: list[dict], date1904: bool) -> bool:
             continue
         nums.append(int(float(text.replace(",", "."))))
     return len(nums) >= 2 and nums == list(range(1, len(nums) + 1))
+
+
+def _is_bare_year_text(text: str | None) -> bool:
+    """An integer in the year range, not ``2025E`` or a date."""
+    if not text or not _is_int_text(text):
+        return False
+    hit = classify_header(text)
+    return (
+        hit is not None
+        and bool(_YEAR_KEY.fullmatch(hit.period_key))
+        and not hit.explicit_role
+    )
+
+
+def _bare_year_values(row_cells: list[dict], date1904: bool) -> list[int]:
+    """Bare years on the row. A non-year number means this is not a year ruler.
+
+    A hidden cell on a row that also has a visible cell is a hidden column, so
+    scratch years there stay out of the run. A row whose every cell is hidden
+    is a hidden year banner (the columns are not hidden) and those years count.
+    """
+    row_hidden = bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
+    values: list[int] = []
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        if cell.get("hidden") and not row_hidden:
+            continue
+        text = _text(cell, date1904)
+        if text is None:
+            continue
+        if _is_bare_year_text(text):
+            values.append(int(float(text.replace(" ", "").replace(",", "."))))
+            continue
+        if _is_number(text):
+            return []
+    return values
+
+
+def _year_run_is_header(values: list[int]) -> bool:
+    """Non-decreasing years. A positive step, when one exists, stays constant.
+
+    ``2022, 2022, 2023, 2023`` is a banner. ``2016, 2017, 2018`` is a ruler.
+    ``2074, 2035, 1988`` is a data row.
+    """
+    if len(values) < 2:
+        return False
+    steps = [right - left for left, right in zip(values, values[1:], strict=False)]
+    if any(step < 0 for step in steps):
+        return False
+    positive = {step for step in steps if step > 0}
+    return len(positive) <= 1
+
+
+def _bare_years_are_header(row_cells: list[dict], date1904: bool) -> bool:
+    return _year_run_is_header(_bare_year_values(row_cells, date1904))
+
+
+def _year_banner_by_column(row_cells: list[dict], date1904: bool) -> dict[int, str]:
+    """Column → year for a real year banner, including a fully hidden row."""
+    if not _bare_years_are_header(row_cells, date1904):
+        return {}
+    row_hidden = bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
+    found: dict[int, str] = {}
+    for cell in row_cells:
+        if cell.get("hidden") and not row_hidden:
+            continue
+        text = _text(cell, date1904)
+        if not text or not _is_bare_year_text(text):
+            continue
+        found[int(cell["col"])] = str(int(float(text.replace(" ", "").replace(",", "."))))
+    return found
+
+
+def _year_layer(row_cells: list[dict], date1904: bool) -> bool:
+    """Text year headers count. Bare numbers count only as a real year run."""
+    for cell in row_cells:
+        text = _text(cell, date1904)
+        hit = classify_header(text)
+        if hit is None or not _YEAR_KEY.fullmatch(hit.period_key):
+            continue
+        if not _is_bare_year_text(text):
+            return True
+    return _bare_years_are_header(row_cells, date1904)
 
 
 def _is_empty_row(row_cells: list[dict], date1904: bool) -> bool:

@@ -2,7 +2,7 @@
 
 [Русский](../ru/overview.md) · **English**
 
-**finance-context-builder** is a read-only service that turns Excel cash-flow models (`.xlsx` / `.xlsm`) into versioned JSON and Markdown.
+**finance-context-builder** is a read-only service that turns Excel cash-flow models (`.xlsx` / `.xlsm`, legacy `.xls` through LibreOffice) into versioned JSON and Markdown.
 
 Formulas are not recalculated: artifacts keep Excel's cached values. Content is complete: every layout row lives once inside its block. JSON and Markdown are the same facts. Cells, AST, and edges are not merged into one document: they stay in `raw/` and `ir/`, while the public `context` and `graph` describe the report row and formula links.
 
@@ -16,7 +16,7 @@ How to run, Docker, and the API: [README](../../README.md). The layer snapshot i
 
 ## Input and output
 
-The input is a workbook whose formulas are already calculated. `.xls`, `.xlsb`, and encrypted files are rejected.
+The input is a workbook whose formulas are already calculated. `.xlsb` and encrypted files are rejected. A legacy `.xls` book is accepted when LibreOffice can convert it.
 
 A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{job_id}/` and are the same for every session. Context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{job_id}/`. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash.
 
@@ -60,4 +60,6 @@ Older snapshots may still say `needs_input` or `degraded`. Those jobs are finish
 
 Hints come from the label and the unit cell: `nature`, `time_semantics` (`flow` / `bop` / `eop` / `rate` / `stock` / `instant`), `unit` (`money` / `count` / `rate` / `ratio` / `years` / `price` / `date`), `unit_per`, `currency` (GBP/EUR/USD/RUB), `scale` (`unit` / `k` / `m` / `bn`), and `sign` (`inflow` / `outflow` / `stock`). `k£` in a label or Units cell is money, GBP, and `k`. `тыс. руб.` / `млн ₽` / `млрд руб.` is money, RUB, and `k` / `m` / `bn`; `руб.` alone is `unit`. `RURm` / `mRUB` / `RUB mn` is money, RUB, and `m`; `RUR` alone is RUB at `unit`; `USD bn`, `EURk`, and `RUB'000` carry `bn` / `k`. A unit caption in the period-header label applies to the block. A unit row inside a section applies until the next section. A unit cell on the row itself wins. A currency known only from a number format (`[$₽-419]`) leaves `scale` empty; `[$-419]` names no currency.
 
-`disposition` is structural exclusion only. It is `excluded` when the reason is `flag`, `helper`, `check`, `noise`, or `technical_bridge`. Otherwise `disposition` and `exclusion_reason` are null. Formula-shape relations on the block are `alias`, `aggregate`, `difference`, and `roll_forward`. They are not a second catalog of the row.
+Time comes from the label and the section. `Opening`, `BoP`, `b/f`, `b/fwd`, `beginning of period`, `на начало периода`, `входящий остаток` are `bop`; `Closing`, `EoP`, `c/f`, `c/fwd`, `end of period`, `на конец периода`, `исходящее сальдо` are `eop`. A fact row on a `Balance Sheet` / `Баланс` tab (a year, `Consolidated`, or a scale such as `тыс. руб.` may sit beside the title) or under that heading is `stock` (`end/last`). A price (`EUR/MWh`), a percent, or a multiple (`x`, or a `DSCR` / `LLCR` / `ratio` / `коэффициент` label) stays `rate` on that sheet too. A price or a multiple, including a percent-formatted coverage ratio, has aggregation `none`. An ordinary percent rate keeps `average`; an index level keeps `last`.
+
+`disposition` is structural exclusion only. It is `excluded` when the reason is `flag`, `helper`, `check`, `noise`, or `technical_bridge`. Otherwise `disposition` and `exclusion_reason` are null. Formula-shape relations on the block are `alias`, `aggregate`, `difference`, and `roll_forward`. They are not a second catalog of the row. `roll_forward` is a reference to the previous column on the same sheet; the previous column of another sheet is an `alias` (sheets often shift the period grid by one column).

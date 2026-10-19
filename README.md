@@ -2,7 +2,7 @@
 
 [Русский](README.ru.md) · **English**
 
-An Excel document parser. This read-only service reads a cash-flow workbook (`.xlsx` or `.xlsm`) and transforms it into JSON and Markdown: `context.json`, `context.md`, `graph.json`, and `graph.md`. Formulas are kept. Numbers come from the Excel cache and are not recalculated.
+An Excel document parser. This read-only service reads a cash-flow workbook (`.xlsx`, `.xlsm`, or legacy `.xls`) and transforms it into JSON and Markdown: `context.json`, `context.md`, `graph.json`, and `graph.md`. Formulas are kept. Numbers come from the Excel cache and are not recalculated.
 
 `context` holds block rows, periods, and values. `graph` holds formula links. A trace of one cell reads that graph.
 
@@ -13,7 +13,8 @@ Adapted from [cashflow-audit](https://github.com/x0r1x/cashflow-audit) (Apache-2
 ## Input
 
 - `.xlsx` and `.xlsm` are accepted.
-- `.xls`, `.xlsb`, and encrypted workbooks are rejected.
+- Legacy `.xls` (BIFF8, OLE2) is accepted when LibreOffice is installed: the job converts it once with `soffice --headless --convert-to xlsx` (fresh profile, `XLS_CONVERT_TIMEOUT_SEC`), then copies cached values from the `.xls` with `xlrd` so a LibreOffice recalculation does not replace the Excel cache. The Docker image ships headless LibreOffice, so `soffice` is on `PATH` in the container. A machine without `soffice` on `PATH` or in `SOFFICE_BIN` rejects the upload as `unsupported_media_type`.
+- `.xlsb` and encrypted workbooks are rejected. An encrypted `.xlsx` is an OLE2 file too; it is `encrypted_workbook`, not a legacy `.xls`.
 - Cached formula values must already be in the file.
 
 ## Environment setup
@@ -63,7 +64,7 @@ Submit a workbook. `POST` returns **202** and the API starts a process for that 
 | --- | --- |
 | `queued` / `running` | Still working |
 | `succeeded` | Documents are ready. |
-| `failed` | Pipeline error, the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`), or the API restarted while the job was still `queued` or `running` (`error` is `process_lost`). Submit the workbook again. |
+| `failed` | Pipeline error with its code in `error` (`zip_rejected`, `encrypted_workbook`, `unsupported_media_type`, `conversion_failed`), the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`), or the API restarted while the job was still `queued` or `running` (`error` is `process_lost`). Submit the workbook again. |
 
 Older snapshots may still say `needs_input` or `degraded`. Those jobs are finished, and the same four documents are served.
 
@@ -106,6 +107,7 @@ HTTP `error` codes:
 | `file_too_large` | 413 |
 | `encrypted_workbook` | 422 |
 | `zip_rejected` | 422 |
+| `conversion_failed` | job `error` only |
 | `selector_required` | 400 |
 | `not_found` | 404 |
 | `report_not_ready` | 409 |
@@ -113,7 +115,7 @@ HTTP `error` codes:
 
 `report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book.
 
-Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (server default 3600), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, check, noise, and technical-bridge rows stay in the block with `disposition=excluded`. An ordinary row has `disposition` null.
+Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (server default 3600), `SOFFICE_BIN` (default `soffice` / `libreoffice` on `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, check, noise, and technical-bridge rows stay in the block with `disposition=excluded`. An ordinary row has `disposition` null.
 
 ## Data
 
@@ -129,6 +131,8 @@ docker compose up --build
 ```
 
 Leave Compose running. The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`.
+
+The image runs as `app` (uid 1000) with `HOME=/app` and includes `libreoffice-calc-nogui`. A `.xls` upload converts inside the container. Conversion writes a temporary profile under the book directory, not into the image home. `XLS_CONVERT_TIMEOUT_SEC` (default 300) stays below `JOB_TIMEOUT_SEC` (default 3600) so a hung conversion fails the job before the server stops the process. `.env` can still set `SOFFICE_BIN` and `XLS_CONVERT_TIMEOUT_SEC`; Compose does not override them. `scripts/docker-xls-smoke.sh` checks that path against a real `.xls`. It needs Docker and is not part of `uv run pytest`.
 
 API container without Compose. The image command is `finance-context serve`:
 

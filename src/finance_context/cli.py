@@ -10,8 +10,10 @@ import uvicorn
 from finance_context.adapters.disk_store import DiskStore
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
-from finance_context.app.pipeline import Pipeline
+from finance_context.app.pipeline import Pipeline, mark_job_failed
 from finance_context.app.publisher import publisher_matches, stale_from_meta
+from finance_context.errors import ContextError
+from finance_context.excel.legacy import LEGACY_SOURCE, SOURCE, source_name
 from finance_context.observability import configure_logging
 from finance_context.settings import DEFAULT_DATA_DIR, Settings
 from finance_context.store.fs import atomic_write_bytes, write_json
@@ -32,6 +34,17 @@ def _read_meta(dest: Path) -> dict | None:
 
 def _same_publisher(dest: Path) -> bool:
     return publisher_matches(_read_meta(dest))
+
+
+def _read_owner(dest: Path) -> dict:
+    path = dest / "owner.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 @app.command()
@@ -56,7 +69,17 @@ def build(
     dest.mkdir(parents=True, exist_ok=True)
     book = shared or dest
     book.mkdir(parents=True, exist_ok=True)
-    atomic_write_bytes(book / "source.xlsx", data)
+    previous_sha = _read_owner(dest).get("content_sha256")
+    kept = source_name(data)
+    atomic_write_bytes(book / kept, data)
+    # A missing or invalid digest is not this workbook, so the old sibling is dropped.
+    source_changed = previous_sha != digest
+    if source_changed:
+        # `build -o` reuses the directory. Drop the other source name so a previous
+        # `source.xlsx` is not parsed in place of this `source.xls`. A repeat of the
+        # same `.xls` keeps the converted sibling.
+        sibling = LEGACY_SOURCE if kept == SOURCE else SOURCE
+        (book / sibling).unlink(missing_ok=True)
     write_json(
         dest / "owner.json",
         {"content_sha256": digest, "source_filename": source.name},
@@ -67,19 +90,33 @@ def build(
         dest / "graph.json",
         dest / "graph.md",
     )
-    if all(path.is_file() for path in published) and _same_publisher(dest):
+    if (
+        not source_changed
+        and all(path.is_file() for path in published)
+        and _same_publisher(dest)
+    ):
         for path in published:
             typer.echo(path)
         typer.echo("reused")
         return
-    clear_downstream_artifacts(dest, stale_from=stale_from_meta(_read_meta(dest)), shared=shared)
-    doc = Pipeline(settings).run(
-        dest,
-        job_id=job_id,
-        source_filename=source.name,
-        content_sha256=digest,
-        shared_dir=shared,
-    )
+    # A different workbook must not keep the previous raw/ parse.
+    stale = "compile" if source_changed else stale_from_meta(_read_meta(dest))
+    clear_downstream_artifacts(dest, stale_from=stale, shared=shared)
+    try:
+        doc = Pipeline(settings).run(
+            dest,
+            job_id=job_id,
+            source_filename=source.name,
+            content_sha256=digest,
+            shared_dir=shared,
+        )
+    except ContextError as exc:
+        mark_job_failed(dest, job_id, exc.code)
+        typer.echo(f"failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        mark_job_failed(dest, job_id, type(exc).__name__)
+        raise
     for path in published:
         typer.echo(path)
     typer.echo(doc.meta.status)

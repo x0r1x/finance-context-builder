@@ -27,6 +27,8 @@ from finance_context.app.jobs import list_session_jobs
 from finance_context.app.pipeline import mark_job_failed
 from finance_context.app.publisher import publisher_changed, publisher_matches, stale_from_meta
 from finance_context.errors import ContextError
+from finance_context.excel.legacy import XlsConverter, check_legacy_workbook, source_name
+from finance_context.excel.ole2 import is_ole2
 from finance_context.excel.zip_guard import open_xlsx_zip
 from finance_context.models.context import JobStatus
 from finance_context.observability import log_event
@@ -106,14 +108,16 @@ async def post_job(
         raise ContextError("empty_file")
     filename = Path(file.filename or "upload.xlsx").name
     data = await file.read()
-    await asyncio.to_thread(_validate_upload, filename, data, ctx.max_upload_bytes)
+    await asyncio.to_thread(
+        _validate_upload, filename, data, ctx.max_upload_bytes, ctx.pipeline.converter
+    )
     digest = await asyncio.to_thread(sha256_bytes, data)
     job_id = job_id_for(digest)
     dest = ctx.store.dest_dir(job_id)
     shared = ctx.store.shared_dir(job_id)
     dest.mkdir(parents=True, exist_ok=True)
     shared.mkdir(parents=True, exist_ok=True)
-    source = shared / "source.xlsx"
+    source = shared / source_name(data)
     if not source.exists():
         atomic_write_bytes(source, data)
     owner_path = dest / "owner.json"
@@ -323,7 +327,9 @@ def _job_body(job_id: str, meta: dict) -> dict:
     return body
 
 
-def _validate_upload(filename: str, data: bytes, max_bytes: int) -> None:
+def _validate_upload(
+    filename: str, data: bytes, max_bytes: int, converter: XlsConverter
+) -> None:
     suffix = Path(filename).suffix.lower()
     if suffix not in _ALLOWED:
         raise ContextError("unsupported_media_type", suffix or "missing")
@@ -331,8 +337,15 @@ def _validate_upload(filename: str, data: bytes, max_bytes: int) -> None:
         raise ContextError("empty_file")
     if len(data) > max_bytes:
         raise ContextError("file_too_large")
+    legacy = is_ole2(data)
+    if suffix == ".xls" and not legacy and not data.startswith(b"PK"):
+        raise ContextError("unsupported_media_type", "not an Excel workbook")
     with NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
         tmp.write(data)
         tmp.flush()
+        if legacy:
+            # Converted in the job process; refuse here what cannot be converted.
+            check_legacy_workbook(Path(tmp.name), converter)
+            return
         zf = open_xlsx_zip(Path(tmp.name))
         zf.close()

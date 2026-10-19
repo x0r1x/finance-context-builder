@@ -280,6 +280,59 @@ def test_wide_letters_pair_is_a_named_range_not_columns() -> None:
     ]
 
 
+def test_sheet_qualified_ref_error_matches_bare_ref_error() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    bare = engine.parse("=#REF!", sheet="CF", addr="C2")
+    quoted = engine.parse("='Денежные потоки'!#REF!", sheet="CF", addr="C2")
+    assert bare.unparsed is False
+    assert quoted.unparsed is False
+    assert quoted.ast == bare.ast == {"op": "err", "value": "#REF!"}
+    assert quoted.template == bare.template == "=#REF!"
+    assert quoted.edges == bare.edges == []
+
+    for formula in (
+        "=Sheet1!#REF!",
+        "=[1]Sheet1!#REF!",
+        "='[1]Денежные потоки'!#REF!",
+    ):
+        parsed = engine.parse(formula, sheet="CF", addr="C2")
+        assert parsed.unparsed is False, formula
+        assert parsed.ast == bare.ast
+        assert parsed.template == bare.template
+        assert parsed.edges == []
+
+
+def test_sheet_qualified_ref_error_inside_an_expression() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=A1+'Sheet 2'!#REF!*2", sheet="CF", addr="B2")
+    assert parsed.unparsed is False
+    assert parsed.ast == {
+        "op": "bin",
+        "kind": "+",
+        "left": {
+            "op": "ref",
+            "col": 1,
+            "row": 1,
+            "abs_col": False,
+            "abs_row": False,
+        },
+        "right": {
+            "op": "bin",
+            "kind": "*",
+            "left": {"op": "err", "value": "#REF!"},
+            "right": {"op": "num", "value": 2.0},
+        },
+    }
+    assert [(edge.kind, edge.target) for edge in parsed.edges] == [("ref", "CF!A1")]
+
+
+def test_sheet_qualifier_does_not_hide_other_unparseable_formulas() -> None:
+    engine = FormulaEngine(locale_hint="en")
+    assert engine.parse("=Sheet1!#NAME?", sheet="CF", addr="C2").unparsed is True
+    assert engine.parse("=Sheet1!not_a_cell", sheet="CF", addr="C2").unparsed is True
+    assert engine.parse("='Денежные потоки'!???", sheet="CF", addr="C2").unparsed is True
+
+
 def test_column_range_inside_the_grid_stays_columns() -> None:
     engine = FormulaEngine(locale_hint="en")
     parsed = engine.parse("=SUM(A:C)+SUM($XFD:$XFD)", sheet="S", addr="B2")

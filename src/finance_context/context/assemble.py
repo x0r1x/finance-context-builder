@@ -24,6 +24,98 @@ from finance_context.models.context import (
 from finance_context.vocab import ValueStatus
 
 _SERIES_KINDS = {"fact", "flag", "helper"}
+# A period start or end in the label. "End of construction" is a phase, not a period end.
+# "На начало" / "на конец" need a period word, the same way "end of" does.
+_RU_PERIOD = r"(?:периода|года|месяца|квартала)"
+_RU_BALANCE_WORD = r"остат(?:ок|ки|ка|ков|ке)"
+_BOP_TEXT = re.compile(
+    # "from beginning of year" is a period-to-date flow, not an opening balance.
+    r"(?<!from )(?<!from the )\b(?:beginning|start) of (?:the )?(?:period|year|month|quarter)\b"
+    r"|\bbeginning balance\b|\bb/f(?:wd)?\b|\bbrought forward\b"
+    rf"|\bна начало(?:\s+\w+){{0,2}}?\s+{_RU_PERIOD}\b"
+    rf"|\b(?:входящ|начальн)\w*\s+(?:{_RU_BALANCE_WORD}|сальдо)\b"
+)
+_EOP_TEXT = re.compile(
+    r"\bend of (?:the )?(?:period|year|month|quarter)\b"
+    r"|\bending balance\b|\bc/f(?:wd)?\b|\bcarried forward\b"
+    rf"|\bна конец(?:\s+\w+){{0,2}}?\s+{_RU_PERIOD}\b"
+    rf"|\b(?:исходящ|конечн)\w*\s+(?:{_RU_BALANCE_WORD}|сальдо)\b"
+)
+# "Остаточная стоимость" is not an account balance.
+_RU_BALANCE = re.compile(r"\bостат(?:ок|ки|ка|ков|ке)\b|\bсальдо\b")
+# Coverage and other multiples. Summing or averaging them across periods is wrong.
+_RATIO_TEXT = re.compile(r"\b(?:ratio|dscr|llcr|plcr|icr|coverage|коэффициент\w*|коэф)\b")
+_BALANCE_SHEET_TITLES = frozenset(
+    {
+        "balance sheet",
+        "balance sheets",
+        "statement of financial position",
+        "баланс",
+        "бухгалтерский баланс",
+        "прогнозный баланс",
+        "балансовый отчет",
+        "балансовый отчёт",
+        "отчет о финансовом положении",
+        "отчёт о финансовом положении",
+    }
+)
+_BALANCE_SHEET_TITLES_LONGEST = tuple(sorted(_BALANCE_SHEET_TITLES, key=len, reverse=True))
+# "Consolidated Balance Sheet" / "Баланс, тыс. руб." / "Balance Sheet 2024".
+# The tail is only a year or a scale/currency, so "Balance check" stays out.
+_TITLE_LEADING = re.compile(r"^(?:consolidated|консолидированн\w+)\s+")
+_TITLE_YEAR = re.compile(r"^(?:fy)?(?:19|20)\d{2}$")
+_TITLE_TAIL = frozenset(
+    {
+        "k",
+        "m",
+        "mn",
+        "mm",
+        "bn",
+        "000",
+        "000s",
+        "thousand",
+        "thousands",
+        "million",
+        "millions",
+        "billion",
+        "billions",
+        "eur",
+        "euro",
+        "euros",
+        "usd",
+        "dollar",
+        "dollars",
+        "gbp",
+        "pound",
+        "pounds",
+        "sterling",
+        "rub",
+        "rur",
+        "ruble",
+        "rubles",
+        "тыс",
+        "тысяча",
+        "тысячи",
+        "тысяч",
+        "млн",
+        "млрд",
+        "руб",
+        "рубль",
+        "рубля",
+        "рублей",
+        "евро",
+        "доллар",
+        "доллара",
+        "долларов",
+        "фунт",
+        "фунта",
+        "фунтов",
+        "consolidated",
+        "консолидированный",
+        "консолидированная",
+        "консолидированное",
+    }
+)
 
 
 class _ExclusionView:
@@ -119,6 +211,9 @@ def _row_for_layout(
     )
     factor = scale_factor_for(hints.scale)
     position, aggregation = temporal_profile(hints.time_semantics)
+    # A level (an index at period end) keeps `last`; a sum or a mean of prices does not hold.
+    if aggregation in {"sum", "average"} and _not_additive(unit, layout_row.label):
+        aggregation = "none"
     if static:
         position, aggregation = "instant", "none"
     if series:
@@ -180,16 +275,18 @@ def _hints_for(
     *,
     number_formats: list[str] | None = None,
     static: bool = False,
+    sheet: str | None = None,
 ) -> RowHints:
     blob, tokens = _hint_blob_and_tokens(layout_row.label or "")
+    text = re.sub(r"\s+", " ", (layout_row.label or "").casefold()).strip()
     nature = None
     time_semantics = None
-    if tokens & {"opening", "closing", "balance", "beg", "ending"}:
+    if tokens & {"opening", "closing", "balance", "beg", "ending"} or _RU_BALANCE.search(blob):
         nature = "balance"
-    if "opening" in tokens or "b/f" in blob or "brought forward" in blob:
+    if tokens & {"opening", "bop"} or _BOP_TEXT.search(text):
         time_semantics = "bop"
         nature = "balance"
-    elif "closing" in tokens or "c/f" in blob or "carried forward" in blob:
+    elif tokens & {"closing", "eop"} or _EOP_TEXT.search(text):
         time_semantics = "eop"
         nature = "balance"
     if time_semantics is None and any(token in tokens for token in ("rate", "ratio", "%")):
@@ -197,12 +294,12 @@ def _hints_for(
     elif layout_row.kind == "fact" and time_semantics is None:
         time_semantics = "flow"
     if _is_index_unit(unit_text):
-        time_semantics = "stock"
+        # An index is a level, except when the label already names the period start.
+        if time_semantics != "bop":
+            time_semantics = "stock"
         nature = nature or "balance"
-    if time_semantics == "flow" and nature == "balance":
-        time_semantics = "stock"
-    elif static and time_semantics in {None, "flow", "stock"}:
-        time_semantics = "instant"
+    if time_semantics == "flow" and _in_balance_sheet(layout_row, sheet):
+        nature = nature or "balance"
     measure = parse_measure(
         unit_text,
         layout_row.label,
@@ -212,8 +309,15 @@ def _hints_for(
     )
     if measure.unit == "money" and _percent_formatted(number_formats or []):
         measure = Measure(unit="rate", sign=measure.sign)
-    if measure.unit == "rate" and time_semantics in {None, "flow", "instant"}:
+    # A price, ratio, or percent is not a stock, including on a balance sheet.
+    if time_semantics in {None, "flow", "instant"} and (
+        measure.unit == "rate" or _not_additive(measure.unit, layout_row.label)
+    ):
         time_semantics = "rate"
+    if time_semantics == "flow" and nature == "balance":
+        time_semantics = "stock"
+    elif static and time_semantics in {None, "flow", "stock"}:
+        time_semantics = "instant"
     return RowHints(
         nature=nature,
         time_semantics=time_semantics,
@@ -223,6 +327,71 @@ def _hints_for(
         scale=measure.scale,
         sign=measure.sign,
     )
+
+
+def _not_additive(unit: str | None, label: str | None) -> bool:
+    """A price or a multiple (DSCR, x). Neither a sum nor an average over periods holds.
+
+    A coverage ratio formatted as a percent is still a multiple. An ordinary
+    percent rate (interest, margin) keeps its average.
+    """
+    if unit in {"ratio", "price"}:
+        return True
+    blob, _tokens = _hint_blob_and_tokens(label or "")
+    if not _RATIO_TEXT.search(blob):
+        return False
+    return unit in {None, "rate"}
+
+
+def _in_balance_sheet(layout_row: LayoutRow, sheet: str | None) -> bool:
+    """The row sits on a balance sheet tab or under a balance sheet heading."""
+    return any(_is_balance_sheet_title(title) for title in (sheet, *layout_row.section_path))
+
+
+def _is_balance_sheet_title(title: str | None) -> bool:
+    blob = _normalize_sheet_title(title)
+    while _TITLE_LEADING.match(blob):
+        blob = _TITLE_LEADING.sub("", blob, count=1)
+    for known in _BALANCE_SHEET_TITLES_LONGEST:
+        if blob == known:
+            return True
+        prefix = f"{known} "
+        if blob.startswith(prefix) and _title_tail_ok(blob[len(prefix) :]):
+            return True
+    return False
+
+
+def _normalize_sheet_title(title: str | None) -> str:
+    blob = re.sub(r"\([^)]*\)", " ", title or "")
+    blob = re.sub(r"^\s*(?:\d+|[ivx]+)[.)]\s*", "", blob, flags=re.IGNORECASE)
+    blob = re.sub(r"[^\w\s]+", " ", blob)
+    return re.sub(r"\s+", " ", blob).strip().casefold()
+
+
+def _title_tail_ok(tail: str) -> bool:
+    words = tail.split()
+    if not words or len(words) > 4:
+        return False
+    index = 0
+    saw_year = False
+    while index < len(words):
+        word = words[index]
+        if word == "fy" and index + 1 < len(words) and _TITLE_YEAR.fullmatch(words[index + 1]):
+            if saw_year:
+                return False
+            saw_year = True
+            index += 2
+            continue
+        if _TITLE_YEAR.fullmatch(word):
+            if saw_year:
+                return False
+            saw_year = True
+            index += 1
+            continue
+        if word not in _TITLE_TAIL:
+            return False
+        index += 1
+    return True
 
 
 def _hint_blob_and_tokens(label: str) -> tuple[str, set[str]]:

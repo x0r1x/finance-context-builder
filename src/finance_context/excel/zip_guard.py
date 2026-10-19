@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 from finance_context.errors import ContextError
+from finance_context.excel.ole2 import is_ole2_file, ole2_kind
 
 MAX_PART_BYTES = 512 * 1024 * 1024
 MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
@@ -34,9 +35,22 @@ def check_zip_info(info: zipfile.ZipInfo, running_total: int) -> int:
     return total
 
 
+def reject_ole2(path: Path) -> None:
+    """An OLE2 file is either an encrypted OOXML book or a legacy `.xls`, never a zip."""
+    if not is_ole2_file(path):
+        return
+    kind = ole2_kind(path)
+    if kind == "encrypted":
+        raise ContextError("encrypted_workbook")
+    if kind == "xls":
+        raise ContextError("unsupported_media_type", "legacy .xls has to be converted to .xlsx")
+    raise ContextError("unsupported_media_type", "OLE2 file is not an Excel workbook")
+
+
 def open_xlsx_zip(path: Path) -> zipfile.ZipFile:
     if not path.exists() or path.stat().st_size == 0:
         raise ContextError("empty_file")
+    reject_ole2(path)
     try:
         zf = zipfile.ZipFile(path)
     except zipfile.BadZipFile as exc:

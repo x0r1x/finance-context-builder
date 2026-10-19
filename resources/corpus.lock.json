@@ -13,6 +13,8 @@
     {
       "slug": "three-statement",
       "license": "MIT",
+      "available": false,
+      "reason": "Nachidoestech/three-statement-model lists model/three_statement_model.xlsx, but the git tree is only README, LICENSE, and .gitignore. Both URLs 404. This lock never stored a sha256, so the same file cannot be pinned.",
       "urls": [
         "https://raw.githubusercontent.com/Nachidoestech/three-statement-model/main/model/three_statement_model.xlsx",
         "https://github.com/Nachidoestech/three-statement-model/raw/main/model/three_statement_model.xlsx"

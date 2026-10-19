@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 50 * 1024 * 1024
     max_concurrent_jobs: int = _DEFAULT_MAX_CONCURRENT_JOBS
     job_timeout_sec: float = 3600
+    soffice_bin: str | None = None
+    xls_convert_timeout_sec: float = 300
     log_level: str = "INFO"
     log_json: bool = True
 

@@ -348,6 +348,55 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.hints.sign == "stock"
 
 
+def test_sheet_qualified_ref_error_is_the_same_exception_as_bare() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+
+    engine = FormulaEngine(locale_hint="en")
+    bare = engine.parse("=#REF!", sheet="CF", addr="C2")
+    qualified = engine.parse("='Денежные потоки'!#REF!", sheet="CF", addr="C2")
+
+    def built(raw: str, template: str | None, unparsed: bool):
+        cells = [
+            {
+                "sheet": "CF",
+                "row": 2,
+                "col": 2,
+                "addr": "B2",
+                "formula_raw": "=A2",
+                "formula_template": "=RC[-1]",
+                "unparsed": False,
+                "cached_value": "1",
+            },
+            {
+                "sheet": "CF",
+                "row": 2,
+                "col": 3,
+                "addr": "C2",
+                "formula_raw": raw,
+                "formula_template": template,
+                "unparsed": unparsed,
+                "cached_value": "#REF!",
+            },
+        ]
+        return build_context(
+            job_id="ref",
+            workbook_meta={"sheets": [{"name": "CF"}]},
+            cells=cells,
+            layout=_layout(),
+        )
+
+    bare_doc = built("=#REF!", bare.template, bare.unparsed)
+    qualified_doc = built("='Денежные потоки'!#REF!", qualified.template, qualified.unparsed)
+    assert bare_doc.blocks[0].rows[0].formula_exceptions == ["CF!C2"]
+    assert (
+        qualified_doc.blocks[0].rows[0].formula_exceptions
+        == bare_doc.blocks[0].rows[0].formula_exceptions
+    )
+    assert qualified_doc.blocks[0].rows[0].formula == bare_doc.blocks[0].rows[0].formula
+    assert all("Unparsed formula" not in warning for warning in qualified_doc.warnings)
+    assert qualified_doc.workbook.unparsed_formulas == 0
+
+
 def test_hidden_warnings_do_not_crowd_out_formula_warnings() -> None:
     sheets = [{"name": f"S{index}", "hidden": True} for index in range(60)]
     cells = [

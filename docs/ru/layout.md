@@ -105,6 +105,6 @@ Compile помечает формулу `unparsed`, если токен не р�
 | Нет `D3` / Scenario Chosen в строках блока | Control-строка попала в header params (`params.py`) |
 | `Unparsed formula` на шапке или SUM | `formulas/engine.py` |
 
-Публичный корпус: Packt (индекс лет + `Input Assumptions` как params) и RVI (календарь + секции в нескольких колонках; `Top Shortcuts` не даёт строк). `three-statement.xlsx` может быть недоступен — сверка корпуса его пропускает.
+Публичный корпус: Packt (индекс лет + `Input Assumptions` как params) и RVI (календарь + секции в нескольких колонках; `Top Shortcuts` не даёт строк). Запись `three-statement` в локе помечена недоступной: в указанном дереве GitHub книги нет и контрольной суммы не было. `scripts/fetch-corpus.py` её пропускает.
 
 Тесты детектора: `tests/layout/`. На `cashflow.xlsx` появляются params-блоки (Assumptions / Checks); Cover и Disclaimer по-прежнему без строк. Timeline `label_col` недельных блоков не должен съезжать.

@@ -1107,3 +1107,63 @@ def test_hidden_sheet_flag_is_recorded_and_rows_stay(tmp_path: Path) -> None:
     block = sheet.blocks[0]
     assert block.label_col == 3
     assert [row.label for row in block.rows] == ["Выручка от реализации"]
+
+
+def test_hidden_year_row_groups_quarters_that_omit_the_year() -> None:
+    years = ["2009", "2009", "2009", "2010", "2010", "2010", "2010", "2011", "2011"]
+    quarters = ["2 кв.", "3 кв.", "4 кв.", "1 кв.", "2 кв.", "3 кв.", "4 кв.", "1 кв.", "2 кв."]
+    cols = list("BCDEFGHIJ")
+    cells = [
+        _c("МСФО", f"{col}28", year, hidden=True) for col, year in zip(cols, years, strict=True)
+    ]
+    cells += [
+        _c("МСФО", f"{col}29", quarter) for col, quarter in zip(cols, quarters, strict=True)
+    ]
+    cells.append(_c("МСФО", "A30", "Выручка"))
+    cells += [_c("МСФО", f"{col}30", "10") for col in cols]
+    sheet = detect_layout(cells).sheets[0]
+    quarter = next(axis for axis in sheet.axes if axis.grain == "quarter")
+    assert [period.period_key for period in quarter.periods] == [
+        "2009Q2",
+        "2009Q3",
+        "2009Q4",
+        "2010Q1",
+        "2010Q2",
+        "2010Q3",
+        "2010Q4",
+        "2011Q1",
+        "2011Q2",
+    ]
+    assert [period.group_key for period in quarter.periods] == years
+    assert [axis.header_row for axis in sheet.axes if axis.grain == "year"] == []
+
+
+def test_year_like_data_row_is_not_a_header() -> None:
+    cells = [
+        _c("Inputs", "A1", "Year"),
+        _c("Inputs", "B1", "2016"),
+        _c("Inputs", "C1", "2017"),
+        _c("Inputs", "D1", "2018"),
+        _c("Inputs", "E1", "2019"),
+        _c("Inputs", "A2", "Revenue"),
+        _c("Inputs", "B2", "10"),
+        _c("Inputs", "C2", "11"),
+        _c("Inputs", "D2", "12"),
+        _c("Inputs", "E2", "13"),
+        _c("Inputs", "A3", "Объем закупок полувагонов"),
+        _c("Inputs", "B3", "2074"),
+        _c("Inputs", "C3", "2155"),
+        _c("Inputs", "D3", "2035.0000000000002"),
+        _c("Inputs", "E3", "2035"),
+        _c("Inputs", "F3", "1988"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.header_row for axis in sheet.axes] == [1]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2016",
+        "2017",
+        "2018",
+        "2019",
+    ]
+    labels = [row.label for block in sheet.blocks for row in block.rows]
+    assert labels == ["Revenue", "Объем закупок полувагонов"]

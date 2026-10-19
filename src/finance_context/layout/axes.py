@@ -39,6 +39,7 @@ from finance_context.layout.rows import (
     _is_starter_row,
     _row_label,
     _row_layers,
+    _year_banner_by_column,
 )
 
 _FLAG_LABEL = re.compile(
@@ -653,6 +654,10 @@ def _axes_from_band(
             )
         )
     known_hidden = hidden_cols or set()
+    banner_years: dict[int, str] = {}
+    for row_n in band_rows:
+        for col, year in _year_banner_by_column(by_row[row_n], date1904).items():
+            banner_years.setdefault(col, year)
     runs = _split_header_runs(composed, known_hidden)
     axes: list[TimeAxis] = []
     multi = len(runs) > 1
@@ -681,6 +686,7 @@ def _axes_from_band(
                         role=header.role,
                         period_key=header.period_key,
                         explicit_role=header.explicit_role,
+                        group_key=_banner_group(header.period_key, banner_years.get(header.col)),
                         start_date=bounds.get(header.col, (None, None))[0],
                         end_date=bounds.get(header.col, (None, None))[1],
                         hidden=header.col in known_hidden,
@@ -693,6 +699,16 @@ def _axes_from_band(
 
 
 _RELATIVE_STEP = re.compile(r"^([YQMP])(\d+)$")
+
+
+def _banner_group(period_key: str, year: str | None) -> str | None:
+    """A year banner over a finer header is that period's group, not a second key."""
+    if not year or period_key == year:
+        return None
+    head = period_key[:4]
+    if head.isdigit() and head == year:
+        return year
+    return None
 
 
 def _period_continues(left: str, right: str) -> bool:
