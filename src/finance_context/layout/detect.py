@@ -23,6 +23,7 @@ def detect_layout(
     edges: list[dict] | None = None,
     hidden_sheets: set[str] | None = None,
     hidden_columns: dict[str, set[int]] | None = None,
+    hidden_rows: dict[str, set[int]] | None = None,
     summary_below: dict[str, bool] | None = None,
 ) -> Layout:
     hidden = hidden_sheets or set()
@@ -33,12 +34,14 @@ def detect_layout(
         by_sheet.setdefault(cell["sheet"], []).append(cell)
     sheets = []
     for name, sheet_cells in by_sheet.items():
+        row_ids = None if hidden_rows is None else set(hidden_rows.get(name, ()))
         blocks, axes = _blocks_for_sheet(
             name,
             sheet_cells,
             date1904,
             edges,
             hidden_cols=set(columns.get(name, ())),
+            hidden_row_ids=row_ids,
             summary_below=below.get(name, True),
         )
         sheets.append(SheetLayout(name=name, blocks=blocks, axes=axes, hidden=name in hidden))
@@ -53,6 +56,7 @@ def _blocks_for_sheet(
     date1904: bool,
     edges: list[dict] | None = None,
     hidden_cols: set[int] | None = None,
+    hidden_row_ids: set[int] | None = None,
     summary_below: bool = True,
 ) -> tuple[list[Block], list[TimeAxis]]:
     by_row: dict[int, list[dict]] = defaultdict(list)
@@ -102,6 +106,7 @@ def _blocks_for_sheet(
             seed=_band_title(by_row, group_axes[0].header_row, span, period_cols, date1904),
             reveal_rows=reveal_rows,
             summary_below=summary_below,
+            hidden_row_ids=hidden_row_ids,
         )
         data_rows, carved = carve_params_regions(
             sheet, data_rows, by_row, date1904, period_cols, label_col
@@ -178,11 +183,14 @@ def _is_label_only_row(
     left = min(period_cols)
     has_label = False
     for cell in cells:
+        if cell.get("formula_raw"):
+            return False
         text = _text(cell, date1904)
         if not text:
             continue
-        if _is_number(text) or cell.get("formula_raw"):
+        col = int(cell["col"])
+        if col in period_cols or _is_number(text):
             return False
-        if int(cell["col"]) < left:
+        if col < left:
             has_label = True
     return has_label

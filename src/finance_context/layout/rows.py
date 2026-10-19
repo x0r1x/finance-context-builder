@@ -220,6 +220,7 @@ def _data_rows(
     seed: LayoutRow | None = None,
     reveal_rows: set[int] | None = None,
     summary_below: bool = True,
+    hidden_row_ids: set[int] | None = None,
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
     out: list[LayoutRow] = []
@@ -232,7 +233,9 @@ def _data_rows(
             continue
         if _is_counter_row(by_row[row_n], date1904):
             continue
-        reveal = row_n in revealed or _row_all_hidden(by_row[row_n])
+        reveal = row_n in revealed or _row_all_hidden(
+            row_n, by_row[row_n], hidden_row_ids
+        )
         label, depth, label_cell = _row_span_label(
             by_row[row_n], label_span, date1904, include_hidden=reveal
         )
@@ -383,8 +386,17 @@ def _outline_parent(
     return None
 
 
-def _row_all_hidden(row_cells: list[dict]) -> bool:
-    """Every populated cell is hidden: the row is hidden, not a hidden column on a visible row."""
+def _row_all_hidden(
+    row_n: int, row_cells: list[dict], hidden_row_ids: set[int] | None
+) -> bool:
+    """A row is hidden when the workbook lists it.
+
+    Cell flags alone are not enough: a visible row can hold text only in a
+    hidden column, and every cell is then flagged hidden. Callers that have no
+    workbook metadata still fall back to those flags.
+    """
+    if hidden_row_ids is not None:
+        return row_n in hidden_row_ids
     return bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
 
 

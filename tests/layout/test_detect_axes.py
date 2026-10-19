@@ -190,6 +190,59 @@ def test_hidden_scratch_prices_do_not_open_an_axis() -> None:
     assert [row.label for row in sheet.blocks[0].rows] == ["Zinc", "Отраслевые"]
 
 
+def test_hidden_year_prefix_continues_across_an_empty_hidden_column() -> None:
+    cells = [
+        _c("CF", "A1", "Item"),
+        _c("CF", "B1", "2023", hidden=True),
+        _c("CF", "C1", "2024", hidden=True),
+        _c("CF", "E1", "2025"),
+        _c("CF", "F1", "2026E"),
+        _c("CF", "A2", "Revenue"),
+        _c("CF", "B2", "1", hidden=True),
+        _c("CF", "C2", "2", hidden=True),
+        _c("CF", "E2", "3"),
+        _c("CF", "F2", "4"),
+    ]
+    sheet = detect_layout(cells, hidden_columns={"CF": {2, 3, 4}}).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2023",
+        "2024",
+        "2025",
+        "2026",
+    ]
+
+
+def test_hidden_relative_prefix_continues_across_an_empty_hidden_column() -> None:
+    cells = [
+        _c("CF", "A1", "Year"),
+        _c("CF", "B1", "1", hidden=True),
+        _c("CF", "C1", "2", hidden=True),
+        _c("CF", "E1", "3"),
+        _c("CF", "A2", "Revenue"),
+        _c("CF", "B2", "10", hidden=True),
+        _c("CF", "C2", "11", hidden=True),
+        _c("CF", "E2", "12"),
+    ]
+    sheet = detect_layout(cells, hidden_columns={"CF": {2, 3, 4}}).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == ["Y1", "Y2", "Y3"]
+
+
+def test_hidden_scratch_years_do_not_bridge_onto_the_visible_axis() -> None:
+    cells = [
+        _c("CF", "A1", "Item"),
+        _c("CF", "B1", "1965", hidden=True),
+        _c("CF", "D1", "1939"),
+        _c("CF", "E1", "1940"),
+        _c("CF", "A2", "Revenue"),
+        _c("CF", "D2", "1"),
+        _c("CF", "E2", "2"),
+    ]
+    sheet = detect_layout(cells, hidden_columns={"CF": {2, 3}}).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == ["1939", "1940"]
+
+
 def test_visible_gap_still_splits_the_period_run() -> None:
     cells = [
         _c("CF", "A1", "Item"),
@@ -913,6 +966,44 @@ def test_section_title_above_the_next_header_labels_that_block() -> None:
     assert blocks[1].rows[1].section_path == ["ТЕКУЩИЙ ПРОГНОЗ"]
 
 
+def _stacked_blocks(period_values: list[str | None], *, formula: bool) -> list:
+    cells = [
+        _c("Steps", "A3", "Продажи"),
+        _c("Steps", "A4", "Сырье"),
+        _c("Steps", "A21", "EBITDA"),
+    ]
+    quarters = ["4 кв. 2015", "1 кв. 2016", "2 кв. 2016", "3 кв. 2016"]
+    for col, quarter, value in zip("BCDE", quarters, period_values, strict=True):
+        cells.append(_c("Steps", f"{col}2", quarter))
+        cells.append(_c("Steps", f"{col}3", "10"))
+        cells.append(
+            _c(
+                "Steps",
+                f"{col}4",
+                value,
+                formula=f"={col}3" if formula else None,
+            )
+        )
+    for col, year in zip("BCDEFGHIJ", range(2015, 2024), strict=True):
+        cells.append(_c("Steps", f"{col}20", str(year)))
+        cells.append(_c("Steps", f"{col}21", "20"))
+    return cells
+
+
+def test_uncached_formula_row_stays_in_the_block_above() -> None:
+    blocks = detect_layout(_stacked_blocks([None, None, None, None], formula=True)).sheets[0].blocks
+    assert [row.label for row in blocks[0].rows] == ["Продажи", "Сырье"]
+    assert [row.label for row in blocks[1].rows] == ["EBITDA"]
+
+
+def test_period_text_row_stays_in_the_block_above() -> None:
+    blocks = detect_layout(_stacked_blocks(["n/a", "n/a", "n/a", "n/a"], formula=False)).sheets[
+        0
+    ].blocks
+    assert [row.label for row in blocks[0].rows] == ["Продажи", "Сырье"]
+    assert [row.label for row in blocks[1].rows] == ["EBITDA"]
+
+
 def test_hidden_section_titles_label_the_next_block() -> None:
     cells = [
         _c("Strategy", "B2", "Стресс-сценарий", hidden=True),
@@ -932,6 +1023,64 @@ def test_hidden_section_titles_label_the_next_block() -> None:
     ]
     assert [row.hidden for row in rows[:3]] == [True, True, True]
     assert rows[3].section_path == ["Текущий прогноз"]
+
+
+def test_visible_row_with_only_hidden_column_text_is_not_a_section(tmp_path: Path) -> None:
+    import json
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "workbook.json").write_text(
+        json.dumps(
+            {
+                "date1904": False,
+                "sheets": [{"name": "CF", "hidden_rows": [], "hidden_cols": [1]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cells = [
+        _c("CF", "C1", "2023"),
+        _c("CF", "D1", "2024"),
+        _c("CF", "E1", "2025"),
+        _c("CF", "A2", "Scratch title", hidden=True),
+        _c("CF", "B3", "Revenue"),
+        _c("CF", "C3", "10"),
+        _c("CF", "D3", "11"),
+        _c("CF", "E3", "12"),
+    ]
+    rows = layout_workbook(tmp_path, cells=cells, edges=[]).sheets[0].blocks[0].rows
+    assert [row.label for row in rows] == ["Revenue"]
+    assert rows[0].section_path == []
+
+
+def test_hidden_row_metadata_still_reveals_a_section_title(tmp_path: Path) -> None:
+    import json
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "workbook.json").write_text(
+        json.dumps(
+            {
+                "date1904": False,
+                "sheets": [{"name": "CF", "hidden_rows": [2], "hidden_cols": []}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cells = [
+        _c("CF", "C1", "2023"),
+        _c("CF", "D1", "2024"),
+        _c("CF", "E1", "2025"),
+        _c("CF", "A2", "Hidden title", hidden=True),
+        _c("CF", "B3", "Revenue"),
+        _c("CF", "C3", "10"),
+        _c("CF", "D3", "11"),
+        _c("CF", "E3", "12"),
+    ]
+    rows = layout_workbook(tmp_path, cells=cells, edges=[]).sheets[0].blocks[0].rows
+    assert [row.label for row in rows] == ["Hidden title", "Revenue"]
+    assert rows[1].section_path == ["Hidden title"]
 
 
 def test_hidden_sheet_flag_is_recorded_and_rows_stay(tmp_path: Path) -> None:

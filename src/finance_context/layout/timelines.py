@@ -229,6 +229,19 @@ def _flag_fingerprint(
     return tuple(items)
 
 
+def _remember_flags(
+    table: dict[tuple, list[tuple[TimeAxis, tuple]]],
+    axis_id: str,
+    fingerprint: tuple,
+) -> None:
+    """Fill an empty fingerprint so a later conflicting alias is rejected."""
+    for key, items in table.items():
+        table[key] = [
+            (item, fingerprint if item.id == axis_id and not flags else flags)
+            for item, flags in items
+        ]
+
+
 def _flags_compatible(left: tuple, right: tuple) -> bool:
     if not left or not right:
         return True
@@ -258,16 +271,19 @@ def _share_repeated_axes(
         signature = _axis_signature(axis)
         fingerprint = _flag_fingerprint(owner.get(axis.id), axis, by_row, date1904)
         if not _has_explicit_role(axis):
-            painted = next(
-                (
-                    previous
-                    for previous, previous_flags in by_columns.get(_column_signature(axis), [])
-                    if _has_explicit_role(previous)
-                    and _flags_compatible(previous_flags, fingerprint)
-                ),
-                None,
-            )
+            painted: TimeAxis | None = None
+            painted_flags: tuple = ()
+            for previous, previous_flags in by_columns.get(_column_signature(axis), []):
+                if _has_explicit_role(previous) and _flags_compatible(
+                    previous_flags, fingerprint
+                ):
+                    painted = previous
+                    painted_flags = previous_flags
+                    break
             if painted is not None:
+                if not painted_flags and fingerprint:
+                    _remember_flags(by_columns, painted.id, fingerprint)
+                    _remember_flags(buckets, painted.id, fingerprint)
                 alias[axis.id] = painted.id
                 continue
         match: TimeAxis | None = None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
@@ -8,6 +9,7 @@ from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import _cell_at, _is_int_text, _is_number, _text
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis
 from finance_context.layout.periods import (
+    _HALF_KEY,
     LAYER_BOUNDS,
     LAYER_DATE,
     LAYER_HALF,
@@ -27,6 +29,7 @@ from finance_context.layout.periods import (
     is_role_marker_text,
     is_start_period_label,
     normalize_header,
+    parse_period_key,
 )
 from finance_context.layout.rows import (
     _RELATIVE_LABEL,
@@ -392,13 +395,13 @@ def _relative_run(
     best: list[tuple[int, int]] = []
     run: list[tuple[int, int]] = []
     for col, value in seq:
-        physical_gap = bool(run) and col > run[-1][0] + 1
-        hidden_only = bool(run) and all(prev_col in bridge for prev_col, _value in run)
+        # The next integer is the continuation. A hidden-only prefix stays
+        # attached across an empty hidden column when that holds; a scratch
+        # value that is not the next integer starts a new run.
         connected = (
             bool(run)
             and value == run[-1][1] + 1
             and _cols_connected(run[-1][0], col, bridge)
-            and not (physical_gap and hidden_only)
         )
         if connected:
             run.append((col, value))
@@ -689,6 +692,55 @@ def _axes_from_band(
     return axes
 
 
+_RELATIVE_STEP = re.compile(r"^([YQMP])(\d+)$")
+
+
+def _period_continues(left: str, right: str) -> bool:
+    """True when ``right`` is the next period of the same grain as ``left``."""
+    left_rel = _RELATIVE_STEP.fullmatch(left)
+    right_rel = _RELATIVE_STEP.fullmatch(right)
+    if left_rel and right_rel and left_rel.group(1) == right_rel.group(1):
+        return int(right_rel.group(2)) == int(left_rel.group(2)) + 1
+    left_half = _HALF_KEY.fullmatch(left)
+    right_half = _HALF_KEY.fullmatch(right)
+    if left_half and right_half:
+        left_index = int(left_half.group(1)) * 2 + int(left_half.group(2))
+        right_index = int(right_half.group(1)) * 2 + int(right_half.group(2))
+        return right_index == left_index + 1
+    left_year, left_quarter, left_month, left_day = parse_period_key(left)
+    right_year, right_quarter, right_month, right_day = parse_period_key(right)
+    if left_year is None or right_year is None:
+        return False
+    if left_day and right_day and left_month and right_month:
+        try:
+            left_date = date(int(left_year), left_month, left_day)
+            right_date = date(int(right_year), right_month, right_day)
+        except ValueError:
+            return False
+        return (right_date - left_date).days in {1, 7, 14}
+    if left_quarter and right_quarter:
+        return int(right_year) * 4 + right_quarter == int(left_year) * 4 + left_quarter + 1
+    if left_month and right_month and not left_day and not right_day:
+        return int(right_year) * 12 + right_month == int(left_year) * 12 + left_month + 1
+    if (
+        left_quarter is None
+        and right_quarter is None
+        and left_month is None
+        and right_month is None
+        and left_day is None
+        and right_day is None
+    ):
+        return int(right_year) == int(left_year) + 1
+    return False
+
+
+def _run_continues(headers: list[AxisHeader]) -> bool:
+    return all(
+        _period_continues(left.period_key, right.period_key)
+        for left, right in zip(headers, headers[1:], strict=False)
+    )
+
+
 def _header_key_class(key: str) -> str:
     if len(key) == 4 and key.isdigit():
         return "year"
@@ -708,13 +760,19 @@ def _split_header_runs(
     ordered = sorted(headers, key=lambda item: item.col)
     runs: list[list[AxisHeader]] = [[ordered[0]]]
     for prev, item in zip(ordered, ordered[1:], strict=False):
-        # An empty hidden column keeps a run together. It does not attach a
-        # run that lives only in hidden columns to the next visible header:
-        # those cells are scratch values under the real axis (1965 next to 1939).
+        # An empty hidden column keeps a run together. A prefix that lives only
+        # in hidden columns stays attached when the next header continues the
+        # sequence (2024, empty hidden column, 2025). Scratch that does not
+        # continue (1965 next to 1939) still starts a new run.
         physical_gap = item.col - prev.col > 1
         bridged = physical_gap and _cols_connected(prev.col, item.col, bridge)
         hidden_only = all(header.col in bridge for header in runs[-1])
-        gap = physical_gap and (not bridged or hidden_only)
+        # 1938 then 1939 is a one-step continuation, but a hidden prefix of
+        # 1965, 1938 is not itself a sequence. Require both.
+        continues = _period_continues(prev.period_key, item.period_key) and (
+            not hidden_only or _run_continues(runs[-1])
+        )
+        gap = physical_gap and (not bridged or (hidden_only and not continues))
         left_cls = _header_key_class(prev.period_key)
         right_cls = _header_key_class(item.period_key)
         grain_break = (

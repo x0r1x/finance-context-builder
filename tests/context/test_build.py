@@ -108,8 +108,8 @@ def test_empty_hidden_rows_and_columns_do_not_warn() -> None:
         layout=Layout(sheets=[]),
     )
     assert doc.warnings == [
-        "Hidden columns Input Assumptions!T are included",
         "1 formula cell(s) missing cached values (e.g. Input Assumptions!T3)",
+        "Hidden columns Input Assumptions!T are included",
     ]
 
 
@@ -346,6 +346,33 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.hints.currency == "USD"
     assert metric.hints.scale is None
     assert metric.hints.sign == "stock"
+
+
+def test_hidden_warnings_do_not_crowd_out_formula_warnings() -> None:
+    sheets = [{"name": f"S{index}", "hidden": True} for index in range(60)]
+    cells = [
+        {
+            "sheet": "S0",
+            "row": 1,
+            "col": 1,
+            "addr": "A1",
+            "cached_value": None,
+            "formula_raw": "=1+1",
+            "unparsed": True,
+        }
+    ]
+    doc = build_context(
+        job_id="cap",
+        workbook_meta={"sheets": sheets},
+        cells=cells,
+        layout=Layout(sheets=[]),
+        graph=GraphPointer(dangling=3),
+    )
+    assert len(doc.warnings) == 50
+    assert doc.meta.warnings == doc.warnings
+    assert "Unparsed formula at S0!A1" in doc.warnings
+    assert "1 formula cell(s) missing cached values (e.g. S0!A1)" in doc.warnings
+    assert "Graph: 3 unresolved formula targets (see graph.json)" in doc.warnings
 
 
 def test_build_warns_on_missing_graph_targets() -> None:

@@ -110,6 +110,49 @@ def test_different_lengths_and_conflicting_flags_stay_apart() -> None:
     assert ids["Short"] != ids["Long"]
 
 
+def test_roleless_alias_keeps_the_incoming_flag_fingerprint() -> None:
+    cells = [
+        _c("Output", "B6", "Item"),
+        _c("Output", "C6", "2020A"),
+        _c("Output", "D6", "2021A"),
+        _c("Output", "E6", "2022E"),
+        _c("Output", "B7", "Revenue"),
+        _c("Output", "C7", "10"),
+        _c("Output", "D7", "11"),
+        _c("Output", "E7", "12"),
+        _c("Output", "B12", "Item"),
+        _c("Output", "C12", "2020"),
+        _c("Output", "D12", "2021"),
+        _c("Output", "E12", "2022"),
+        _c("Output", "B13", "Construction"),
+        _c("Output", "C13", "1"),
+        _c("Output", "D13", "1"),
+        _c("Output", "E13", "0"),
+        _c("Output", "B14", "Costs"),
+        _c("Output", "C14", "1"),
+        _c("Output", "D14", "2"),
+        _c("Output", "E14", "3"),
+        _c("Output", "B20", "Item"),
+        _c("Output", "C20", "2020"),
+        _c("Output", "D20", "2021"),
+        _c("Output", "E20", "2022"),
+        _c("Output", "B21", "Construction"),
+        _c("Output", "C21", "0"),
+        _c("Output", "D21", "0"),
+        _c("Output", "E21", "1"),
+        _c("Output", "B22", "Amount"),
+        _c("Output", "C22", "4"),
+        _c("Output", "D22", "5"),
+        _c("Output", "E22", "6"),
+    ]
+    blocks = detect_layout(cells).sheets[0].blocks
+    first = next(block for block in blocks if any(row.label == "Revenue" for row in block.rows))
+    second = next(block for block in blocks if any(row.label == "Costs" for row in block.rows))
+    third = next(block for block in blocks if any(row.label == "Amount" for row in block.rows))
+    assert first.axis_ids == second.axis_ids
+    assert third.axis_ids != first.axis_ids
+
+
 def test_dated_calendar_wins_over_an_undated_copy() -> None:
     dated = TimeAxis(
         id="Model!r7",
