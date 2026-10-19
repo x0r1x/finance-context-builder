@@ -103,6 +103,12 @@ def test_percent_rate_keeps_the_average() -> None:
     assert _time(row) == ("rate", "during_period", "average")
 
 
+def test_percent_formatted_coverage_ratio_is_not_averaged() -> None:
+    row = _row("Debt Service Coverage Ratio", unit="%")
+    assert row.unit == "rate"
+    assert _time(row) == ("rate", "during_period", "none")
+
+
 def test_money_flow_keeps_the_sum() -> None:
     row = _row("Revenue", unit="EUR'000")
     assert _time(row) == ("flow", "during_period", "sum")
@@ -142,6 +148,16 @@ def test_english_beginning_and_end_of_period() -> None:
 def test_brought_and_carried_forward_without_a_roll_forward() -> None:
     assert _time(_row("Cash account b/f")) == ("bop", "beginning", "first")
     assert _time(_row("Reserve c/f")) == ("eop", "end", "last")
+    assert _time(_row("Cash b/fwd")) == ("bop", "beginning", "first")
+    assert _time(_row("Reserve c/fwd")) == ("eop", "end", "last")
+
+
+def test_russian_phase_words_are_not_period_boundaries() -> None:
+    assert _time(_row("Затраты на конец строительства")) == ("flow", "during_period", "sum")
+    assert _time(_row("Затраты на начало строительства")) == ("flow", "during_period", "sum")
+    assert _time(_row("на конец дня")) == ("flow", "during_period", "sum")
+    assert _time(_row("Начальная остаточная стоимость")) == ("flow", "during_period", "sum")
+    assert _time(_row("Остаточная стоимость")) == ("flow", "during_period", "sum")
 
 
 def test_end_of_construction_is_not_a_period_end() -> None:
@@ -166,6 +182,40 @@ def test_balance_sheet_tab_row_is_a_stock() -> None:
         "end",
         "last",
     )
+
+
+def test_balance_sheet_title_allows_a_year_a_scale_and_consolidated() -> None:
+    assert _time(_row("Retained Earnings", sheet="Balance Sheet 2024")) == (
+        "stock",
+        "end",
+        "last",
+    )
+    assert _time(_row("Основные средства", sheet="Баланс, тыс. руб.")) == (
+        "stock",
+        "end",
+        "last",
+    )
+    assert _time(_row("Cash", sheet="Consolidated Balance Sheet")) == ("stock", "end", "last")
+    assert _time(_row("Revenue", sheet="Balance Sheet 20241")) == ("flow", "during_period", "sum")
+    assert _time(_row("Revenue", sheet="Balance check")) == ("flow", "during_period", "sum")
+    assert _time(_row("Revenue", sheet="Balances and checks")) == ("flow", "during_period", "sum")
+
+
+def test_balance_sheet_ratio_price_and_percent_are_not_last() -> None:
+    dscr = _row("DSCR", sheet="Balance Sheet")
+    multiple = _row("Debt Service Coverage Ratio", unit="x", sheet="Balance Sheet")
+    price = _row("Merchant price (real)", unit="EUR/MWh", sheet="Баланс")
+    percent = _row("Margin", unit="%", sheet="Balance Sheet")
+    llcr = _row("LLCR", sheet="Balance Sheet")
+    coverage = _row("Коэффициент покрытия", sheet="Баланс")
+    for row in (dscr, multiple, price, percent, llcr, coverage):
+        assert row.aggregation != "last", row.label
+    assert _time(dscr) == ("rate", "during_period", "none")
+    assert _time(multiple) == ("rate", "during_period", "none")
+    assert _time(price) == ("rate", "during_period", "none")
+    assert percent.hints.time_semantics == "rate"
+    assert _time(llcr)[2] == "none"
+    assert _time(coverage)[2] == "none"
 
 
 def test_balance_sheet_section_keeps_opening_and_closing() -> None:
