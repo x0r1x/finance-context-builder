@@ -57,9 +57,13 @@ def _entry_names(path: Path) -> set[str]:
         fat_sectors = _fat_sectors(header, reader)
         names: set[str] = set()
         sector = struct.unpack_from("<I", header, 48)[0]
+        seen: set[int] = set()
         for _ in range(reader.count):
             if sector == _END_OF_CHAIN:
                 return names
+            if sector > _MAX_SECTOR or sector in seen:
+                raise ValueError("directory chain loops")
+            seen.add(sector)
             data = reader.read(sector)
             for offset in range(0, len(data), _DIR_ENTRY):
                 name = _entry_name(data[offset : offset + _DIR_ENTRY])
@@ -97,11 +101,20 @@ class _Sectors:
 
 
 def _fat_sectors(header: bytes, reader: _Sectors) -> list[int]:
-    count = struct.unpack_from("<I", header, 44)[0]
+    # Header counts are attacker-controlled uint32s. A DIFAT sector that points at
+    # itself, or a count past the end of the file, must not walk more sectors than
+    # the upload contains.
+    limit = reader.file_size // reader.size
+    count = min(struct.unpack_from("<I", header, 44)[0], limit)
     found = [sid for sid in struct.unpack_from("<109I", header, 76) if sid <= _MAX_SECTOR]
     sector, remaining = struct.unpack_from("<II", header, 68)
+    remaining = min(remaining, limit)
     per_sector = reader.size // 4
+    seen: set[int] = set()
     while remaining and sector <= _MAX_SECTOR and len(found) < count:
+        if sector in seen:
+            raise ValueError("DIFAT chain loops")
+        seen.add(sector)
         values = struct.unpack(f"<{per_sector}I", reader.read(sector))
         found.extend(sid for sid in values[:-1] if sid <= _MAX_SECTOR)
         sector = values[-1]
