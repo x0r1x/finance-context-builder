@@ -524,6 +524,17 @@ def test_unparsed_period_header_warns_without_becoming_a_period() -> None:
     assert any("1.2025" in item for item in warnings)
 
 
+def test_formatted_number_is_not_an_unparsed_period() -> None:
+    cells = _ru_timeline(("Выручка", ["1", "2", "3", "4"]))
+    number = _c("Модель", "U38", "1.2072")
+    number["number_format"] = "0.0"
+    cells.append(number)
+    cells.append(_c("Модель", "F1", "Q5 2025"))
+    _axes, warnings = build_axes(detect_layout(cells), cells)
+    assert not any("1.2072" in item or "U38" in item for item in warnings)
+    assert any("Q5 2025" in item and item.startswith("Unparsed period header") for item in warnings)
+
+
 def test_yo_in_a_phase_stem_matches_the_lexicon_spelling() -> None:
     assert _phases_for("Опёрационный период") == ["operation", "operation", None, None]
 

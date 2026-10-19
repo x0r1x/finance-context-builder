@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 
+from finance_context.excel.dates import is_date_format
 from finance_context.layout.lexicon import searcher
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis
 from finance_context.layout.normalize import normalize_label
@@ -19,6 +21,8 @@ _SERIES_ROLES = {
     "stub",
     "relative",
 }
+_GENERAL_FORMAT = re.compile(r"^(general|standard|@)$", re.IGNORECASE)
+_FORMAT_NOISE = re.compile(r"\[[^\]]*\]|\"[^\"]*\"|\\.|[*_]")
 
 
 def build_axes(
@@ -83,13 +87,7 @@ def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
     out: list[str] = []
     seen: set[tuple[str, str]] = set()
     for cell in cells:
-        text = display_cell_text(
-            cell.get("cached_value") if cell.get("cached_value") is not None else None,
-            cell.get("number_format"),
-            date1904=date1904,
-        )
-        if text is None and cell.get("cached_value") is not None:
-            text = str(cell.get("cached_value"))
+        text = _period_warning_text(cell, date1904)
         if not text or not unparsed_period_shape(text):
             continue
         key = (str(cell.get("sheet")), text)
@@ -98,6 +96,60 @@ def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
         seen.add(key)
         out.append(f"Unparsed period header {cell.get('sheet')}!{cell.get('addr')}: «{text}»")
     return out
+
+
+def _period_warning_text(cell: dict, date1904: bool) -> str | None:
+    """Text a header warning may use.
+
+    A plain number with a non-date format is judged by what Excel shows.
+    ``1.2072`` with ``0.0`` is ``1.2``, not month 1 of 2072. Text such as
+    ``Q5 2025`` and ``1.2025`` still uses the cell text.
+    """
+    value = cell.get("cached_value")
+    if value is None:
+        return None
+    raw = str(value)
+    fmt = cell.get("number_format")
+    if isinstance(fmt, str) and _explicit_numeric_format(fmt) and _plain_number(raw):
+        return _displayed_number(raw, fmt)
+    text = display_cell_text(raw, fmt if isinstance(fmt, str) else None, date1904=date1904)
+    if text is None:
+        return raw
+    return text
+
+
+def _plain_number(text: str) -> bool:
+    try:
+        float(text.replace(" ", "").replace(",", "."))
+    except ValueError:
+        return False
+    return True
+
+
+def _explicit_numeric_format(fmt: str) -> bool:
+    if is_date_format(fmt):
+        return False
+    first = fmt.split(";", 1)[0].strip()
+    return bool(first) and _GENERAL_FORMAT.fullmatch(first) is None
+
+
+def _displayed_number(value: str, fmt: str) -> str | None:
+    """Excel's shown digits for a simple ``0`` / ``0.0`` / ``#,##0.00`` format."""
+    try:
+        number = float(value.replace(" ", "").replace(",", "."))
+    except ValueError:
+        return None
+    token = _FORMAT_NOISE.sub("", fmt.split(";", 1)[0])
+    percent = "%" in token
+    token = token.replace("%", "").replace(",", "")
+    if not re.search(r"[0#]", token):
+        return None
+    if percent:
+        number *= 100
+    decimals = 0
+    if "." in token:
+        decimals = sum(1 for char in token.split(".", 1)[1] if char in "0#")
+    return f"{number:.{decimals}f}"
 
 
 def _published_axis_ids(layout: Layout) -> set[str]:
