@@ -135,6 +135,14 @@ def test_converter_dies_with_the_parent(tmp_path: Path) -> None:
     assert seen.read_text(encoding="utf-8") == "9"
 
 
+def test_pid1_worker_is_not_treated_as_already_dead() -> None:
+    from finance_context.adapters.soffice import _orphaned
+
+    assert _orphaned(1, 1) is False
+    assert _orphaned(100, 100) is False
+    assert _orphaned(100, 1) is True
+
+
 def test_finished_group_is_not_signalled() -> None:
     from finance_context.adapters.soffice import _kill_group
 

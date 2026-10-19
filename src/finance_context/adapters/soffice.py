@@ -135,13 +135,22 @@ def _converter_env(home: Path) -> dict[str, str]:
     return env
 
 
+def _orphaned(parent_at_fork: int, parent_after_prctl: int) -> bool:
+    """The worker died before the death signal was armed.
+
+    A worker that is already PID 1, such as the container entrypoint, is not dead.
+    """
+    return parent_at_fork != 1 and parent_after_prctl == 1
+
+
 def _die_with_parent() -> None:
     """SIGKILL this process when the worker exits. Runs after `setsid`, before exec."""
     if _LIBC is None:
         return
+    parent = os.getppid()
     if _LIBC.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0) != 0:
         return
-    if os.getppid() == 1:
+    if _orphaned(parent, os.getppid()):
         os.kill(os.getpid(), signal.SIGKILL)
 
 
