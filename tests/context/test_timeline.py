@@ -506,3 +506,11 @@ def test_duration_and_unrelated_flag_labels_are_not_phases(label: str) -> None:
 def test_start_of_operation_stays_an_event() -> None:
     assert _phases_for("Дата начала эксплуатации") == [None, None, None, None]
     assert _phases_for("Начало строительства") == [None, None, None, None]
+
+
+def test_yo_in_a_phase_stem_matches_the_lexicon_spelling() -> None:
+    assert _phases_for("Опёрационный период") == ["operation", "operation", None, None]
+
+
+def test_yo_outside_a_phase_stem_is_not_a_phase() -> None:
+    assert _phases_for("Ёмкость") == [None, None, None, None]

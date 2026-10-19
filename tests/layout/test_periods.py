@@ -421,3 +421,177 @@ def test_half_word_then_number_composes_with_a_year_row() -> None:
 def test_half_year_spellings_do_not_swallow_nearby_words(text: str) -> None:
     assert classify_header(text) is None
     assert classify_atom(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "role", "period_key"),
+    [
+        ("2025A", "historical", "2025"),
+        ("2025А", "historical", "2025"),
+        ("2025а", "historical", "2025"),
+        ("2025P", "forecast", "2025"),
+        ("2025Р", "forecast", "2025"),
+        ("2025р", "forecast", "2025"),
+        ("2025E", "forecast", "2025"),
+        ("2025Е", "forecast", "2025"),
+        ("2025П", "forecast", "2025"),
+        ("2025Ф", "historical", "2025"),
+        ("1 кв. 2025А", "historical", "2025Q1"),
+        ("1 кв. 2025Р", "forecast", "2025Q1"),
+        ("Н1 2025", "historical", "2025H1"),
+        ("н2 2025", "historical", "2025H2"),
+        ("1Н25", "historical", "2025H1"),
+        ("2н2025", "historical", "2025H2"),
+    ],
+)
+def test_cyrillic_lookalikes_in_period_codes_keep_suffix_roles(
+    text: str, role: str, period_key: str
+) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    explicit = text[-1] not in "125"
+    assert (hit.period_key, hit.role, hit.explicit_role) == (period_key, role, explicit)
+
+
+def test_cyrillic_en_without_a_year_is_a_half_token() -> None:
+    atom = classify_atom("Н1")
+    assert atom is not None
+    assert (atom.kind, atom.half) == ("half_token", 1)
+    assert classify_header("Н1") is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["2025Н", "Начало", "Нет", "1Нет", "Факт", "План", "2025 график", "History"],
+)
+def test_lookalike_letters_do_not_rewrite_russian_words(text: str) -> None:
+    hit = classify_header(text)
+    if text in {"Факт", "План"}:
+        assert hit is not None and hit.period_key in {"actual", "plan"}
+    else:
+        assert hit is None
+
+
+@pytest.mark.parametrize(
+    ("text", "period_key"),
+    [
+        ("2025 Q1", "2025Q1"),
+        ("2025Q1", "2025Q1"),
+        ("2025-Q1", "2025Q1"),
+        ("2025/Q1", "2025Q1"),
+        ("Q1-2025", "2025Q1"),
+        ("Q1/2025", "2025Q1"),
+        ("2025 Q4", "2025Q4"),
+        ("2025 H1", "2025H1"),
+        ("2025H2", "2025H2"),
+        ("2025-H1", "2025H1"),
+        ("2025 Н1", "2025H1"),
+        ("2025Н2", "2025H2"),
+        ("FY2025", "2025"),
+        ("FY 2025", "2025"),
+        ("FY25", "2025"),
+        ("FY 25", "2025"),
+    ],
+)
+def test_year_first_quarters_halves_and_short_fiscal_years(text: str, period_key: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert hit.period_key == period_key
+    assert hit.role == "historical"
+
+
+def test_fiscal_year_suffix_keeps_its_role() -> None:
+    hit = classify_header("FY25E")
+    assert hit is not None
+    assert (hit.period_key, hit.role, hit.explicit_role) == ("2025", "forecast", True)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Q5-2025",
+        "Q1/2",
+        "Q1-2",
+        "2025 Q",
+        "2025Q",
+        "2025H",
+        "H5 2025",
+        "FY",
+        "FY2",
+        "FYI",
+        "FY250",
+        "20251",
+        "1 кВт",
+        "History",
+    ],
+)
+def test_quarter_separators_and_fiscal_years_reject_nearby_tokens(text: str) -> None:
+    assert classify_header(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "period_key"),
+    [
+        ("янв.25", "2025-01"),
+        ("январь 2025", "2025-01"),
+        ("января 25", "2025-01"),
+        ("мая 25", "2025-05"),
+        ("мае 25", "2025-05"),
+        ("март 2025", "2025-03"),
+        ("марта 2025", "2025-03"),
+        ("марту 25", "2025-03"),
+        ("мартом 2025", "2025-03"),
+        ("августа 2025", "2025-08"),
+        ("августу 25", "2025-08"),
+        ("августом 2025", "2025-08"),
+        ("январём 2025", "2025-01"),
+        ("сентября 2025", "2025-09"),
+        ("сентябрь 2025", "2025-09"),
+        ("Dec-25", "2025-12"),
+        ("September 2025", "2025-09"),
+        ("Jan-25", "2025-01"),
+    ],
+)
+def test_real_month_names_and_inflections(text: str, period_key: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert hit.period_key == period_key
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["маяк 25", "марка 25", "маркер 25", "июльский 25", "marching 25", "maybe 25", "январский 25"],
+)
+def test_words_that_start_like_a_month_are_not_months(text: str) -> None:
+    assert classify_header(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Upside",
+        "Base case",
+        "сценарий",
+        "сценарий базовый",
+        "Сценарий: базовый",
+        "Сценарий:базовый",
+        "Базовый сценарий",
+        "Пессимистичный сценарий",
+        "Оптимистичный сценарий",
+        "Негативный",
+        "Стрессовый сценарий",
+    ],
+)
+def test_scenario_headers_accept_either_word_order(text: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert hit.role == "scenario"
+    assert hit.explicit_role is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["базовый", "Выручка", "мой сценарий", "сцена", "сценарист", "1 кВт", "History"],
+)
+def test_scenario_words_do_not_match_loose_phrases(text: str) -> None:
+    assert classify_header(text) is None

@@ -10,8 +10,11 @@ from finance_context.layout.models import ColumnRole, PeriodHit
 
 _YEAR_WORD = rf"(?:\s*{pattern('period_words', 'year')}\.?)?"
 # One suffix class for a year and for a quarter, half, month or date of that year.
-# E/F/P and Cyrillic Е/П are forecast. A/a is actual. Ф is explicit historical, as on a bare year.
-_ROLE_SUFFIX = r"[EFAPеЕфФпПaA]"
+# E/F/P, Cyrillic Е/П, and Cyrillic Р (the lookalike of P) are forecast.
+# П is the Russian plan letter, not a P-lookalike, and stays forecast.
+# A/a and Cyrillic А/а are actual. Ф stays explicit historical.
+_ROLE_SUFFIX = r"[EFAPеЕфФпПaAАаРр]"
+_H_MARK = r"[HН]"
 _YEAR = re.compile(
     rf"^(?:FY\s*)?((?:19|20)\d{{2}}){_YEAR_WORD}({_ROLE_SUFFIX})?$", re.IGNORECASE
 )
@@ -23,7 +26,8 @@ _QUARTER_WORD = rf"{pattern('period_words', 'quarter')}\.?"
 _HALF_WORD = rf"{pattern('period_words', 'half')}\.?"
 _ORDINAL = r"(?:\s*[-–—−]?\s*(?:й|ый|ой|е|ое))?"
 _PART_YEAR = (
-    rf"(?:\s*'?\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}}){_YEAR_WORD}(?P<sfx>{_ROLE_SUFFIX})?)?"
+    rf"(?:(?:\s*[-/]\s*|\s*'?\s*)(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
+    rf"{_YEAR_WORD}(?P<sfx>{_ROLE_SUFFIX})?)?"
 )
 _QUARTER_FORMS = tuple(
     re.compile(rf"^{body}{_PART_YEAR}$", re.IGNORECASE)
@@ -40,9 +44,18 @@ _HALF_FORMS = tuple(
         rf"(?P<num>[12]|I{{1,2}}){_ORDINAL}\s*{_HALF_WORD}",
         rf"{_HALF_WORD}\s*(?P<num>[12]|I{{1,2}})",
         r"(?P<num>[12])\s*п\s*/\s*г\.?",
-        r"H(?P<num>[12])",
-        r"(?P<num>[12])\s*H",
+        rf"{_H_MARK}(?P<num>[12])",
+        rf"(?P<num>[12])\s*{_H_MARK}",
     )
+)
+# "2025 Q1" / "2025Q1" / "2025 H1". A second year group cannot sit in _PART_YEAR.
+_YEAR_FIRST_QUARTER = re.compile(
+    rf"^(?P<year>(?:19|20)\d{{2}})\s*[-/]?\s*Q(?P<num>[1-4])(?P<sfx>{_ROLE_SUFFIX})?$",
+    re.IGNORECASE,
+)
+_YEAR_FIRST_HALF = re.compile(
+    rf"^(?P<year>(?:19|20)\d{{2}})\s*[-/]?\s*{_H_MARK}(?P<num>[12])(?P<sfx>{_ROLE_SUFFIX})?$",
+    re.IGNORECASE,
 )
 # "2П25" / "1П2025" only, with the year required. Bare "2П" is not a half.
 _CYRILLIC_HALF = re.compile(
@@ -56,8 +69,14 @@ _MONTH_YEAR = re.compile(
 )
 _TOTAL = re.compile(r"^(итого|всего|total|sum)$", re.IGNORECASE)
 _STUB = re.compile(r"^(stub|частичн\w*|partial)$", re.IGNORECASE)
+_SCENARIO_NOUN = r"сценари(?:й|я|ю|ем|и)"
+_SCENARIO_ADJ = (
+    r"(?:базов|пессимистичн|оптимистичн|негативн|позитивн|консервативн|стрессов)\w*"
+)
 _SCENARIO = re.compile(
-    r"^(base(?:\s*case)?|upside|downside|негативн\w*|позитивн\w*|stress|сценарий(?:\s+\w+)?)$",
+    rf"^(?:base(?:\s*case)?|upside|downside|stress|негативн\w*|позитивн\w*"
+    rf"|{_SCENARIO_NOUN}(?:(?:\s*[:\-–—]\s*|\s+)\w+)?"
+    rf"|{_SCENARIO_ADJ}\s+{_SCENARIO_NOUN})$",
     re.IGNORECASE,
 )
 _HISTORICAL_WORD = pattern("period_roles", "historical")
@@ -73,7 +92,8 @@ _TAG_FIRST = re.compile(
     rf"^({_HISTORICAL_WORD}|{_FORECAST_WORD})\.?\s+(.+)$",
     re.IGNORECASE,
 )
-_FORECAST_SFX = {"E", "F", "P", "Е", "П"}
+_FORECAST_SFX = {"E", "F", "P", "Е", "П", "Р"}
+_FY_SHORT = re.compile(rf"^FY\s*(\d{{2}})({_ROLE_SUFFIX})?$", re.IGNORECASE)
 _ISO_YMD = re.compile(
     rf"^((?:19|20)\d{{2}})-(\d{{2}})-(\d{{2}})({_ROLE_SUFFIX})?$"
 )
@@ -100,31 +120,21 @@ _END_PERIOD = re.compile(
     r"конец\s+период|end\s+of\s+period|period\s+end",
     re.IGNORECASE,
 )
+
+
+def _ru_month(num: int, abbr: str, name: str) -> dict[str, int]:
+    """Abbreviation plus the case forms of one Russian month. ё is folded by the caller."""
+    if name.endswith(("ь", "й")):
+        stem = name[:-1]
+        endings = ("я", "ю", "ем", "е")
+    else:
+        stem = name
+        endings = ("а", "у", "ом", "е")
+    forms = {abbr, name, *(f"{stem}{ending}" for ending in endings)}
+    return {form: num for form in forms}
+
+
 _MONTH_NUM = {
-    "янв": 1,
-    "январ": 1,
-    "фев": 2,
-    "феврал": 2,
-    "мар": 3,
-    "март": 3,
-    "апр": 4,
-    "апрел": 4,
-    "май": 5,
-    "мая": 5,
-    "июн": 6,
-    "июня": 6,
-    "июл": 7,
-    "июля": 7,
-    "авг": 8,
-    "август": 8,
-    "сен": 9,
-    "сентябр": 9,
-    "окт": 10,
-    "октябр": 10,
-    "ноя": 11,
-    "ноябр": 11,
-    "дек": 12,
-    "декабр": 12,
     "jan": 1,
     "january": 1,
     "feb": 2,
@@ -150,6 +160,21 @@ _MONTH_NUM = {
     "dec": 12,
     "december": 12,
 }
+_MONTH_NUM.update(_ru_month(1, "янв", "январь"))
+_MONTH_NUM.update(_ru_month(2, "фев", "февраль"))
+_MONTH_NUM.update(_ru_month(3, "мар", "март"))
+_MONTH_NUM.update(_ru_month(4, "апр", "апрель"))
+_MONTH_NUM.update(_ru_month(5, "май", "май"))
+_MONTH_NUM.update(_ru_month(6, "июн", "июнь"))
+_MONTH_NUM.update(_ru_month(7, "июл", "июль"))
+_MONTH_NUM.update(_ru_month(8, "авг", "август"))
+_MONTH_NUM.update(_ru_month(9, "сен", "сентябрь"))
+_MONTH_NUM.update(_ru_month(10, "окт", "октябрь"))
+_MONTH_NUM.update(_ru_month(11, "ноя", "ноябрь"))
+_MONTH_NUM.update(_ru_month(12, "дек", "декабрь"))
+_MONTH_NUM["сент"] = 9
+_MONTH_NUM["февр"] = 2
+_MONTH_NUM["нояб"] = 11
 
 LAYER_DATE = "date"
 LAYER_YEAR = "year"
@@ -246,6 +271,13 @@ def classify_header(text: str | None) -> PeriodHit | None:
             role=_suffix_role(sfx),
             period_key=f"{_full_year(year)}{grain}{num}",
             explicit_role=bool(sfx),
+        )
+    fy = _FY_SHORT.fullmatch(raw)
+    if fy:
+        return PeriodHit(
+            role=_suffix_role(fy.group(2)),
+            period_key=_full_year(fy.group(1)),
+            explicit_role=bool(fy.group(2)),
         )
     year = _YEAR.fullmatch(raw)
     if year:
@@ -594,6 +626,12 @@ def _part_of_year(raw: str) -> tuple[str, int, str | None, str | None] | None:
     cyr = _CYRILLIC_HALF.fullmatch(raw)
     if cyr is not None:
         return "H", int(cyr.group("num")), cyr.group("year"), cyr.group("sfx")
+    for grain, form, top in (("Q", _YEAR_FIRST_QUARTER, 4), ("H", _YEAR_FIRST_HALF, 2)):
+        match = form.fullmatch(raw)
+        if match is not None:
+            num = int(match.group("num"))
+            if 1 <= num <= top:
+                return grain, num, match.group("year"), match.group("sfx")
     for grain, forms, top in (("Q", _QUARTER_FORMS, 4), ("H", _HALF_FORMS, 2)):
         for form in forms:
             match = form.fullmatch(raw)
@@ -635,14 +673,7 @@ def _ymd_hit(year: int, month: int, day: int, suffix: str | None) -> PeriodHit |
 
 def _month_number(token: str) -> int | None:
     stem = token.lower().replace("ё", "е").rstrip(".")
-    found: int | None = None
-    best = 0
-    for name, num in _MONTH_NUM.items():
-        if stem == name or stem.startswith(name):
-            if len(name) > best:
-                found = num
-                best = len(name)
-    return found
+    return _MONTH_NUM.get(stem)
 
 
 def _full_year(raw: str) -> str:

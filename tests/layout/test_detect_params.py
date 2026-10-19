@@ -232,6 +232,12 @@ def test_param_header_spellings_keep_label_value_unit_and_note(
     assert [(header.role, header.text) for header in block.axis.headers] == roles
 
 
+def test_yo_in_a_value_header_matches_the_lexicon_spelling() -> None:
+    heads = ["Параметр", "Значениё", "Ед. изм.", "Примечание"]
+    block = detect_layout(_param_table(heads)).sheets[0].blocks[0]
+    assert [(header.role, header.col) for header in block.axis.headers][0] == ("value", 2)
+
+
 def test_unknown_short_param_header_stays_a_scenario_column() -> None:
     heads = ["Параметр", "Значение", "Прочее"]
     cells = [_c("Допущения", f"{col}1", head) for col, head in zip("ABC", heads, strict=True)]

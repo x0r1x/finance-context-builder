@@ -701,7 +701,8 @@ def _is_check_table(
 
 
 def _header_role(text: str) -> str | None:
-    n = re.sub(r"[\W_]+", " ", text.casefold()).strip()
+    folded = text.replace("Ё", "Е").replace("ё", "е")
+    n = re.sub(r"[\W_]+", " ", folded.casefold()).strip()
     if n in _HEADER_ROLES:
         return _HEADER_ROLES[n]
     return None
