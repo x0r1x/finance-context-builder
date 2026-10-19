@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from finance_context.context.build import build_context
 from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import parse_addr
@@ -444,3 +446,63 @@ def test_initial_investment_period_is_not_a_start_event() -> None:
     cells = _ru_timeline(("Первоначальный инвестиционный период", ["1", "1", "0", "0"]))
     axes, _warnings = build_axes(detect_layout(cells), cells)
     assert [p.phase for p in axes[0].periods] == ["construction", "construction", None, None]
+
+
+def _phases_for(label: str) -> list[str | None]:
+    cells = _ru_timeline((label, ["1", "1", "0", "0"]))
+    axes, _warnings = build_axes(detect_layout(cells), cells)
+    return [p.phase for p in axes[0].periods]
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Период СМР",
+        "СМР",
+        "Стройка",
+        "Флаг стройки",
+        "Период инвестиций",
+        "Инвестиции",
+        "Флаг строит.",
+        "Constr. flag",
+    ],
+)
+def test_construction_spellings_mark_the_flagged_years(label: str) -> None:
+    assert _phases_for(label) == ["construction", "construction", None, None]
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Производство",
+        "Производственная фаза",
+        "Флаг операций",
+        "Операции",
+        "Флаг эксп.",
+        "Op. flag",
+        "Начальный период эксплуатации",
+    ],
+)
+def test_operation_spellings_mark_the_flagged_years(label: str) -> None:
+    assert _phases_for(label) == ["operation", "operation", None, None]
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Длительность эксплуатации",
+        "Срок строительства",
+        "Длительность строительства",
+        "Срок эксплуатации",
+        "Продолжительность строительства",
+        "1 кВт",
+        "History",
+    ],
+)
+def test_duration_and_unrelated_flag_labels_are_not_phases(label: str) -> None:
+    assert _phases_for(label) == [None, None, None, None]
+
+
+def test_start_of_operation_stays_an_event() -> None:
+    assert _phases_for("Дата начала эксплуатации") == [None, None, None, None]
+    assert _phases_for("Начало строительства") == [None, None, None, None]

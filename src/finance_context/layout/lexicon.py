@@ -30,8 +30,15 @@ def words(*path: str) -> tuple[str, ...]:
     return tuple(node)
 
 
+@cache
 def pattern(*path: str) -> str:
     """Regex for the words at `path`, longest first, not followed by another letter."""
     items = sorted(words(*path), key=len, reverse=True)
     alts = [re.escape(w[:-1]) + r"\w*" if w.endswith("*") else re.escape(w) for w in items]
     return rf"(?:{'|'.join(alts)})(?![^\W\d_])"
+
+
+@cache
+def searcher(*path: str) -> re.Pattern[str]:
+    """Compiled scan of one normalized label. Built once per word list."""
+    return re.compile(rf"(?<!\w){pattern(*path)}")

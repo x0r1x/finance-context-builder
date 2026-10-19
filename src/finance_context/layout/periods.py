@@ -9,8 +9,11 @@ from finance_context.layout.lexicon import pattern
 from finance_context.layout.models import ColumnRole, PeriodHit
 
 _YEAR_WORD = rf"(?:\s*{pattern('period_words', 'year')}\.?)?"
+# One suffix class for a year and for a quarter, half, month or date of that year.
+# E/F/P and Cyrillic Е/П are forecast. A/a is actual. Ф is explicit historical, as on a bare year.
+_ROLE_SUFFIX = r"[EFAPеЕфФпПaA]"
 _YEAR = re.compile(
-    rf"^(?:FY\s*)?((?:19|20)\d{{2}}){_YEAR_WORD}([EFAPеЕфФпПaA])?$", re.IGNORECASE
+    rf"^(?:FY\s*)?((?:19|20)\d{{2}}){_YEAR_WORD}({_ROLE_SUFFIX})?$", re.IGNORECASE
 )
 _YEAR_FLOAT = re.compile(r"^((?:19|20)\d{2})(?:\.0+)?$")
 # Quarter and half-year headers: "1 кв. 2025", "I кв. 2025", "1-й квартал 2025", "Кв.1 2025",
@@ -18,8 +21,10 @@ _YEAR_FLOAT = re.compile(r"^((?:19|20)\d{2})(?:\.0+)?$")
 # (a year row above) or two digits; "2025 г." is the same year.
 _QUARTER_WORD = rf"{pattern('period_words', 'quarter')}\.?"
 _HALF_WORD = rf"{pattern('period_words', 'half')}\.?"
-_ORDINAL = r"(?:\s*-?\s*(?:й|ый|ой|е|ое))?"
-_PART_YEAR = rf"(?:\s*'?\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}}){_YEAR_WORD}(?P<sfx>[EFAPеЕ])?)?"
+_ORDINAL = r"(?:\s*[-–—−]?\s*(?:й|ый|ой|е|ое))?"
+_PART_YEAR = (
+    rf"(?:\s*'?\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}}){_YEAR_WORD}(?P<sfx>{_ROLE_SUFFIX})?)?"
+)
 _QUARTER_FORMS = tuple(
     re.compile(rf"^{body}{_PART_YEAR}$", re.IGNORECASE)
     for body in (
@@ -33,12 +38,22 @@ _HALF_FORMS = tuple(
     re.compile(rf"^{body}{_PART_YEAR}$", re.IGNORECASE)
     for body in (
         rf"(?P<num>[12]|I{{1,2}}){_ORDINAL}\s*{_HALF_WORD}",
+        rf"{_HALF_WORD}\s*(?P<num>[12]|I{{1,2}})",
+        r"(?P<num>[12])\s*п\s*/\s*г\.?",
         r"H(?P<num>[12])",
         r"(?P<num>[12])\s*H",
     )
 )
+# "2П25" / "1П2025" only, with the year required. Bare "2П" is not a half.
+_CYRILLIC_HALF = re.compile(
+    rf"^(?P<num>[12])\s*[Пп]\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
+    rf"{_YEAR_WORD}(?P<sfx>{_ROLE_SUFFIX})?$",
+    re.IGNORECASE,
+)
 _ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4}
-_MONTH_YEAR = re.compile(r"^(0[1-9]|1[0-2])[./]((?:19|20)\d{2})([EFAPеЕфФпП])?$")
+_MONTH_YEAR = re.compile(
+    rf"^(0[1-9]|1[0-2])[./]((?:19|20)\d{{2}})({_ROLE_SUFFIX})?$"
+)
 _TOTAL = re.compile(r"^(итого|всего|total|sum)$", re.IGNORECASE)
 _STUB = re.compile(r"^(stub|частичн\w*|partial)$", re.IGNORECASE)
 _SCENARIO = re.compile(
@@ -47,8 +62,8 @@ _SCENARIO = re.compile(
 )
 _HISTORICAL_WORD = pattern("period_roles", "historical")
 _FORECAST_WORD = pattern("period_roles", "forecast")
-_FACT = re.compile(rf"^({_HISTORICAL_WORD})$", re.IGNORECASE)
-_PLAN = re.compile(rf"^({_FORECAST_WORD})$", re.IGNORECASE)
+_FACT = re.compile(rf"^({_HISTORICAL_WORD})\.?$", re.IGNORECASE)
+_PLAN = re.compile(rf"^({_FORECAST_WORD})\.?$", re.IGNORECASE)
 # "2024 факт", "2025 (факт)" and "Факт 2025", "План I кв. 2026".
 _TAG = re.compile(
     rf"^(.*?)\s+\(?({_HISTORICAL_WORD}|{_FORECAST_WORD})\)?$",
@@ -60,14 +75,14 @@ _TAG_FIRST = re.compile(
 )
 _FORECAST_SFX = {"E", "F", "P", "Е", "П"}
 _ISO_YMD = re.compile(
-    r"^((?:19|20)\d{2})-(\d{2})-(\d{2})([EFAPеЕфФпП])?$"
+    rf"^((?:19|20)\d{{2}})-(\d{{2}})-(\d{{2}})({_ROLE_SUFFIX})?$"
 )
-_ISO_YM = re.compile(r"^((?:19|20)\d{2})-(\d{2})([EFAPеЕфФпП])?$")
+_ISO_YM = re.compile(rf"^((?:19|20)\d{{2}})-(\d{{2}})({_ROLE_SUFFIX})?$")
 _DATE_DMY = re.compile(
-    r"^([0-3]?\d)[./]([01]?\d)[./]((?:19|20)\d{2}|\d{2})([EFAPеЕфФпП])?$"
+    rf"^([0-3]?\d)[./]([01]?\d)[./]((?:19|20)\d{{2}}|\d{{2}})({_ROLE_SUFFIX})?$"
 )
 _NAMED_MONTH = re.compile(
-    r"^([A-Za-zА-Яа-яёЁ]+)\.?\s*[-/.]?\s*((?:19|20)\d{2}|\d{2})([EFAPеЕфФпП])?$",
+    rf"^([A-Za-zА-Яа-яёЁ]+)\.?\s*[-/.]?\s*((?:19|20)\d{{2}}|\d{{2}})({_ROLE_SUFFIX})?$",
     re.IGNORECASE,
 )
 _QUARTER_KEY = re.compile(r"^((?:19|20)\d{2})Q([1-4])$")
@@ -576,6 +591,9 @@ def _part_token(raw: str) -> HeaderAtom | None:
 
 def _part_of_year(raw: str) -> tuple[str, int, str | None, str | None] | None:
     """Quarter ("Q") or half ("H") header: grain, its number, the year if any, a role suffix."""
+    cyr = _CYRILLIC_HALF.fullmatch(raw)
+    if cyr is not None:
+        return "H", int(cyr.group("num")), cyr.group("year"), cyr.group("sfx")
     for grain, forms, top in (("Q", _QUARTER_FORMS, 4), ("H", _HALF_FORMS, 2)):
         for form in forms:
             match = form.fullmatch(raw)

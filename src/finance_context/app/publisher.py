@@ -12,6 +12,8 @@ _CACHE_STAGES: dict[str, str] | None = None
 _CACHE_FINGERPRINT: str | None = None
 
 STAGE_ORDER = ("compile", "layout", "graph", "publish")
+# Package data that is part of a stage. Other JSON (notes, fixtures) is not.
+_DATA_FILES = {"layout/lexicon.json"}
 _STAGE_DIRS = {
     "compile": {"excel", "formulas"},
     "layout": {"layout"},
@@ -25,7 +27,8 @@ def _sources() -> list[Path]:
     for path in _PACKAGE.rglob("*"):
         if not path.is_file() or "__pycache__" in path.parts:
             continue
-        if path.suffix in {".py", ".json"}:
+        rel = path.relative_to(_PACKAGE).as_posix()
+        if path.suffix == ".py" or rel in _DATA_FILES:
             found.append(path)
     found.sort(key=lambda item: item.relative_to(_PACKAGE).as_posix())
     return found

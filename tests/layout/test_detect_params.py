@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 
@@ -176,4 +178,71 @@ def test_russian_param_headers_name_value_unit_and_note_columns() -> None:
         (3, "value"),
         (4, "unit"),
         (5, "note"),
+    ]
+
+
+def _param_table(heads: list[str]) -> list[dict]:
+    cells = [_c("Допущения", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
+    note = "источник: бизнес-план компании на 2025 год, утверждён советом"
+    for r, label in enumerate(["Цена", "Доля расходов", "Ставка налога"], start=2):
+        cells += [
+            _c("Допущения", f"A{r}", label),
+            _c("Допущения", f"B{r}", "12"),
+            _c("Допущения", f"C{r}", "руб."),
+            _c("Допущения", f"D{r}", note),
+        ]
+    return cells
+
+
+@pytest.mark.parametrize(
+    ("heads", "roles"),
+    [
+        (
+            ["Наименование показателя", "Значение, руб.", "Ед. измерения", "Источник"],
+            [("value", "Значение, руб."), ("unit", "Ед. измерения"), ("note", "Источник")],
+        ),
+        (
+            ["Статья затрат", "Значение (руб.)", "Единица изм.", "Описание"],
+            [("value", "Значение (руб.)"), ("unit", "Единица изм."), ("note", "Описание")],
+        ),
+        (
+            ["Параметры проекта", "Значение", "Размерность", "Source"],
+            [("value", "Значение"), ("unit", "Размерность"), ("note", "Source")],
+        ),
+        (
+            ["Исходные данные", "Значение", "UoM", "Comment"],
+            [("value", "Значение"), ("unit", "UoM"), ("note", "Comment")],
+        ),
+        (
+            ["Параметр", "Значение", "Unit of measure", "Comments"],
+            [("value", "Значение"), ("unit", "Unit of measure"), ("note", "Comments")],
+        ),
+        (
+            ["Показатель", "Значение", "Ед. изм.", "Comment(s)"],
+            [("value", "Значение"), ("unit", "Ед. изм."), ("note", "Comment(s)")],
+        ),
+    ],
+)
+def test_param_header_spellings_keep_label_value_unit_and_note(
+    heads: list[str], roles: list[tuple[str, str]]
+) -> None:
+    block = detect_layout(_param_table(heads)).sheets[0].blocks[0]
+    assert block.kind == "params"
+    assert block.label_col == 1
+    assert [(header.role, header.text) for header in block.axis.headers] == roles
+
+
+def test_unknown_short_param_header_stays_a_scenario_column() -> None:
+    heads = ["Параметр", "Значение", "Прочее"]
+    cells = [_c("Допущения", f"{col}1", head) for col, head in zip("ABC", heads, strict=True)]
+    for r, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells += [
+            _c("Допущения", f"A{r}", label),
+            _c("Допущения", f"B{r}", "12"),
+            _c("Допущения", f"C{r}", "альфа"),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert [(header.role, header.text) for header in block.axis.headers] == [
+        ("value", "Значение"),
+        ("scenario", "Прочее"),
     ]

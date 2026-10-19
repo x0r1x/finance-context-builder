@@ -126,7 +126,20 @@ def test_layout_lexicon_edit_restales_the_layout_stage(tmp_path, monkeypatch) ->
     lexicon.write_text('{"phases": {}}', encoding="utf-8")
     monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
     before = publisher._compute_stages()
-    lexicon.write_text('{"phases": {"construction": ["строительств"]}}', encoding="utf-8")
+    lexicon.write_text('{"phases": {"construction": ["строител*"]}}', encoding="utf-8")
     after = publisher._compute_stages()
     assert before["layout"] != after["layout"]
     assert before["compile"] == after["compile"]
+
+
+def test_stray_package_json_does_not_restale_layout(tmp_path, monkeypatch) -> None:
+    from finance_context.app import publisher
+
+    (tmp_path / "layout").mkdir()
+    (tmp_path / "layout" / "rows.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
+    before = publisher._compute_stages()
+    (tmp_path / "layout" / "notes.json").write_text("{}\n", encoding="utf-8")
+    after = publisher._compute_stages()
+    assert before == after

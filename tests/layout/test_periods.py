@@ -290,3 +290,134 @@ def test_words_starting_like_a_role_are_not_role_markers(text: str) -> None:
 def test_role_words_and_russian_inflections_are_role_markers(text: str) -> None:
     atom = classify_atom(text)
     assert atom is not None and atom.kind == "role_marker"
+
+
+@pytest.mark.parametrize(
+    ("text", "role", "period_key"),
+    [
+        ("Бюджет 2026", "forecast", "2026"),
+        ("2026 бюджет", "forecast", "2026"),
+        ("Бюджетный 2026", "forecast", "2026"),
+        ("Plan 2026", "forecast", "2026"),
+        ("2026 Plan", "forecast", "2026"),
+        ("Оценка 2025", "forecast", "2025"),
+        ("2025 (оценка)", "forecast", "2025"),
+        ("Ожидание 2025", "forecast", "2025"),
+        ("Ожид. 2025", "forecast", "2025"),
+    ],
+)
+def test_budget_plan_and_estimate_are_forecast_roles(
+    text: str, role: str, period_key: str
+) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert (hit.period_key, hit.role, hit.explicit_role) == (period_key, role, True)
+
+
+@pytest.mark.parametrize("text", ["Бюджет", "Plan", "Оценка", "Ожид."])
+def test_bare_budget_plan_and_estimate_are_role_markers(text: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert hit.role == "forecast"
+    assert hit.explicit_role is True
+
+
+@pytest.mark.parametrize("text", ["Plant 2026", "Planning", "Plants", "Histogram"])
+def test_words_near_plan_are_not_forecast_markers(text: str) -> None:
+    assert classify_header(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "role", "period_key"),
+    [
+        ("2025П", "forecast", "2025"),
+        ("2025Ф", "historical", "2025"),
+        ("2025A", "historical", "2025"),
+        ("1 кв. 2025П", "forecast", "2025Q1"),
+        ("1 кв. 2025Ф", "historical", "2025Q1"),
+        ("1 кв. 2025A", "historical", "2025Q1"),
+        ("Q2 2025П", "forecast", "2025Q2"),
+        ("1 полугодие 2025П", "forecast", "2025H1"),
+        ("1 полугодие 2025Ф", "historical", "2025H1"),
+        ("H1 2025A", "historical", "2025H1"),
+        ("01.2025П", "forecast", "2025-01"),
+        ("01.2025A", "historical", "2025-01"),
+        ("янв.25П", "forecast", "2025-01"),
+        ("янв.25A", "historical", "2025-01"),
+    ],
+)
+def test_year_suffix_letters_match_on_parts_and_months(
+    text: str, role: str, period_key: str
+) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert (hit.period_key, hit.role, hit.explicit_role) == (period_key, role, True)
+
+
+@pytest.mark.parametrize(
+    ("text", "period_key"),
+    [
+        ("1 пол. 2025", "2025H1"),
+        ("2 пол. 2025", "2025H2"),
+        ("1 п/г 2025", "2025H1"),
+        ("2 п/г 2025", "2025H2"),
+        ("2П25", "2025H2"),
+        ("1П2025", "2025H1"),
+        ("Полугодие 1 2025", "2025H1"),
+        ("Полугодие 2 2026", "2026H2"),
+        ("1–й квартал 2025", "2025Q1"),
+        ("1–е полугодие 2025", "2025H1"),
+    ],
+)
+def test_half_year_abbreviations_and_en_dash_ordinals(text: str, period_key: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert (hit.period_key, hit.role) == (period_key, "historical")
+
+
+@pytest.mark.parametrize(
+    ("text", "half"),
+    [
+        ("Полугодие 1", 1),
+        ("1 пол.", 1),
+        ("2 пол.", 2),
+        ("1 п/г", 1),
+    ],
+)
+def test_half_year_tokens_without_a_year(text: str, half: int) -> None:
+    atom = classify_atom(text)
+    assert atom is not None
+    assert (atom.kind, atom.half) == ("half_token", half)
+    assert classify_header(text) is None
+
+
+def test_half_word_then_number_composes_with_a_year_row() -> None:
+    year = classify_atom("2025")
+    half = classify_atom("Полугодие 1")
+    assert year is not None and half is not None
+    hit = compose_period([year, half])
+    assert hit is not None and hit.period_key == "2025H1"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1 кВт",
+        "2025 график",
+        "History",
+        "2П",
+        "П25",
+        "12П25",
+        "1 полка",
+        "1 полка 2025",
+        "полнота 2025",
+        "3 пол. 2025",
+        "1 п/год",
+        "1 п/гВт",
+        "2P25",
+        "Plant 2026",
+    ],
+)
+def test_half_year_spellings_do_not_swallow_nearby_words(text: str) -> None:
+    assert classify_header(text) is None
+    assert classify_atom(text) is None

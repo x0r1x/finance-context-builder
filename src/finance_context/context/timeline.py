@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import re
 from collections import Counter
 
-from finance_context.layout.lexicon import pattern
+from finance_context.layout.lexicon import searcher
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis
 from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import display_cell_text, is_calendar_key
@@ -243,13 +242,16 @@ def _phase_kind(label: str) -> TimelinePhase | None:
     n = normalize_label(label)
 
     def has(*path: str) -> bool:
-        return re.search(rf"(?<!\w){pattern(*path)}", n) is not None
+        return searcher(*path).search(n) is not None
 
     if has("phase_events"):
         return None
+    # "Срок строительства" and "Длительность эксплуатации" name a length, not a phase.
+    if has("operation_duration"):
+        return None
     if has("phases", "construction"):
         return "construction"
-    if has("phases", "operation") and not has("operation_duration"):
+    if has("phases", "operation"):
         return "operation"
     return None
 
