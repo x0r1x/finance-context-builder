@@ -59,6 +59,7 @@ def detect_params_block(
         axis=Axis(id=f"{sheet}!r{header_row}", row=header_row, headers=headers),
         rows=data_rows,
         kind="params",
+        header_rows=sorted(header_rows),
     )
 
 
@@ -331,6 +332,7 @@ def _scenario_block(
         axis=Axis(id=f"{sheet}!r{header_row.row}", row=header_row.row, headers=headers),
         rows=body,
         kind="params",
+        header_rows=[header_row.row],
     )
 
 

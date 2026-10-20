@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_serializer
 
 from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
 
-SCHEMA_VERSION = "1.14.0"
+SCHEMA_VERSION = "1.15.0"
 
 TimelinePhase = Literal["construction", "operation"]
 
@@ -194,6 +194,27 @@ class WorkbookRaw(BaseModel):
     unparsed_formulas: int = 0
 
 
+class SheetCompleteness(BaseModel):
+    sheet: str
+    cells: int = 0
+    in_context: int = 0
+    missing: int = 0
+
+
+class ContentCompleteness(BaseModel):
+    """Numbers and formulas of the source and how many of them the context carries.
+
+    A cell is carried by a block row (its label, role cells, or period values)
+    or by an axis header band. ``sheets`` lists every sheet with such cells.
+    """
+
+    cells: int = 0
+    in_context: int = 0
+    missing: int = 0
+    ratio: float = 1.0
+    sheets: list[SheetCompleteness] = Field(default_factory=list)
+
+
 class ArtifactMeta(BaseModel):
     schema_version: str = SCHEMA_VERSION
     job_id: str
@@ -227,4 +248,6 @@ class ContextDocument(BaseModel):
     axes: list[ContextAxis] = Field(default_factory=list)
     blocks: list[FinancialBlock] = Field(default_factory=list)
     graph: GraphPointer = Field(default_factory=GraphPointer)
+    # None on a document built before source cells were counted.
+    completeness: ContentCompleteness | None = None
     warnings: list[str] = Field(default_factory=list)

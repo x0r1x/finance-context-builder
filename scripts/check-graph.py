@@ -35,7 +35,7 @@ GRAPH_FORBIDDEN = frozenset(
 GRAPH_REQUIRED = ("schema_version", "job_id", "nodes", "edges", "iterate", "links", "artifacts")
 ARTIFACT_REQUIRED = ("cells", "edges", "cell_edges", "index")
 GRAPH_SCHEMA_PREFIX = "1.7"
-CONTEXT_SCHEMA_PREFIX = "1.14"
+CONTEXT_SCHEMA_PREFIX = "1.15"
 LINK_FIELDS = ("cell", "formula", "refs", "formula_class")
 ROW_SERIES_FIELDS = (
     "value_statuses",

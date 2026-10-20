@@ -7,8 +7,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from finance_context.graph.models import CycleClass, IdCount
+from finance_context.models.context import ContentCompleteness
 
-SUMMARY_SCHEMA_VERSION = "summary-2"
+SUMMARY_SCHEMA_VERSION = "summary-3"
 
 
 class SummaryCycle(BaseModel):
@@ -26,9 +27,9 @@ class SummaryHint(BaseModel):
 
 
 class SummaryDocument(BaseModel):
-    """Graph and workbook counters without links[] or row values. Schema summary-2."""
+    """Graph and workbook counters without links[] or row values. Schema summary-3."""
 
-    schema_version: Literal["summary-2"] = SUMMARY_SCHEMA_VERSION
+    schema_version: Literal["summary-3"] = SUMMARY_SCHEMA_VERSION
     context_schema_version: str
     graph_schema_version: str
     source_filename: str | None = None
@@ -52,4 +53,5 @@ class SummaryDocument(BaseModel):
     dangling_classes: dict[str, int] = Field(default_factory=dict)
     cycles: list[SummaryCycle] = Field(default_factory=list)
     circularity_hints: list[SummaryHint] = Field(default_factory=list)
+    completeness: ContentCompleteness | None = None
     warnings: list[str] = Field(default_factory=list)

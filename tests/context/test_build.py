@@ -544,7 +544,7 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     abstract = rows[0]
     assert abstract.disposition is None
     assert abstract.neighbors == []
-    assert doc.schema_version == "1.14.0"
+    assert doc.schema_version == "1.15.0"
 
 
 def test_neighbors_include_every_formula_row_ref() -> None:

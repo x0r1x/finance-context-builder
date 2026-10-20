@@ -13,12 +13,14 @@ from finance_context.graph.models import (
 from finance_context.models.context import (
     ArtifactMeta,
     BlockRow,
+    ContentCompleteness,
     ContextAxis,
     ContextDocument,
     ContextPeriod,
     FinancialBlock,
     RoleCell,
     RowHints,
+    SheetCompleteness,
     WorkbookRaw,
 )
 from finance_context.render.graph import render_graph_markdown, render_trace_markdown
@@ -73,6 +75,11 @@ def _doc() -> ContextDocument:
                 ],
             )
         ],
+        completeness=ContentCompleteness(
+            cells=3,
+            in_context=3,
+            sheets=[SheetCompleteness(sheet="CF", cells=3, in_context=3)],
+        ),
         warnings=[],
     )
 
@@ -132,7 +139,31 @@ def test_markdown_matches_golden() -> None:
     assert "110" in rendered
     assert "=RC[-1]" in rendered
     assert "Concept" not in rendered
-    assert "Content completeness: 1.00 (1/1 layout rows)" in rendered
+    assert "Content completeness: 1.00 (3/3 numeric and formula cells in context)" in rendered
+
+
+def test_document_built_before_cell_counting_says_so() -> None:
+    doc = _doc().model_copy(update={"completeness": None})
+    rendered = render_markdown(doc)
+    assert "- Content completeness: n/a (1 layout rows, source cells not counted)" in rendered
+
+
+def test_a_small_loss_never_prints_as_full() -> None:
+    doc = _doc().model_copy(
+        update={
+            "completeness": ContentCompleteness(
+                cells=1000,
+                in_context=999,
+                missing=1,
+                ratio=0.999,
+                sheets=[SheetCompleteness(sheet="CF", cells=1000, in_context=999, missing=1)],
+            )
+        }
+    )
+    rendered = render_markdown(doc)
+    line = "- Content completeness: 0.99 (999/1000 numeric and formula cells in context)"
+    assert line in rendered
+    assert "  - `CF`: 1/1000 not in context" in rendered
 
 
 def test_percent_unit_shows_the_fraction_and_the_percent() -> None:

@@ -2,7 +2,7 @@
 
 **Русский** · [English](../en/slices.md)
 
-Канон джобы — `context.json` / `context.md` (schema `1.14.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция этих файлов. Роут отдаёт её в ответе и не пишет вторым JSON. Она не заменяет ряд `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
+Канон джобы — `context.json` / `context.md` (schema `1.15.0`) и `graph.json` / `graph.md` (schema `1.7.0`). Срез ниже — проекция этих файлов. Роут отдаёт её в ответе и не пишет вторым JSON. Она не заменяет ряд `blocks[].rows`. Ячейки, AST и рёбра в срез не переносятся.
 
 Связанные документы: [обзор](overview.md), [архитектура](architecture.md), [граф](graph.md).
 
@@ -66,7 +66,7 @@
 | Роут | Схема | Что внутри |
 | --- | --- | --- |
 | `GET /v1/context-jobs?status=&q=` | список из `meta.json` | Книги сессии. `context.json` не открывается. `q` — фрагмент имени файла |
-| `GET .../summary` | `summary-2` | Счётчики книги, счётчики графа и предупреждения: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`. Без `links` и без кэша ячеек |
+| `GET .../summary` | `summary-3` | Счётчики книги, счётчики графа, полнота контента и предупреждения: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`, `completeness` (числа и формулы источника в context, по листам). Без `links` и без кэша ячеек |
 | `GET .../catalog` | `catalog-2` | Строки и оси без чисел. У периода есть `phase_year`, `flags` и `group_key`; пустые ключи снимаются так же, как у оси в `context.json`. Класса формулы нет: у одной строки он разный по периодам. Фильтры: `q` (подстрока собственной подписи без регистра), `sheet`, `disposition`, `limit`, `offset`. `q=General` — подпись содержит General. Потомок с другой подписью не входит. Путь в иглу не входит |
 | `GET .../observations` | `observation-2` | Единственный ответ с кэшем ячеек |
 

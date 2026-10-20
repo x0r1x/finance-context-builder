@@ -51,6 +51,7 @@ def build_summary(
             SummaryHint(sheet=hint.sheet, row=hint.row, label=hint.label)
             for hint in parsed_graph.circularity_hints
         ],
+        completeness=parsed_context.completeness,
         warnings=list(parsed_context.warnings),
     )
 

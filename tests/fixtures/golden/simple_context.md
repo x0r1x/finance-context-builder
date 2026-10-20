@@ -1,13 +1,13 @@
 # Financial context
 
-- Schema: `1.14.0`
+- Schema: `1.15.0`
 - Job: `job1`
 - Status: `succeeded`
 - Source: `simple.xlsx`
 - Sheets: 1
 - Cells: 4
 - Formulas: 1
-- Content completeness: 1.00 (1/1 layout rows)
+- Content completeness: 1.00 (3/3 numeric and formula cells in context)
 
 ## CF / `CF!r1`
 
