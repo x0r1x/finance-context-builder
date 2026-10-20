@@ -1184,3 +1184,26 @@ def test_dotted_role_word_keeps_the_year_on_the_axis() -> None:
     block = detect_layout(cells).sheets[0].blocks[0]
     assert block.kind == "timeline"
     assert [h.period_key for h in block.axis.headers] == ["2024", "2025", "2026"]
+
+
+def test_dotted_fact_and_expected_on_one_year_split_the_key() -> None:
+    cells = [
+        _c("CF", "A1", "Показатель"),
+        _c("CF", "B1", "2024"),
+        _c("CF", "C1", "2025 факт."),
+        _c("CF", "D1", "2025 ожид."),
+        _c("CF", "E1", "2026"),
+        _c("CF", "A2", "Выручка"),
+        _c("CF", "B2", "1"),
+        _c("CF", "C2", "2"),
+        _c("CF", "D2", "3"),
+        _c("CF", "E2", "4"),
+    ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "timeline"
+    assert [h.period_key for h in block.axis.headers] == [
+        "2024",
+        "2025@факт",
+        "2025@ожид",
+        "2026",
+    ]
