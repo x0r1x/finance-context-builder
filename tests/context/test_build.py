@@ -27,10 +27,10 @@ def _layout() -> Layout:
                             row=1,
                             headers=[
                                 AxisHeader(
-                                    col=2, text="2023", role="historical", period_key="2023"
+                                    col=2, text="2023", kind="period", period_key="2023"
                                 ),
                                 AxisHeader(
-                                    col=3, text="2024E", role="forecast", period_key="2024E"
+                                    col=3, text="2024E", kind="period", period_key="2024E"
                                 ),
                             ],
                         ),
@@ -490,7 +490,7 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
                             row=1,
                             headers=[
                                 AxisHeader(
-                                    col=2, text="2023", role="historical", period_key="2023"
+                                    col=2, text="2023", kind="period", period_key="2023"
                                 )
                             ],
                         ),
@@ -586,7 +586,7 @@ def test_fact_time_comes_from_the_label_not_a_concept() -> None:
                             row=1,
                             headers=[
                                 AxisHeader(
-                                    col=2, text="2023", role="historical", period_key="2023"
+                                    col=2, text="2023", kind="period", period_key="2023"
                                 )
                             ],
                         ),
@@ -672,7 +672,7 @@ def test_build_exports_role_cells_not_graph_samples() -> None:
                             row=1,
                             headers=[
                                 AxisHeader(
-                                    col=5, text="2023", role="historical", period_key="2023"
+                                    col=5, text="2023", kind="period", period_key="2023"
                                 )
                             ],
                         ),
@@ -739,10 +739,10 @@ def test_axis_inputs_do_not_inherit_the_stub_check_formula() -> None:
                             row=7,
                             headers=[
                                 AxisHeader(
-                                    col=13, text="2024", role="forecast", period_key="2024"
+                                    col=13, text="2024", kind="period", period_key="2024"
                                 ),
                                 AxisHeader(
-                                    col=14, text="2025", role="forecast", period_key="2025"
+                                    col=14, text="2025", kind="period", period_key="2025"
                                 ),
                             ],
                         ),

@@ -7,7 +7,7 @@ from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import _cell_at, _is_int_text, _is_number, _text
-from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis
+from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
 from finance_context.layout.periods import (
     _HALF_KEY,
     LAYER_BOUNDS,
@@ -28,6 +28,7 @@ from finance_context.layout.periods import (
     is_quarter_label,
     is_role_marker_text,
     is_start_period_label,
+    marker_token,
     normalize_header,
     parse_period_key,
 )
@@ -49,12 +50,6 @@ _FLAG_LABEL = re.compile(
 
 
 _CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_HALF, LAYER_MONTH})
-
-
-_PERIOD_ROLES = frozenset({"historical", "forecast", "stub", "relative"})
-
-
-_STRUCTURAL_KEYS = frozenset({"actual", "plan", "total", "stub"})
 
 
 _UNLABELED_RELATIVE_MIN = 8
@@ -119,7 +114,7 @@ def _period_count(axis: TimeAxis) -> int:
     return sum(
         1
         for period in axis.periods
-        if period.role in _PERIOD_ROLES and period.period_key not in _STRUCTURAL_KEYS
+        if is_series_column(period.kind, period.period_key)
     )
 
 
@@ -174,7 +169,7 @@ def _repeated_year_axis(axis: TimeAxis) -> bool:
     keys = [
         period.period_key
         for period in axis.periods
-        if period.role in _PERIOD_ROLES and period.period_key not in _STRUCTURAL_KEYS
+        if is_series_column(period.kind, period.period_key)
     ]
     if len(keys) < 2 or len(set(keys)) == len(keys):
         return False
@@ -440,7 +435,7 @@ def _axis_from_relative(
         AxisPeriod(
             col=col,
             text=str(value),
-            role="relative",
+            kind="relative",
             period_key=f"{prefix}{value}",
             hidden=col in hidden,
         )
@@ -643,12 +638,13 @@ def _axes_from_band(
         if hit.period_key[:4].isdigit():
             year_hint = hit.period_key[:4]
         text = _column_text(col, band_rows, by_row, date1904, prefer_end=prefer_end)
-        role, explicit_role = _column_role(col, atoms, hit, role_runs)
+        kind, variant, explicit_role = _column_mark(col, atoms, hit, role_runs)
         composed.append(
             AxisHeader(
                 col=col,
                 text=text,
-                role=role,
+                kind=kind,
+                variant=variant,
                 period_key=hit.period_key,
                 explicit_role=explicit_role,
             )
@@ -674,25 +670,29 @@ def _axes_from_band(
         axis_id = f"{sheet}!r{header_row}"
         if multi:
             axis_id = f"{axis_id}c{headers[0].col}"
+        periods = disambiguate_period_keys(
+            [
+                AxisPeriod(
+                    col=header.col,
+                    text=header.text,
+                    kind=header.kind or "period",
+                    variant=header.variant,
+                    period_key=header.period_key,
+                    explicit_role=header.explicit_role,
+                    group_key=_banner_group(header.period_key, banner_years.get(header.col)),
+                    start_date=bounds.get(header.col, (None, None))[0],
+                    end_date=bounds.get(header.col, (None, None))[1],
+                    hidden=header.col in known_hidden,
+                )
+                for header in headers
+            ]
+        )
         axes.append(
             TimeAxis(
                 id=axis_id,
                 grain=grain,
                 header_row=header_row,
-                periods=[
-                    AxisPeriod(
-                        col=header.col,
-                        text=header.text,
-                        role=header.role,
-                        period_key=header.period_key,
-                        explicit_role=header.explicit_role,
-                        group_key=_banner_group(header.period_key, banner_years.get(header.col)),
-                        start_date=bounds.get(header.col, (None, None))[0],
-                        end_date=bounds.get(header.col, (None, None))[1],
-                        hidden=header.col in known_hidden,
-                    )
-                    for header in headers
-                ],
+                periods=periods,
             )
         )
     return axes
@@ -853,20 +853,50 @@ def _column_text(
     return " ".join(parts)
 
 
-def _column_role(
-    col: int, atoms: list[HeaderAtom], hit, role_runs: dict[int, str]
-) -> tuple[str, bool]:
+def disambiguate_period_keys(periods: list[AxisPeriod]) -> list[AxisPeriod]:
+    """Suffix a repeated key with ``@<marker>`` when the columns' markers differ.
+
+    The token is ``marker_token``: ``casefold`` of the marker text recognized in
+    the header. ``2024 факт`` and ``2024 план`` become ``2024@факт`` and
+    ``2024@план``. A column with no marker keeps the base key. A group whose
+    markers are all equal, including a repeated bare year, is left unchanged.
+    """
+    groups: dict[str, list[int]] = {}
+    for index, period in enumerate(periods):
+        groups.setdefault(period.period_key, []).append(index)
+    updates: dict[int, str] = {}
+    for key, indexes in groups.items():
+        if len(indexes) < 2:
+            continue
+        markers = [marker_token(periods[index].variant) for index in indexes]
+        if len(set(markers)) < 2:
+            continue
+        for index, marker in zip(indexes, markers, strict=True):
+            if not marker:
+                continue
+            updates[index] = f"{key}@{marker}"
+    if not updates:
+        return periods
+    return [
+        period.model_copy(update={"period_key": updates[index]}) if index in updates else period
+        for index, period in enumerate(periods)
+    ]
+
+
+def _column_mark(
+    col: int, atoms: list[HeaderAtom], hit, variant_runs: dict[int, str]
+) -> tuple[str, str | None, bool]:
     for atom in atoms:
-        if atom.explicit_role and atom.role in {"historical", "forecast", "stub"}:
+        if atom.explicit_role and atom.variant and atom.column_kind in {"period", "stub", None}:
             if atom.kind == "full" and atom.period_key in {"actual", "plan"}:
                 continue
-            return atom.role, True
+            return atom.column_kind or "period", atom.variant, True
     for atom in atoms:
-        if atom.kind == "role_marker" and atom.role in {"historical", "forecast"}:
-            return atom.role, True
-    if col in role_runs:
-        return role_runs[col], True
-    return hit.role, bool(getattr(hit, "explicit_role", False))
+        if atom.kind == "role_marker" and atom.variant:
+            return "period", atom.variant, True
+    if col in variant_runs:
+        return "period", variant_runs[col], True
+    return hit.kind, hit.variant, bool(getattr(hit, "explicit_role", False))
 
 
 def _role_runs(
@@ -908,8 +938,8 @@ def _role_runs(
             text = _text(cell, date1904)
             if is_role_marker_text(text):
                 hit = classify_header(text)
-                if hit is not None and hit.role in {"historical", "forecast"}:
-                    markers.append((int(cell["col"]), hit.role))
+                if hit is not None and hit.variant and hit.period_key in {"actual", "plan"}:
+                    markers.append((int(cell["col"]), hit.variant))
         if not markers:
             continue
         off = [(col, role) for col, role in markers if col not in calendar_cols]

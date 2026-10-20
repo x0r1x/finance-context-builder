@@ -5,7 +5,7 @@ from collections import Counter
 
 from finance_context.excel.dates import is_date_format
 from finance_context.layout.lexicon import searcher
-from finance_context.layout.models import Layout, LayoutRow, TimeAxis
+from finance_context.layout.models import Layout, LayoutRow, TimeAxis, is_series_column
 from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import (
     display_cell_text,
@@ -15,12 +15,6 @@ from finance_context.layout.periods import (
 from finance_context.layout.resolve import axes_for
 from finance_context.models.context import ContextAxis, ContextPeriod, TimelinePhase
 
-_SERIES_ROLES = {
-    "historical",
-    "forecast",
-    "stub",
-    "relative",
-}
 _GENERAL_FORMAT = re.compile(r"^(general|standard|@)$", re.IGNORECASE)
 _FORMAT_NOISE = re.compile(r"\[[^\]]*\]|\"[^\"]*\"|\\.|[*_]")
 
@@ -253,8 +247,7 @@ def _annotate_axis(
     periods_in = [
         period
         for period in axis.periods
-        if period.role in _SERIES_ROLES
-        and period.period_key not in {"actual", "plan", "total", "stub"}
+        if is_series_column(period.kind, period.period_key)
     ]
     if not periods_in:
         return None
@@ -299,7 +292,6 @@ def _annotate_axis(
             ContextPeriod(
                 col=header.col,
                 text=header.text,
-                role=header.role,
                 period_key=header.period_key,
                 group_key=header.group_key,
                 index=index,
@@ -315,7 +307,6 @@ def _annotate_axis(
     live = {name for period in periods for name, on in period.flags.items() if on}
     for period in periods:
         period.flags = {name: on for name, on in period.flags.items() if name in live}
-    _promote_forecast_roles(periods, periods_in)
     return ContextAxis(
         id=axis.id,
         sheet=sheet_name,
@@ -323,20 +314,6 @@ def _annotate_axis(
         header_row=axis.header_row,
         periods=periods,
     )
-
-
-def _promote_forecast_roles(periods: list[ContextPeriod], headers) -> None:
-    """A construction/operation axis is a forecast, unless the header says actual.
-
-    Bare years and end-dates default to historical. On a project timeline that
-    already has a phase, that default is the model forecast, not reported actuals.
-    An explicit `2023A` / `факт` header keeps `historical`.
-    """
-    if not any(period.phase for period in periods):
-        return
-    for period, header in zip(periods, headers, strict=True):
-        if period.role == "historical" and not getattr(header, "explicit_role", False):
-            period.role = "forecast"
 
 
 def _phase_kind(label: str) -> TimelinePhase | None:

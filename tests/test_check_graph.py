@@ -91,7 +91,6 @@ def test_accepts_slim_period_without_empty_phase_fields(tmp_path: Path) -> None:
                         {
                             "col": 2,
                             "text": "2024",
-                            "role": "historical",
                             "period_key": "2024",
                             "index": 1,
                         }

@@ -74,7 +74,7 @@ def test_get_context_md_rewrites_a_finished_job(tmp_path: Path) -> None:
                 "block_id": "PF Model!r7",
                 "sheet": "PF Model",
                 "label_col": 1,
-                "periods": [{"col": 27, "period_key": "2038", "text": "2038", "role": "forecast"}],
+                "periods": [{"col": 27, "period_key": "2038", "text": "2038"}],
                 "rows": [
                     {
                         "row_key": "PF Model|172|PF Model!r7",

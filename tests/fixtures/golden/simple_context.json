@@ -11,13 +11,11 @@
         {
           "col": 2,
           "period_key": "2023",
-          "role": "historical",
           "text": "2023"
         },
         {
           "col": 3,
           "period_key": "2024E",
-          "role": "forecast",
           "text": "2024E"
         }
       ],

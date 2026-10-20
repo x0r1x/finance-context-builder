@@ -18,7 +18,7 @@ from finance_context.context.series import (
 from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.layout.adjacency import row_adjacency
-from finance_context.layout.models import AxisHeader, Layout, LayoutRow
+from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
 from finance_context.layout.params import is_scenario_selector_label
 from finance_context.layout.periods import display_cell_text
 from finance_context.layout.relations import RowRelation
@@ -39,15 +39,6 @@ from finance_context.models.context import (
     WorkbookRaw,
 )
 from finance_context.vocab import ValueStatus
-
-_SERIES_ROLES = {
-    "historical",
-    "forecast",
-    "stub",
-    "relative",
-    "value",
-    "scenario",
-}
 
 
 def build_context(
@@ -353,17 +344,17 @@ def _block_views(
         headers: list[AxisHeader] = []
         phases: dict[str, str | None] = {}
         for period in axis.periods:
-            structural = period.period_key in {"actual", "plan", "total", "stub"}
-            if period.role not in _SERIES_ROLES or structural:
+            if not is_series_column(period.kind, period.period_key):
                 continue
             canon = by_key.get(period.period_key)
-            role = canon.role if canon is not None and canon.role in _SERIES_ROLES else period.role
             headers.append(
                 AxisHeader(
                     col=period.col,
                     text=period.text,
-                    role=role,
+                    kind=period.kind,
+                    variant=period.variant,
                     period_key=period.period_key,
+                    explicit_role=period.explicit_role,
                     hidden=bool(getattr(period, "hidden", False)),
                 )
             )
@@ -714,9 +705,11 @@ def _period_dict(header: AxisHeader) -> dict[str, object]:
     item: dict[str, object] = {
         "col": header.col,
         "text": header.text,
-        "role": header.role,
         "period_key": header.period_key,
     }
+    # Params columns keep value/unit/note/scenario. Period columns have no role.
+    if header.role:
+        item["role"] = header.role
     if header.hidden:
         item["hidden"] = True
     return item

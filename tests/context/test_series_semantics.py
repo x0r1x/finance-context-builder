@@ -34,10 +34,10 @@ def test_build_marks_scale_and_blank_cells() -> None:
                             row=1,
                             headers=[
                                 AxisHeader(
-                                    col=2, text="2023", role="historical", period_key="2023"
+                                    col=2, text="2023", kind="period", period_key="2023"
                                 ),
                                 AxisHeader(
-                                    col=3, text="2024E", role="forecast", period_key="2024E"
+                                    col=3, text="2024E", kind="period", period_key="2024E"
                                 ),
                             ],
                         ),

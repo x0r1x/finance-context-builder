@@ -26,8 +26,9 @@ def test_caption_outcome(case: dict) -> None:
         else:
             assert hit is not None
             assert hit.period_key == case["period_key"]
-            assert hit.role == case["role"]
+            assert hit.kind == "period"
             assert hit.explicit_role is case["explicit_role"]
+            assert bool(hit.variant) is case["explicit_role"]
     if "header_role" in case:
         assert _header_role(text) == case["header_role"]
     if "phase" in case:

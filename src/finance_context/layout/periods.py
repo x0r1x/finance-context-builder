@@ -16,12 +16,12 @@ from finance_context.layout.lexicon import (
     searcher,
     words,
 )
-from finance_context.layout.models import ColumnRole, PeriodHit
+from finance_context.layout.models import ColumnKind, PeriodHit
 
 # One suffix class for a year and for a quarter, half, month or date of that year.
-# E/F/P, Cyrillic Е/П, and Cyrillic Р (the lookalike of P) are forecast.
-# П is the Russian plan letter, not a P-lookalike, and stays forecast.
-# A/a and Cyrillic А/а are actual. Ф stays explicit historical.
+# E/F/P, Cyrillic Е/П/Ф, Cyrillic Р (the lookalike of P), and A/a/А are variant
+# markers. They do not become a historical/forecast role. П is the Russian plan
+# letter, not a P-lookalike, and stays a marker.
 _ROLE_SUFFIX = r"[EFAPеЕфФпПaAАаРр]"
 _H_MARK = r"[HН]"
 _YEAR_FLOAT = re.compile(r"^((?:19|20)\d{2})(?:\.0+)?$")
@@ -42,7 +42,6 @@ _ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4}
 _MONTH_YEAR = re.compile(
     rf"^(0[1-9]|1[0-2])[./]((?:19|20)\d{{2}})({_ROLE_SUFFIX})?$"
 )
-_FORECAST_SFX = {"E", "F", "P", "Е", "П", "Р"}
 _FY_SHORT = re.compile(rf"^FY\s*(\d{{2}})({_ROLE_SUFFIX})?$", re.IGNORECASE)
 _ISO_YMD = re.compile(
     rf"^((?:19|20)\d{{2}})-(\d{{2}})-(\d{{2}})({_ROLE_SUFFIX})?$"
@@ -147,14 +146,28 @@ class HeaderAtom:
     quarter: int | None = None
     month: int | None = None
     day: int | None = None
-    role: ColumnRole | None = None
+    column_kind: ColumnKind | None = None
+    variant: str | None = None
     period_key: str | None = None
     explicit_role: bool = False
     half: int | None = None
 
 
+def marker_token(variant: str | None) -> str:
+    """Casefolded variant marker used in ``<period_key>@<marker>``.
+
+    ``variant`` is the marker as recognized after ``normalize_header`` (NFKC,
+    ё→е, collapsed whitespace, lookalike folding on a period token). ``casefold``
+    is the only further step: ``Факт`` and ``факт`` share ``факт``, and a suffix
+    ``E`` becomes ``e``. The lexicon stem is not applied.
+    """
+    if not variant:
+        return ""
+    return variant.casefold()
+
+
 # Lookalikes folded only inside a token that already contains a digit.
-# Ф/П stay themselves: Ф is historical, П is the Russian plan letter.
+# Ф/П stay themselves: both are variant markers, and П is the Russian plan letter.
 _LOOKALIKE_TO_LATIN = str.maketrans(
     {
         "А": "A",
@@ -223,16 +236,20 @@ def classify_header(text: str | None) -> PeriodHit | None:
     if not raw:
         return None
     if _listed(raw, "structural", "total"):
-        return PeriodHit(role="total", period_key="total", explicit_role=True)
+        return PeriodHit(kind="total", period_key="total", explicit_role=True)
     if _listed(raw, "structural", "stub"):
-        return PeriodHit(role="stub", period_key="stub", explicit_role=True)
+        return PeriodHit(kind="stub", period_key="stub", explicit_role=True)
     if is_scenario_caption(raw):
-        return PeriodHit(role="scenario", period_key=raw.casefold(), explicit_role=True)
-    role = _role_word(raw)
-    if role == "historical":
-        return PeriodHit(role="historical", period_key="actual", explicit_role=True)
-    if role == "forecast":
-        return PeriodHit(role="forecast", period_key="plan", explicit_role=True)
+        return PeriodHit(kind="scenario", period_key=raw.casefold(), explicit_role=True)
+    marker = _role_word(raw)
+    if marker is not None:
+        structural_key, surface = marker
+        return PeriodHit(
+            kind="period",
+            period_key=structural_key,
+            variant=surface,
+            explicit_role=True,
+        )
     tagged = _tagged_hit(raw)
     if tagged is not None:
         return tagged
@@ -250,11 +267,7 @@ def classify_header(text: str | None) -> PeriodHit | None:
     if iso:
         month = int(iso.group(2))
         if 1 <= month <= 12:
-            return PeriodHit(
-                role=_suffix_role(iso.group(3)),
-                period_key=f"{iso.group(1)}-{month:02d}",
-                explicit_role=bool(iso.group(3)),
-            )
+            return _suffixed_hit(f"{iso.group(1)}-{month:02d}", iso.group(3))
     dmy = _DATE_DMY.fullmatch(raw)
     if dmy:
         year = _full_year(dmy.group(3))
@@ -268,10 +281,9 @@ def classify_header(text: str | None) -> PeriodHit | None:
             return hit
     month_year = _MONTH_YEAR.fullmatch(raw)
     if month_year:
-        return PeriodHit(
-            role=_suffix_role(month_year.group(3)),
-            period_key=f"{month_year.group(2)}-{month_year.group(1)}",
-            explicit_role=bool(month_year.group(3)),
+        return _suffixed_hit(
+            f"{month_year.group(2)}-{month_year.group(1)}",
+            month_year.group(3),
         )
     named = _month_hit(raw)
     if named is not None:
@@ -279,28 +291,16 @@ def classify_header(text: str | None) -> PeriodHit | None:
     part = _part_of_year(raw)
     if part is not None and part[2] is not None:
         grain, num, year, sfx = part
-        return PeriodHit(
-            role=_suffix_role(sfx),
-            period_key=f"{_full_year(year)}{grain}{num}",
-            explicit_role=bool(sfx),
-        )
+        return _suffixed_hit(f"{_full_year(year)}{grain}{num}", sfx)
     fy = _FY_SHORT.fullmatch(raw)
     if fy:
-        return PeriodHit(
-            role=_suffix_role(fy.group(2)),
-            period_key=_full_year(fy.group(1)),
-            explicit_role=bool(fy.group(2)),
-        )
+        return _suffixed_hit(_full_year(fy.group(1)), fy.group(2))
     year = _YEAR.fullmatch(raw)
     if year and _year_words_ok(raw):
-        return PeriodHit(
-            role=_suffix_role(year.group(2)),
-            period_key=year.group(1),
-            explicit_role=bool(year.group(2)),
-        )
+        return _suffixed_hit(year.group(1), year.group(2))
     as_year = _YEAR_FLOAT.fullmatch(raw)
     if as_year:
-        return PeriodHit(role="historical", period_key=as_year.group(1))
+        return PeriodHit(kind="period", period_key=as_year.group(1))
     return None
 
 
@@ -334,7 +334,12 @@ def classify_atom(
     hit = classify_header(raw)
     if hit is not None:
         if hit.period_key in {"actual", "plan"}:
-            return HeaderAtom(kind="role_marker", role=hit.role, explicit_role=True)
+            return HeaderAtom(
+                kind="role_marker",
+                column_kind="period",
+                variant=hit.variant,
+                explicit_role=True,
+            )
         parsed = parse_period_key(hit.period_key)
         half = _HALF_KEY.fullmatch(hit.period_key)
         return HeaderAtom(
@@ -343,7 +348,8 @@ def classify_atom(
             quarter=parsed[1] if parsed else None,
             month=parsed[2] if parsed else None,
             day=parsed[3] if parsed else None,
-            role=hit.role,
+            column_kind=hit.kind,
+            variant=hit.variant,
             period_key=hit.period_key,
             explicit_role=hit.explicit_role,
             half=int(half.group(2)) if half else None,
@@ -356,7 +362,12 @@ def classify_atom(
         token = _part_token(tagged[0].strip())
         if token is not None:
             # "План I кв.", "H2 (факт)" under a year row: the part keeps its role.
-            return replace(token, role=_tag_role(tagged[1]), explicit_role=True)
+            return replace(
+                token,
+                column_kind="period",
+                variant=tagged[1],
+                explicit_role=True,
+            )
     if allow_quarter_num and _is_int_token(raw):
         num = int(raw)
         if 1 <= num <= 4:
@@ -383,12 +394,18 @@ def compose_period(
         (
             atom
             for atom in calendar
-            if atom.period_key in {"total", "stub"} or (atom.role == "scenario" and atom.period_key)
+            if atom.period_key in {"total", "stub"}
+            or (atom.column_kind == "scenario" and atom.period_key)
         ),
         None,
     )
     if structural is not None and structural.period_key:
-        return PeriodHit(role=structural.role or "total", period_key=structural.period_key)
+        return PeriodHit(
+            kind=structural.column_kind or "total",
+            period_key=structural.period_key,
+            variant=structural.variant,
+            explicit_role=True,
+        )
     temporal = [
         atom
         for atom in calendar
@@ -403,31 +420,31 @@ def compose_period(
     ]
     if not temporal:
         return None
-    role = _compose_role(calendar)
+    mark = _compose_mark(calendar)
     date_atom = next(
         (atom for atom in calendar if atom.day is not None and atom.month and atom.year),
         None,
     )
     if date_atom is not None and date_atom.year and date_atom.month and date_atom.day:
-        return PeriodHit(
-            role=role,
-            period_key=f"{date_atom.year}-{date_atom.month:02d}-{date_atom.day:02d}",
+        return _marked(
+            f"{date_atom.year}-{date_atom.month:02d}-{date_atom.day:02d}",
+            mark,
         )
     year = next(iter(years), None) or year_hint
     quarter = next((atom.quarter for atom in calendar if atom.quarter), None)
     half = next((atom.half for atom in calendar if atom.half), None)
     month = next((atom.month for atom in calendar if atom.month and atom.day is None), None)
     if year and quarter:
-        return PeriodHit(role=role, period_key=f"{year}Q{quarter}")
+        return _marked(f"{year}Q{quarter}", mark)
     if year and half:
-        return PeriodHit(role=role, period_key=f"{year}H{half}")
+        return _marked(f"{year}H{half}", mark)
     if year and month:
-        return PeriodHit(role=role, period_key=f"{year}-{month:02d}")
+        return _marked(f"{year}-{month:02d}", mark)
     full = next((atom for atom in calendar if atom.kind == "full" and atom.period_key), None)
     if full is not None and full.period_key and is_calendar_key(full.period_key):
-        return PeriodHit(role=role, period_key=full.period_key)
+        return _marked(full.period_key, mark)
     if year:
-        return PeriodHit(role=role, period_key=year)
+        return _marked(year, mark)
     return None
 
 
@@ -616,7 +633,7 @@ def is_role_marker_text(text: str | None) -> bool:
 
 
 def _role_tag(raw: str) -> tuple[str, str] | None:
-    """Period text and role word of "2024 факт", "2025 (план)" or "Факт 2025"."""
+    """Period text and marker word of "2024 факт", "2025 (план)" or "Факт 2025"."""
     _bind()
     match = _TAG.fullmatch(raw)
     if match is not None and _role_word(match.group(2)):
@@ -627,18 +644,15 @@ def _role_tag(raw: str) -> tuple[str, str] | None:
     return None
 
 
-def _tag_role(tag: str) -> ColumnRole:
-    return _role_word(tag) or "forecast"
-
-
-def _role_word(raw: str) -> ColumnRole | None:
+def _role_word(raw: str) -> tuple[str, str] | None:
+    """A bare variant marker: structural key (``actual``/``plan``) and its surface."""
     _bind()
     match = _FACT.fullmatch(raw)
     if match and accepts("period_roles", "historical", surface=match.group(1)):
-        return "historical"
+        return "actual", match.group(1)
     match = _PLAN.fullmatch(raw)
     if match and accepts("period_roles", "forecast", surface=match.group(1)):
-        return "forecast"
+        return "plan", match.group(1)
     return None
 
 
@@ -662,9 +676,14 @@ def _tagged_hit(raw: str) -> PeriodHit | None:
     if tagged is None:
         return None
     base = classify_header(tagged[0].strip())
-    if base is None or base.role not in {"historical", "forecast", "stub"}:
+    if base is None or base.kind not in {"period", "stub"}:
         return None
-    return PeriodHit(role=_tag_role(tagged[1]), period_key=base.period_key, explicit_role=True)
+    return PeriodHit(
+        kind=base.kind,
+        period_key=base.period_key,
+        variant=tagged[1],
+        explicit_role=True,
+    )
 
 
 def _part_token(raw: str) -> HeaderAtom | None:
@@ -728,11 +747,7 @@ def _month_hit(raw: str) -> PeriodHit | None:
     if month is None:
         return None
     year = _full_year(match.group(2))
-    return PeriodHit(
-        role=_suffix_role(match.group(3)),
-        period_key=f"{year}-{month:02d}",
-        explicit_role=bool(match.group(3)),
-    )
+    return _suffixed_hit(f"{year}-{month:02d}", match.group(3))
 
 
 def _ymd_hit(year: int, month: int, day: int, suffix: str | None) -> PeriodHit | None:
@@ -740,11 +755,7 @@ def _ymd_hit(year: int, month: int, day: int, suffix: str | None) -> PeriodHit |
         date(year, month, day)
     except ValueError:
         return None
-    return PeriodHit(
-        role=_suffix_role(suffix),
-        period_key=f"{year:04d}-{month:02d}-{day:02d}",
-        explicit_role=bool(suffix),
-    )
+    return _suffixed_hit(f"{year:04d}-{month:02d}-{day:02d}", suffix)
 
 
 def _month_number(token: str) -> int | None:
@@ -758,19 +769,38 @@ def _full_year(raw: str) -> str:
     return raw
 
 
-def _suffix_role(suffix: str | None) -> ColumnRole:
-    if not suffix:
-        return "historical"
-    if suffix.upper() in _FORECAST_SFX:
-        return "forecast"
-    return "historical"
+def _suffixed_hit(period_key: str, suffix: str | None) -> PeriodHit:
+    return PeriodHit(
+        kind="period",
+        period_key=period_key,
+        variant=suffix or None,
+        explicit_role=bool(suffix),
+    )
 
 
-def _compose_role(atoms: list[HeaderAtom]) -> ColumnRole:
+def _marked(period_key: str, mark: tuple[ColumnKind, str | None, bool]) -> PeriodHit:
+    kind, variant, explicit = mark
+    return PeriodHit(
+        kind=kind,
+        period_key=period_key,
+        variant=variant,
+        explicit_role=explicit,
+    )
+
+
+def _compose_mark(atoms: list[HeaderAtom]) -> tuple[ColumnKind, str | None, bool]:
     for atom in atoms:
-        if atom.explicit_role and atom.role in {"historical", "forecast", "stub"}:
-            return atom.role
-    return "historical"
+        if atom.explicit_role and atom.variant and atom.column_kind in {"period", "stub", None}:
+            if atom.kind == "full" and atom.period_key in {"actual", "plan"}:
+                continue
+            return atom.column_kind or "period", atom.variant, True
+    for atom in atoms:
+        if atom.kind == "role_marker" and atom.variant:
+            return "period", atom.variant, True
+    for atom in atoms:
+        if atom.column_kind in {"total", "stub", "scenario"}:
+            return atom.column_kind, atom.variant, True
+    return "period", None, False
 
 
 def _key_as_date(key: str) -> date | None:

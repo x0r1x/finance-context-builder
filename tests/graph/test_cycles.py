@@ -107,7 +107,7 @@ def test_circular_label_hint_when_no_scc() -> None:
                             row=1,
                             headers=[
                                 AxisHeader(
-                                    col=2, text="2023", role="forecast", period_key="2023"
+                                    col=2, text="2023", kind="period", period_key="2023"
                                 )
                             ],
                         ),

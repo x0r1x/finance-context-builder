@@ -6,6 +6,7 @@ import pytest
 
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
+from finance_context.layout.periods import marker_token
 from finance_context.layout.stage import layout_workbook
 
 
@@ -53,10 +54,11 @@ def test_two_axes_on_one_sheet_become_two_blocks() -> None:
     layout = detect_layout(cells)
     sheet = next(s for s in layout.sheets if s.name == "P&L")
     assert len(sheet.blocks) == 2
-    roles_0 = [h.role for h in sheet.blocks[0].axis.headers]
-    assert roles_0 == ["historical", "forecast"]
+    kinds_0 = [h.kind for h in sheet.blocks[0].axis.headers]
+    assert kinds_0 == ["period", "period"]
+    assert [marker_token(h.variant) for h in sheet.blocks[0].axis.headers] == ["", "e"]
     assert [h.period_key for h in sheet.blocks[0].axis.headers] == ["2023", "2024"]
-    assert all(h.role in {"historical", "forecast"} for h in sheet.blocks[1].axis.headers)
+    assert all(h.kind == "period" for h in sheet.blocks[1].axis.headers)
     assert sheet.blocks[0].axis.headers[0].col == 2
 
 
@@ -269,12 +271,12 @@ def test_period_role_is_not_article_role() -> None:
     ]
     layout = detect_layout(cells)
     block = layout.sheets[0].blocks[0]
-    assert {h.role for h in block.axis.headers} <= {
-        "historical",
-        "forecast",
+    assert {h.kind for h in block.axis.headers} <= {
+        "period",
         "stub",
         "scenario",
         "total",
+        "relative",
     }
     for row in block.rows:
         dumped = row.model_dump()
@@ -307,8 +309,9 @@ def test_plain_year_and_e_suffix_share_calendar_key() -> None:
     ]
     layout = detect_layout(cells)
     headers = layout.sheets[0].blocks[0].axis.headers
-    assert [h.period_key for h in headers] == ["2024", "2024"]
-    assert [h.role for h in headers] == ["historical", "forecast"]
+    assert [h.period_key for h in headers] == ["2024", "2024@e"]
+    assert [h.kind for h in headers] == ["period", "period"]
+    assert [marker_token(h.variant) for h in headers] == ["", "e"]
 
 
 def test_plan_fact_headers_share_period_key() -> None:
@@ -322,8 +325,9 @@ def test_plan_fact_headers_share_period_key() -> None:
     ]
     layout = detect_layout(cells)
     headers = layout.sheets[0].blocks[0].axis.headers
-    assert [h.period_key for h in headers] == ["2024", "2024"]
-    assert [h.role for h in headers] == ["historical", "forecast"]
+    assert [h.period_key for h in headers] == ["2024@факт", "2024@план"]
+    assert [h.kind for h in headers] == ["period", "period"]
+    assert [marker_token(h.variant) for h in headers] == ["факт", "план"]
 
 
 def test_date_year_quarter_band_is_one_quarterly_axis() -> None:
@@ -353,7 +357,7 @@ def test_date_year_quarter_band_is_one_quarterly_axis() -> None:
     assert len(sheet.blocks) == 1
     keys = [h.period_key for h in sheet.blocks[0].axis.headers]
     assert keys == ["2022Q3", "2022Q4", "2023Q1", "2023Q2"]
-    assert [h.role for h in sheet.blocks[0].axis.headers] == ["historical"] * 4
+    assert [h.kind for h in sheet.blocks[0].axis.headers] == ["period"] * 4
     assert [r.label for r in sheet.blocks[0].rows] == ["Revenue"]
 
 
@@ -382,9 +386,9 @@ def test_forecast_banner_starts_second_block() -> None:
     blocks = layout.sheets[0].blocks
     assert len(blocks) == 2
     assert [h.period_key for h in blocks[0].axis.headers] == ["2022Q3", "2022Q4"]
-    assert [h.role for h in blocks[0].axis.headers] == ["historical", "historical"]
+    assert [h.kind for h in blocks[0].axis.headers] == ["period", "period"]
     assert [h.period_key for h in blocks[1].axis.headers] == ["2026Q1", "2026Q2"]
-    assert [h.role for h in blocks[1].axis.headers] == ["forecast", "forecast"]
+    assert [marker_token(h.variant) for h in blocks[1].axis.headers] == ["прогноз", "прогноз"]
 
 
 def test_fact_marker_overrides_forecast_banner() -> None:
@@ -414,7 +418,7 @@ def test_fact_marker_overrides_forecast_banner() -> None:
     assert len(layout.sheets[0].blocks) == 1
     headers = layout.sheets[0].blocks[0].axis.headers
     assert [h.period_key for h in headers] == ["2025Q4", "2026Q1", "2026Q2", "2026Q3"]
-    assert [h.role for h in headers] == ["historical", "forecast", "forecast", "forecast"]
+    assert [marker_token(h.variant) for h in headers] == ["факт", "прогноз", "прогноз", "прогноз"]
     assert [r.label for r in layout.sheets[0].blocks[0].rows] == ["Revenue"]
 
 
@@ -436,7 +440,7 @@ def test_year_forward_fill_under_forecast_banner() -> None:
     layout = detect_layout(cells)
     headers = layout.sheets[0].blocks[0].axis.headers
     assert [h.period_key for h in headers] == ["2026Q1", "2026Q2", "2027Q3", "2027Q4"]
-    assert all(h.role == "forecast" for h in headers)
+    assert all(marker_token(h.variant) == "прогноз" for h in headers)
 
 
 def test_start_end_period_pair_prefers_end() -> None:
@@ -520,7 +524,7 @@ def test_model_year_row_forms_relative_axis() -> None:
     assert len(blocks) == 1
     block = blocks[0]
     assert [h.period_key for h in block.axis.headers] == ["Y1", "Y2", "Y3"]
-    assert all(h.role == "relative" for h in block.axis.headers)
+    assert all(h.kind == "relative" for h in block.axis.headers)
     assert block.label_col == 2
     rows = {r.label: r for r in block.rows}
     assert rows["Gross revenues"].kind == "fact"
@@ -578,7 +582,7 @@ def test_unlabeled_model_years_align_with_formula_run() -> None:
     blocks = layout.sheets[0].blocks
     assert len(blocks) == 1
     assert [h.period_key for h in blocks[0].axis.headers] == [f"P{i}" for i in range(1, 9)]
-    assert all(h.role == "relative" for h in blocks[0].axis.headers)
+    assert all(h.kind == "relative" for h in blocks[0].axis.headers)
     assert blocks[0].rows[0].kind == "fact"
 
 
@@ -833,7 +837,7 @@ def test_on_column_fact_and_forecast_banners_paint_until_the_next_banner() -> No
         "2017Q4",
         "2018Q1",
     ]
-    assert [h.role for h in headers] == ["historical"] * 4 + ["forecast"] * 2
+    assert [marker_token(h.variant) for h in headers] == ["факт"] * 4 + ["прогноз"] * 2
 
 
 def test_repeated_quarter_header_keeps_the_banner_roles() -> None:
@@ -847,9 +851,9 @@ def test_repeated_quarter_header_keeps_the_banner_roles() -> None:
     cells.append(_c("CF", "A9", "Долг"))
     blocks = detect_layout(cells).sheets[0].blocks
     assert len(blocks) == 2
-    expected = ["historical"] * 4 + ["forecast"] * 2
-    assert [h.role for h in blocks[0].axis.headers] == expected
-    assert [h.role for h in blocks[1].axis.headers] == expected
+    expected = ["факт"] * 4 + ["прогноз"] * 2
+    assert [marker_token(h.variant) for h in blocks[0].axis.headers] == expected
+    assert [marker_token(h.variant) for h in blocks[1].axis.headers] == expected
 
 
 def test_stale_year_banner_does_not_override_the_quarter_year() -> None:

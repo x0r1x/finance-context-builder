@@ -64,7 +64,6 @@ def sample_context(*, job_id: str = "job") -> ContextDocument:
             ContextPeriod(
                 col=8,
                 text="Y5",
-                role="forecast",
                 period_key="Y5",
                 index=5,
                 phase="operation",

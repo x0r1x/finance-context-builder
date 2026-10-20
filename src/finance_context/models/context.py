@@ -117,7 +117,6 @@ class ModelPeriod(BaseModel):
 class ContextPeriod(BaseModel):
     col: int
     text: str = ""
-    role: str = "historical"
     period_key: str
     group_key: str | None = None
     index: int = 0

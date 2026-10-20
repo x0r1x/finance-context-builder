@@ -56,8 +56,8 @@ def test_layout_writes_json_registers_axes_and_no_findings(
     assert len(layout.sheets[0].blocks) == 2
     periods = [period for axis in layout.sheets[0].axes for period in axis.periods]
     assert len(periods) >= 4
-    roles = {period.role for period in periods}
-    assert "historical" in roles or "forecast" in roles
+    kinds = {period.kind for period in periods}
+    assert "period" in kinds
     checks = [
         row.label
         for sheet in layout.sheets

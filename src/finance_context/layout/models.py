@@ -4,9 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_serializer
 
+# Params-block column roles and non-period cells. Not a period classification.
 ColumnRole = Literal[
-    "historical",
-    "forecast",
     "stub",
     "scenario",
     "total",
@@ -18,20 +17,35 @@ ColumnRole = Literal[
     "index",
     "unknown",
 ]
+# Internal period-column classification. Not written to context.json.
+ColumnKind = Literal["period", "total", "stub", "scenario", "relative"]
 RowKind = Literal["fact", "abstract", "index", "helper", "flag"]
 BlockKind = Literal["timeline", "params"]
 
+SERIES_KINDS = frozenset({"period", "stub", "relative"})
+STRUCTURAL_PERIOD_KEYS = frozenset({"actual", "plan", "total", "stub"})
+
+
+def is_series_column(kind: str | None, period_key: str) -> bool:
+    """A timeline value column, not a total, stub, scenario, or bare marker."""
+    return kind in SERIES_KINDS and period_key not in STRUCTURAL_PERIOD_KEYS
+
 
 class PeriodHit(BaseModel):
-    role: ColumnRole
+    kind: ColumnKind
     period_key: str
+    # Marker text after normalize_header (suffix letter or role word). Not a role.
+    variant: str | None = None
     explicit_role: bool = False
 
 
 class AxisHeader(BaseModel):
     col: int
     text: str
-    role: ColumnRole
+    # Params columns only (value/unit/note/scenario/...). Period columns leave this empty.
+    role: str | None = None
+    kind: ColumnKind | None = None
+    variant: str | None = Field(default=None, exclude=True)
     period_key: str
     explicit_role: bool = False
     hidden: bool = False
@@ -41,6 +55,10 @@ class AxisHeader(BaseModel):
         data = handler(self)
         if not data.get("hidden"):
             data.pop("hidden", None)
+        if data.get("role") is None:
+            data.pop("role", None)
+        if data.get("kind") is None:
+            data.pop("kind", None)
         return data
 
 
@@ -53,7 +71,8 @@ class Axis(BaseModel):
 class AxisPeriod(BaseModel):
     col: int
     text: str
-    role: ColumnRole
+    kind: ColumnKind = "period"
+    variant: str | None = Field(default=None, exclude=True)
     period_key: str
     explicit_role: bool = False
     group_key: str | None = None
