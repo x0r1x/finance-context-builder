@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -143,13 +144,21 @@ def test_pid1_worker_is_not_treated_as_already_dead() -> None:
     assert _orphaned(100, 1) is True
 
 
+def _tool(name: str) -> str:
+    """`true` is /usr/bin/true on macOS and /bin/true on most Linux images."""
+    found = shutil.which(name)
+    if found is None:
+        pytest.skip(f"{name} is not on PATH")
+    return found
+
+
 def test_finished_group_is_not_signalled() -> None:
     from finance_context.adapters.soffice import _kill_group
 
-    process = subprocess.Popen(["/bin/true"], start_new_session=True)
+    process = subprocess.Popen([_tool("true")], start_new_session=True)
     pgid = os.getpgid(process.pid)
     process.wait()
-    victim = subprocess.Popen(["/bin/sleep", "30"])
+    victim = subprocess.Popen([_tool("sleep"), "30"])
     try:
         _kill_group(pgid)
         os.kill(victim.pid, 0)
