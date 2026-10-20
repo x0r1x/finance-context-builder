@@ -638,3 +638,23 @@ def test_scenario_headers_accept_either_word_order(text: str) -> None:
 )
 def test_scenario_words_do_not_match_loose_phrases(text: str) -> None:
     assert classify_header(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["9М 2025", "FY2025/26", "Ожидаемое 2025", "Estimate 2025", "2025/26", "Год 1", "Year 3"],
+)
+def test_unparsed_header_with_a_year_or_model_period_is_period_like(text: str) -> None:
+    from finance_context.layout.periods import period_like_header
+
+    assert period_like_header(text)
+
+
+@pytest.mark.parametrize(
+    "text", ["Low", "Вариант 1", "Amount", "Мин", "2025", "2025E", "Revenue growth", "Case 2"]
+)
+def test_parsed_period_or_plain_caption_is_not_period_like(text: str) -> None:
+    from finance_context.layout.periods import period_like_header
+
+    assert not period_like_header(text)
+

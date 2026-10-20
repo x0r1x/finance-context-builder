@@ -333,6 +333,27 @@ def unparsed_period_shape(text: str | None) -> bool:
     return bool(grain and re.search(r"(?:19|20)\d{2}", raw))
 
 
+_YEAR_INSIDE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+_MODEL_PERIOD = re.compile(
+    r"(?:год|year|yr|период|period|квартал|quarter|месяц|month)\s*№?\s*\d{1,3}",
+    re.IGNORECASE,
+)
+
+
+def period_like_header(text: str | None) -> bool:
+    """A column header with a year or a model-period number that is not a period.
+
+    ``9М 2025``, ``FY2025/26``, ``Estimate 2025``, ``2025/26``, ``Год 1``. A
+    header that parses (``2025``, ``2025E``) is a period, not period-like.
+    """
+    raw = normalize_header(text)
+    if not raw or len(raw) > 40 or classify_header(raw) is not None:
+        return False
+    if unparsed_period_shape(raw) or _YEAR_INSIDE.search(raw):
+        return True
+    return _MODEL_PERIOD.fullmatch(raw) is not None
+
+
 def classify_atom(
     text: str | None,
     *,

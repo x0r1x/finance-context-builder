@@ -20,7 +20,12 @@ from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.layout.adjacency import row_adjacency
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
 from finance_context.layout.params import is_scenario_selector_label
-from finance_context.layout.periods import display_cell_text
+from finance_context.layout.periods import (
+    classify_header,
+    display_cell_text,
+    is_calendar_hit,
+    period_like_header,
+)
 from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
 from finance_context.layout.roles import article_role
@@ -63,7 +68,7 @@ def build_context(
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
     hidden_warnings = _hidden_warnings(workbook_meta, cells)
-    warnings: list[str] = [*_unknown_header_warnings(layout)]
+    warnings: list[str] = [*_unknown_header_warnings(layout, by_addr)]
     formula_count = 0
     missing_cached = 0
     unparsed = 0
@@ -605,22 +610,93 @@ def _header_unit(sheet, block, by_addr: dict, date1904: bool) -> str | None:
     return found[0][1]
 
 
-def _unknown_header_warnings(layout: Layout) -> list[str]:
+def _unknown_header_warnings(
+    layout: Layout, by_addr: dict[tuple[str, int, int], dict]
+) -> list[str]:
+    """Params columns the lexicon did not name. Their values stay, the role is ``unknown``.
+
+    Two or more period headers mean a timeline whose axis did not form: some did
+    not parse (``9М 2025``), or a miss between parsed ones broke the run.
+    Numeric columns side by side on the same rows may be alternatives; the
+    warning says so and leaves the role alone.
+    """
     warnings: list[str] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            if block.axis is None:
+            if block.kind != "params" or block.axis is None:
                 continue
-            names = [
-                header.text
+            unknown = [
+                header
                 for header in block.axis.headers
                 if header.role == "unknown" and header.text
             ]
-            if not names:
+            periodish = [header for header in unknown if _period_header(header.text)]
+            if len(periodish) >= 2:
+                warnings.append(_no_axis_warning(sheet.name, block.axis.row, periodish))
+                unknown = [header for header in unknown if header not in periodish]
+            if not unknown:
                 continue
-            quoted = ", ".join(f"«{name}»" for name in names)
-            warnings.append(f"Unrecognized column headers in {block.block_id}: {quoted}")
+            quoted = ", ".join(f"«{header.text}»" for header in unknown)
+            text = f"Unrecognized column headers in {block.block_id}: {quoted}"
+            side = _side_by_side_columns(sheet.name, block, unknown, by_addr)
+            if len(side) >= 2:
+                text += (
+                    f"; {len(side)} numeric columns side by side may be alternatives"
+                    " (scenario candidates), role left unknown"
+                )
+            warnings.append(text)
     return warnings
+
+
+def _period_header(text: str) -> bool:
+    return period_like_header(text) or is_calendar_hit(classify_header(text))
+
+
+def _no_axis_warning(sheet: str, row: int, headers: list[AxisHeader]) -> str:
+    cols = sorted(header.col for header in headers)
+    span = f"{sheet}!{format_addr(cols[0], row)}:{format_addr(cols[-1], row)}"
+    quoted = ", ".join(f"«{header.text}»" for header in headers)
+    return (
+        f"No time axis on {sheet}: headers {span} look like periods but do not form"
+        f" an axis ({quoted}); columns kept as unknown"
+    )
+
+
+def _side_by_side_columns(
+    sheet: str,
+    block,
+    headers: list[AxisHeader],
+    by_addr: dict[tuple[str, int, int], dict],
+) -> list[int]:
+    """Columns that hold numbers on at least two rows that another column shares."""
+    numeric: dict[int, set[int]] = {}
+    for header in headers:
+        rows: set[int] = set()
+        for layout_row in block.rows:
+            cell = by_addr.get((sheet, layout_row.row, header.col))
+            if cell is not None and _is_source_number(cell):
+                rows.add(layout_row.row)
+        numeric[header.col] = rows
+    return [
+        col
+        for col, rows in numeric.items()
+        if any(len(rows & other) >= 2 for key, other in numeric.items() if key != col)
+    ]
+
+
+def _is_source_number(cell: dict) -> bool:
+    """A formula, or a cached number (a date serial is a number too)."""
+    formula = cell.get("formula_raw")
+    if isinstance(formula, str) and formula.strip():
+        return True
+    value = cell.get("cached_value")
+    if value is None:
+        return False
+    try:
+        float(str(value).replace(" ", "").replace(",", "."))
+    except ValueError:
+        return False
+    return True
 
 
 def _hidden_warnings(workbook_meta: dict, cells: list[dict]) -> list[str]:

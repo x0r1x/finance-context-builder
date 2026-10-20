@@ -35,6 +35,11 @@ def detect_params_block(
     roles = _column_roles(by_row, date1904, sheet, edges or [])
     label_col = _label_column(by_row, date1904, roles)
     value_cols = [col for col, role in roles.items() if role in {"value", "scenario"}]
+    if not value_cols:
+        # Numbers under headers the lexicon does not know stay as ``unknown``
+        # columns. Context warns about them; dropping the table would be silent.
+        numeric = _numeric_columns(by_row, date1904)
+        value_cols = [col for col, role in roles.items() if role == "unknown" and numeric[col]]
     if label_col is None or not value_cols:
         return None
     header_rows, header_row = _header_rows(by_row, date1904, roles, label_col)
@@ -464,6 +469,19 @@ def _column_roles(
     _apply_value_column_roles(roles, by_row, date1904)
     _promote_scenario_siblings(roles, by_row, date1904)
     return roles
+
+
+def _numeric_columns(by_row: dict[int, list[dict]], date1904: bool) -> Counter[int]:
+    """Visible cells per column that hold a number or a formula."""
+    counts: Counter[int] = Counter()
+    for cells in by_row.values():
+        for cell in cells:
+            if cell.get("hidden"):
+                continue
+            text = _text(cell, date1904)
+            if cell.get("formula_raw") or (text and _is_number(text)):
+                counts[int(cell["col"])] += 1
+    return counts
 
 
 def _apply_value_column_roles(

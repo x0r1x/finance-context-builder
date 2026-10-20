@@ -48,7 +48,9 @@ def formula_relations(layout: Layout, cells: list[dict]) -> list[RowRelation]:
             period_cols = [header.col for header in headers]
             if getattr(block, "kind", "timeline") == "params":
                 period_cols = [
-                    header.col for header in headers if header.role in {"value", "scenario"}
+                    header.col
+                    for header in headers
+                    if header.role in {"value", "scenario", "unknown"}
                 ]
             for layout_row in block.rows:
                 pattern = _pattern_for_row(book, sheet.name, layout_row.row, period_cols)
