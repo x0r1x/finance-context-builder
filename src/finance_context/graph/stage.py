@@ -190,20 +190,31 @@ def _row_meta(layout: Layout) -> dict[tuple[str, int], str]:
     return out
 
 
+def calendar_key(period_id: str) -> str:
+    """Lag slot for a period id. ``2024@факт`` and ``2024`` share ``2024``.
+
+    The part before ``@`` is the calendar key. The marker stays in the period id
+    so two columns of one year do not collapse in the index.
+    """
+    head, sep, _marker = period_id.partition("@")
+    return head if sep else period_id
+
+
 def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, int]]:
+    """Cell period ids stay distinct. The index value is the calendar-key slot."""
     period_by_cell: dict[tuple[str, int], str] = {}
     index: dict[str, int] = {}
+    slots: dict[str, int] = {}
     seq = 0
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            local: dict[str, int] = {}
-            for pos, header in enumerate(period_headers(sheet, block)):
+            for header in period_headers(sheet, block):
                 period_by_cell[(sheet.name, header.col)] = header.period_key
-                if header.period_key not in local:
-                    local[header.period_key] = pos
-                if header.period_key not in index:
-                    index[header.period_key] = seq
+                slot = calendar_key(header.period_key)
+                if slot not in slots:
+                    slots[slot] = seq
                     seq += 1
+                index[header.period_key] = slots[slot]
     return period_by_cell, index
 
 
@@ -356,7 +367,7 @@ def _enrich_edge(
     tgt_p = period_of.get(target)
     if not src_p or not tgt_p:
         lag = "unaligned"
-    elif src_p == tgt_p:
+    elif calendar_key(src_p) == calendar_key(tgt_p):
         lag = "same"
     elif src_p in period_index and tgt_p in period_index:
         lag = str(period_index[tgt_p] - period_index[src_p])

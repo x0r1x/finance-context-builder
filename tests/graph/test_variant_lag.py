@@ -1,0 +1,132 @@
+"""Variant columns keep distinct period ids and share one calendar lag slot."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
+
+from finance_context.app.pipeline import Pipeline
+from finance_context.settings import Settings
+from finance_context.store.fs import read_parquet
+
+
+def _text(addr: str, value: str) -> CellSpec:
+    return CellSpec(addr=addr, value=value, type="inlineStr")
+
+
+def _run(tmp_path: Path, cells: list[CellSpec]) -> tuple[dict, list[dict]]:
+    source = build_xlsx(
+        tmp_path / "model.xlsx",
+        sheets=[SheetSpec(name="P&L", cells=cells)],
+    )
+    dest = tmp_path / "job"
+    dest.mkdir()
+    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None)).run(
+        dest, job_id="variant-lag", source_filename="model.xlsx"
+    )
+    graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
+    edges = read_parquet(dest / "ir" / "graph_edges.parquet")
+    return graph, edges
+
+
+def _link(graph: dict, cell: str) -> dict:
+    return next(item for item in graph["links"] if item["cell"] == cell)
+
+
+def _lag(edges: list[dict], source: str, target: str) -> str:
+    found = [edge for edge in edges if edge["source"] == source and edge["target"] == target]
+    assert found, (source, target)
+    return str(found[0]["period_lag"])
+
+
+def test_fact_and_plan_of_one_year_are_the_same_period(tmp_path: Path) -> None:
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2024 факт"),
+            _text("C1", "2024 план"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="100"),
+            CellSpec(addr="C2", value="80", formula="=B2"),
+        ],
+    )
+    assert _lag(edges, "P&L!C2", "P&L!B2") == "same"
+    link = _link(graph, "P&L!C2")
+    assert link["formula_class"] == "same_period"
+    assert link["period_id"] == "2024@план"
+
+
+def test_prior_year_variant_is_one_calendar_step(tmp_path: Path) -> None:
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2023 ф"),
+            _text("C1", "2023 п"),
+            _text("D1", "2024 ф"),
+            _text("E1", "2024 п"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="1"),
+            CellSpec(addr="C2", value="2"),
+            CellSpec(addr="D2", value="3", formula="=B2"),
+            CellSpec(addr="E2", value="4", formula="=C2"),
+        ],
+    )
+    assert _lag(edges, "P&L!D2", "P&L!B2") == "-1"
+    assert _lag(edges, "P&L!E2", "P&L!C2") == "-1"
+    assert _link(graph, "P&L!D2")["formula_class"] == "rollforward"
+    assert _link(graph, "P&L!E2")["formula_class"] == "rollforward"
+    assert _link(graph, "P&L!E2")["period_id"] == "2024@п"
+
+
+def test_mutual_variant_refs_are_unexpected(tmp_path: Path) -> None:
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2024 факт"),
+            _text("C1", "2024 план"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="100", formula="=C2"),
+            CellSpec(addr="C2", value="80", formula="=B2"),
+        ],
+    )
+    assert _lag(edges, "P&L!B2", "P&L!C2") == "same"
+    assert _lag(edges, "P&L!C2", "P&L!B2") == "same"
+    assert _link(graph, "P&L!B2")["formula_class"] == "same_period"
+    assert _link(graph, "P&L!C2")["formula_class"] == "same_period"
+    assert graph["cycles"]
+    assert {cycle["class"] for cycle in graph["cycles"]} == {"unexpected"}
+    assert any(
+        {"P&L!B2", "P&L!C2"} <= set(cycle["members"]) for cycle in graph["cycles"]
+    )
+
+
+def test_bare_year_beside_estimate_stays_split_and_same_slot(tmp_path: Path) -> None:
+    """``2024`` next to ``2024E`` stays two period ids so the columns do not collapse.
+
+    Lag still treats them as one calendar year. ``2025E`` is the next slot.
+    """
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2024"),
+            _text("C1", "2024E"),
+            _text("D1", "2025E"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="100"),
+            CellSpec(addr="C2", value="80", formula="=B2"),
+            CellSpec(addr="D2", value="90", formula="=C2"),
+        ],
+    )
+    assert _link(graph, "P&L!C2")["period_id"] == "2024@e"
+    assert _link(graph, "P&L!D2")["period_id"] == "2025"
+    assert _lag(edges, "P&L!C2", "P&L!B2") == "same"
+    assert _link(graph, "P&L!C2")["formula_class"] == "same_period"
+    assert _lag(edges, "P&L!D2", "P&L!C2") == "-1"
+    assert _link(graph, "P&L!D2")["formula_class"] == "rollforward"

@@ -77,6 +77,7 @@ def _classify(intra: list[dict]) -> str:
 
 
 def _is_period_chain(edge: dict) -> bool:
+    """A shift of calendar slot. Two variants of one key have lag ``same``."""
     lag = edge.get("period_lag")
     if lag in {"same", "0", "unaligned"}:
         return False
