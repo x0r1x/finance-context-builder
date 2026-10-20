@@ -2,7 +2,7 @@
 
 [Русский](../ru/slices.md) · **English**
 
-The job canon is `context.json` / `context.md` (schema `1.15.0`) and `graph.json` / `graph.md` (schema `1.7.0`). The slice below is a projection of those files. A route returns it in the response and does not write a second JSON. It does not replace `blocks[].rows`. Cells, AST, and edges are not copied into the slice.
+The job canon is `context.json` / `context.md` (schema `1.14.0`) and `graph.json` / `graph.md` (schema `1.7.0`). The slice below is a projection of those files. A route returns it in the response and does not write a second JSON. It does not replace `blocks[].rows`. Cells, AST, and edges are not copied into the slice.
 
 Related documents: [overview](overview.md), [architecture](architecture.md), [graph](graph.md).
 
@@ -66,7 +66,7 @@ Do not put `context.json` or `graph.json` in the prompt. Read graph counters fro
 | Route | Schema | What is inside |
 | --- | --- | --- |
 | `GET /v1/context-jobs?status=&q=` | a list from `meta.json` | Session books. `context.json` is not opened. `q` is a piece of the file name |
-| `GET .../summary` | `summary-3` | Workbook counters, graph counters, content completeness, and warnings: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`, `completeness` (source numbers and formulas in context, per sheet). No `links` and no cell cache |
+| `GET .../summary` | `summary-2` | Workbook counters, graph counters, and warnings: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`. No `links` and no cell cache |
 | `GET .../catalog` | `catalog-2` | Rows and axes without numbers. A period carries `phase_year`, `flags`, and `group_key`, omitted when empty the same way as the axis in `context.json`. No formula class: one row has a different class per period. Filters: `q` (case-insensitive substring of the row's own label), `sheet`, `disposition`, `limit`, `offset`. `q=General` matches a label that contains General. A child with another label does not enter. The path is not searched |
 | `GET .../observations` | `observation-2` | The only response that carries a cell cache |
 

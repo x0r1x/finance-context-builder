@@ -34,7 +34,6 @@ from finance_context.models.context import (
     SCHEMA_VERSION,
     ArtifactMeta,
     BlockRow,
-    ContentCompleteness,
     ContextAxis,
     ContextDocument,
     FinancialBlock,
@@ -42,15 +41,9 @@ from finance_context.models.context import (
     NumericSummary,
     RoleCell,
     RowSeries,
-    SheetCompleteness,
     WorkbookRaw,
 )
 from finance_context.vocab import ValueStatus
-
-# A sheet warns when it loses more than this share of its numbers and formulas,
-# and at least this many cells. A nav sheet with four shortcut numbers stays quiet.
-_LOSS_SHARE = 0.05
-_LOSS_MIN_CELLS = 5
 
 
 def build_context(
@@ -75,9 +68,7 @@ def build_context(
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
     hidden_warnings = _hidden_warnings(workbook_meta, cells)
-    header_warnings = _unknown_header_warnings(layout, by_addr)
-    warnings: list[str] = []
-    carried: set[tuple[str, int, int]] = set()
+    warnings: list[str] = [*_unknown_header_warnings(layout, by_addr)]
     formula_count = 0
     missing_cached = 0
     unparsed = 0
@@ -100,7 +91,6 @@ def build_context(
             kind = getattr(block, "kind", "timeline")
             views = _block_views(sheet, block, axes_by_id)
             hint_headers = [header for _axis_id, headers, _phases in views for header in headers]
-            carried.update(_header_band_cells(sheet.name, block, hint_headers))
             axis_ids = (
                 list(dict.fromkeys(axis_id for axis_id, _headers, _phases in views))
                 if kind != "params"
@@ -123,8 +113,6 @@ def build_context(
             body_unit = False
             for layout_row in block.rows:
                 row_key = f"{sheet.name}|{layout_row.row}|{block.block_id}"
-                carried.add((sheet.name, layout_row.row, layout_row.label_col or block.label_col))
-                carried.update((sheet.name, layout_row.row, item.col) for item in layout_row.cells)
                 parent = None
                 if layout_row.parent_row:
                     parent = parent_by_row.get(layout_row.parent_row)
@@ -187,7 +175,6 @@ def build_context(
                     row_headers = headers
                     if is_scenario_selector_label(layout_row.label):
                         row_headers = [header for header in headers if header.role == "value"]
-                    carried.update((sheet.name, layout_row.row, item.col) for item in row_headers)
                     fingerprint, exceptions, summary = _row_formula_and_numbers(
                         sheet_name=sheet.name,
                         row_num=layout_row.row,
@@ -276,8 +263,6 @@ def build_context(
             f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
         )
     warnings.extend(hidden_warnings)
-    completeness = _completeness(cells, carried, workbook_meta)
-    warnings = [*header_warnings, *_loss_warnings(completeness), *warnings]
 
     sheets = [
         s["name"] if isinstance(s, dict) else getattr(s, "name", str(s))
@@ -315,7 +300,6 @@ def build_context(
         axes=axes,
         blocks=blocks,
         graph=graph or GraphPointer(),
-        completeness=completeness,
         warnings=warnings[:50],
     )
 
@@ -700,54 +684,6 @@ def _side_by_side_columns(
     ]
 
 
-def _header_band_cells(sheet: str, block, headers: list[AxisHeader]) -> set[tuple[str, int, int]]:
-    """Header-band cells an axis or a params header carries: years, dates, captions."""
-    rows = set(block.header_rows)
-    if block.axis is not None:
-        rows.add(block.axis.row)
-    cols = {header.col for header in headers} | {block.label_col}
-    return {(sheet, row, col) for row in rows for col in cols}
-
-
-def _completeness(
-    cells: list[dict], carried: set[tuple[str, int, int]], workbook_meta: dict
-) -> ContentCompleteness:
-    counts: dict[str, list[int]] = {}
-    for cell in cells:
-        if not _is_source_number(cell):
-            continue
-        sheet = str(cell.get("sheet") or "")
-        tally = counts.setdefault(sheet, [0, 0])
-        tally[0] += 1
-        if (sheet, int(cell["row"]), int(cell["col"])) in carried:
-            tally[1] += 1
-    order = [
-        str(item["name"]) if isinstance(item, dict) else str(item)
-        for item in workbook_meta.get("sheets") or []
-        if (item.get("name") if isinstance(item, dict) else item)
-    ]
-    order += sorted(name for name in counts if name not in order)
-    sheets = [
-        SheetCompleteness(
-            sheet=name,
-            cells=counts[name][0],
-            in_context=counts[name][1],
-            missing=counts[name][0] - counts[name][1],
-        )
-        for name in order
-        if name in counts
-    ]
-    total = sum(item.cells for item in sheets)
-    carried_n = sum(item.in_context for item in sheets)
-    return ContentCompleteness(
-        cells=total,
-        in_context=carried_n,
-        missing=total - carried_n,
-        ratio=round(carried_n / total, 4) if total else 1.0,
-        sheets=sheets,
-    )
-
-
 def _is_source_number(cell: dict) -> bool:
     """A formula, or a cached number (a date serial is a number too)."""
     formula = cell.get("formula_raw")
@@ -761,17 +697,6 @@ def _is_source_number(cell: dict) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _loss_warnings(completeness: ContentCompleteness) -> list[str]:
-    return [
-        (
-            f"Content completeness: {item.missing} of {item.cells} numeric and formula cells"
-            f" on {item.sheet} are not in context"
-        )
-        for item in completeness.sheets
-        if item.missing >= _LOSS_MIN_CELLS and item.missing > _LOSS_SHARE * item.cells
-    ]
 
 
 def _hidden_warnings(workbook_meta: dict, cells: list[dict]) -> list[str]:

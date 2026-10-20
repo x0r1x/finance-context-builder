@@ -93,7 +93,7 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     ):
         assert name in schemas
     assert _const(schemas["CatalogDocument"], "schema_version") == "catalog-2"
-    assert _const(schemas["SummaryDocument"], "schema_version") == "summary-3"
+    assert _const(schemas["SummaryDocument"], "schema_version") == "summary-2"
     assert _const(schemas["ObservationDocument"], "schema_version") == "observation-2"
 
     listing = spec["paths"]["/v1/context-jobs"]["get"]

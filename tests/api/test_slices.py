@@ -46,7 +46,7 @@ def test_list_finds_a_book_by_filename(tmp_path: Path) -> None:
     body = response.json()
     assert [item["job_id"] for item in body] == [_JOB]
     assert body[0]["source_filename"] == "rvi-project-finance.xlsx"
-    assert body[0]["schema_version"] == "1.15.0"
+    assert body[0]["schema_version"] == "1.14.0"
     assert "warnings" not in body[0]
 
 
@@ -133,12 +133,12 @@ def test_summary_has_counters_without_links(tmp_path: Path) -> None:
         response = client.get(f"/v1/context-jobs/{_JOB}/summary")
     assert response.status_code == 200
     body = response.json()
-    assert body["schema_version"] == "summary-3"
+    assert body["schema_version"] == "summary-2"
     assert body["missing_cached_values"] == 17
     assert body["unresolved"]["count"] == 2
     assert "links" not in body
     assert "1234.56" not in response.text
-    assert response.headers["etag"].startswith('"summary-3:')
+    assert response.headers["etag"].startswith('"summary-2:')
 
 
 def test_missing_graph_and_unknown_job(tmp_path: Path) -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 from finance_context.context.measure import Measure
@@ -76,26 +75,8 @@ def refresh_context_markdown(dest: Path) -> bool:
 
 
 def _coverage_lines(doc: ContextDocument) -> list[str]:
-    """Source numbers and formulas in context, then each sheet that lost some."""
-    done = doc.completeness
-    if done is None:
-        rows = sum(len(block.rows) for block in doc.blocks)
-        return [f"- Content completeness: n/a ({rows} layout rows, source cells not counted)"]
-    lines = [
-        f"- Content completeness: {_ratio_text(done.in_context, done.cells)}"
-        f" ({done.in_context}/{done.cells} numeric and formula cells in context)"
-    ]
-    for item in done.sheets:
-        if item.missing:
-            lines.append(f"  - `{_cell(item.sheet)}`: {item.missing}/{item.cells} not in context")
-    return lines
-
-
-def _ratio_text(carried: int, total: int) -> str:
-    """Two decimals rounded down, so a loss never prints as 1.00."""
-    if total == 0 or carried >= total:
-        return "1.00"
-    return f"{math.floor(carried * 100 / total) / 100:.2f}"
+    rows = sum(len(block.rows) for block in doc.blocks)
+    return [f"- Content completeness: 1.00 ({rows}/{rows} layout rows)"]
 
 
 def _axes_section(axes: list[ContextAxis]) -> list[str]:

@@ -59,7 +59,7 @@ def test_upload_and_download(client: TestClient, tmp_path: Path) -> None:
     assert "P&L!C2" in traced_md.text
     assert md_doc.status_code == 200
     assert "Financial context" in md_doc.text
-    assert json_doc.json()["schema_version"] == "1.15.0"
+    assert json_doc.json()["schema_version"] == "1.14.0"
 
 
 def test_get_context_md_rewrites_a_finished_job(tmp_path: Path) -> None:

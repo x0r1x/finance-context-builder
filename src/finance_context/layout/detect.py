@@ -124,7 +124,6 @@ def _blocks_for_sheet(
                 axis_ids=[axis.id for axis in group_axes],
                 rows=data_rows,
                 kind="timeline",
-                header_rows=sorted({row_n for band, _axis in group for row_n in band}),
             )
         )
     blocks, axes = _share_repeated_axes(blocks, axes, by_row, date1904)

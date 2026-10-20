@@ -128,8 +128,6 @@ class Block(BaseModel):
     timeline_ids: list[str] = Field(default_factory=list)
     rows: list[LayoutRow]
     kind: BlockKind = "timeline"
-    # Rows of this block's own header band, before a repeated axis is shared.
-    header_rows: list[int] = Field(default_factory=list)
 
 
 class SheetLayout(BaseModel):
