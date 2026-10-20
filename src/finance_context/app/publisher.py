@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -65,6 +66,7 @@ def _compute_stages() -> dict[str, str]:
         stage = _stage_of(path.relative_to(_PACKAGE).as_posix())
         if stage is not None:
             buckets[stage].append(path)
+    _include_layout_imports(buckets)
     stages = {name: _hash_files(buckets[name]) for name in STAGE_ORDER}
     overlay = _overlay_bytes()
     if overlay is not None:
@@ -74,6 +76,83 @@ def _compute_stages() -> dict[str, str]:
         digest.update(overlay)
         stages["layout"] = digest.hexdigest()
     return stages
+
+
+def _include_layout_imports(buckets: dict[str, list[Path]]) -> None:
+    """Hash every package module the layout stage imports into that stage.
+
+    ``layout/units.py`` imports ``context/measure.py``. A directory bucket would
+    leave that edit in the publish stage, so ``layout.json`` would stay fresh.
+    """
+    seen = {path.resolve() for path in buckets["layout"]}
+    pending = [path for path in buckets["layout"] if path.suffix == ".py"]
+    extra: list[Path] = []
+    while pending:
+        path = pending.pop()
+        for imported in _imported_package_files(path):
+            resolved = imported.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            extra.append(imported)
+            if imported.suffix == ".py":
+                pending.append(imported)
+    if not extra:
+        return
+    buckets["layout"].extend(extra)
+    buckets["layout"].sort(key=lambda item: item.relative_to(_PACKAGE).as_posix())
+
+
+def _imported_package_files(path: Path) -> list[Path]:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return []
+    found: list[Path] = []
+    for node in ast.walk(tree):
+        modules: list[str] = []
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.extend(_import_from_modules(path, node))
+        for module in modules:
+            candidate = _module_file(module)
+            if candidate is not None:
+                found.append(candidate)
+    return found
+
+
+def _import_from_modules(path: Path, node: ast.ImportFrom) -> list[str]:
+    if node.level == 0:
+        return [node.module] if node.module else []
+    try:
+        parts = list(path.relative_to(_PACKAGE).parts[:-1])
+    except ValueError:
+        return []
+    drop = node.level - 1
+    if drop > len(parts):
+        return []
+    if drop:
+        parts = parts[:-drop]
+    if node.module:
+        parts.extend(node.module.split("."))
+    if not parts:
+        return ["finance_context"]
+    return ["finance_context." + ".".join(parts)]
+
+
+def _module_file(module: str) -> Path | None:
+    prefix = "finance_context"
+    if module != prefix and not module.startswith(prefix + "."):
+        return None
+    rel = module[len(prefix) :].lstrip(".").replace(".", "/")
+    file = _PACKAGE / "__init__.py" if not rel else _PACKAGE / f"{rel}.py"
+    if file.is_file():
+        return file
+    if not rel:
+        return None
+    init = _PACKAGE / rel / "__init__.py"
+    return init if init.is_file() else None
 
 
 def _overlay_bytes() -> bytes | None:

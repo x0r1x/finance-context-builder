@@ -149,6 +149,33 @@ def test_lexicon_overlay_restales_the_layout_stage(tmp_path, monkeypatch) -> Non
     assert before["compile"] == after["compile"]
 
 
+def test_layout_stage_hashes_modules_it_imports(tmp_path, monkeypatch) -> None:
+    from finance_context.app import publisher
+
+    (tmp_path / "layout").mkdir()
+    (tmp_path / "context").mkdir()
+    (tmp_path / "layout" / "units.py").write_text(
+        "from finance_context.context.measure import unit_caption\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
+    measure = tmp_path / "context" / "measure.py"
+    measure.write_text("x = 1\n", encoding="utf-8")
+    series = tmp_path / "context" / "series.py"
+    series.write_text("y = 1\n", encoding="utf-8")
+    monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
+    before = publisher._compute_stages()
+    series.write_text("y = 2\n", encoding="utf-8")
+    untouched = publisher._compute_stages()
+    assert before["layout"] == untouched["layout"]
+    assert before["publish"] != untouched["publish"]
+    measure.write_text("x = 2\n", encoding="utf-8")
+    after = publisher._compute_stages()
+    assert before["layout"] != after["layout"]
+    assert untouched["publish"] != after["publish"]
+    assert before["compile"] == after["compile"]
+
+
 def test_stray_package_json_does_not_restale_layout(tmp_path, monkeypatch) -> None:
     from finance_context.app import publisher
 
