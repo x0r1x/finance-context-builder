@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 # Params-block column roles and non-period cells. Not a period classification.
 ColumnRole = Literal[
@@ -32,6 +32,9 @@ def is_series_column(kind: str | None, period_key: str) -> bool:
 
 
 class PeriodHit(BaseModel):
+    # Shared from the classification cache, so callers cannot change it.
+    model_config = ConfigDict(frozen=True)
+
     kind: ColumnKind
     period_key: str
     # Marker text after normalize_header (suffix letter or role word). Not a role.

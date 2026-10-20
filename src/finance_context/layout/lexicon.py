@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from functools import cache
+from functools import cache, lru_cache
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -34,6 +34,9 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 _RU = snowballstemmer.stemmer("russian")
 _EN = snowballstemmer.stemmer("english")
 _SHORT = 3
+# Stems do not depend on the lexicon. One workbook repeats the same few
+# thousand words, and a server keeps the cache across jobs.
+_STEM_CACHE = 1 << 16
 _INFLECTIONS = frozenset(
     {
         "а",
@@ -184,6 +187,7 @@ def _fold(text: str) -> str:
     return text.casefold().replace("ё", "е")
 
 
+@lru_cache(maxsize=_STEM_CACHE)
 def _stem(word: str) -> str:
     folded = _fold(word)
     if re.search(r"[а-я]", folded):

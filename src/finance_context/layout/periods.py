@@ -4,6 +4,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, replace
 from datetime import date
+from functools import lru_cache
 
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.layout.lexicon import (
@@ -230,11 +231,23 @@ def _fold_period_token(token: str) -> str:
     return token
 
 
+# Distinct normalized headers kept per lexicon token. A sheet asks for the same
+# header from bands, rows and atoms, often thousands of times.
+_CLASSIFY_CACHE = 1 << 16
+
+
 def classify_header(text: str | None) -> PeriodHit | None:
     _bind()
     raw = normalize_header(text)
     if not raw:
         return None
+    return _classify(_BOUND, raw)
+
+
+@lru_cache(maxsize=_CLASSIFY_CACHE)
+def _classify(token: str | None, raw: str) -> PeriodHit | None:
+    """``classify_header`` of a normalized header. ``token`` keys the lexicon."""
+    del token
     if _listed(raw, "structural", "total"):
         return PeriodHit(kind="total", period_key="total", explicit_role=True)
     if _listed(raw, "structural", "stub"):
