@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from finance_context.layout.periods import (
+    _marker_word,
     apply_grain,
     classify_atom,
     classify_header,
@@ -10,6 +11,18 @@ from finance_context.layout.periods import (
     infer_grain,
     marker_token,
 )
+
+# Casefolded suffix letter to the structural marker key.
+_SUFFIX_MARKER = {
+    "п": "plan",
+    "p": "plan",
+    "р": "plan",
+    "e": "plan",
+    "е": "plan",
+    "ф": "actual",
+    "a": "actual",
+    "а": "actual",
+}
 
 
 @pytest.mark.parametrize(
@@ -203,7 +216,8 @@ def test_marker_word_before_or_around_the_period(text: str, marker: str, period_
     assert hit is not None
     assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
     assert hit.variant
-    assert marker in {"actual", "plan"}
+    resolved = _marker_word(hit.variant)
+    assert resolved is not None and resolved[0] == marker
 
 
 @pytest.mark.parametrize("text", ["13.2025", "V кв. 2025", "3 полугодие 2025", "1.2025"])
@@ -266,7 +280,8 @@ def test_marker_word_on_a_part_without_a_year(
         True,
     )
     assert atom.variant
-    assert marker in {"actual", "plan"}
+    resolved = _marker_word(atom.variant)
+    assert resolved is not None and resolved[0] == marker
 
 
 def test_year_row_over_marker_tagged_quarter_keeps_the_marker() -> None:
@@ -342,7 +357,8 @@ def test_budget_plan_and_estimate_are_variant_markers(
     assert hit is not None
     assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
     assert hit.variant
-    assert marker == "plan"
+    resolved = _marker_word(hit.variant)
+    assert resolved is not None and resolved[0] == marker
 
 
 @pytest.mark.parametrize("text", ["Бюджет", "Plan", "Оценка", "Ожид."])
@@ -385,8 +401,7 @@ def test_year_suffix_letters_match_on_parts_and_months(
     hit = classify_header(text)
     assert hit is not None
     assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
-    assert marker_token(hit.variant)
-    assert marker in {"actual", "plan"}
+    assert _SUFFIX_MARKER[marker_token(hit.variant)] == marker
 
 
 @pytest.mark.parametrize(
@@ -475,23 +490,25 @@ def test_half_year_spellings_do_not_swallow_nearby_words(text: str) -> None:
         ("2025Ф", "actual", "2025"),
         ("1 кв. 2025А", "actual", "2025Q1"),
         ("1 кв. 2025Р", "plan", "2025Q1"),
-        ("Н1 2025", "actual", "2025H1"),
-        ("н2 2025", "actual", "2025H2"),
-        ("1Н25", "actual", "2025H1"),
-        ("2н2025", "actual", "2025H2"),
+        ("Н1 2025", None, "2025H1"),
+        ("н2 2025", None, "2025H2"),
+        ("1Н25", None, "2025H1"),
+        ("2н2025", None, "2025H2"),
     ],
 )
 def test_cyrillic_lookalikes_in_period_codes_keep_suffix_markers(
-    text: str, marker: str, period_key: str
+    text: str, marker: str | None, period_key: str
 ) -> None:
     hit = classify_header(text)
     assert hit is not None
-    explicit = text[-1] not in "125"
     assert hit.kind == "period"
     assert hit.period_key == period_key
-    assert hit.explicit_role is explicit
-    assert bool(hit.variant) is explicit
-    assert marker in {"actual", "plan"}
+    if marker is None:
+        assert hit.variant is None
+        assert hit.explicit_role is False
+    else:
+        assert hit.explicit_role is True
+        assert _SUFFIX_MARKER[marker_token(hit.variant)] == marker
 
 
 def test_cyrillic_en_without_a_year_is_a_half_token() -> None:
