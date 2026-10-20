@@ -118,7 +118,7 @@ def test_overlay_reaches_a_cached_header(tmp_path, monkeypatch) -> None:
 
     assert classify_header("Прикидка") is None
     overlay = tmp_path / "overlay.json"
-    overlay.write_text('{"period_roles": {"forecast": ["прикидка"]}}', encoding="utf-8")
+    overlay.write_text('{"period_markers": {"plan": ["прикидка"]}}', encoding="utf-8")
     monkeypatch.setenv("FINANCE_CONTEXT_LEXICON", str(overlay))
     hit = classify_header("Прикидка")
     assert hit is not None and (hit.kind, hit.period_key) == ("period", "plan")
