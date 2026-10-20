@@ -113,10 +113,6 @@ def test_ashan_xls_has_the_xlsx_structure(
     for key, row in new.items():
         other = old[key]
         assert (other.label, other.kind, other.formula) == (row.label, row.kind, row.formula), key
-        assert (other.hints.time_semantics, other.aggregation) == (
-            row.hints.time_semantics,
-            row.aggregation,
-        ), key
 
 
 @pytest.mark.e2e_models

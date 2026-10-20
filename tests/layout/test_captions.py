@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from finance_context.context.timeline import _phase_kind
 from finance_context.layout.params import _header_role
 from finance_context.layout.periods import classify_atom, classify_header, unparsed_period_shape
 
@@ -31,8 +30,6 @@ def test_caption_outcome(case: dict) -> None:
             assert bool(hit.variant) is case["explicit_role"]
     if "header_role" in case:
         assert _header_role(text) == case["header_role"]
-    if "phase" in case:
-        assert _phase_kind(text) == case["phase"]
     if case.get("quarter") is False:
         atom = classify_atom(text)
         assert atom is None or atom.quarter is None

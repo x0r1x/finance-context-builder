@@ -30,19 +30,15 @@ def test_revenue_observation_matches_the_slice_fields() -> None:
         {
             "row_key": REVENUE,
             "label": "Revenue",
-            "disposition": None,
             "period_id": "Y5",
             "value": "1234.56",
             "value_status": "cached",
             "normalized_value": "1234560",
             "scale_factor": 1000,
-            "period_position": "during_period",
-            "aggregation": "sum",
             "unit": {
                 "kind": "money",
                 "currency": "GBP",
                 "scale": "k",
-                "sign": "inflow",
             },
             "formula": {
                 "text": "=RC[-1]*(1+Growth)",
@@ -53,8 +49,6 @@ def test_revenue_observation_matches_the_slice_fields() -> None:
             "source": {"sheet": "Operation", "cell": "H10"},
             "timeline": {
                 "axis_id": "Operation!r8",
-                "phase": "operation",
-                "phase_year": 1,
                 "start_date": "2026-01-01",
                 "end_date": "2026-12-31",
             },
@@ -251,8 +245,6 @@ def test_params_scenario_comes_from_the_value_header() -> None:
     assert observation["value"] == "0.05"
     assert observation["source"] == {"sheet": "Inputs", "cell": "B20"}
     assert "timeline" not in observation
-    assert observation["period_position"] == "instant"
-    assert observation["aggregation"] == "none"
 
 
 def test_empty_cell_stays_null_and_explicit_zero_stays_text() -> None:
