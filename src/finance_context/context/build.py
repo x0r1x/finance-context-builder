@@ -66,7 +66,7 @@ def build_context(
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
     hidden_warnings = _hidden_warnings(workbook_meta, cells)
-    warnings: list[str] = [*_unknown_header_warnings(layout, by_addr)]
+    warnings: list[str] = [*_unknown_header_warnings(layout)]
     formula_count = 0
     missing_cached = 0
     unparsed = 0
@@ -522,15 +522,11 @@ def _header_unit(sheet, block, by_addr: dict, date1904: bool) -> str | None:
     return found[0][1]
 
 
-def _unknown_header_warnings(
-    layout: Layout, by_addr: dict[tuple[str, int, int], dict]
-) -> list[str]:
+def _unknown_header_warnings(layout: Layout) -> list[str]:
     """Params columns the lexicon did not name. Their values stay, the role is ``unknown``.
 
     Two or more period headers mean a timeline whose axis did not form: some did
     not parse (``9М 2025``), or a miss between parsed ones broke the run.
-    Numeric columns side by side on the same rows may be alternatives; the
-    warning says so and leaves the role alone.
     """
     warnings: list[str] = []
     for sheet in layout.sheets:
@@ -549,14 +545,7 @@ def _unknown_header_warnings(
             if not unknown:
                 continue
             quoted = ", ".join(f"«{header.text}»" for header in unknown)
-            text = f"Unrecognized column headers in {block.block_id}: {quoted}"
-            side = _side_by_side_columns(sheet.name, block, unknown, by_addr)
-            if len(side) >= 2:
-                text += (
-                    f"; {len(side)} numeric columns side by side may be alternatives"
-                    " (scenario candidates), role left unknown"
-                )
-            warnings.append(text)
+            warnings.append(f"Unrecognized column headers in {block.block_id}: {quoted}")
     return warnings
 
 
@@ -572,43 +561,6 @@ def _no_axis_warning(sheet: str, row: int, headers: list[AxisHeader]) -> str:
         f"No time axis on {sheet}: headers {span} look like periods but do not form"
         f" an axis ({quoted}); columns kept as unknown"
     )
-
-
-def _side_by_side_columns(
-    sheet: str,
-    block,
-    headers: list[AxisHeader],
-    by_addr: dict[tuple[str, int, int], dict],
-) -> list[int]:
-    """Columns that hold numbers on at least two rows that another column shares."""
-    numeric: dict[int, set[int]] = {}
-    for header in headers:
-        rows: set[int] = set()
-        for layout_row in block.rows:
-            cell = by_addr.get((sheet, layout_row.row, header.col))
-            if cell is not None and _is_source_number(cell):
-                rows.add(layout_row.row)
-        numeric[header.col] = rows
-    return [
-        col
-        for col, rows in numeric.items()
-        if any(len(rows & other) >= 2 for key, other in numeric.items() if key != col)
-    ]
-
-
-def _is_source_number(cell: dict) -> bool:
-    """A formula, or a cached number (a date serial is a number too)."""
-    formula = cell.get("formula_raw")
-    if isinstance(formula, str) and formula.strip():
-        return True
-    value = cell.get("cached_value")
-    if value is None:
-        return False
-    try:
-        float(str(value).replace(" ", "").replace(",", "."))
-    except ValueError:
-        return False
-    return True
 
 
 def _hidden_warnings(workbook_meta: dict, cells: list[dict]) -> list[str]:

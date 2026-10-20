@@ -64,9 +64,7 @@ def _unknown_columns(doc: ContextDocument) -> dict[str, list[str | None]]:
         ["Параметр", "Мин", "Макс"],
     ],
 )
-def test_side_by_side_numeric_columns_are_unknown_scenario_candidates(
-    tmp_path: Path, header: list[str]
-) -> None:
+def test_side_by_side_numeric_columns_stay_unknown(tmp_path: Path, header: list[str]) -> None:
     doc = _run(tmp_path, header)
     columns = _unknown_columns(doc)
     assert list(columns) == header[1:]
@@ -74,7 +72,7 @@ def test_side_by_side_numeric_columns_are_unknown_scenario_candidates(
         assert columns[text] == [str(100 * row + col) for row in range(1, 5)]
     warning = next(item for item in doc.warnings if "Unrecognized column headers" in item)
     assert all(f"«{text}»" in warning for text in header[1:])
-    assert "scenario candidates" in warning
+    assert "scenario" not in warning
     assert warning in (tmp_path / "job" / "context.md").read_text(encoding="utf-8")
 
 
@@ -113,4 +111,4 @@ def test_period_like_headers_without_an_axis_warn_with_their_address(
     warning = next(item for item in doc.warnings if "No time axis" in item)
     assert "Ввод!B1:D1" in warning
     assert all(f"«{text}»" in warning for text in header[1:])
-    assert not any("scenario candidates" in item for item in doc.warnings)
+    assert not any("scenario" in item for item in doc.warnings)
