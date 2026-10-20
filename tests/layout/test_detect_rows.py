@@ -54,6 +54,39 @@ def test_check_row_is_marker_not_finding() -> None:
     assert "candidates" not in dumped
 
 
+def test_check_stem_inside_word_is_not_check_row() -> None:
+    cells = [
+        _c("BS", "A1", "Item"),
+        _c("BS", "B1", "2023"),
+        _c("BS", "C1", "2024"),
+        _c("BS", "A2", "Задолженность поставщикам, в т.ч."),
+        _c("BS", "B2", "50"),
+        _c("BS", "C2", "60"),
+        _c("BS", "A3", "  - перед подрядчиками"),
+        _c("BS", "B3", "20"),
+        _c("BS", "C3", "25"),
+        _c("BS", "A4", "Всего задолженность"),
+        _c("BS", "B4", "50", formula="=B2"),
+        _c("BS", "C4", "60", formula="=C2"),
+        _c("BS", "A5", "Итог должен быть равен нулю"),
+        _c("BS", "B5", "0", formula="=B4-B2"),
+        _c("BS", "C5", "0", formula="=C4-C2"),
+        _c("BS", "A6", "Сходимость остатков"),
+        _c("BS", "B6", "0"),
+        _c("BS", "C6", "0"),
+    ]
+    layout = detect_layout(cells)
+    rows = {r.label.strip(): r for r in layout.sheets[0].blocks[0].rows}
+    real = ("Задолженность поставщикам, в т.ч.", "- перед подрядчиками", "Всего задолженность")
+    for label in real:
+        row = rows[label]
+        assert row.check_row is False, label
+        assert row.kind == "fact", label
+    assert rows["Итог должен быть равен нулю"].check_row is True
+    assert rows["Итог должен быть равен нулю"].kind == "helper"
+    assert rows["Сходимость остатков"].check_row is True
+
+
 def test_section_header_is_abstract_and_week_index_is_index() -> None:
     cells = [
         _c("Dash", "A1", "Item"),

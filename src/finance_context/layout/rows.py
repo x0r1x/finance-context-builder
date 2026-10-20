@@ -27,8 +27,10 @@ from finance_context.layout.periods import (
 )
 from finance_context.layout.units import is_unit_text
 
+# Cyrillic stems match only at a word start: a bare `должен` also hits
+# `задолженность`, which turned ordinary balance lines into check rows.
 _CHECK = re.compile(
-    r"check|проверк|контроль|tie[- ]?out|plug\b|сход[ия]|должен",
+    r"check|tie[- ]?out|plug\b|\b(?:проверк|контроль|сход[ия]|долж(?:ен|на|но|ны)\b)",
     re.IGNORECASE,
 )
 
