@@ -83,6 +83,7 @@ def _include_layout_imports(buckets: dict[str, list[Path]]) -> None:
 
     ``layout/units.py`` imports ``context/measure.py``. A directory bucket would
     leave that edit in the publish stage, so ``layout.json`` would stay fresh.
+    Parent package ``__init__.py`` files run on that import, so they are hashed too.
     """
     seen = {path.resolve() for path in buckets["layout"]}
     pending = [path for path in buckets["layout"] if path.suffix == ".py"]
@@ -117,8 +118,14 @@ def _imported_package_files(path: Path) -> list[Path]:
             modules.extend(_import_from_modules(path, node))
         for module in modules:
             candidate = _module_file(module)
-            if candidate is not None:
-                found.append(candidate)
+            if candidate is None:
+                continue
+            found.append(candidate)
+            parts = module.split(".")
+            for index in range(1, len(parts)):
+                parent = _module_file(".".join(parts[:index]))
+                if parent is not None and parent.name == "__init__.py":
+                    found.append(parent)
     return found
 
 
