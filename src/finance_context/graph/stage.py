@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from datetime import date
 from pathlib import Path
 
 from finance_context.excel.a1 import index_to_col
@@ -20,6 +21,7 @@ from finance_context.graph.models import (
 )
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
+from finance_context.layout.periods import calendar_rank
 from finance_context.layout.resolve import period_headers
 from finance_context.models.context import GraphPointer
 from finance_context.store.fs import read_parquet, write_json, write_parquet
@@ -201,20 +203,41 @@ def calendar_key(period_id: str) -> str:
 
 
 def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, int]]:
-    """Cell period ids stay distinct. The index value is the calendar-key slot."""
+    """Cell period ids stay distinct. The index value is the calendar-key slot.
+
+    A calendar key's slot is ``calendar_rank``: period start within its grain,
+    not the sheet or column it was first seen in. Variant ids share that slot.
+    Keys that are not calendar periods keep first-seen order after those ranks.
+    """
     period_by_cell: dict[tuple[str, int], str] = {}
-    index: dict[str, int] = {}
-    slots: dict[str, int] = {}
-    seq = 0
+    seen: list[str] = []
+    known: set[str] = set()
     for sheet in layout.sheets:
         for block in sheet.blocks:
             for header in period_headers(sheet, block):
                 period_by_cell[(sheet.name, header.col)] = header.period_key
-                slot = calendar_key(header.period_key)
-                if slot not in slots:
-                    slots[slot] = seq
-                    seq += 1
-                index[header.period_key] = slots[slot]
+                if header.period_key not in known:
+                    known.add(header.period_key)
+                    seen.append(header.period_key)
+    ranked: list[tuple[tuple[int, date, str], str]] = []
+    other: list[str] = []
+    placed: set[str] = set()
+    for period_id in seen:
+        key = calendar_key(period_id)
+        if key in placed:
+            continue
+        placed.add(key)
+        rank = calendar_rank(key)
+        if rank is None:
+            other.append(key)
+        else:
+            ranked.append((rank, key))
+    ranked.sort(key=lambda item: item[0])
+    slots = {key: index for index, (_rank, key) in enumerate(ranked)}
+    base = len(slots)
+    for offset, key in enumerate(other):
+        slots[key] = base + offset
+    index = {period_id: slots[calendar_key(period_id)] for period_id in seen}
     return period_by_cell, index
 
 

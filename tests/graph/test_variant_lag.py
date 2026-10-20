@@ -16,10 +16,14 @@ def _text(addr: str, value: str) -> CellSpec:
     return CellSpec(addr=addr, value=value, type="inlineStr")
 
 
-def _run(tmp_path: Path, cells: list[CellSpec]) -> tuple[dict, list[dict]]:
+def _run(
+    tmp_path: Path,
+    cells: list[CellSpec] | None = None,
+    sheets: list[SheetSpec] | None = None,
+) -> tuple[dict, list[dict]]:
     source = build_xlsx(
         tmp_path / "model.xlsx",
-        sheets=[SheetSpec(name="P&L", cells=cells)],
+        sheets=sheets or [SheetSpec(name="P&L", cells=cells or [])],
     )
     dest = tmp_path / "job"
     dest.mkdir()
@@ -130,3 +134,194 @@ def test_bare_year_beside_estimate_stays_split_and_same_slot(tmp_path: Path) -> 
     assert _link(graph, "P&L!C2")["formula_class"] == "same_period"
     assert _lag(edges, "P&L!D2", "P&L!C2") == "-1"
     assert _link(graph, "P&L!D2")["formula_class"] == "rollforward"
+
+
+def test_out_of_order_variant_columns_rank_by_calendar_year(tmp_path: Path) -> None:
+    """``2025 план | 2026 план | 2023 факт | 2024 факт | 2025 факт``.
+
+    First-seen slots put ``2025`` at 0 and ``2024`` at 3, so ``2025 факт`` →
+    ``2024 факт`` was lag 3. The slot is the year's calendar rank.
+    """
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2025 план"),
+            _text("C1", "2026 план"),
+            _text("D1", "2023 факт"),
+            _text("E1", "2024 факт"),
+            _text("F1", "2025 факт"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="1"),
+            CellSpec(addr="C2", value="2"),
+            CellSpec(addr="D2", value="3"),
+            CellSpec(addr="E2", value="4", formula="=D2"),
+            CellSpec(addr="F2", value="5", formula="=E2"),
+        ],
+    )
+    assert _link(graph, "P&L!E2")["period_id"] == "2024"
+    assert _link(graph, "P&L!F2")["period_id"] == "2025@факт"
+    assert _lag(edges, "P&L!E2", "P&L!D2") == "-1"
+    assert _lag(edges, "P&L!F2", "P&L!E2") == "-1"
+    assert _link(graph, "P&L!E2")["formula_class"] == "rollforward"
+    assert _link(graph, "P&L!F2")["formula_class"] == "rollforward"
+
+
+def test_forecast_sheet_before_history_keeps_year_lag(tmp_path: Path) -> None:
+    """History ``2024`` → ``2023`` stays one year back when Forecast is seen first.
+
+    Forecast introduces ``2024`` and ``2025`` before History's ``2022 | 2023 | 2024``.
+    First-seen then scored that edge as lag 3.
+    """
+    graph, edges = _run(
+        tmp_path,
+        sheets=[
+            SheetSpec(
+                name="Forecast",
+                cells=[
+                    _text("A1", "Item"),
+                    _text("B1", "2024 факт"),
+                    _text("C1", "2024 план"),
+                    _text("D1", "2025 план"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="C2", value="2", formula="=B2"),
+                    CellSpec(addr="D2", value="3"),
+                ],
+            ),
+            SheetSpec(
+                name="History",
+                cells=[
+                    _text("A1", "Item"),
+                    _text("B1", "2022"),
+                    _text("C1", "2023"),
+                    _text("D1", "2024"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="C2", value="2"),
+                    CellSpec(addr="D2", value="3", formula="=C2"),
+                ],
+            ),
+        ],
+    )
+    assert _link(graph, "Forecast!C2")["period_id"] == "2024@план"
+    assert _lag(edges, "Forecast!C2", "Forecast!B2") == "same"
+    assert _link(graph, "History!D2")["period_id"] == "2024"
+    assert _lag(edges, "History!D2", "History!C2") == "-1"
+    assert _link(graph, "History!D2")["formula_class"] == "rollforward"
+
+
+def test_out_of_order_columns_rank_by_calendar_year(tmp_path: Path) -> None:
+    """A descending ``2025E | 2024E | 2023E`` axis lags by year, not column position.
+
+    A leftward reference hits a later year, so the lag is positive.
+    """
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2025E"),
+            _text("C1", "2024E"),
+            _text("D1", "2023E"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="1"),
+            CellSpec(addr="C2", value="2", formula="=B2"),
+            CellSpec(addr="D2", value="3", formula="=C2"),
+        ],
+    )
+    assert _link(graph, "P&L!C2")["period_id"] == "2024"
+    assert _link(graph, "P&L!D2")["period_id"] == "2023"
+    assert _lag(edges, "P&L!C2", "P&L!B2") == "1"
+    assert _lag(edges, "P&L!D2", "P&L!C2") == "1"
+    assert _link(graph, "P&L!C2")["formula_class"] == "cross_period"
+    assert _link(graph, "P&L!D2")["formula_class"] == "cross_period"
+
+
+def test_scrambled_year_columns_keep_calendar_steps(tmp_path: Path) -> None:
+    """``2025E | 2026E | 2023E | 2024E``: ``2025`` → ``2024`` is one year, not three slots."""
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2025E"),
+            _text("C1", "2026E"),
+            _text("D1", "2023E"),
+            _text("E1", "2024E"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="1", formula="=E2"),
+            CellSpec(addr="C2", value="2"),
+            CellSpec(addr="D2", value="3"),
+            CellSpec(addr="E2", value="4", formula="=D2"),
+        ],
+    )
+    assert _lag(edges, "P&L!E2", "P&L!D2") == "-1"
+    assert _lag(edges, "P&L!B2", "P&L!E2") == "-1"
+    assert _link(graph, "P&L!B2")["formula_class"] == "rollforward"
+    assert _link(graph, "P&L!E2")["formula_class"] == "rollforward"
+
+
+def test_out_of_order_halves_stay_distinct_calendar_slots(tmp_path: Path) -> None:
+    """``2024H1`` and ``2024H2`` do not collapse, and column order does not set the lag."""
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2025H2"),
+            _text("C1", "2024H1"),
+            _text("D1", "2025H1"),
+            _text("E1", "2024H2"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="1", formula="=D2"),
+            CellSpec(addr="C2", value="2"),
+            CellSpec(addr="D2", value="3", formula="=E2"),
+            CellSpec(addr="E2", value="4", formula="=C2"),
+        ],
+    )
+    assert _link(graph, "P&L!E2")["period_id"] == "2024H2"
+    assert _link(graph, "P&L!D2")["period_id"] == "2025H1"
+    assert _lag(edges, "P&L!E2", "P&L!C2") == "-1"
+    assert _lag(edges, "P&L!D2", "P&L!E2") == "-1"
+    assert _lag(edges, "P&L!B2", "P&L!D2") == "-1"
+    assert _link(graph, "P&L!E2")["formula_class"] == "rollforward"
+    assert _link(graph, "P&L!D2")["formula_class"] == "rollforward"
+
+
+def test_quarter_sheet_does_not_change_year_lag(tmp_path: Path) -> None:
+    """Years and quarters stay separate runs. A quarter sheet does not sit between years."""
+    graph, edges = _run(
+        tmp_path,
+        sheets=[
+            SheetSpec(
+                name="Quarters",
+                cells=[
+                    _text("A1", "Item"),
+                    _text("B1", "2024Q1"),
+                    _text("C1", "2024Q2"),
+                    _text("D1", "2024Q3"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="C2", value="2", formula="=B2"),
+                    CellSpec(addr="D2", value="3", formula="=C2"),
+                ],
+            ),
+            SheetSpec(
+                name="Years",
+                cells=[
+                    _text("A1", "Item"),
+                    _text("B1", "2023"),
+                    _text("C1", "2024"),
+                    _text("D1", "2025"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="C2", value="2", formula="=B2"),
+                    CellSpec(addr="D2", value="3", formula="=C2"),
+                ],
+            ),
+        ],
+    )
+    assert _lag(edges, "Quarters!C2", "Quarters!B2") == "-1"
+    assert _lag(edges, "Quarters!D2", "Quarters!C2") == "-1"
+    assert _lag(edges, "Years!C2", "Years!B2") == "-1"
+    assert _lag(edges, "Years!D2", "Years!C2") == "-1"
+    assert _link(graph, "Years!D2")["formula_class"] == "rollforward"
+    assert _link(graph, "Quarters!C2")["formula_class"] == "rollforward"

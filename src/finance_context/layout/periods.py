@@ -460,6 +460,31 @@ def is_calendar_key(key: str | None) -> bool:
     )
 
 
+def calendar_rank(key: str) -> tuple[int, date, str] | None:
+    """Grain, then the period start. ``None`` when ``key`` is not a calendar key.
+
+    Years, halves, quarters, months, and days each stay in their own run.
+    ``_key_as_date`` is the start, so ``2024H1`` and ``2024H2`` do not collapse
+    the way ``parse_period_key`` does. The key string breaks a remaining tie.
+    """
+    if not is_calendar_key(key):
+        return None
+    start = _key_as_date(key)
+    if start is None:
+        return None
+    if _YEAR_KEY.fullmatch(key):
+        grain = 0
+    elif _HALF_KEY.fullmatch(key):
+        grain = 1
+    elif _QUARTER_KEY.fullmatch(key):
+        grain = 2
+    elif _MONTH_KEY.fullmatch(key):
+        grain = 3
+    else:
+        grain = 4
+    return grain, start, key
+
+
 def is_calendar_hit(hit: PeriodHit | None) -> bool:
     return hit is not None and is_calendar_key(hit.period_key)
 
