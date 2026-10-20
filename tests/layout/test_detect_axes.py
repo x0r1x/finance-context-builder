@@ -260,7 +260,7 @@ def test_visible_gap_still_splits_the_period_run() -> None:
     assert [period.period_key for period in sheet.axes[0].periods] == ["2024", "2025"]
 
 
-def test_period_role_is_not_article_role() -> None:
+def test_explicit_period_marker_stays_a_period_column() -> None:
     cells = [
         _c("BS", "A1", "Item"),
         _c("BS", "B1", "2023"),
@@ -278,9 +278,6 @@ def test_period_role_is_not_article_role() -> None:
         "total",
         "relative",
     }
-    for row in block.rows:
-        dumped = row.model_dump()
-        assert dumped.get("article_role") is None
 
 
 def test_monthly_headers_form_a_period_axis() -> None:

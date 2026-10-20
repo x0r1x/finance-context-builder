@@ -60,11 +60,7 @@ def _doc() -> ContextDocument:
                             unit="money",
                             currency="GBP",
                             scale="k",
-                            time_semantics="bop",
-                            sign="stock",
                         ),
-                        period_position="beginning",
-                        aggregation="first",
                         scale_factor=1000,
                         values=["100", "110"],
                         value_statuses=["cached", "cached"],
@@ -152,7 +148,7 @@ def test_percent_unit_shows_the_fraction_and_the_percent() -> None:
                         row=1,
                         kind="fact",
                         label="CPI",
-                        hints=RowHints(unit="rate", time_semantics="rate"),
+                        hints=RowHints(unit="rate"),
                         cells=[RoleCell(addr="B1", col=1, role="unit", cached_value="%")],
                         values=["0.02"],
                         value_statuses=["cached"],
@@ -196,8 +192,6 @@ def test_markdown_keeps_every_period_and_excluded_row() -> None:
                         row=3,
                         kind="helper",
                         label="Spare",
-                        disposition="excluded",
-                        exclusion_reason="helper",
                         values=["0"] * 20,
                     ),
                 ],
@@ -207,7 +201,6 @@ def test_markdown_keeps_every_period_and_excluded_row() -> None:
     rendered = render_markdown(doc)
     assert "Y20" in rendered
     assert "Spare" in rendered
-    assert "excluded" in rendered
     assert "Truncated" not in rendered
 
 
@@ -231,7 +224,6 @@ def test_markdown_parameters_include_selector_and_value() -> None:
                         row=3,
                         kind="flag",
                         label="Scenario Chosen",
-                        disposition="excluded",
                         cells=[RoleCell(addr="D3", col=4, role="value", cached_value="1")],
                         values=["1"],
                     ),
@@ -280,15 +272,11 @@ def test_axes_print_periods_as_columns() -> None:
                     ContextPeriod(
                         col=2,
                         period_key="Y1",
-                        phase="construction",
-                        phase_year=1,
                         flags={"construction": True},
                     ),
                     ContextPeriod(
                         col=3,
                         period_key="Y2",
-                        phase="operation",
-                        phase_year=1,
                         flags={"operation": True},
                     ),
                 ],
@@ -299,8 +287,6 @@ def test_axes_print_periods_as_columns() -> None:
     assert "| PF Model!r9 | 2021 | 2022 | 2032 |\n| --- | --- | --- | --- |\n" in rendered
     assert "| Period |" not in rendered
     assert "| TBA!r1 | Y1 | Y2 |" in rendered
-    assert "| Phase | construction | operation |" in rendered
-    assert "| Phase year | 1 | 1 |" in rendered
     assert "| Flags | construction | operation |" in rendered
 
 

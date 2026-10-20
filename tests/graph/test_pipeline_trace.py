@@ -282,7 +282,7 @@ def test_pipeline_traces_blank_ref_and_styled_blank(tmp_path: Path) -> None:
     assert all("empty range" not in warning for warning in doc.warnings)
 
 
-def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
+def test_pipeline_publishes_iterate_and_cycles(tmp_path: Path) -> None:
     source = _circular_book(tmp_path / "circular.xlsx")
     dest = tmp_path / "job"
     dest.mkdir()
@@ -297,9 +297,8 @@ def test_pipeline_publishes_iterate_and_cycle_breakers(tmp_path: Path) -> None:
     assert graph["cycles"]
     members = {m for cycle in graph["cycles"] for m in cycle["members"]}
     assert {"CF!B5", "CF!B6"} <= members or {"CF!C5", "CF!C6"} <= members
-    breakers = {b for cycle in graph["cycles"] for b in cycle.get("breakers") or []}
-    assert "CF!B6" in breakers or "CF!C6" in breakers
     assert all(cycle["class"] == "unexpected" for cycle in graph["cycles"])
+    assert all(cycle.get("breakers") == [] for cycle in graph["cycles"])
 
 
 def test_graph_does_not_rewrite_cell_edges(tmp_path: Path, monkeypatch) -> None:

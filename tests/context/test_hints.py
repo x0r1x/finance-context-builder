@@ -1,60 +1,21 @@
 from __future__ import annotations
 
-from finance_context.context.assemble import _hint_blob_and_tokens, _hints_for
+from finance_context.context.assemble import _hints_for
 from finance_context.layout.models import LayoutRow
 
 
 def test_percent_unit_is_a_rate() -> None:
-    blob, tokens = _hint_blob_and_tokens(
-        "Inflation per year (costs) from beginning of concession"
-    )
-    assert "costs" in tokens
-    assert "inflation" in blob
     row = LayoutRow(row=8, label="Inflation per year (costs) from beginning of concession")
     hints = _hints_for(row, "%")
-    assert hints.time_semantics == "rate"
     assert hints.unit == "rate"
 
 
-def test_traffic_label_keeps_flow_time() -> None:
-    row = LayoutRow(
-        row=13,
-        label="TRAFFIC - Heavy Vehicle (HV)",
-        kind="fact",
-    )
-    hints = _hints_for(row)
-    assert hints.time_semantics == "flow"
-    assert hints.unit is None
-
-
-def test_balance_sheet_section_makes_a_stock() -> None:
-    row = LayoutRow(row=8, label="Cash in hand", kind="fact", section_path=["Balance Sheet"])
-    hints = _hints_for(row)
-    assert hints.nature == "balance"
-    assert hints.time_semantics == "stock"
-
-
-def test_balance_word_in_a_section_is_not_the_balance_sheet() -> None:
-    row = LayoutRow(row=8, label="Cash in hand", kind="fact", section_path=["Balance check"])
-    hints = _hints_for(row, sheet="Balances and checks")
-    assert hints.nature is None
-    assert hints.time_semantics == "flow"
-
-
-def test_opening_balance_stays_bop() -> None:
-    row = LayoutRow(row=2, label="Opening cash", kind="fact")
-    hints = _hints_for(row)
-    assert hints.time_semantics == "bop"
-    assert hints.sign == "stock"
-
-
-def test_index_unit_is_a_level_and_percent_stays_a_rate() -> None:
+def test_index_unit_is_a_ratio_and_percent_stays_a_rate() -> None:
     index = LayoutRow(row=172, label="CPI", kind="fact")
     index_hints = _hints_for(index, "Index")
-    assert index_hints.time_semantics == "stock"
+    assert index_hints.unit == "ratio"
     rate = LayoutRow(row=165, label="CPI", kind="fact")
     rate_hints = _hints_for(rate, "%")
-    assert rate_hints.time_semantics == "rate"
     assert rate_hints.unit == "rate"
 
 
@@ -73,4 +34,3 @@ def test_k_pound_in_label_sets_money_gbp() -> None:
     assert hints.unit == "money"
     assert hints.currency == "GBP"
     assert hints.scale == "k"
-    assert hints.sign == "inflow"

@@ -66,8 +66,6 @@ def sample_context(*, job_id: str = "job") -> ContextDocument:
                 text="Y5",
                 period_key="Y5",
                 index=5,
-                phase="operation",
-                phase_year=1,
                 start_date="2026-01-01",
                 end_date="2026-12-31",
             )
@@ -89,7 +87,6 @@ def sample_context(*, job_id: str = "job") -> ContextDocument:
                     unit="money",
                     currency="GBP",
                     scale="k",
-                    sign="inflow",
                 ),
                 formula="=RC[-1]*(1+Growth)",
                 values=["1234.56"],
@@ -102,7 +99,7 @@ def sample_context(*, job_id: str = "job") -> ContextDocument:
                 row=11,
                 label="Other income",
                 label_path=["Operation", "Other income"],
-                hints=RowHints(unit="money", currency="GBP", scale="k", sign="inflow"),
+                hints=RowHints(unit="money", currency="GBP", scale="k"),
                 values=["765.44"],
                 statuses=["cached"],
                 normalized=["765440"],
@@ -113,7 +110,7 @@ def sample_context(*, job_id: str = "job") -> ContextDocument:
                 row=12,
                 label="Total",
                 label_path=["Operation", "Total"],
-                hints=RowHints(unit="money", currency="GBP", scale="k", sign="inflow"),
+                hints=RowHints(unit="money", currency="GBP", scale="k"),
                 formula="=SUM(H10:H11)",
                 values=["2000"],
                 statuses=["cached"],
@@ -167,8 +164,6 @@ def sample_context(*, job_id: str = "job") -> ContextDocument:
                 label="Discount rate",
                 label_path=["Inputs", "Discount rate"],
                 kind="fact",
-                period_position="instant",
-                aggregation="none",
                 hints=RowHints(unit="rate"),
                 cells=[
                     RoleCell(
@@ -210,7 +205,7 @@ def sample_context(*, job_id: str = "job") -> ContextDocument:
         ),
         axes=[axis],
         blocks=[timeline, params],
-        warnings=["cache missing inside the phase"],
+        warnings=["cache missing"],
     )
 
 
@@ -270,7 +265,6 @@ def _timeline(
     statuses: list[str],
     normalized: list[str | None],
     formula: str | None = None,
-    disposition: str | None = None,
     scale_factor: int | None = None,
 ) -> BlockRow:
     return BlockRow(
@@ -280,9 +274,6 @@ def _timeline(
         label=label,
         label_path=label_path,
         kind="fact",
-        disposition=disposition,
-        period_position="during_period",
-        aggregation="sum",
         scale_factor=scale_factor,
         hints=hints,
         formula=formula,

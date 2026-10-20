@@ -1,4 +1,4 @@
-"""RU/EN words the layout reads: param headers, phases, period roles and units.
+"""RU/EN words the layout reads: param headers, period roles and units.
 
 Words live in ``lexicon.json`` next to this module. A word matches whole. A longer
 word matches when its Snowball stem agrees with the entry, or when only a
@@ -86,9 +86,6 @@ class _LexiconModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     header_roles: dict[str, list[str]]
-    phases: dict[str, list[str]]
-    phase_events: list[str]
-    operation_duration: list[str]
     period_roles: dict[str, list[str]]
     period_words: dict[str, list[str]]
     structural: _Structural
@@ -125,9 +122,6 @@ def _validate(data: dict[str, Any], *, package: bool) -> None:
 class _OverlayModel(BaseModel):
     model_config = ConfigDict(extra="allow")
     header_roles: dict[str, list[str]] | None = None
-    phases: dict[str, list[str]] | None = None
-    phase_events: list[str] | None = None
-    operation_duration: list[str] | None = None
     period_roles: dict[str, list[str]] | None = None
     period_words: dict[str, list[str]] | None = None
     structural: dict[str, Any] | None = None

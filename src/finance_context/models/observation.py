@@ -6,8 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
-from finance_context.models.context import TimelinePhase
-from finance_context.vocab import FormulaClass, PeriodPosition, SeriesAggregation, ValueStatus
+from finance_context.vocab import FormulaClass, ValueStatus
 
 OBSERVATION_SCHEMA_VERSION = "observation-2"
 
@@ -16,7 +15,6 @@ class ObservationUnit(BaseModel):
     kind: str | None = None
     currency: str | None = None
     scale: str | None = None
-    sign: str | None = None
 
 
 class ObservationPrecedent(BaseModel):
@@ -44,8 +42,6 @@ class ObservationSource(BaseModel):
 
 class ObservationTimeline(BaseModel):
     axis_id: str
-    phase: TimelinePhase | None = None
-    phase_year: int | None = None
     start_date: str | None = None
     end_date: str | None = None
     group_key: str | None = None
@@ -54,9 +50,6 @@ class ObservationTimeline(BaseModel):
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
-        if data.get("phase") is None:
-            data.pop("phase", None)
-            data.pop("phase_year", None)
         for key in ("start_date", "end_date", "group_key"):
             if data.get(key) is None:
                 data.pop(key, None)
@@ -72,14 +65,11 @@ class Observation(BaseModel):
 
     row_key: str
     label: str
-    disposition: str | None = None
     period_id: str
     value: str | None = None
     value_status: ValueStatus
     normalized_value: str | None = None
     scale_factor: int | None = None
-    period_position: PeriodPosition | None = None
-    aggregation: SeriesAggregation | None = None
     scenario: str | None = None
     unit: ObservationUnit
     formula: ObservationFormula

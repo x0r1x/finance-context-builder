@@ -84,11 +84,6 @@ def test_observations_selector_limit_and_unknown_row(tmp_path: Path) -> None:
         assert missing.status_code == 400
         assert missing.json()["error"] == "selector_required"
         assert "etag" not in missing.headers
-        phase_only = client.get(
-            f"/v1/context-jobs/{_JOB}/observations",
-            params={"phase": "operation"},
-        )
-        assert phase_only.status_code == 400
         unknown = client.get(
             f"/v1/context-jobs/{_JOB}/observations",
             params={"row_key": "missing"},

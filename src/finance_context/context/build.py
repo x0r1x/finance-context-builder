@@ -11,7 +11,6 @@ from finance_context.context.assemble import (
 from finance_context.context.series import (
     format_number,
     normalize_series,
-    phase_gate,
     scale_factor_for,
     value_status,
 )
@@ -23,7 +22,6 @@ from finance_context.layout.params import is_scenario_selector_label
 from finance_context.layout.periods import display_cell_text
 from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
-from finance_context.layout.roles import article_role
 from finance_context.layout.units import is_block_unit_caption
 from finance_context.models.context import (
     SCHEMA_VERSION,
@@ -78,22 +76,21 @@ def build_context(
                 unparsed += 1
                 warnings.append(f"Unparsed formula at {cell['sheet']}!{cell['addr']}")
 
-    roll_time = _roll_forward_time(relations)
-    out_of_phase: set[str] = set()
+    not_applicable: set[str] = set()
     blocks: list[FinancialBlock] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
             kind = getattr(block, "kind", "timeline")
-            views = _block_views(sheet, block, axes_by_id)
-            hint_headers = [header for _axis_id, headers, _phases in views for header in headers]
+            views = _block_views(sheet, block)
+            hint_headers = [header for _axis_id, headers in views for header in headers]
             axis_ids = (
-                list(dict.fromkeys(axis_id for axis_id, _headers, _phases in views))
+                list(dict.fromkeys(axis_id for axis_id, _headers in views))
                 if kind != "params"
                 else []
             )
             periods = _local_periods(views, axes_by_id) if axis_ids else [
                 _period_dict(header)
-                for _axis_id, headers, _phases in views
+                for _axis_id, headers in views
                 for header in headers
             ]
             rows: list[BlockRow] = []
@@ -107,7 +104,6 @@ def build_context(
             running_unit = block_unit
             body_unit = False
             for layout_row in block.rows:
-                row_key = f"{sheet.name}|{layout_row.row}|{block.block_id}"
                 parent = None
                 if layout_row.parent_row:
                     parent = parent_by_row.get(layout_row.parent_row)
@@ -145,28 +141,14 @@ def build_context(
                     headers=hint_headers,
                     by_addr=by_addr,
                 )
-                static = _is_static_row(kind, sheet.name, layout_row, hint_headers, by_addr)
                 hints = _hints_for(
                     layout_row,
                     unit_text,
                     number_formats=formats,
-                    static=static,
-                    sheet=sheet.name,
                 )
-                rolled = roll_time.get(row_key)
-                if rolled is not None and not static:
-                    update = {"time_semantics": rolled}
-                    if rolled == "flow":
-                        update["nature"] = "flow"
-                    hints = hints.model_copy(update=update)
                 series_unit = hints.unit
-                role = article_role(
-                    layout_row,
-                    _row_templates(sheet.name, layout_row.row, hint_headers, by_addr),
-                    block_kind=kind,
-                )
                 series: list[RowSeries] = []
-                for axis_id, headers, phases in views:
+                for axis_id, headers in views:
                     row_headers = headers
                     if is_scenario_selector_label(layout_row.label):
                         row_headers = [header for header in headers if header.role == "value"]
@@ -184,7 +166,6 @@ def build_context(
                         value_headers=row_headers,
                         by_addr=by_addr,
                         date1904=bool(workbook_meta.get("date1904")),
-                        period_phases=phases,
                         factor=scale_factor_for(hints.scale),
                     )
                     series.append(
@@ -204,7 +185,6 @@ def build_context(
                     block_id=block.block_id,
                     layout_row=layout_row,
                     layout_row_parent=parent,
-                    article_role=role,
                     headers=[],
                     value_headers=[],
                     by_addr=by_addr,
@@ -218,12 +198,11 @@ def build_context(
                     role_cells=role_cells,
                     series_unit=series_unit,
                     series=series,
-                    static=static,
                 )
-                for (_axis_id, headers, _phases), item in zip(views, series, strict=False):
+                for (_axis_id, headers), item in zip(views, series, strict=False):
                     for header, state in zip(headers, item.value_statuses, strict=False):
                         if state == "not_applicable":
-                            out_of_phase.add(
+                            not_applicable.add(
                                 f"{sheet.name}!{format_addr(header.col, layout_row.row)}"
                             )
                 rows.append(line)
@@ -248,11 +227,11 @@ def build_context(
             f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
         )
     warnings.extend(timeline_warnings)
-    in_phase_missing = [addr for addr in missing_addrs if addr not in out_of_phase]
-    if in_phase_missing:
-        sample = ", ".join(in_phase_missing[:3])
+    missing_values = [addr for addr in missing_addrs if addr not in not_applicable]
+    if missing_values:
+        sample = ", ".join(missing_values[:3])
         extra = f" (e.g. {sample})" if sample else ""
-        warnings.append(f"{len(in_phase_missing)} formula cell(s) missing cached values{extra}")
+        warnings.append(f"{len(missing_values)} formula cell(s) missing cached values{extra}")
     if graph is not None and graph.dangling:
         warnings.append(
             f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
@@ -302,13 +281,13 @@ def build_context(
 
 
 def _local_periods(
-    views: list[tuple[str, list[AxisHeader], dict[str, str | None]]],
+    views: list[tuple[str, list[AxisHeader]]],
     axes_by_id: dict[str, ContextAxis],
 ) -> list[dict[str, object]]:
     """Column map for a block whose columns differ from the shared timeline."""
     if len(views) != 1:
         return []
-    axis_id, headers, _phases = views[0]
+    axis_id, headers = views[0]
     local = axes_by_id.get(axis_id)
     if local is None:
         return []
@@ -322,8 +301,7 @@ def _local_periods(
 def _block_views(
     sheet,
     block,
-    axes_by_id: dict[str, ContextAxis],
-) -> list[tuple[str, list[AxisHeader], dict[str, str | None]]]:
+) -> list[tuple[str, list[AxisHeader]]]:
     kind = getattr(block, "kind", "timeline")
     if kind == "params":
         headers = [
@@ -331,22 +309,13 @@ def _block_views(
             for header in (block.axis.headers if block.axis is not None else [])
             if header.role in {"value", "scenario", "unknown"}
         ]
-        return [(block.block_id, headers, {})]
-    views: list[tuple[str, list[AxisHeader], dict[str, str | None]]] = []
-    published = list(block.timeline_ids)
-    if len(published) != len(block.axis_ids):
-        published = list(block.axis_ids)
-    published_for = dict(zip(block.axis_ids, published, strict=False))
+        return [(block.block_id, headers)]
+    views: list[tuple[str, list[AxisHeader]]] = []
     for axis in axes_for(sheet, block):
-        published_id = published_for.get(axis.id, axis.id)
-        annotated = axes_by_id.get(published_id)
-        by_key = {period.period_key: period for period in annotated.periods} if annotated else {}
         headers: list[AxisHeader] = []
-        phases: dict[str, str | None] = {}
         for period in axis.periods:
             if not is_series_column(period.kind, period.period_key):
                 continue
-            canon = by_key.get(period.period_key)
             headers.append(
                 AxisHeader(
                     col=period.col,
@@ -358,8 +327,7 @@ def _block_views(
                     hidden=bool(getattr(period, "hidden", False)),
                 )
             )
-            phases[period.period_key] = getattr(canon, "phase", None) if canon is not None else None
-        views.append((axis.id, headers, phases))
+        views.append((axis.id, headers))
     return views
 
 
@@ -372,11 +340,9 @@ def _series_numbers(
     value_headers: list,
     by_addr: dict[tuple[str, int, int], dict],
     date1904: bool,
-    period_phases: dict[str, str | None],
     factor: int | None,
 ) -> tuple[list[str | None], list[ValueStatus], list[str | None]]:
     keep_cols = {header.col for header in value_headers}
-    gate = phase_gate(layout_row.label)
     values: list[str | None] = []
     statuses: list[ValueStatus] = []
     for header in headers:
@@ -396,48 +362,11 @@ def _series_numbers(
             cached = displayed
         text = None if cached in (None, "") else str(cached)
         values.append(text)
-        phase = period_phases.get(str(header.period_key))
-        outside_phase = bool(gate and phase and gate != phase and text is None)
         structural = layout_row.kind not in _SERIES_KINDS and text is None
-        statuses.append(value_status(text, applicable=not outside_phase and not structural))
+        statuses.append(value_status(text, applicable=not structural))
     return values, statuses, normalize_series(values, factor)
 
 
-
-
-
-
-def _roll_forward_time(relations: list[RowRelation]) -> dict[str, str]:
-    """b/f is the opening, c/f the closing; the lines between them and their aliases move."""
-    found: dict[str, str] = {}
-    for rel in relations:
-        if rel.kind != "roll_forward" or not rel.source_row_key or not rel.target_row_key:
-            continue
-        opening = _split_row_key(rel.source_row_key)
-        closing = _split_row_key(rel.target_row_key)
-        if opening is None or closing is None:
-            continue
-        if opening[0] != closing[0] or opening[2] != closing[2]:
-            continue
-        sheet, first, block_id = opening
-        last = closing[1]
-        found[rel.source_row_key] = "bop"
-        found[rel.target_row_key] = "eop"
-        for row in range(first + 1, last):
-            found.setdefault(f"{sheet}|{row}|{block_id}", "flow")
-    for rel in relations:
-        if rel.kind != "alias" or not rel.source_row_key or not rel.target_row_key:
-            continue
-        if found.get(rel.source_row_key) == "flow":
-            found.setdefault(rel.target_row_key, "flow")
-    return found
-
-
-def _split_row_key(row_key: str) -> tuple[str, int, str] | None:
-    parts = row_key.split("|")
-    if len(parts) != 3 or not parts[1].isdigit():
-        return None
-    return parts[0], int(parts[1]), parts[2]
 
 
 
@@ -469,23 +398,6 @@ def _formula_neighbors(
         if ref not in seen:
             seen.append(ref)
     return seen
-
-
-def _row_templates(
-    sheet: str,
-    row: int,
-    headers: list,
-    by_addr: dict[tuple[str, int, int], dict],
-) -> list[str | None]:
-    templates: list[str | None] = []
-    for header in headers:
-        cell = by_addr.get((sheet, row, header.col))
-        template = None if cell is None else cell.get("formula_template")
-        templates.append(str(template) if template else None)
-    return templates
-
-
-
 
 
 
@@ -713,29 +625,6 @@ def _period_dict(header: AxisHeader) -> dict[str, object]:
     if header.hidden:
         item["hidden"] = True
     return item
-
-
-def _is_static_row(
-    kind: str,
-    sheet: str,
-    layout_row: LayoutRow,
-    headers: list,
-    by_addr: dict[tuple[str, int, int], dict],
-) -> bool:
-    """A params line or a scalar left of the ruler is a point value, not a period series."""
-    if layout_row.kind not in {"fact", "helper", "flag"}:
-        return False
-    if kind == "params":
-        return True
-    if not any(item.role == "value" for item in layout_row.cells):
-        return False
-    return not any(
-        (by_addr.get((sheet, layout_row.row, header.col)) or {}).get("cached_value")
-        not in (None, "")
-        for header in headers
-    )
-
-
 
 
 
