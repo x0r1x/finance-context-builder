@@ -460,6 +460,34 @@ def is_calendar_key(key: str | None) -> bool:
     )
 
 
+_ORDINAL_KEY = re.compile(r"^([YQMP])(\d+)$")
+
+
+def ordinal_position(key: str) -> tuple[str, int] | None:
+    """Absolute index of an ordinal period key inside its letter grain.
+
+    The axis parser emits only ``Y<n>``, ``Q<n>``, ``M<n>``, and ``P<n>``
+    (a Year / Год / Quarter / Month / Period label picks the letter). The
+    index is that number, so a missing step stays in the count. The letter is
+    the grain: ``Y`` and ``Q`` do not share an index, and neither shares one
+    with a calendar year.
+    """
+    if not key:
+        return None
+    match = _ORDINAL_KEY.fullmatch(key)
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2))
+
+
+def period_position(key: str) -> tuple[str, int] | None:
+    """Grain and absolute index for a calendar or ordinal period key."""
+    ordinal = ordinal_position(key)
+    if ordinal is not None:
+        return ordinal
+    return calendar_position(key)
+
+
 def calendar_position(key: str) -> tuple[str, int] | None:
     """Absolute index of a calendar key inside its grain.
 

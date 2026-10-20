@@ -20,7 +20,7 @@ from finance_context.graph.models import (
 )
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
-from finance_context.layout.periods import calendar_position
+from finance_context.layout.periods import period_position
 from finance_context.layout.resolve import period_headers
 from finance_context.models.context import GraphPointer
 from finance_context.store.fs import read_parquet, write_json, write_parquet
@@ -202,27 +202,29 @@ def calendar_key(period_id: str) -> str:
 
 
 def calendar_lag(source_id: str, target_id: str) -> str:
-    """Distance inside one grain. One calendar key is ``same``.
+    """Distance inside one grain. One period key is ``same``.
 
-    Anything else — another grain, or a key that is not a calendar period — is
-    ``unaligned``. ``classify_formula`` skips that, so it is not a prior step.
+    Calendar grains use the calendar index. Ordinal keys ``Y`` / ``Q`` / ``M`` /
+    ``P`` use the number after the letter. Another grain, or a key that is not
+    a period, is ``unaligned``. ``classify_formula`` skips that, so it is not a
+    prior step.
     """
     source = calendar_key(source_id)
     target = calendar_key(target_id)
     if source == target:
         return "same"
-    src = calendar_position(source)
-    tgt = calendar_position(target)
+    src = period_position(source)
+    tgt = period_position(target)
     if src is None or tgt is None or src[0] != tgt[0]:
         return "unaligned"
     return str(tgt[1] - src[1])
 
 
 def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, int]]:
-    """Cell period ids stay distinct. Variant ids of one calendar key share its index.
+    """Cell period ids stay distinct. Variant ids of one period key share its index.
 
-    The index is the absolute position from ``calendar_position``, comparable
-    only inside that grain. A key that is not a calendar period is omitted.
+    The index is the absolute position from ``period_position``, comparable
+    only inside that grain. A key that is not a period is omitted.
     """
     period_by_cell: dict[tuple[str, int], str] = {}
     index: dict[str, int] = {}
@@ -230,7 +232,7 @@ def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, 
         for block in sheet.blocks:
             for header in period_headers(sheet, block):
                 period_by_cell[(sheet.name, header.col)] = header.period_key
-                position = calendar_position(calendar_key(header.period_key))
+                position = period_position(calendar_key(header.period_key))
                 if position is not None:
                     index[header.period_key] = position[1]
     return period_by_cell, index

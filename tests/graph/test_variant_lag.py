@@ -8,6 +8,7 @@ from pathlib import Path
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.app.pipeline import Pipeline
+from finance_context.graph.stage import calendar_lag
 from finance_context.settings import Settings
 from finance_context.store.fs import read_parquet
 
@@ -381,8 +382,21 @@ def test_cross_grain_reference_is_unaligned(tmp_path: Path) -> None:
     assert _lag(edges, "Quarters!C2", "Quarters!B2") == "-1"
 
 
-def test_model_year_reference_is_unaligned(tmp_path: Path) -> None:
-    """``Y1`` is not a calendar key, so the step is not a number."""
+def test_ordinal_distance_keeps_a_missing_step() -> None:
+    """The number is the index. A missing ``Y2`` does not compress ``Y3`` → ``Y1``."""
+    assert calendar_lag("Y3", "Y1") == "-2"
+    assert calendar_lag("Y1", "Y3") == "2"
+    assert calendar_lag("M3", "M1") == "-2"
+    assert calendar_lag("Q2@план", "Q1") == "-1"
+    assert calendar_lag("P4", "P4") == "same"
+    assert calendar_lag("Y1", "Q1") == "unaligned"
+    assert calendar_lag("Y2", "2024") == "unaligned"
+    assert calendar_lag("value", "case-1") == "unaligned"
+    assert calendar_lag("value-h", "value-g") == "unaligned"
+
+
+def test_model_year_lag_is_the_ordinal_difference(tmp_path: Path) -> None:
+    """A Year row emits ``Y<n>``. ``Y2`` → ``Y1`` is one step; ``Y3`` → ``Y1`` is two."""
     graph, edges = _run(
         tmp_path,
         [
@@ -393,12 +407,94 @@ def test_model_year_reference_is_unaligned(tmp_path: Path) -> None:
             _text("A2", "Revenue"),
             CellSpec(addr="B2", value="1"),
             CellSpec(addr="C2", value="2", formula="=B2"),
-            CellSpec(addr="D2", value="3"),
+            CellSpec(addr="D2", value="3", formula="=B2"),
         ],
     )
     assert _link(graph, "P&L!C2")["period_id"] == "Y2"
-    assert _lag(edges, "P&L!C2", "P&L!B2") == "unaligned"
-    assert _link(graph, "P&L!C2")["formula_class"] == "same_period"
+    assert _link(graph, "P&L!D2")["period_id"] == "Y3"
+    assert _lag(edges, "P&L!C2", "P&L!B2") == "-1"
+    assert _link(graph, "P&L!C2")["formula_class"] == "rollforward"
+    assert _lag(edges, "P&L!D2", "P&L!B2") == "-2"
+    assert _link(graph, "P&L!D2")["formula_class"] == "cross_period"
+
+
+def test_period_and_quarter_labels_emit_their_own_ordinal_grains(tmp_path: Path) -> None:
+    """Period emits ``P<n>``, Quarter emits ``Q<n>``. ``Q`` against ``P`` is unaligned."""
+    graph, edges = _run(
+        tmp_path,
+        sheets=[
+            SheetSpec(
+                name="Period",
+                cells=[
+                    _text("A1", "Period"),
+                    _text("B1", "1"),
+                    _text("C1", "2"),
+                    _text("D1", "3"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="C2", value="2", formula="=B2"),
+                    CellSpec(addr="D2", value="3"),
+                ],
+            ),
+            SheetSpec(
+                name="Quarter",
+                cells=[
+                    _text("A1", "Quarter"),
+                    _text("B1", "1"),
+                    _text("C1", "2"),
+                    _text("D1", "3"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1", formula="=Period!C2"),
+                    CellSpec(addr="C2", value="2", formula="=B2"),
+                    CellSpec(addr="D2", value="3"),
+                ],
+            ),
+        ],
+    )
+    assert _link(graph, "Period!C2")["period_id"] == "P2"
+    assert _lag(edges, "Period!C2", "Period!B2") == "-1"
+    assert _link(graph, "Period!C2")["formula_class"] == "rollforward"
+    assert _link(graph, "Quarter!C2")["period_id"] == "Q2"
+    assert _lag(edges, "Quarter!C2", "Quarter!B2") == "-1"
+    assert _lag(edges, "Quarter!B2", "Period!C2") == "unaligned"
+    assert _link(graph, "Quarter!B2")["formula_class"] == "same_period"
+
+
+def test_ordinal_against_a_calendar_year_is_unaligned(tmp_path: Path) -> None:
+    graph, edges = _run(
+        tmp_path,
+        sheets=[
+            SheetSpec(
+                name="Model",
+                cells=[
+                    _text("A1", "Год"),
+                    _text("B1", "1"),
+                    _text("C1", "2"),
+                    _text("D1", "3"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="C2", value="2", formula="=Calendar!C2"),
+                    CellSpec(addr="D2", value="3"),
+                ],
+            ),
+            SheetSpec(
+                name="Calendar",
+                cells=[
+                    _text("A1", "Item"),
+                    _text("B1", "2023"),
+                    _text("C1", "2024"),
+                    _text("D1", "2025"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="C2", value="2"),
+                    CellSpec(addr="D2", value="3"),
+                ],
+            ),
+        ],
+    )
+    assert _link(graph, "Model!C2")["period_id"] == "Y2"
+    assert _lag(edges, "Model!C2", "Calendar!C2") == "unaligned"
+    assert _link(graph, "Model!C2")["formula_class"] == "same_period"
 
 
 def test_day_lag_counts_days(tmp_path: Path) -> None:
