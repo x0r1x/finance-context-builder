@@ -1171,3 +1171,19 @@ def test_year_like_data_row_is_not_a_header() -> None:
     ]
     labels = [row.label for block in sheet.blocks for row in block.rows]
     assert labels == ["Revenue", "Объем закупок полувагонов"]
+
+
+def test_dotted_role_word_keeps_the_year_on_the_axis() -> None:
+    cells = [
+        _c("CF", "A1", "Показатель"),
+        _c("CF", "B1", "2024"),
+        _c("CF", "C1", "2025 ожид."),
+        _c("CF", "D1", "2026"),
+        _c("CF", "A2", "Выручка"),
+        _c("CF", "B2", "1"),
+        _c("CF", "C2", "2"),
+        _c("CF", "D2", "3"),
+    ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "timeline"
+    assert [h.period_key for h in block.axis.headers] == ["2024", "2025", "2026"]

@@ -658,3 +658,25 @@ def test_parsed_period_or_plain_caption_is_not_period_like(text: str) -> None:
 
     assert not period_like_header(text)
 
+
+
+@pytest.mark.parametrize(
+    ("text", "period_key", "marker"),
+    [
+        ("2031 ожид.", "2031", "ожид"),
+        ("2025 факт.", "2025", "факт"),
+        ("2025 (ожид.)", "2025", "ожид"),
+        ("2025 (факт.)", "2025", "факт"),
+    ],
+)
+def test_role_word_with_a_dot_after_the_year_is_a_marker(
+    text: str, period_key: str, marker: str
+) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert (hit.kind, hit.period_key, marker_token(hit.variant), hit.explicit_role) == (
+        "period",
+        period_key,
+        marker,
+        True,
+    )

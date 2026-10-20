@@ -102,7 +102,7 @@ def _bind() -> None:
     )
     _FACT = re.compile(rf"^({historical})\.?$", re.IGNORECASE)
     _PLAN = re.compile(rf"^({forecast})\.?$", re.IGNORECASE)
-    _TAG = re.compile(rf"^(.*?)\s+\(?({role_word})\)?$", re.IGNORECASE)
+    _TAG = re.compile(rf"^(.*?)\s+\(?({role_word})\.?\)?$", re.IGNORECASE)
     _TAG_FIRST = re.compile(rf"^({role_word})\.?\s+(.+)$", re.IGNORECASE)
 
     def compile_forms(bodies: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
