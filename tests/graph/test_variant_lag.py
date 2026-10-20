@@ -106,9 +106,7 @@ def test_mutual_variant_refs_are_unexpected(tmp_path: Path) -> None:
     assert _link(graph, "P&L!C2")["formula_class"] == "same_period"
     assert graph["cycles"]
     assert {cycle["class"] for cycle in graph["cycles"]} == {"unexpected"}
-    assert any(
-        {"P&L!B2", "P&L!C2"} <= set(cycle["members"]) for cycle in graph["cycles"]
-    )
+    assert any({"P&L!B2", "P&L!C2"} <= set(cycle["members"]) for cycle in graph["cycles"])
 
 
 def test_bare_year_beside_estimate_stays_split_and_same_slot(tmp_path: Path) -> None:
