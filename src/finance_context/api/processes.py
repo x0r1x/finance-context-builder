@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import threading
+from multiprocessing.connection import wait as wait_for_exit
 from pathlib import Path
 
 from finance_context.adapters.memory_bus import MemoryJobBus
@@ -152,8 +153,12 @@ class JobProcesses:
                 proc.join()
                 timed_out = False
             else:
-                proc.join(timeout)
-                timed_out = proc.is_alive()
+                # Timeout comes from the sentinel, not is_alive(). A request thread can
+                # reap the child first; waitpid then raises ECHILD and poll() still
+                # reports the process as alive.
+                timed_out = not wait_for_exit([proc.sentinel], timeout)
+                if not timed_out:
+                    proc.join()
             if timed_out:
                 reap_process(proc)
             if self._is_closed(job_id, generation) or not self._bus.owns(job_id, generation):
