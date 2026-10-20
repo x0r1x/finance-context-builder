@@ -6,6 +6,7 @@ def test_formula_class_prefers_one_financial_shape() -> None:
     assert classify_formula("=SUM(C9:C12)", ["S!C9:C12"], ["same"]) == "aggregation"
     assert classify_formula("=B10", ["S!B10"], ["-1"]) == "rollforward"
     assert classify_formula("=RC[-1]") == "rollforward"
+    assert classify_formula("=RC[-1]", ["S!B2"], ["same"]) == "same_period"
     assert classify_formula("=B10*(1+C5)", ["S!B10", "S!C5"], ["-1", "same"]) == "cross_period"
     assert classify_formula("=Operation!C14", ["Operation!C14"], ["1"]) == "cross_period"
     assert classify_formula("=C15-C16", ["S!C15", "S!C16"], ["same", "same"]) == "same_period"

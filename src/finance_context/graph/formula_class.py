@@ -31,10 +31,13 @@ def classify_formula(
         return "conditional"
     if _AGGREGATION.search(text):
         return "aggregation"
-    offsets = _lag_numbers(lags or [])
-    if not offsets:
+    # A computed lag, including ``same`` for two variants of one calendar key,
+    # wins over an ``RC[-1]`` written in the formula.
+    if lags is None:
         offsets = [int(item) for item in _COL_OFFSET.findall(text)]
         offsets.extend(int(item) for item in _ROW_OFFSET.findall(text))
+    else:
+        offsets = _lag_numbers(lags)
     prior = [item for item in offsets if item < 0]
     forward = [item for item in offsets if item > 0]
     if prior or forward:

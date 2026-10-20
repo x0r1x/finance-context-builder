@@ -54,7 +54,7 @@ def test_graph_index_keeps_both_variant_columns() -> None:
     period_by_cell, index = _period_maps(layout)
     assert period_by_cell[("P&L", 2)] == "2024@факт"
     assert period_by_cell[("P&L", 3)] == "2024@план"
-    assert index["2024@факт"] != index["2024@план"]
+    assert index["2024@факт"] == index["2024@план"]
 
 
 def test_observations_and_block_series_keep_both_variant_columns() -> None:
