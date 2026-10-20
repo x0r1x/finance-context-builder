@@ -656,3 +656,47 @@ def test_year_in_the_label_column_is_still_not_a_row_name() -> None:
     cells += [_c("ПФ", f"{col}4", v) for col, v in zip("BCD", ["4", "5", "6"], strict=True)]
     rows = detect_layout(cells).sheets[0].blocks[0].rows
     assert "2024" not in [row.label for row in rows]
+
+
+def _flat_list(second: list[dict]) -> list[dict]:
+    cells = [_c("Notes", "A1", "Item")]
+    years = ["2023", "2024", "2025"]
+    cells += [_c("Notes", f"{col}1", y) for col, y in zip("CDE", years, strict=True)]
+    cells += [_c("Notes", "A2", "Widgets owed")] + second
+    cells += [_c("Notes", "A3", "Gadgets owed")]
+    cells += [_c("Notes", f"{col}3", v) for col, v in zip("CDE", ["5", "6", "7"], strict=True)]
+    cells += [_c("Notes", "A4", "Gizmos owed")]
+    cells += [_c("Notes", f"{col}4", v) for col, v in zip("CDE", ["8", "9", "10"], strict=True)]
+    return cells
+
+
+def test_dash_placeholders_make_an_empty_line_not_a_section_title() -> None:
+    dashes = [_c("Notes", f"{col}2", "-") for col in "CDE"]
+    rows = {row.label: row for row in detect_layout(_flat_list(dashes)).sheets[0].blocks[0].rows}
+    assert rows["Widgets owed"].kind == "fact"
+    assert rows["Gadgets owed"].parent_row is None
+    assert rows["Gadgets owed"].section_path == []
+    assert rows["Gizmos owed"].parent_row is None
+
+
+def test_a_formula_beside_the_label_makes_an_empty_line_not_a_section_title() -> None:
+    blank = [_c("Notes", "B2", None, formula='IF(ISERROR(Z2),"",Z2)')]
+    rows = {row.label: row for row in detect_layout(_flat_list(blank)).sheets[0].blocks[0].rows}
+    assert rows["Widgets owed"].kind == "fact"
+    assert rows["Gadgets owed"].parent_row is None
+    assert rows["Gizmos owed"].section_path == []
+
+
+def test_a_label_only_row_still_opens_a_section_at_the_same_indent() -> None:
+    rows = {row.label: row for row in detect_layout(_flat_list([])).sheets[0].blocks[0].rows}
+    title = rows["Widgets owed"]
+    assert title.kind == "abstract"
+    assert rows["Gadgets owed"].parent_row == title.row
+    assert rows["Gizmos owed"].section_path == ["Widgets owed"]
+
+
+def test_a_formula_that_prints_period_captions_keeps_a_section_title() -> None:
+    cells = _flat_list([_c("Notes", "B2", "2 кв. 2024", formula="C1")])
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows["Widgets owed"].kind == "abstract"
+    assert rows["Gadgets owed"].parent_row == rows["Widgets owed"].row
