@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from finance_context.graph.cycles import classify_cycles
-from finance_context.graph.stage import attach_cycle_breakers, circularity_hints
+from finance_context.graph.stage import circularity_hints
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
 
 
@@ -68,32 +68,7 @@ def test_period_roll_forward_is_iterative() -> None:
     assert cycles[0].class_ == "iterative_ok"
 
 
-def test_technical_bridge_cells_are_cycle_breakers() -> None:
-    edges = [
-        {
-            "source": "CF!B5",
-            "target": "CF!B6",
-            "kind": "ref",
-            "col_offset": 0,
-            "period_lag": "same",
-        },
-        {
-            "source": "CF!B6",
-            "target": "CF!B5",
-            "kind": "ref",
-            "col_offset": 0,
-            "period_lag": "same",
-        },
-    ]
-    exclusion = {("CF", 6): "technical_bridge"}
-    cycles = attach_cycle_breakers(classify_cycles(edges), exclusion)
-    assert len(cycles) == 1
-    assert cycles[0].class_ == "unexpected"
-    assert cycles[0].breakers == ["CF!B6"]
-
-
 def test_circular_label_hint_when_no_scc() -> None:
-    exclusion = {("CF", 12): "technical_bridge"}
     layout = Layout(
         sheets=[
             SheetLayout(
@@ -120,7 +95,7 @@ def test_circular_label_hint_when_no_scc() -> None:
         ]
     )
     index_rows = [("CF!B12", "CF", "B12", "CF|12|CF!r1", None, "2023", "calculated")]
-    hints = circularity_hints(layout, index_rows, [], exclusion)
+    hints = circularity_hints(layout, index_rows, [])
     assert len(hints) == 1
     assert hints[0].sheet == "CF"
     assert hints[0].row == 12
@@ -140,4 +115,4 @@ def test_circular_label_hint_when_no_scc() -> None:
             "period_lag": "same",
         },
     ]
-    assert circularity_hints(layout, index_rows, classify_cycles(cycle_edges), exclusion) == []
+    assert circularity_hints(layout, index_rows, classify_cycles(cycle_edges)) == []

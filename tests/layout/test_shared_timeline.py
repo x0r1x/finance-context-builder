@@ -57,13 +57,6 @@ def test_shifted_model_years_share_one_published_timeline() -> None:
     assert by_axis[canonical].timeline_id == canonical
     assert by_axis[local].timeline_id == canonical
     assert [period.period_key for period in by_axis[canonical].periods] == ["Y1", "Y2", "Y3", "Y4"]
-    assert [period.phase for period in by_axis[canonical].periods] == [
-        "construction",
-        "construction",
-        "operation",
-        "operation",
-    ]
-    assert not any(period.phase for period in by_axis[local].periods)
     build_block = next(block for block in doc.blocks if block.sheet == "Build")
     assert build_block.axis_ids == [local]
     assert [item["col"] for item in build_block.periods] == [5, 6, 7, 8]
@@ -76,7 +69,6 @@ def test_shifted_model_years_share_one_published_timeline() -> None:
     assert "| Axis | Y1 | Y2 | Y3 | Y4 |" in rendered
     assert f"| {canonical} | D | E | F | G |" in rendered
     assert f"| {local} | E | F | G | H |" in rendered
-    assert "| Phase | construction | construction | operation | operation |" in rendered
     assert f"Axis: `{local}`" in rendered
     assert f"Timeline: `{canonical}`" in rendered
     assert "Y1 (E)" in rendered

@@ -4,11 +4,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_serializer
 
-from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
+from finance_context.vocab import ValueStatus
 
 SCHEMA_VERSION = "1.14.0"
-
-TimelinePhase = Literal["construction", "operation"]
 
 JobStatus = Literal["queued", "running", "succeeded", "degraded", "needs_input", "failed"]
 
@@ -34,13 +32,10 @@ class NumericSummary(BaseModel):
 
 
 class RowHints(BaseModel):
-    nature: str | None = None
-    time_semantics: str | None = None
     unit: str | None = None
     unit_per: str | None = None
     currency: str | None = None
     scale: str | None = None
-    sign: str | None = None
 
 
 class RoleCell(BaseModel):
@@ -83,9 +78,6 @@ class BlockRow(BaseModel):
     parent_label: str | None = None
     label_path: list[str] = Field(default_factory=list)
     kind: str
-    disposition: str | None = None
-    exclusion_reason: str | None = None
-    article_role: str | None = None
     unit: str | None = None
     formula: str | None = None
     formula_exceptions: list[str] = Field(default_factory=list)
@@ -96,8 +88,6 @@ class BlockRow(BaseModel):
     numeric_summary: NumericSummary | None = None
     hints: RowHints = Field(default_factory=RowHints)
     cells: list[RoleCell] = Field(default_factory=list)
-    period_position: PeriodPosition | None = None
-    aggregation: SeriesAggregation | None = None
     scale_factor: int | None = None
     values: list[str | None] = Field(default_factory=list)
     value_statuses: list[ValueStatus] = Field(default_factory=list)
@@ -108,8 +98,6 @@ class BlockRow(BaseModel):
 class ModelPeriod(BaseModel):
     period_id: str
     index: int
-    phase: TimelinePhase | None = None
-    phase_year: int | None = None
     calendar_year: str | None = None
     flags: dict[str, bool] = Field(default_factory=dict)
 
@@ -120,8 +108,6 @@ class ContextPeriod(BaseModel):
     period_key: str
     group_key: str | None = None
     index: int = 0
-    phase: TimelinePhase | None = None
-    phase_year: int | None = None
     calendar_year: str | None = None
     start_date: str | None = None
     end_date: str | None = None
@@ -136,9 +122,6 @@ class ContextPeriod(BaseModel):
                 data.pop(key, None)
         if not data.get("hidden"):
             data.pop("hidden", None)
-        if data.get("phase") is None:
-            data.pop("phase", None)
-            data.pop("phase_year", None)
         if not data.get("flags"):
             data.pop("flags", None)
         if data.get("group_key") is None:

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from finance_context.context.build import build_context
 from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import parse_addr
@@ -61,9 +59,6 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
     assert axes
     assert not warnings
     by_id = {item.period_key: item for item in axes[0].periods}
-    assert by_id["Y1"].phase == "construction" and by_id["Y1"].phase_year == 1
-    assert by_id["Y2"].phase == "construction" and by_id["Y2"].phase_year == 2
-    assert by_id["Y3"].phase == "operation" and by_id["Y3"].phase_year == 1
     assert by_id["Y1"].flags["construction"] is True
     assert by_id["Y3"].flags["operation"] is True
     assert by_id["Y1"].flags["beginning of construction"] is True
@@ -81,7 +76,6 @@ def test_flag_rows_set_construction_then_operation_phase() -> None:
     assert "construction" in rendered
     flag_rows = [row for block in doc.blocks for row in block.rows if row.kind == "flag"]
     assert flag_rows
-    assert all(row.disposition == "excluded" for row in flag_rows)
 
 
 def test_repeated_flag_labels_keep_both_rows() -> None:
@@ -207,7 +201,7 @@ def test_flag_row_fallback_does_not_replace_another_label() -> None:
     assert by_id["Y4"].flags[later] is True
 
 
-def test_calendar_book_timeline_has_no_phase() -> None:
+def test_calendar_book_keeps_calendar_years() -> None:
     cells = [
         _c("P&L", "A1", "Item"),
         _c("P&L", "B1", "2020"),
@@ -223,55 +217,7 @@ def test_calendar_book_timeline_has_no_phase() -> None:
     assert len(axes) == 1
     assert not warnings
     assert axes[0].grain == "year"
-    assert all(item.phase is None for item in axes[0].periods)
     assert [item.calendar_year for item in axes[0].periods] == ["2020", "2021", "2022"]
-
-
-def test_duration_mismatch_warns_without_overriding_flags() -> None:
-    cells = [
-        _c("TBA", "A1", "Year"),
-        _c("TBA", "B1", "1"),
-        _c("TBA", "C1", "2"),
-        _c("TBA", "D1", "3"),
-        _c("TBA", "A2", "Construction"),
-        _c("TBA", "B2", "1"),
-        _c("TBA", "C2", "1"),
-        _c("TBA", "D2", "0"),
-        _c("TBA", "A3", "Operation"),
-        _c("TBA", "B3", "0"),
-        _c("TBA", "C3", "0"),
-        _c("TBA", "D3", "1"),
-        _c("TBA", "A4", "Revenue"),
-        _c("TBA", "B4", "10"),
-        _c("TBA", "C4", "20"),
-        _c("TBA", "D4", "30"),
-        _c("Input Assumptions", "B5", "Parameter"),
-        _c("Input Assumptions", "C5", "Units"),
-        _c("Input Assumptions", "D5", "Values"),
-        _c("Input Assumptions", "B8", "Construction Duration"),
-        _c("Input Assumptions", "C8", "years"),
-        _c("Input Assumptions", "D8", "5"),
-        _c("Input Assumptions", "B9", "Operations Duration"),
-        _c("Input Assumptions", "C9", "years"),
-        _c("Input Assumptions", "D9", "1"),
-        _c("Input Assumptions", "B10", "Concession Duration"),
-        _c("Input Assumptions", "C10", "years"),
-        _c("Input Assumptions", "D10", "10"),
-        _c("Input Assumptions", "B11", "Tax Rate"),
-        _c("Input Assumptions", "C11", "%"),
-        _c("Input Assumptions", "D11", "0.3"),
-    ]
-    layout = detect_layout(cells)
-    axes, warnings = build_axes(layout, cells)
-    assert axes
-    assert [item.phase for item in axes[0].periods] == [
-        "construction",
-        "construction",
-        "operation",
-    ]
-    assert any("Construction Duration" in item for item in warnings)
-    assert any("Concession Duration" in item for item in warnings)
-    assert not any("Operations Duration" in item for item in warnings)
 
 
 def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
@@ -376,11 +322,23 @@ def test_phased_year_axis_keeps_markers_and_drops_period_role() -> None:
     axes, _warnings = build_axes(layout, cells)
     dumped = axes[0].periods[0].model_dump(mode="json")
     assert "role" not in dumped
-    assert [(period.period_key, period.phase) for period in axes[0].periods] == [
-        ("2023", None),
-        ("2024", "construction"),
-        ("2025", "operation"),
-        ("2056", None),
+    assert [period.period_key for period in axes[0].periods] == [
+        "2023",
+        "2024",
+        "2025",
+        "2056",
+    ]
+    assert [period.flags.get("construction") for period in axes[0].periods] == [
+        False,
+        True,
+        False,
+        False,
+    ]
+    assert [period.flags.get("operations") for period in axes[0].periods] == [
+        False,
+        False,
+        True,
+        False,
     ]
 
 
@@ -395,133 +353,6 @@ def _ru_timeline(*rows: tuple[str, list[str]]) -> list[dict]:
         cells.append(_c("Модель", f"A{r}", label))
         cells += [_c("Модель", f"{col}{r}", v) for col, v in zip("BCDE", values, strict=True)]
     return cells
-
-
-def test_russian_flag_rows_set_construction_then_operation_phase() -> None:
-    cells = _ru_timeline(
-        ("Флаг строительства", ["1", "1", "0", "0"]),
-        ("Флаг эксплуатации", ["0", "0", "1", "1"]),
-        ("Флаг ввода в эксплуатацию", ["0", "0", "1", "0"]),
-    )
-    axes, _warnings = build_axes(detect_layout(cells), cells)
-    assert [(p.period_key, p.phase, p.phase_year) for p in axes[0].periods] == [
-        ("2025", "construction", 1),
-        ("2026", "construction", 2),
-        ("2027", "operation", 1),
-        ("2028", "operation", 2),
-    ]
-    assert "role" not in axes[0].periods[0].model_dump(mode="json")
-
-
-def test_russian_investment_phase_is_construction() -> None:
-    cells = _ru_timeline(
-        ("Инвестиционная фаза", ["1", "1", "1", "0"]),
-        ("Операционный период", ["0", "0", "0", "1"]),
-    )
-    axes, _warnings = build_axes(detect_layout(cells), cells)
-    assert [p.phase for p in axes[0].periods] == [
-        "construction",
-        "construction",
-        "construction",
-        "operation",
-    ]
-
-
-def test_russian_event_flags_are_not_phases() -> None:
-    cells = _ru_timeline(
-        ("Дата начала строительства", ["1", "0", "0", "0"]),
-        ("Окончание строительства", ["0", "1", "0", "0"]),
-        ("Ввод в эксплуатацию", ["0", "0", "1", "0"]),
-    )
-    axes, _warnings = build_axes(detect_layout(cells), cells)
-    assert [p.phase for p in axes[0].periods] == [None, None, None, None]
-
-
-def test_russian_construction_adjectives_and_cwip_mark_construction() -> None:
-    for label in ("Строительная фаза", "Незавершенное строительство"):
-        cells = _ru_timeline(
-            (label, ["1", "1", "0", "0"]), ("Флаг эксплуатации", ["0", "0", "1", "1"])
-        )
-        axes, _warnings = build_axes(detect_layout(cells), cells)
-        assert [p.phase for p in axes[0].periods] == [
-            "construction",
-            "construction",
-            "operation",
-            "operation",
-        ], label
-
-
-def test_initial_investment_period_is_not_a_start_event() -> None:
-    cells = _ru_timeline(("Первоначальный инвестиционный период", ["1", "1", "0", "0"]))
-    axes, _warnings = build_axes(detect_layout(cells), cells)
-    assert [p.phase for p in axes[0].periods] == ["construction", "construction", None, None]
-
-
-def _phases_for(label: str) -> list[str | None]:
-    cells = _ru_timeline((label, ["1", "1", "0", "0"]))
-    axes, _warnings = build_axes(detect_layout(cells), cells)
-    return [p.phase for p in axes[0].periods]
-
-
-@pytest.mark.parametrize(
-    "label",
-    [
-        "Период СМР",
-        "СМР",
-        "Стройка",
-        "Флаг стройки",
-        "Период инвестиций",
-        "Инвестиции",
-        "Флаг строит.",
-        "Constr. flag",
-    ],
-)
-def test_construction_spellings_mark_the_flagged_years(label: str) -> None:
-    assert _phases_for(label) == ["construction", "construction", None, None]
-
-
-@pytest.mark.parametrize(
-    "label",
-    [
-        "Производство",
-        "Производственная фаза",
-        "Флаг операций",
-        "Операции",
-        "Флаг эксп.",
-        "Op. flag",
-        "Начальный период эксплуатации",
-    ],
-)
-def test_operation_spellings_mark_the_flagged_years(label: str) -> None:
-    assert _phases_for(label) == ["operation", "operation", None, None]
-
-
-@pytest.mark.parametrize(
-    "label",
-    [
-        "Длительность эксплуатации",
-        "Срок строительства",
-        "Длительность строительства",
-        "Срок эксплуатации",
-        "Продолжительность строительства",
-        "1 кВт",
-        "History",
-    ],
-)
-def test_duration_and_unrelated_flag_labels_are_not_phases(label: str) -> None:
-    assert _phases_for(label) == [None, None, None, None]
-
-
-def test_start_of_operation_stays_an_event() -> None:
-    assert _phases_for("Дата начала эксплуатации") == [None, None, None, None]
-    assert _phases_for("Начало строительства") == [None, None, None, None]
-
-
-def test_flag_word_without_a_phase_warns_and_stays_empty() -> None:
-    cells = _ru_timeline(("Флаг прочее", ["1", "0", "0", "0"]))
-    axes, warnings = build_axes(detect_layout(cells), cells)
-    assert [period.phase for period in axes[0].periods] == [None, None, None, None]
-    assert any(item.startswith("Flag row has no phase on Модель:") for item in warnings)
 
 
 def test_unparsed_period_header_warns_without_becoming_a_period() -> None:
@@ -543,10 +374,3 @@ def test_formatted_number_is_not_an_unparsed_period() -> None:
     assert not any("1.2072" in item or "U38" in item for item in warnings)
     assert any("Q5 2025" in item and item.startswith("Unparsed period header") for item in warnings)
 
-
-def test_yo_in_a_phase_stem_matches_the_lexicon_spelling() -> None:
-    assert _phases_for("Опёрационный период") == ["operation", "operation", None, None]
-
-
-def test_yo_outside_a_phase_stem_is_not_a_phase() -> None:
-    assert _phases_for("Ёмкость") == [None, None, None, None]

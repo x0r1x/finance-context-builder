@@ -66,8 +66,6 @@ def _ok_context(**overrides: object) -> dict:
                         "value_statuses": ["cached", "cached"],
                         "normalized_values": ["13", "23"],
                         "scale_factor": 1,
-                        "period_position": None,
-                        "aggregation": None,
                     }
                 ],
             }
@@ -372,8 +370,6 @@ def test_shifted_sheet_total_is_not_a_period_of_the_shared_axis(tmp_path: Path) 
                     "value_statuses": ["cached", "cached"],
                     "normalized_values": ["1", "2"],
                     "scale_factor": 1,
-                    "period_position": None,
-                    "aggregation": None,
                 }
             ],
         }
@@ -476,20 +472,17 @@ def test_normalized_value_that_only_reformats_the_cache_is_not_required(tmp_path
     assert result.returncode == 0, result.stderr
 
 
-def test_axes_summary_counts_phases(tmp_path: Path) -> None:
+def test_axes_summary_reports_the_period_span(tmp_path: Path) -> None:
     axis = _dated_axis(
         (13, "2024", "2024-01-01", "2024-12-31"),
         (14, "2025", "2025-01-01", "2025-12-31"),
     )
-    axis["periods"][0]["phase"] = "construction"
-    axis["periods"][1]["phase"] = "operation"
     context = _write(tmp_path / "context.json", _ok_context(axes=[axis]))
     graph = _write(tmp_path / "graph.json", _ok_graph())
     result = _run(str(context), str(graph), "--axes-summary")
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == (
-        "axes=1 blocks=1 params_blocks=0; axis=PF!r7 periods=2 span=2024..2025 "
-        "construction=1 operation=1"
+        "axes=1 blocks=1 params_blocks=0; axis=PF!r7 periods=2 span=2024..2025"
     )
 
 
@@ -533,8 +526,6 @@ def test_markdown_must_show_status_scale_and_normalized_value(tmp_path: Path) ->
     row["value_statuses"] = ["empty", "cached"]
     row["normalized_values"] = [None, "1500"]
     row["scale_factor"] = 1000
-    row["period_position"] = "during_period"
-    row["aggregation"] = "sum"
     context = _write(tmp_path / "context.json", payload)
     graph = _write(tmp_path / "graph.json", _ok_graph())
     context_md = tmp_path / "context.md"

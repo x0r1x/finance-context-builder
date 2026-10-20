@@ -37,22 +37,6 @@ _CURRENCY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # Number-format tag `[$₽-419]`: the currency symbol, then an optional locale id.
 # `[$-419]` and `[$-F800]` carry only a locale, so they name no currency.
 _FORMAT_CURRENCY_TAG = re.compile(r"\[\$([^\]\-]*)(?:-[^\]]*)?\]")
-_REPAYMENT_TOKENS = {"repayment", "principal"}
-_INFLOW_TOKENS = {"revenue", "receipts", "receipt", "inflow", "inflows", "income"}
-_OUTFLOW_TOKENS = {
-    "opex",
-    "capex",
-    "cost",
-    "costs",
-    "uses",
-    "tax",
-    "outflow",
-    "outflows",
-    "expense",
-    "expenses",
-    "fee",
-    "maintenance",
-}
 _YEARS_TEXT = re.compile(r"\byears?\b", re.I)
 _COUNT_TEXT = re.compile(r"\b(months?|days?|hours?|veh|mw|mwh|count)\b", re.I)
 _PER_YEAR = re.compile(r"per year|/year", re.I)
@@ -103,7 +87,6 @@ class Measure:
     unit: str | None = None
     currency: str | None = None
     scale: str | None = None
-    sign: str | None = None
     per: str | None = None
 
     def display(self) -> str:
@@ -131,9 +114,6 @@ def parse_measure(
     unit_text: str | None = None,
     label: str | None = None,
     number_formats: list[str] | None = None,
-    *,
-    nature: str | None = None,
-    time_semantics: str | None = None,
 ) -> Measure:
     measure = Measure()
     measure = _fill(measure, _parse_text(unit_text or ""))
@@ -148,21 +128,9 @@ def parse_measure(
             unit=measure.unit,
             currency=measure.currency,
             scale="unit",
-            sign=measure.sign,
             per=measure.per,
         )
-    sign = _infer_sign(
-        nature=nature,
-        time_semantics=time_semantics,
-        label=label or "",
-    )
-    return Measure(
-        unit=measure.unit,
-        currency=measure.currency,
-        scale=measure.scale,
-        sign=sign,
-        per=measure.per,
-    )
+    return measure
 
 
 def _fill(base: Measure, extra: Measure) -> Measure:
@@ -171,14 +139,12 @@ def _fill(base: Measure, extra: Measure) -> Measure:
             unit=base.unit,
             currency=base.currency or extra.currency,
             scale=base.scale or extra.scale,
-            sign=base.sign or extra.sign,
             per=base.per,
         )
     return Measure(
         unit=extra.unit,
         currency=base.currency or extra.currency,
         scale=base.scale or extra.scale,
-        sign=base.sign or extra.sign,
         per=extra.per,
     )
 
@@ -337,22 +303,4 @@ def _unit_from(text: str, currency: str | None) -> str | None:
         return "years"
     if _COUNT_TEXT.search(text):
         return "count"
-    return None
-
-
-def _infer_sign(
-    *,
-    nature: str | None,
-    time_semantics: str | None,
-    label: str,
-) -> str | None:
-    if nature == "balance" or time_semantics in {"stock", "bop", "eop"}:
-        return "stock"
-    tokens = set(re.sub(r"[^a-z0-9]+", " ", label.casefold()).split())
-    if tokens & _REPAYMENT_TOKENS:
-        return "outflow"
-    if tokens & _INFLOW_TOKENS and not tokens & _OUTFLOW_TOKENS:
-        return "inflow"
-    if tokens & _OUTFLOW_TOKENS:
-        return "outflow"
     return None

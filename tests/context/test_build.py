@@ -339,13 +339,10 @@ def test_build_keeps_cached_value_and_cell_ref() -> None:
     assert metric.value_statuses == ["cached", "cached"]
     assert metric.scale_factor is None
     assert metric.normalized_values == ["320000", "320000"]
-    assert metric.period_position == "beginning"
-    assert metric.aggregation == "first"
     assert metric.formula == "=RC[-1]"
     assert metric.unit == "money"
     assert metric.hints.currency == "USD"
     assert metric.hints.scale is None
-    assert metric.hints.sign == "stock"
 
 
 def test_sheet_qualified_ref_error_is_the_same_exception_as_bare() -> None:
@@ -532,17 +529,13 @@ def test_build_keeps_inventory_for_every_layout_row() -> None:
     assert len(rows) == 3
     cash = rows[1]
     assert cash.kind == "fact"
-    assert cash.disposition is None
     assert cash.label_path == ["Cashflow"]
     assert cash.formula == "=RC[1]"
     assert cash.neighbors == ["CF!3"]
-    assert cash.hints.time_semantics in {"bop", "flow", "eop", "stock"}
-    assert rows[2].disposition == "excluded"
-    assert rows[2].exclusion_reason == "helper"
+    assert rows[2].kind == "helper"
     assert rows[2].neighbors == ["CF!2"]
     assert not any("Content completeness" in warning for warning in doc.warnings)
     abstract = rows[0]
-    assert abstract.disposition is None
     assert abstract.neighbors == []
     assert doc.schema_version == "1.14.0"
 
@@ -572,7 +565,7 @@ def test_neighbors_include_every_formula_row_ref() -> None:
     assert doc.blocks[0].rows[0].neighbors == [f"CF!{row}" for row in range(3, 15)]
 
 
-def test_fact_time_comes_from_the_label_not_a_concept() -> None:
+def test_fact_row_keeps_its_cached_value() -> None:
     layout = Layout(
         sheets=[
             SheetLayout(
@@ -613,8 +606,8 @@ def test_fact_time_comes_from_the_label_not_a_concept() -> None:
         layout=layout,
     )
     row = doc.blocks[0].rows[0]
-    assert row.hints.time_semantics == "flow"
-    assert row.hints.sign is None
+    assert row.kind == "fact"
+    assert row.values == ["10"]
 
 
 def test_zero_cached_formula_is_not_missing() -> None:
