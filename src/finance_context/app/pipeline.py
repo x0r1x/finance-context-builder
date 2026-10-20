@@ -14,7 +14,6 @@ from finance_context.excel.legacy import XlsConverter, ensure_xlsx, has_source
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
-from finance_context.layout.exclusion import row_exclusion
 from finance_context.layout.models import Layout
 from finance_context.layout.relations import formula_relations
 from finance_context.layout.stage import layout_workbook
@@ -163,7 +162,6 @@ class Pipeline:
         cells = ir_cells
         edges = ir_edges
         relations = formula_relations(layout, ir_cells)
-        exclusion = row_exclusion(layout, ir_cells)
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status()
         set_stage("graph", status="running")
@@ -182,7 +180,6 @@ class Pipeline:
                     edges=ir_edges,
                     cell_edges=ir_cell_edges,
                     book_dir=book,
-                    exclusion=exclusion,
                 ),
             )
         else:

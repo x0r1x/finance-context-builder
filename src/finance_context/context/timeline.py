@@ -4,7 +4,6 @@ import re
 from collections import Counter
 
 from finance_context.excel.dates import is_date_format
-from finance_context.layout.lexicon import searcher
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis, is_series_column
 from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import (
@@ -13,7 +12,7 @@ from finance_context.layout.periods import (
     unparsed_period_shape,
 )
 from finance_context.layout.resolve import axes_for
-from finance_context.models.context import ContextAxis, ContextPeriod, TimelinePhase
+from finance_context.models.context import ContextAxis, ContextPeriod
 
 _GENERAL_FORMAT = re.compile(r"^(general|standard|@)$", re.IGNORECASE)
 _FORMAT_NOISE = re.compile(r"\[[^\]]*\]|\"[^\"]*\"|\\.|[*_]")
@@ -29,7 +28,6 @@ def build_axes(
     published = _published_axis_ids(layout)
     timeline_of = _timeline_of(layout)
     axes: list[ContextAxis] = []
-    phased: list[ContextAxis] = []
     for sheet in layout.sheets:
         for axis in _sheet_axes(sheet):
             if axis.id not in published:
@@ -40,41 +38,8 @@ def build_axes(
                 continue
             built.timeline_id = timeline_of.get(built.id, built.id)
             axes.append(built)
-            if any(item.phase for item in built.periods):
-                phased.append(built)
-    warnings: list[str] = []
-    warnings.extend(_flag_phase_warnings(layout))
-    if phased:
-        master = max(phased, key=lambda item: sum(1 for period in item.periods if period.phase))
-        warnings.extend(_duration_warnings(layout, master.periods, by_addr, date1904))
-    warnings.extend(_unparsed_period_warnings(cells, date1904))
+    warnings = _unparsed_period_warnings(cells, date1904)
     return axes, warnings
-
-
-def _flag_phase_warnings(layout: Layout) -> list[str]:
-    """A flag-shaped row with no phase stays phase-less and says so."""
-    out: list[str] = []
-    seen: set[tuple[str, str]] = set()
-    for sheet in layout.sheets:
-        for block in sheet.blocks:
-            if getattr(block, "kind", "timeline") != "timeline":
-                continue
-            for row in block.rows:
-                if row.kind != "flag" or _phase_kind(row.label) is not None:
-                    continue
-                folded = normalize_label(row.label)
-                if searcher("phase_events").search(folded) or searcher("operation_duration").search(
-                    folded
-                ):
-                    continue
-                if searcher("structural", "flag").search(folded) is None:
-                    continue
-                key = (sheet.name, row.label)
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(f"Flag row has no phase on {sheet.name}: «{row.label}»")
-    return out
 
 
 def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
@@ -252,35 +217,12 @@ def _annotate_axis(
     if not periods_in:
         return None
     periods: list[ContextPeriod] = []
-    last_phase: TimelinePhase | None = None
-    run = 0
     grain = axis.grain
     flag_keys = _flag_keys(flags)
     for index, header in enumerate(periods_in, start=1):
         flag_map: dict[str, bool] = {}
-        construction = False
-        operation = False
         for row, key in zip(flags, flag_keys, strict=True):
-            on = _flag_on(by_addr, sheet_name, row.row, header.col, date1904)
-            flag_map[key] = on
-            kind = _phase_kind(row.label)
-            if kind == "construction" and on:
-                construction = True
-            elif kind == "operation" and on:
-                operation = True
-        phase: TimelinePhase | None = None
-        if construction:
-            phase = "construction"
-        elif operation:
-            phase = "operation"
-        if phase == last_phase and phase is not None:
-            run += 1
-        elif phase is not None:
-            run = 1
-            last_phase = phase
-        else:
-            run = 0
-            last_phase = None
+            flag_map[key] = _flag_on(by_addr, sheet_name, row.row, header.col, date1904)
         calendar = header.period_key if is_calendar_key(header.period_key) else None
         if calendar and len(calendar) >= 4 and calendar[:4].isdigit():
             calendar = calendar[:4]
@@ -295,8 +237,6 @@ def _annotate_axis(
                 period_key=header.period_key,
                 group_key=header.group_key,
                 index=index,
-                phase=phase,
-                phase_year=run if phase else None,
                 calendar_year=calendar,
                 start_date=getattr(header, "start_date", None),
                 end_date=getattr(header, "end_date", None),
@@ -314,29 +254,6 @@ def _annotate_axis(
         header_row=axis.header_row,
         periods=periods,
     )
-
-
-def _phase_kind(label: str) -> TimelinePhase | None:
-    """Phase a 0/1 flag row marks: "Construction", "Флаг строительства", "Операционный период".
-
-    A start/end/commissioning event flag ("Дата начала строительства", "Ввод в
-    эксплуатацию") is one period, not a phase. Words come from the layout lexicon.
-    """
-    n = normalize_label(label)
-
-    def has(*path: str) -> bool:
-        return searcher(*path).search(n) is not None
-
-    if has("phase_events"):
-        return None
-    # "Срок строительства" and "Длительность эксплуатации" name a length, not a phase.
-    if has("operation_duration"):
-        return None
-    if has("phases", "construction"):
-        return "construction"
-    if has("phases", "operation"):
-        return "operation"
-    return None
 
 
 def _flag_on(
@@ -365,85 +282,3 @@ def _flag_on(
     except ValueError:
         return False
 
-
-def _duration_warnings(
-    layout: Layout,
-    periods: list[ContextPeriod],
-    by_addr: dict[tuple[str, int, int], dict],
-    date1904: bool,
-) -> list[str]:
-    construction_n = sum(1 for item in periods if item.phase == "construction")
-    operation_n = sum(1 for item in periods if item.phase == "operation")
-    out: list[str] = []
-    for sheet in layout.sheets:
-        for block in sheet.blocks:
-            if getattr(block, "kind", "timeline") != "params" or block.axis is None:
-                continue
-            value_cols = [h.col for h in block.axis.headers if h.role == "value"] or [
-                h.col for h in block.axis.headers if h.role in {"value", "scenario"}
-            ]
-            if not value_cols:
-                continue
-            col = value_cols[0]
-            for row in block.rows:
-                if row.kind != "fact":
-                    continue
-                n = normalize_label(row.label)
-                assumed = _numeric_cell(by_addr, sheet.name, row.row, col, date1904)
-                if assumed is None:
-                    continue
-                if (
-                    "construction" in n
-                    and "duration" in n
-                    and construction_n
-                    and assumed != construction_n
-                ):
-                    out.append(
-                        "Construction Duration "
-                        f"{assumed:g} does not match construction timeline length {construction_n}"
-                    )
-                if (
-                    "operation" in n
-                    and "duration" in n
-                    and operation_n
-                    and assumed != operation_n
-                ):
-                    out.append(
-                        "Operations Duration "
-                        f"{assumed:g} does not match operation timeline length {operation_n}"
-                    )
-                if (
-                    "concession" in n
-                    and "duration" in n
-                    and construction_n
-                    and operation_n
-                    and assumed != construction_n + operation_n
-                ):
-                    out.append(
-                        "Concession Duration "
-                        f"{assumed:g} does not match construction+operation "
-                        f"timeline length {construction_n + operation_n}"
-                    )
-    return out
-
-
-def _numeric_cell(
-    by_addr: dict[tuple[str, int, int], dict],
-    sheet: str,
-    row: int,
-    col: int,
-    date1904: bool,
-) -> float | None:
-    cell = by_addr.get((sheet, row, col))
-    if cell is None:
-        return None
-    text = display_cell_text(
-        cell.get("cached_value") if cell.get("cached_value") is not None else None,
-        cell.get("number_format"),
-        date1904=date1904,
-    )
-    blob = (text or str(cell.get("cached_value") or "")).strip().replace(" ", "").replace(",", ".")
-    try:
-        return float(blob)
-    except ValueError:
-        return None

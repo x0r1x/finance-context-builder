@@ -1,14 +1,12 @@
-"""Series semantics on a layout row.
+"""Series values on a layout row.
 
-`values` stays a flat list of cached strings. Status, scale, and time
-profile sit beside that list. They are not a second cell catalog.
+`values` stays a flat list of cached strings. Status and scale sit beside
+that list. They are not a second cell catalog.
 """
 
 from __future__ import annotations
 
-import re
-
-from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
+from finance_context.vocab import ValueStatus
 
 SCALE_FACTORS: dict[str, int] = {
     "unit": 1,
@@ -17,49 +15,13 @@ SCALE_FACTORS: dict[str, int] = {
     "bn": 1_000_000_000,
 }
 
-_TEMPORAL: dict[str, tuple[PeriodPosition, SeriesAggregation]] = {
-    "flow": ("during_period", "sum"),
-    "bop": ("beginning", "first"),
-    "eop": ("end", "last"),
-    "stock": ("end", "last"),
-    "rate": ("during_period", "average"),
-    "instant": ("instant", "none"),
-}
-
-_OPERATION_GATE = frozenset(
-    {"traffic", "toll", "revenue", "opex", "dscr", "coverage", "cfads", "dividend", "dividends"}
-)
 _NOISE_RATIO = 1e-6
-_CONSTRUCTION_GATE = frozenset({"capex"})
 
 
 def scale_factor_for(scale: str | None) -> int | None:
     if scale is None:
         return None
     return SCALE_FACTORS.get(scale)
-
-
-def temporal_profile(
-    time_semantics: str | None,
-) -> tuple[PeriodPosition | None, SeriesAggregation | None]:
-    if not time_semantics:
-        return None, None
-    return _TEMPORAL.get(time_semantics, (None, None))
-
-
-def phase_gate(label: str) -> str | None:
-    """Phase where an empty cell is not a missing number.
-
-    A cached value, including an explicit zero, always wins over the gate.
-    The gate reads the row label only.
-    """
-
-    tokens = set(re.sub(r"[^a-z0-9]+", " ", (label or "").casefold()).split())
-    if tokens & _CONSTRUCTION_GATE:
-        return "construction"
-    if tokens & _OPERATION_GATE:
-        return "operation"
-    return None
 
 
 def value_status(text: str | None, *, applicable: bool) -> ValueStatus:

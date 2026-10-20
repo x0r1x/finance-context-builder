@@ -12,7 +12,7 @@ The slice is one observation: a row × a period, with the fields below already j
 
 ## Example
 
-The response of `GET /v1/context-jobs/{id}/observations`. The object is not written into the job JSON: it is assembled from the row, that axis's series, and `links` / trace. A timeline row has no `scenario` key. An ordinary row has `disposition` null. A structurally excluded row (flag, helper, check, noise, or technical bridge) has `disposition` `excluded`.
+The response of `GET /v1/context-jobs/{id}/observations`. The object is not written into the job JSON: it is assembled from the row, that axis's series, and `links` / trace. A timeline row has no `scenario` key.
 
 ```json
 {
@@ -22,19 +22,15 @@ The response of `GET /v1/context-jobs/{id}/observations`. The object is not writ
     {
       "row_key": "Operation|10|Operation!r8",
       "label": "Revenue",
-      "disposition": null,
       "period_id": "Y5",
       "value": "1234.56",
       "value_status": "cached",
       "normalized_value": "1234560",
       "scale_factor": 1000,
-      "period_position": "during_period",
-      "aggregation": "sum",
       "unit": {
         "kind": "money",
         "currency": "GBP",
-        "scale": "k",
-        "sign": "inflow"
+        "scale": "k"
       },
       "formula": {
         "text": "=RC[-1]*(1+Growth)",
@@ -47,8 +43,6 @@ The response of `GET /v1/context-jobs/{id}/observations`. The object is not writ
       },
       "timeline": {
         "axis_id": "Operation!r8",
-        "phase": "operation",
-        "phase_year": 1,
         "start_date": "2026-01-01",
         "end_date": "2026-12-31"
       }
@@ -57,7 +51,7 @@ The response of `GET /v1/context-jobs/{id}/observations`. The object is not writ
 }
 ```
 
-`Y5` and `phase_year: 1` are different clocks. The fifth model year can be the first operating year.
+`Y5` is the period key of that axis. A flag on the same period is a separate `flags` entry.
 
 ## How to request the slice
 
@@ -67,14 +61,14 @@ Do not put `context.json` or `graph.json` in the prompt. Read graph counters fro
 | --- | --- | --- |
 | `GET /v1/context-jobs?status=&q=` | a list from `meta.json` | Session books. `context.json` is not opened. `q` is a piece of the file name |
 | `GET .../summary` | `summary-2` | Workbook counters, graph counters, and warnings: `unresolved.count`, `external.count`, `dangling`, `missing_cached_values`. No `links` and no cell cache |
-| `GET .../catalog` | `catalog-2` | Rows and axes without numbers. A period carries `phase_year`, `flags`, and `group_key`, omitted when empty the same way as the axis in `context.json`. No formula class: one row has a different class per period. Filters: `q` (case-insensitive substring of the row's own label), `sheet`, `disposition`, `limit`, `offset`. `q=General` matches a label that contains General. A child with another label does not enter. The path is not searched |
+| `GET .../catalog` | `catalog-2` | Rows and axes without numbers. A period carries `flags` and `group_key`, omitted when empty the same way as the axis in `context.json`. No formula class: one row has a different class per period. Filters: `q` (case-insensitive substring of the row's own label), `sheet`, `limit`, `offset`. `q=General` matches a label that contains General. A child with another label does not enter. The path is not searched |
 | `GET .../observations` | `observation-2` | The only response that carries a cell cache |
 
-The first operating year and a period that carries a flag are named from the catalog periods.
+A period that carries a flag is named from the catalog periods.
 
 While a job is still running, read status from `GET /v1/context-jobs/{id}`. The passport does not replace that poll: without `context.json` or `graph.json`, the passport and observations answer 409 `report_not_ready`.
 
-Observations require at least one selector: repeatable `row_key` or `q`. `q` is the same case-insensitive substring of the row's own label as the catalog. The path is not searched. A request with neither returns 400 `selector_required`. The route does not send the whole book. `period_id` and `phase` are not selectors. An unknown selector inside a finished job is 200 and an empty list. A foreign `job_id` is 404.
+Observations require at least one selector: repeatable `row_key` or `q`. `q` is the same case-insensitive substring of the row's own label as the catalog. The path is not searched. A request with neither returns 400 `selector_required`. The route does not send the whole book. `period_id` does not satisfy that selector requirement. An unknown selector inside a finished job is 200 and an empty list. A foreign `job_id` is 404.
 
 `limit` defaults to 24 and stops at 48. Past the limit the observation list is cut and `truncated=true`. `precedent_depth` defaults to 0 and stops at 3. Depth 0 does not call trace: the precedent list is empty and `precedents_total` is 0. Depth 1–3 calls the current `trace_graph` and embeds the whole walk at that depth. `precedents_total` is the length of that list. A wider walk on this route is a higher `precedent_depth`. Above 3 the response is 422. Beyond that depth, read `graph/trace`. Each item carries `depth` and the `label` of the context row with the same `row_key`. With no `row_key`, `label` is null. A number outside the range is 422.
 
@@ -84,28 +78,27 @@ The `ETag` of catalog, summary, and observations is strong: schema, `content_sha
 
 | Slice field | Where it comes from | How it enters the prompt |
 | --- | --- | --- |
-| `row_key`, `label`, `disposition` | `blocks[].rows` | As stored. `excluded` on a structurally excluded row. `null` on an ordinary row |
+| `row_key`, `label` | `blocks[].rows` | As stored |
 | `period_id` | `axes[].periods[]` of the axis the row's series belongs to | Axis key (`Y5`, a calendar year, a date). Grain comes from that axis |
 | `value` | `row.series[]` with the same `axis_id`, otherwise `row.values[i]` | Excel cache string or `null`. Not a float: formulas are not recalculated |
 | `value_status` | `row.value_statuses[i]` | `cached`, `empty`, `zero_explicit`, or `not_applicable`. An empty cell is not replaced with zero |
 | `normalized_value` | `row.normalized_values[i]` | A string in base units, or `null` if the number cannot be parsed. Not a replacement for `value` |
 | `scale_factor` | `row.scale_factor` | Integer multiplier `1` / `1000` / `1000000` / `1000000000`, or `null` |
-| `period_position`, `aggregation` | row fields | Markdown Time joins them with `hints.time_semantics`: `flow/during_period/sum` for a filled money year, `rate/during_period/average` for a filled annual rate. A point is `instant/instant/none` (position `instant`, aggregation `none`, so the series is not summed). A static rate is `rate/instant/none`. A price or a DSCR series is `rate/during_period/none`; a balance sheet line is `stock/end/last`. Scenario columns are alternatives and keep aggregation `none` |
 | `scenario` | header of a params value/scenario column (`cells[].header`) | `Live` or `Case N`. Absent on a timeline row |
 | `timeline.start_date`, `end_date` | `axes[].periods[]` | ISO when the axis was built from a Start/End band. Otherwise the keys are absent |
-| `unit.kind`, `currency`, `scale`, `sign` | `hints.unit`, `hints.currency`, `hints.scale`, `hints.sign` | `scale` is the token `unit` / `k` / `m` / `bn`. The multiplier is the separate `scale_factor`. Without `kind` a rate looks like money |
+| `unit.kind`, `currency`, `scale` | `hints.unit`, `hints.currency`, `hints.scale` | `scale` is the token `unit` / `k` / `m` / `bn`. The multiplier is the separate `scale_factor`. Without `kind` a rate looks like money |
 | `formula.text` | the link with the same `row_key` and `period_id`, otherwise `row.formula` | The formula text of this period. No link means the row fingerprint or `null`. A stub formula is not substituted |
 | `formula.class` | `links[].formula_class` | The class of this cell in the response. It is not in `context.json`. AST is not copied |
 | `formula.precedents` | `trace_graph` when `precedent_depth` is 1–3 | `depth`, `label`, `row_key`, `period_id`, the cache in `value`, the address in `cell`. `depth` 1 is a direct input. `label` is the context row with the same `row_key`. The list is the whole walk at the requested depth, and `precedents_total` is its length. Depth 0 leaves the list empty and `precedents_total` at 0. A wider walk is a higher `precedent_depth` or `graph/trace` |
 | `source.sheet`, `source.cell` | the sheet, the row number, and `period.col` | The address is computed in the response. `context.json` has no per-cell `source` |
-| `timeline.phase`, `phase_year`, `group_key`, `flags` | `axes[].periods[]` with the same `period_key` on the series axis | Copied into the slice so the model does not join. Phase is not duplicated on `blocks[].periods`. `group_key` is set on a month under a repeated year |
+| `timeline.group_key`, `flags` | `axes[].periods[]` with the same `period_key` on the series axis | Copied into the slice so the model does not join. `group_key` is set on a month under a repeated year |
 
-`flags` (case, covenant, repayment, and other 0/1 overlays) come from the axis whose rows contain the flags. Phase alone is not enough to read the number.
+`flags` (case, covenant, repayment, and other 0/1 overlays) come from the axis whose rows contain the flags.
 
 ## What the slice does not contain
 
 - A replacement of `context.json` by a catalog of observations. Completeness stays the row: one row, one fingerprint, `values[]` along the axis.
-- `validation_context`. `phase` / `phase_year` are timeline clocks, not a check result.
+- `validation_context`.
 - Replacing `value` with the multiplier or a JSON number. The cache stays a string; the multiplier and the base amount are separate fields.
 - AST. It stays in `ir/cells.parquet` and enters a conversation only as a separate request, not in the ordinary prompt.
 - A second JSON on disk. The slice is a route response, not a job file.
@@ -119,8 +112,6 @@ The `ETag` of catalog, summary, and observations is strong: schema, `content_sha
 - Look up a name in the formula text in `refs` and in `workbook.defined_names`. A local cell and a local range are already replaced by an address in `refs`. A token with no `!` means the name is not one cell and not one range in this workbook. A name formula that contains `[` or `#REF!` points outside this workbook.
 - `dangling` of 0 does not mean every name resolved. Read `unresolved.count` and `external.count` on the `summary` passport, not in the full `graph.json`. `ids` holds at most 32 entries; the full number is `count`.
 - A question such as "DSCR in 2030" finds the row by label and `row_key`, then the period.
-- A year on the axis with no `phase` is not an operating year.
-- An excluded row has `disposition` `excluded`. An ordinary row has `disposition` null.
-- The warning counts formula cells missing a cache inside the phase. `workbook.missing_cached_values` counts every such formula, including years outside the phase.
+- The warning counts formula cells missing a cache, except cells marked `not_applicable`. `workbook.missing_cached_values` counts every formula cell without a cache.
 - Do not put `graph.json`, `graph.md`, or a wide block table into the prompt. Take graph counters from `summary`. When `numeric_summary.constant` is true, quote one value and the addresses of the first and last periods. Do not compress the exact `values` in JSON.
 - Do not recalculate. The Excel cache remains the source of the number.

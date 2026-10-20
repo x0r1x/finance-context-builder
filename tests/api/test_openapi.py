@@ -135,7 +135,6 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     assert _query_names(catalog) == {
         "q",
         "sheet",
-        "disposition",
         "limit",
         "offset",
     }
@@ -156,7 +155,6 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
         "row_key",
         "q",
         "period_id",
-        "phase",
         "precedent_depth",
         "limit",
     }

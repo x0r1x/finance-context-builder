@@ -22,21 +22,14 @@
       "relations": [],
       "rows": [
         {
-          "aggregation": "first",
-          "article_role": null,
           "cells": [],
           "check_row": false,
-          "disposition": null,
-          "exclusion_reason": null,
           "formula": "=RC[-1]",
           "formula_exceptions": [],
           "hidden": false,
           "hints": {
             "currency": "GBP",
-            "nature": null,
             "scale": "k",
-            "sign": "stock",
-            "time_semantics": "bop",
             "unit": "money",
             "unit_per": null
           },
@@ -51,7 +44,6 @@
           ],
           "numeric_summary": null,
           "parent_label": null,
-          "period_position": "beginning",
           "row": 2,
           "row_key": "CF|2|CF!r1",
           "scale_factor": 1000,

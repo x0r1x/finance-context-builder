@@ -6,9 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_serializer
 
-from finance_context.models.context import TimelinePhase
-from finance_context.vocab import PeriodPosition, SeriesAggregation
-
 CATALOG_SCHEMA_VERSION = "catalog-2"
 
 
@@ -16,13 +13,10 @@ class CatalogHints(BaseModel):
     unit: str | None = None
     currency: str | None = None
     scale: str | None = None
-    sign: str | None = None
 
 
 class CatalogPeriod(BaseModel):
     period_key: str
-    phase: TimelinePhase | None = None
-    phase_year: int | None = None
     start_date: str | None = None
     end_date: str | None = None
     group_key: str | None = None
@@ -31,9 +25,6 @@ class CatalogPeriod(BaseModel):
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
-        if data.get("phase") is None:
-            data.pop("phase", None)
-            data.pop("phase_year", None)
         for key in ("start_date", "end_date", "group_key"):
             if data.get(key) is None:
                 data.pop(key, None)
@@ -54,11 +45,8 @@ class CatalogRow(BaseModel):
     sheet: str
     label: str
     label_path: list[str] = Field(default_factory=list)
-    disposition: str | None = None
     kind: str
     axis_ids: list[str] = Field(default_factory=list)
-    period_position: PeriodPosition | None = None
-    aggregation: SeriesAggregation | None = None
     has_formula: bool = False
     hints: CatalogHints = Field(default_factory=CatalogHints)
 

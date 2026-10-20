@@ -43,7 +43,6 @@ def build_formula_graph(
     edges: list[dict] | None = None,
     cell_edges: list[dict] | None = None,
     book_dir: Path | None = None,
-    exclusion: dict[tuple[str, int], str] | None = None,
 ) -> GraphPointer:
     book = book_dir or dest_dir
     if cells is None:
@@ -55,7 +54,6 @@ def build_formula_graph(
         cell_edges_path = book / "ir" / "cell_edges.parquet"
         cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
 
-    excluded = dict(exclusion or {})
     row_meta = _row_meta(layout)
     period_by_cell, period_index = _period_maps(layout)
     index_rows = _index_rows(cells, row_meta, period_by_cell)
@@ -95,8 +93,8 @@ def build_formula_graph(
         ],
     )
 
-    cycles = attach_cycle_breakers(classify_cycles(enriched), excluded)
-    hints = circularity_hints(layout, index_rows, cycles, excluded)
+    cycles = classify_cycles(enriched)
+    hints = circularity_hints(layout, index_rows, cycles)
     iterate = _workbook_iterate(book)
     doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
     doc.links = _formula_links(cells, edges, row_meta, period_by_cell, enriched)
@@ -150,35 +148,10 @@ def _cells_by_row(index_rows: list[tuple[object, ...]]) -> dict[tuple[str, int],
     return out
 
 
-def attach_cycle_breakers(
-    cycles: list[CycleRecord],
-    exclusion: dict[tuple[str, int], str],
-) -> list[CycleRecord]:
-    if not cycles:
-        return cycles
-    bridge_rows = {
-        key for key, reason in exclusion.items() if reason == "technical_bridge"
-    }
-    if not bridge_rows:
-        return cycles
-    annotated: list[CycleRecord] = []
-    for cycle in cycles:
-        breakers: list[str] = []
-        for member in cycle.members:
-            parsed = parse_node_id(member)
-            if parsed is None:
-                continue
-            if (parsed[0], parsed[2]) in bridge_rows:
-                breakers.append(member)
-        annotated.append(cycle.model_copy(update={"breakers": sorted(breakers)}))
-    return annotated
-
-
 def circularity_hints(
     layout: Layout,
     index_rows: list[tuple[object, ...]],
     cycles: list[CycleRecord],
-    exclusion: dict[tuple[str, int], str],
 ) -> list[CircularityHint]:
     if cycles:
         return []
@@ -200,26 +173,12 @@ def circularity_hints(
             )
         )
 
-    for (sheet, row), reason in exclusion.items():
-        if reason == "technical_bridge":
-            add(sheet, row, _layout_label(layout, sheet, row))
     for sheet in layout.sheets:
         for block in sheet.blocks:
             for row in block.rows:
                 if "circular" in (row.label or "").casefold():
                     add(sheet.name, row.row, row.label)
     return hints
-
-
-def _layout_label(layout: Layout, sheet: str, row: int) -> str:
-    for item in layout.sheets:
-        if item.name != sheet:
-            continue
-        for block in item.blocks:
-            for layout_row in block.rows:
-                if layout_row.row == row:
-                    return layout_row.label
-    return ""
 
 
 def _row_meta(layout: Layout) -> dict[tuple[str, int], str]:

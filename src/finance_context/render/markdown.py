@@ -15,7 +15,7 @@ from finance_context.models.context import (
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
 # Bump when period-cell text changes, so a finished job rewrites context.md.
-MARKDOWN_RENDERER = "period-cell-bracket"
+MARKDOWN_RENDERER = "structure-columns"
 _RENDERER_STAMP = "context.md.renderer"
 
 
@@ -168,10 +168,6 @@ def _visible_attributes(axis: ContextAxis) -> list[str]:
         attributes.append("End")
     if any(period.group_key for period in periods):
         attributes.append("Group")
-    if any(period.phase for period in periods):
-        attributes.append("Phase")
-    if any(period.phase_year is not None for period in periods):
-        attributes.append("Phase year")
     if any(period.calendar_year and not _redundant_calendar(period) for period in periods):
         attributes.append("Calendar")
     if any(period.flags for period in periods):
@@ -184,7 +180,7 @@ def _axis_row(cells: list[str]) -> str:
 
 
 def _period_table(axis: ContextAxis) -> list[str]:
-    """One column per period; attributes such as phase are rows under the period keys."""
+    """One column per period; attributes are rows under the period keys."""
     header = [_cell(axis.id), *[_cell(period.period_key) for period in axis.periods]]
     lines = [_axis_row(header), _axis_row(["---"] * len(header))]
     for attribute in _visible_attributes(axis):
@@ -200,10 +196,6 @@ def _period_cell(attribute: str, period) -> str:
         return _cell(period.end_date or "")
     if attribute == "Group":
         return _cell(period.group_key or "")
-    if attribute == "Phase":
-        return _cell(period.phase or "")
-    if attribute == "Phase year":
-        return "" if period.phase_year is None else str(period.phase_year)
     if attribute == "Calendar":
         if _redundant_calendar(period):
             return ""
@@ -221,8 +213,8 @@ def _month_key(period_key: str) -> tuple[int, int] | None:
 
 
 def _month_runs(axis: ContextAxis) -> list[tuple[str, list[str]]] | None:
-    """Year lines for a month axis with no phases and a stable group inside each year."""
-    if any(period.phase or period.flags for period in axis.periods):
+    """Year lines for a month axis with no flags and a stable group inside each year."""
+    if any(period.flags for period in axis.periods):
         return None
     parsed: list[tuple[str, str]] = []
     for period in axis.periods:
@@ -321,9 +313,7 @@ def _value_table(rows: list[BlockRow], periods: list[dict], axis_id: str | None)
         "Row",
         "Path",
         "Kind",
-        "Disposition",
         "Unit",
-        "Time",
         "Formula",
         "Cells",
         *headers,
@@ -382,9 +372,7 @@ def _row_line(
         _cell(row.row_key),
         _cell(" / ".join(row.label_path)),
         _cell(row.kind),
-        _cell(row.disposition or ""),
         _cell(unit),
-        _cell(_time_label(row)),
         _cell(formula or ""),
         _cell(_role_cells_label(row, period_cols or set())),
         *[
@@ -421,13 +409,6 @@ def _unit_label(row: BlockRow) -> str:
         base = unit or "unit"
         return f"{base} ×{row.scale_factor}"
     return unit or ""
-
-
-def _time_label(row: BlockRow) -> str:
-    semantics = row.hints.time_semantics
-    if not any((semantics, row.period_position, row.aggregation)):
-        return ""
-    return "/".join(part or "-" for part in (semantics, row.period_position, row.aggregation))
 
 
 def _is_percent_row(row: BlockRow) -> bool:
