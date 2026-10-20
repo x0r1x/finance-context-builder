@@ -47,10 +47,10 @@ def _row(
                             row=1,
                             headers=[
                                 AxisHeader(
-                                    col=3, text="2024", role="historical", period_key="2024"
+                                    col=3, text="2024", kind="period", period_key="2024"
                                 ),
                                 AxisHeader(
-                                    col=4, text="2025", role="forecast", period_key="2025"
+                                    col=4, text="2025", kind="period", period_key="2025"
                                 ),
                             ],
                         ),

@@ -8,7 +8,6 @@ from finance_context.context.build import build_context
 from finance_context.context.observations import build_observations
 from finance_context.graph.stage import _period_maps
 from finance_context.layout.detect import detect_layout
-from finance_context.models.context import ContextPeriod, FinancialBlock
 
 
 def _fact_plan_sheet() -> list[dict]:
@@ -77,25 +76,3 @@ def test_observations_and_block_series_keep_both_variant_columns() -> None:
         ("2024@факт", "100"),
         ("2024@план", "80"),
     ]
-
-
-def test_older_context_ignores_a_period_role() -> None:
-    period = ContextPeriod.model_validate(
-        {"col": 2, "text": "2024", "period_key": "2024", "role": "forecast"}
-    )
-    assert period.period_key == "2024"
-    assert "role" not in period.model_dump(mode="json")
-    block = FinancialBlock.model_validate(
-        {
-            "block_id": "P&L!r1",
-            "sheet": "P&L",
-            "label_col": 1,
-            "kind": "timeline",
-            "periods": [
-                {"col": 2, "text": "2024", "period_key": "2024", "role": "historical"},
-                {"col": 3, "text": "Value", "period_key": "value", "role": "value"},
-            ],
-        }
-    )
-    assert "role" not in block.periods[0]
-    assert block.periods[1]["role"] == "value"

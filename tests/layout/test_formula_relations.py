@@ -21,7 +21,7 @@ def _layout() -> Layout:
                                 AxisHeader(
                                     col=4,
                                     text="2024",
-                                    role="historical",
+                                    kind="period",
                                     period_key="2024",
                                 )
                             ],
@@ -103,8 +103,8 @@ def _two_sheet_layout() -> Layout:
                 id=f"{sheet}!r1",
                 row=1,
                 headers=[
-                    AxisHeader(col=4, text="2024", role="historical", period_key="2024"),
-                    AxisHeader(col=5, text="2025", role="forecast", period_key="2025"),
+                    AxisHeader(col=4, text="2024", kind="period", period_key="2024"),
+                    AxisHeader(col=5, text="2025", kind="period", period_key="2025"),
                 ],
             ),
             rows=rows,

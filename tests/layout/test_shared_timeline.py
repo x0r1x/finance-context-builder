@@ -162,7 +162,6 @@ def test_dated_calendar_wins_over_an_undated_copy() -> None:
             AxisPeriod(
                 col=13,
                 text=str(year),
-                role="historical",
                 period_key=str(year),
                 start_date=f"{year}-01-01",
                 end_date=f"{year}-12-31",
@@ -175,7 +174,7 @@ def test_dated_calendar_wins_over_an_undated_copy() -> None:
         grain="year",
         header_row=2,
         periods=[
-            AxisPeriod(col=index, text=str(year), role="historical", period_key=str(year))
+            AxisPeriod(col=index, text=str(year), period_key=str(year))
             for index, year in enumerate((2024, 2025, 2026), start=6)
         ],
     )

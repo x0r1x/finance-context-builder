@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_serializer, model_validator
+from pydantic import BaseModel, Field, model_serializer
 
 # Params-block column roles and non-period cells. Not a period classification.
 ColumnRole = Literal[
@@ -25,30 +25,10 @@ BlockKind = Literal["timeline", "params"]
 SERIES_KINDS = frozenset({"period", "stub", "relative"})
 STRUCTURAL_PERIOD_KEYS = frozenset({"actual", "plan", "total", "stub"})
 
-_LEGACY_PERIOD_ROLES = {
-    "historical": "period",
-    "forecast": "period",
-    "relative": "relative",
-    "total": "total",
-    "stub": "stub",
-    "scenario": "scenario",
-}
-
 
 def is_series_column(kind: str | None, period_key: str) -> bool:
     """A timeline value column, not a total, stub, scenario, or bare marker."""
     return kind in SERIES_KINDS and period_key not in STRUCTURAL_PERIOD_KEYS
-
-
-def _legacy_kind(data: dict[str, Any]) -> dict[str, Any]:
-    """Old layout JSON stored historical/forecast on ``role``. Read it as kind."""
-    role = data.get("role")
-    if not isinstance(role, str) or role not in _LEGACY_PERIOD_ROLES:
-        return data
-    copied = dict(data)
-    copied["kind"] = copied.get("kind") or _LEGACY_PERIOD_ROLES[role]
-    copied.pop("role", None)
-    return copied
 
 
 class PeriodHit(BaseModel):
@@ -69,19 +49,6 @@ class AxisHeader(BaseModel):
     period_key: str
     explicit_role: bool = False
     hidden: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def _lift_legacy_role(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        role = data.get("role")
-        if role in {"value", "unit", "note", "label", "index", "unknown", "check", "helper"}:
-            return data
-        # A params scenario header keeps ``role``. A timeline scenario is a column kind.
-        if role == "scenario" and data.get("kind") is None:
-            return data
-        return _legacy_kind(data)
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
@@ -112,13 +79,6 @@ class AxisPeriod(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     hidden: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def _lift_legacy_role(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        return _legacy_kind(data)
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):

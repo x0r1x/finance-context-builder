@@ -44,8 +44,8 @@ def _doc() -> ContextDocument:
                 label_col=1,
                 grain="year",
                 periods=[
-                    {"col": 2, "text": "2023", "role": "historical", "period_key": "2023"},
-                    {"col": 3, "text": "2024E", "role": "forecast", "period_key": "2024E"},
+                    {"col": 2, "text": "2023", "period_key": "2023"},
+                    {"col": 3, "text": "2024E", "period_key": "2024E"},
                 ],
                 rows=[
                     BlockRow(
@@ -87,7 +87,7 @@ def test_period_cell_prints_the_graph_address_under_the_value() -> None:
                 sheet="PF Model",
                 label_col=1,
                 periods=[
-                    {"col": 27, "text": "31.12.2038", "role": "forecast", "period_key": "2038"},
+                    {"col": 27, "text": "31.12.2038", "period_key": "2038"},
                 ],
                 rows=[
                     BlockRow(
@@ -144,7 +144,7 @@ def test_percent_unit_shows_the_fraction_and_the_percent() -> None:
                 block_id="PF!r1",
                 sheet="PF",
                 label_col=1,
-                periods=[{"col": 2, "text": "2024", "role": "forecast", "period_key": "2024"}],
+                periods=[{"col": 2, "text": "2024", "period_key": "2024"}],
                 rows=[
                     BlockRow(
                         row_key="PF|1|PF!r1",
@@ -169,7 +169,7 @@ def test_percent_unit_shows_the_fraction_and_the_percent() -> None:
 
 def test_markdown_keeps_every_period_and_excluded_row() -> None:
     periods = [
-        {"col": index, "text": f"Y{index}", "role": "relative", "period_key": f"Y{index}"}
+        {"col": index, "text": f"Y{index}", "period_key": f"Y{index}"}
         for index in range(1, 21)
     ]
     doc = ContextDocument(
@@ -355,7 +355,7 @@ def test_refresh_rewrites_stale_markdown_and_leaves_json(tmp_path: Path) -> None
                 block_id="PF Model!r7",
                 sheet="PF Model",
                 label_col=1,
-                periods=[{"col": 27, "period_key": "2038", "text": "2038", "role": "forecast"}],
+                periods=[{"col": 27, "period_key": "2038", "text": "2038"}],
                 rows=[
                     BlockRow(
                         row_key="PF Model|172|PF Model!r7",
