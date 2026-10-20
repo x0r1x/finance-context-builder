@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from finance_context.layout.axes import _PERIOD_ROLES, _STRUCTURAL_KEYS, _derived_axis
+from finance_context.layout.axes import _derived_axis
 from finance_context.layout.cells import _cell_at, _text
 from finance_context.layout.models import (
     AxisPeriod,
@@ -8,7 +8,9 @@ from finance_context.layout.models import (
     Layout,
     SheetLayout,
     TimeAxis,
+    is_series_column,
 )
+from finance_context.layout.periods import marker_token
 from finance_context.layout.resolve import project_axis
 
 _SHARE_GRAINS = frozenset({"model_year", "year"})
@@ -60,7 +62,10 @@ def _workbook_timeline_signature(axis: TimeAxis) -> tuple | None:
         return None
     return (
         axis.grain,
-        tuple((period.period_key, period.role, period.group_key) for period in periods),
+        tuple(
+            (period.period_key, period.kind, marker_token(period.variant), period.group_key)
+            for period in periods
+        ),
     )
 
 
@@ -68,7 +73,7 @@ def _timeline_periods(axis: TimeAxis) -> list[AxisPeriod]:
     return [
         period
         for period in axis.periods
-        if period.role in _PERIOD_ROLES and period.period_key not in _STRUCTURAL_KEYS
+        if is_series_column(period.kind, period.period_key)
     ]
 
 
@@ -178,7 +183,13 @@ def _axis_signature(axis: TimeAxis) -> tuple:
     return (
         axis.grain,
         tuple(
-            (period.col, period.period_key, period.role, period.group_key)
+            (
+                period.col,
+                period.period_key,
+                period.kind,
+                marker_token(period.variant),
+                period.group_key,
+            )
             for period in axis.periods
         ),
     )
@@ -191,8 +202,8 @@ def _column_signature(axis: TimeAxis) -> tuple:
     )
 
 
-def _has_explicit_role(axis: TimeAxis) -> bool:
-    return any(period.explicit_role for period in axis.periods)
+def _has_explicit_marker(axis: TimeAxis) -> bool:
+    return any(period.explicit_role or period.variant for period in axis.periods)
 
 
 def _flag_bit(cell: dict | None, date1904: bool) -> bool:
@@ -270,11 +281,13 @@ def _share_repeated_axes(
             continue
         signature = _axis_signature(axis)
         fingerprint = _flag_fingerprint(owner.get(axis.id), axis, by_row, date1904)
-        if not _has_explicit_role(axis):
+        # A later header with the same columns and no marker is the marked axis.
+        # The signature includes the marker, so this match is not that signature.
+        if not _has_explicit_marker(axis):
             painted: TimeAxis | None = None
             painted_flags: tuple = ()
             for previous, previous_flags in by_columns.get(_column_signature(axis), []):
-                if _has_explicit_role(previous) and _flags_compatible(
+                if _has_explicit_marker(previous) and _flags_compatible(
                     previous_flags, fingerprint
                 ):
                     painted = previous

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 from finance_context.vocab import PeriodPosition, SeriesAggregation, ValueStatus
 
@@ -115,9 +115,12 @@ class ModelPeriod(BaseModel):
 
 
 class ContextPeriod(BaseModel):
+    """One axis column. Older context.json may still carry ``role``; it is ignored."""
+
+    model_config = ConfigDict(extra="ignore")
+
     col: int
     text: str = ""
-    role: str = "historical"
     period_key: str
     group_key: str | None = None
     index: int = 0
@@ -167,6 +170,9 @@ class WorkbookTimeline(BaseModel):
     periods: list[ModelPeriod] = Field(default_factory=list)
 
 
+_LEGACY_PERIOD_ROLES = frozenset({"historical", "forecast", "relative"})
+
+
 class FinancialBlock(BaseModel):
     block_id: str
     sheet: str
@@ -177,6 +183,22 @@ class FinancialBlock(BaseModel):
     periods: list[dict[str, Any]] = Field(default_factory=list)
     rows: list[BlockRow] = Field(default_factory=list)
     relations: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("periods", mode="before")
+    @classmethod
+    def _drop_legacy_period_role(cls, periods: Any) -> Any:
+        """Ignore a historical/forecast/relative role left on an older period dict.
+
+        Params column roles (value, unit, note, scenario, ...) stay.
+        """
+        if not isinstance(periods, list):
+            return periods
+        cleaned: list[Any] = []
+        for item in periods:
+            if isinstance(item, dict) and item.get("role") in _LEGACY_PERIOD_ROLES:
+                item = {key: value for key, value in item.items() if key != "role"}
+            cleaned.append(item)
+        return cleaned
 
 
 class WorkbookRaw(BaseModel):

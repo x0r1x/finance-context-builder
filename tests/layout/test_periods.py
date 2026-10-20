@@ -8,33 +8,42 @@ from finance_context.layout.periods import (
     classify_header,
     compose_period,
     infer_grain,
+    marker_token,
 )
 
 
 @pytest.mark.parametrize(
-    ("text", "role", "period_key"),
+    ("text", "period_key", "variant"),
     [
-        ("2023", "historical", "2023"),
-        ("2025E", "forecast", "2025"),
-        ("янв.25", "historical", "2025-01"),
-        ("2025-01", "historical", "2025-01"),
-        ("01.07.2022", "historical", "2022-07-01"),
+        ("2023", "2023", None),
+        ("2025E", "2025", "E"),
+        ("янв.25", "2025-01", None),
+        ("2025-01", "2025-01", None),
+        ("01.07.2022", "2022-07-01", None),
     ],
 )
-def test_header_carries_role_and_period_key(text: str, role: str, period_key: str) -> None:
+def test_header_carries_kind_and_period_key(
+    text: str, period_key: str, variant: str | None
+) -> None:
     hit = classify_header(text)
     assert hit is not None
-    assert hit.role == role
+    assert hit.kind == "period"
     assert hit.period_key == period_key
+    assert hit.variant == variant
+    assert hit.explicit_role is (variant is not None)
 
 
 def test_year_fact_plan_share_calendar_key() -> None:
+    """The calendar key stays shared. An axis disambiguates it when both appear."""
     fact = classify_header("2024 факт")
     plan = classify_header("2024 план")
     assert fact is not None and plan is not None
     assert fact.period_key == plan.period_key == "2024"
-    assert fact.role == "historical"
-    assert plan.role == "forecast"
+    assert fact.kind == plan.kind == "period"
+    assert marker_token(fact.variant) == "факт"
+    assert marker_token(plan.variant) == "план"
+    assert fact.explicit_role is True
+    assert plan.explicit_role is True
 
 
 def test_month_fact_plan_share_calendar_key() -> None:
@@ -42,8 +51,9 @@ def test_month_fact_plan_share_calendar_key() -> None:
     plan = classify_header("янв.25 план")
     assert fact is not None and plan is not None
     assert fact.period_key == plan.period_key == "2025-01"
-    assert fact.role == "historical"
-    assert plan.role == "forecast"
+    assert fact.kind == plan.kind == "period"
+    assert marker_token(fact.variant) == "факт"
+    assert marker_token(plan.variant) == "план"
 
 
 @pytest.mark.parametrize(
@@ -63,14 +73,20 @@ def test_header_period_key(text: str, period_key: str) -> None:
 
 
 def test_fact_plan_keywords() -> None:
-    assert classify_header("факт").role == "historical"  # type: ignore[union-attr]
-    assert classify_header("план").role == "forecast"  # type: ignore[union-attr]
+    fact = classify_header("факт")
+    plan = classify_header("план")
+    assert fact is not None and plan is not None
+    assert fact.kind == plan.kind == "period"
+    assert fact.period_key == "actual"
+    assert plan.period_key == "plan"
+    assert marker_token(fact.variant) == "факт"
+    assert marker_token(plan.variant) == "план"
 
 
 def test_scenario_and_total_and_stub() -> None:
-    assert classify_header("Upside").role == "scenario"  # type: ignore[union-attr]
-    assert classify_header("Итого").role == "total"  # type: ignore[union-attr]
-    assert classify_header("stub").role == "stub"  # type: ignore[union-attr]
+    assert classify_header("Upside").kind == "scenario"  # type: ignore[union-attr]
+    assert classify_header("Итого").kind == "total"  # type: ignore[union-attr]
+    assert classify_header("stub").kind == "stub"  # type: ignore[union-attr]
 
 
 def test_line_item_is_not_a_period() -> None:
@@ -166,7 +182,9 @@ def test_model_year_keys_infer_relative_grain() -> None:
 def test_russian_and_short_period_headers(text: str, period_key: str) -> None:
     hit = classify_header(text)
     assert hit is not None
-    assert (hit.period_key, hit.role) == (period_key, "historical")
+    assert hit.kind == "period"
+    assert hit.period_key == period_key
+    assert hit.variant is None
 
 
 @pytest.mark.parametrize(
@@ -183,7 +201,9 @@ def test_russian_and_short_period_headers(text: str, period_key: str) -> None:
 def test_role_word_before_or_around_the_period(text: str, role: str, period_key: str) -> None:
     hit = classify_header(text)
     assert hit is not None
-    assert (hit.period_key, hit.role, hit.explicit_role) == (period_key, role, True)
+    assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
+    assert hit.variant
+    assert role in {"historical", "forecast"}
 
 
 @pytest.mark.parametrize("text", ["13.2025", "V кв. 2025", "3 полугодие 2025", "1.2025"])
@@ -239,7 +259,14 @@ def test_role_word_on_a_part_without_a_year(
 ) -> None:
     atom = classify_atom(text)
     assert atom is not None
-    assert (atom.quarter, atom.half, atom.role, atom.explicit_role) == (quarter, half, role, True)
+    assert (atom.quarter, atom.half, atom.column_kind, atom.explicit_role) == (
+        quarter,
+        half,
+        "period",
+        True,
+    )
+    assert atom.variant
+    assert role in {"historical", "forecast"}
 
 
 def test_year_row_over_role_tagged_quarter_keeps_the_role() -> None:
@@ -248,7 +275,9 @@ def test_year_row_over_role_tagged_quarter_keeps_the_role() -> None:
     assert year is not None and part is not None
     hit = compose_period([year, part])
     assert hit is not None
-    assert (hit.period_key, hit.role) == ("2025Q1", "forecast")
+    assert hit.period_key == "2025Q1"
+    assert hit.kind == "period"
+    assert marker_token(hit.variant) == "план"
 
 
 def test_sparse_quarter_and_half_keys_keep_their_identity() -> None:
@@ -306,19 +335,23 @@ def test_role_words_and_russian_inflections_are_role_markers(text: str) -> None:
         ("Ожид. 2025", "forecast", "2025"),
     ],
 )
-def test_budget_plan_and_estimate_are_forecast_roles(
+def test_budget_plan_and_estimate_are_variant_markers(
     text: str, role: str, period_key: str
 ) -> None:
     hit = classify_header(text)
     assert hit is not None
-    assert (hit.period_key, hit.role, hit.explicit_role) == (period_key, role, True)
+    assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
+    assert hit.variant
+    assert role == "forecast"
 
 
 @pytest.mark.parametrize("text", ["Бюджет", "Plan", "Оценка", "Ожид."])
 def test_bare_budget_plan_and_estimate_are_role_markers(text: str) -> None:
     hit = classify_header(text)
     assert hit is not None
-    assert hit.role == "forecast"
+    assert hit.kind == "period"
+    assert hit.period_key == "plan"
+    assert hit.variant
     assert hit.explicit_role is True
 
 
@@ -351,7 +384,9 @@ def test_year_suffix_letters_match_on_parts_and_months(
 ) -> None:
     hit = classify_header(text)
     assert hit is not None
-    assert (hit.period_key, hit.role, hit.explicit_role) == (period_key, role, True)
+    assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
+    assert marker_token(hit.variant)
+    assert role in {"historical", "forecast"}
 
 
 @pytest.mark.parametrize(
@@ -372,7 +407,9 @@ def test_year_suffix_letters_match_on_parts_and_months(
 def test_half_year_abbreviations_and_en_dash_ordinals(text: str, period_key: str) -> None:
     hit = classify_header(text)
     assert hit is not None
-    assert (hit.period_key, hit.role) == (period_key, "historical")
+    assert hit.kind == "period"
+    assert hit.period_key == period_key
+    assert hit.variant is None
 
 
 @pytest.mark.parametrize(
@@ -444,13 +481,17 @@ def test_half_year_spellings_do_not_swallow_nearby_words(text: str) -> None:
         ("2н2025", "historical", "2025H2"),
     ],
 )
-def test_cyrillic_lookalikes_in_period_codes_keep_suffix_roles(
+def test_cyrillic_lookalikes_in_period_codes_keep_suffix_markers(
     text: str, role: str, period_key: str
 ) -> None:
     hit = classify_header(text)
     assert hit is not None
     explicit = text[-1] not in "125"
-    assert (hit.period_key, hit.role, hit.explicit_role) == (period_key, role, explicit)
+    assert hit.kind == "period"
+    assert hit.period_key == period_key
+    assert hit.explicit_role is explicit
+    assert bool(hit.variant) is explicit
+    assert role in {"historical", "forecast"}
 
 
 def test_cyrillic_en_without_a_year_is_a_half_token() -> None:
@@ -497,13 +538,15 @@ def test_year_first_quarters_halves_and_short_fiscal_years(text: str, period_key
     hit = classify_header(text)
     assert hit is not None
     assert hit.period_key == period_key
-    assert hit.role == "historical"
+    assert hit.kind == "period"
+    assert hit.variant is None
 
 
-def test_fiscal_year_suffix_keeps_its_role() -> None:
+def test_fiscal_year_suffix_keeps_its_marker() -> None:
     hit = classify_header("FY25E")
     assert hit is not None
-    assert (hit.period_key, hit.role, hit.explicit_role) == ("2025", "forecast", True)
+    assert (hit.period_key, hit.kind, hit.explicit_role) == ("2025", "period", True)
+    assert marker_token(hit.variant) == "e"
 
 
 @pytest.mark.parametrize(
@@ -585,7 +628,7 @@ def test_words_that_start_like_a_month_are_not_months(text: str) -> None:
 def test_scenario_headers_accept_either_word_order(text: str) -> None:
     hit = classify_header(text)
     assert hit is not None
-    assert hit.role == "scenario"
+    assert hit.kind == "scenario"
     assert hit.explicit_role is True
 
 

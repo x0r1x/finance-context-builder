@@ -341,7 +341,7 @@ def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
     assert rendered.count("### `") >= 2
 
 
-def test_phased_year_axis_is_forecast_unless_the_header_says_actual() -> None:
+def test_phased_year_axis_keeps_markers_and_drops_period_role() -> None:
     cells = [
         _c("PF", "A1", "Item"),
         _c("PF", "B1", "2023A"),
@@ -363,17 +363,25 @@ def test_phased_year_axis_is_forecast_unless_the_header_says_actual() -> None:
         _c("PF", "D4", "11"),
     ]
     layout = detect_layout(cells)
+    from finance_context.layout.periods import marker_token
+
     headers = {header.period_key: header for header in layout.sheets[0].axes[0].periods}
-    assert headers["2024"].role == "historical"
+    assert headers["2024"].kind == "period"
     assert headers["2024"].explicit_role is False
-    assert headers["2023"].role == "historical" and headers["2023"].explicit_role is True
-    assert headers["2025"].role == "forecast" and headers["2025"].explicit_role is True
+    assert headers["2024"].variant is None
+    assert headers["2023"].kind == "period" and headers["2023"].explicit_role is True
+    assert marker_token(headers["2023"].variant) == "a"
+    assert headers["2025"].kind == "period" and headers["2025"].explicit_role is True
+    assert marker_token(headers["2025"].variant) == "e"
     axes, _warnings = build_axes(layout, cells)
-    roles = {period.period_key: period.role for period in axes[0].periods}
-    assert roles["2023"] == "historical"
-    assert roles["2024"] == "forecast"
-    assert roles["2025"] == "forecast"
-    assert roles["2056"] == "forecast"
+    dumped = axes[0].periods[0].model_dump(mode="json")
+    assert "role" not in dumped
+    assert [(period.period_key, period.phase) for period in axes[0].periods] == [
+        ("2023", None),
+        ("2024", "construction"),
+        ("2025", "operation"),
+        ("2056", None),
+    ]
 
 
 def _ru_timeline(*rows: tuple[str, list[str]]) -> list[dict]:
@@ -396,12 +404,13 @@ def test_russian_flag_rows_set_construction_then_operation_phase() -> None:
         ("Флаг ввода в эксплуатацию", ["0", "0", "1", "0"]),
     )
     axes, _warnings = build_axes(detect_layout(cells), cells)
-    assert [(p.period_key, p.phase, p.phase_year, p.role) for p in axes[0].periods] == [
-        ("2025", "construction", 1, "forecast"),
-        ("2026", "construction", 2, "forecast"),
-        ("2027", "operation", 1, "forecast"),
-        ("2028", "operation", 2, "forecast"),
+    assert [(p.period_key, p.phase, p.phase_year) for p in axes[0].periods] == [
+        ("2025", "construction", 1),
+        ("2026", "construction", 2),
+        ("2027", "operation", 1),
+        ("2028", "operation", 2),
     ]
+    assert "role" not in axes[0].periods[0].model_dump(mode="json")
 
 
 def test_russian_investment_phase_is_construction() -> None:
