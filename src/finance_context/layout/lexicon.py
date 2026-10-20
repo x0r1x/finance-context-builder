@@ -1,17 +1,17 @@
-"""RU/EN words the layout reads: param headers, period roles and units.
+"""RU/EN words the layout reads: param headers, period markers and units.
 
 Words live in ``lexicon.json`` next to this module. A word matches whole. A longer
 word matches when its Snowball stem agrees with the entry, or when only a
 grammatical ending differs (``кварталу`` / ``квартал``). Words of at most three
 letters stay exact, so ``кв`` is not ``кВт`` and ``г`` is not ``график``.
 ``stem_block`` lists collisions the stemmer must not accept (``кВт``, ``график``,
-``History``, ``Histogram``, ``фактор``, ``планета``, ``начальный``, ``Budgeting``).
+``History``, ``Histogram``, ``фактор``, ``планета``, ``Budgeting``).
 A trailing ``*`` is still read as a root, not as "any ending". A word with a space
 is a phrase (``end of``).
 
 ``structural`` holds the patterns that used to be hardcoded: totals, stubs,
 scenario names, month names, quarter and month axis labels, period bounds, and
-the flag / scenario-table header words. The package file is validated on load.
+scenario-table header words. The package file is validated on load.
 
 ``FINANCE_CONTEXT_LEXICON`` may point at a JSON file with the same shape. Its
 lists are added to the package lists and its objects are merged. The publisher
@@ -73,7 +73,6 @@ class _Structural(BaseModel):
     scenario_adjectives: list[str]
     scenario_evidence: list[str]
     scenario_header: list[str]
-    flag: list[str]
     months: dict[str, list[str]]
     quarter_label: list[str]
     month_label: list[str]
@@ -86,7 +85,7 @@ class _LexiconModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     header_roles: dict[str, list[str]]
-    period_roles: dict[str, list[str]]
+    period_markers: dict[str, list[str]]
     period_words: dict[str, list[str]]
     structural: _Structural
     stem_block: dict[str, list[str]] = {}
@@ -122,7 +121,7 @@ def _validate(data: dict[str, Any], *, package: bool) -> None:
 class _OverlayModel(BaseModel):
     model_config = ConfigDict(extra="allow")
     header_roles: dict[str, list[str]] | None = None
-    period_roles: dict[str, list[str]] | None = None
+    period_markers: dict[str, list[str]] | None = None
     period_words: dict[str, list[str]] | None = None
     structural: dict[str, Any] | None = None
     stem_block: dict[str, list[str]] | None = None
@@ -383,11 +382,3 @@ def has_scenario_evidence(text: str) -> bool:
             return True
     return False
 
-
-def phrase_in(text: str, *path: str) -> bool:
-    folded = _fold(text)
-    for entry in words(*path):
-        root = _fold(_root(entry))
-        if re.search(rf"(?<!\w){re.escape(root)}(?![^\W\d_])", folded):
-            return True
-    return False

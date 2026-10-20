@@ -8,10 +8,10 @@ from finance_context.layout.lexicon import accepts, matches_entry, searcher
 
 
 def test_label_searcher_is_compiled_once() -> None:
-    first = searcher("structural", "flag")
-    second = searcher("structural", "flag")
+    first = searcher("structural", "period_start")
+    second = searcher("structural", "period_start")
     assert first is second
-    assert first.search("flag row")
+    assert first.search("начало периода")
 
 
 @pytest.mark.parametrize(
@@ -37,16 +37,14 @@ def test_stem_or_ending_accepts_an_inflection(surface: str, entry: str) -> None:
         "Histogram",
         "фактор",
         "планета",
-        "начальный",
         "Budgeting",
     ],
 )
 def test_stem_block_rejects_lookalike_words(surface: str) -> None:
     assert not accepts("period_words", "quarter", surface=surface)
     assert not accepts("period_words", "year", surface=surface)
-    assert not accepts("period_roles", "historical", surface=surface)
-    assert not accepts("period_roles", "forecast", surface=surface)
-    assert not accepts("structural", "flag", surface=surface)
+    assert not accepts("period_markers", "actual", surface=surface)
+    assert not accepts("period_markers", "plan", surface=surface)
 
 
 def test_package_lexicon_rejects_an_unknown_key(tmp_path, monkeypatch) -> None:

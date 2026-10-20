@@ -13,9 +13,9 @@ from finance_context.layout.periods import (
     LAYER_BOUNDS,
     LAYER_DATE,
     LAYER_HALF,
+    LAYER_MARKER,
     LAYER_MONTH,
     LAYER_QUARTER,
-    LAYER_ROLE,
     LAYER_YEAR,
     HeaderAtom,
     apply_grain,
@@ -24,9 +24,9 @@ from finance_context.layout.periods import (
     compose_period,
     infer_grain,
     is_end_period_label,
+    is_marker_text,
     is_month_label,
     is_quarter_label,
-    is_role_marker_text,
     is_start_period_label,
     marker_token,
     normalize_header,
@@ -469,7 +469,7 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
                 k -= 1
                 continue
             prev_layers = _row_layers(prev_cells, date1904)
-            if prev_layers <= {LAYER_ROLE} and LAYER_ROLE in prev_layers:
+            if prev_layers <= {LAYER_MARKER} and LAYER_MARKER in prev_layers:
                 prefix.insert(0, prev)
                 k -= 1
                 continue
@@ -492,11 +492,11 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
             new_layers = _row_layers(cells, date1904)
             if not new_layers:
                 break
-            if new_layers <= {LAYER_ROLE} and (layers & _CALENDAR_LAYERS):
+            if new_layers <= {LAYER_MARKER} and (layers & _CALENDAR_LAYERS):
                 marker_cols = [
                     int(cell["col"])
                     for cell in cells
-                    if is_role_marker_text(_text(cell, date1904))
+                    if is_marker_text(_text(cell, date1904))
                 ]
                 calendar_cols = _band_calendar_cols(band, by_row, date1904)
                 if marker_cols and all(col not in calendar_cols for col in marker_cols):
@@ -569,7 +569,7 @@ def _band_calendar_cols(
     for row_n in band_rows:
         for cell in by_row[row_n]:
             atom = classify_atom(_text(cell, date1904))
-            if atom is None or atom.kind in {"role_marker", "noise"}:
+            if atom is None or atom.kind in {"marker", "noise"}:
                 continue
             if atom.kind == "full" or atom.year or atom.quarter or atom.half or atom.month:
                 cols.add(int(cell["col"]))
@@ -599,7 +599,7 @@ def _axes_from_band(
     allow_m = any(
         is_month_label(_row_label(by_row[row_n], date1904)) for row_n in band_rows
     )
-    role_runs = _role_runs(band_rows, by_row, cols, date1904, prefer_end=prefer_end)
+    marker_runs = _marker_runs(band_rows, by_row, cols, date1904, prefer_end=prefer_end)
     labels = {row_n: _row_label(by_row[row_n], date1904) for row_n in band_rows}
     start_rows = [row_n for row_n in band_rows if is_start_period_label(labels[row_n])]
     end_rows = [row_n for row_n in band_rows if is_end_period_label(labels[row_n])]
@@ -638,7 +638,7 @@ def _axes_from_band(
         if hit.period_key[:4].isdigit():
             year_hint = hit.period_key[:4]
         text = _column_text(col, band_rows, by_row, date1904, prefer_end=prefer_end)
-        kind, variant, explicit_role = _column_mark(col, atoms, hit, role_runs)
+        kind, variant, explicit_role = _column_mark(col, atoms, hit, marker_runs)
         composed.append(
             AxisHeader(
                 col=col,
@@ -892,14 +892,14 @@ def _column_mark(
                 continue
             return atom.column_kind or "period", atom.variant, True
     for atom in atoms:
-        if atom.kind == "role_marker" and atom.variant:
+        if atom.kind == "marker" and atom.variant:
             return "period", atom.variant, True
     if col in variant_runs:
         return "period", variant_runs[col], True
     return hit.kind, hit.variant, bool(getattr(hit, "explicit_role", False))
 
 
-def _role_runs(
+def _marker_runs(
     band_rows: list[int],
     by_row: dict[int, list[dict]],
     cols: list[int],
@@ -925,7 +925,7 @@ def _role_runs(
                 allow_m=True,
                 prefer_end=prefer_end,
             )
-            if atom.kind != "role_marker"
+            if atom.kind != "marker"
         )
     }
     assigned: dict[int, str] = {}
@@ -936,34 +936,34 @@ def _role_runs(
         markers: list[tuple[int, str]] = []
         for cell in sorted(by_row[row_n], key=lambda c: int(c["col"])):
             text = _text(cell, date1904)
-            if is_role_marker_text(text):
+            if is_marker_text(text):
                 hit = classify_header(text)
                 if hit is not None and hit.variant and hit.period_key in {"actual", "plan"}:
                     markers.append((int(cell["col"]), hit.variant))
         if not markers:
             continue
-        off = [(col, role) for col, role in markers if col not in calendar_cols]
-        on = [(col, role) for col, role in markers if col in calendar_cols]
-        for index, (mcol, role) in enumerate(off):
+        off = [(col, surface) for col, surface in markers if col not in calendar_cols]
+        on = [(col, surface) for col, surface in markers if col in calendar_cols]
+        for index, (mcol, surface) in enumerate(off):
             right = off[index + 1][0] if index + 1 < len(off) else max(cols) + 1
             for col in cols:
                 if col >= mcol and col < right:
-                    assigned[col] = role
+                    assigned[col] = surface
                     banner_cols.add(col)
         if len(off) == 1:
-            _mcol, role = off[0]
+            _mcol, surface = off[0]
             for col in cols:
                 if col not in assigned:
-                    assigned[col] = role
+                    assigned[col] = surface
                     banner_cols.add(col)
-        for index, (mcol, role) in enumerate(on):
+        for index, (mcol, surface) in enumerate(on):
             if mcol in banner_cols:
-                assigned[mcol] = role
+                assigned[mcol] = surface
                 continue
             right = on[index + 1][0] if index + 1 < len(on) else max(cols) + 1
             for col in cols:
                 if col >= mcol and col < right and col not in banner_cols:
-                    assigned[col] = role
+                    assigned[col] = surface
     return assigned
 
 

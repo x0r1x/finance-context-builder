@@ -11,17 +11,17 @@ from finance_context.layout.periods import (
     LAYER_BOUNDS,
     LAYER_DATE,
     LAYER_HALF,
+    LAYER_MARKER,
     LAYER_MONTH,
     LAYER_QUARTER,
-    LAYER_ROLE,
     LAYER_YEAR,
     classify_atom,
     classify_header,
     is_calendar_hit,
     is_end_period_label,
+    is_marker_text,
     is_month_label,
     is_quarter_label,
-    is_role_marker_text,
     is_start_period_label,
     normalize_header,
 )
@@ -81,8 +81,8 @@ def _row_layers(row_cells: list[dict], date1904: bool) -> set[str]:
         for cell in row_cells
     ]
     atoms = [atom for atom in atoms if atom is not None and atom.kind != "noise"]
-    if any(atom.kind == "role_marker" for atom in atoms) or is_role_marker_text(label):
-        layers.add(LAYER_ROLE)
+    if any(atom.kind == "marker" for atom in atoms) or is_marker_text(label):
+        layers.add(LAYER_MARKER)
     if sum(1 for atom in atoms if atom.kind == "full" and atom.day) >= 1:
         layers.add(LAYER_DATE)
     if _year_layer(row_cells, date1904):
@@ -146,7 +146,7 @@ def _is_counter_row(row_cells: list[dict], date1904: bool) -> bool:
         text = _text(cell, date1904)
         if not text:
             continue
-        if classify_header(text) is not None or is_role_marker_text(text):
+        if classify_header(text) is not None or is_marker_text(text):
             continue
         if not _is_int_text(text):
             if _is_number(text):
@@ -250,7 +250,7 @@ def _row_label(row_cells: list[dict], date1904: bool) -> str | None:
         if not text or _is_number(text):
             continue
         atom = classify_atom(text)
-        if atom is not None and atom.kind != "role_marker":
+        if atom is not None and atom.kind != "marker":
             continue
         return text
     return None
