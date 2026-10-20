@@ -27,8 +27,13 @@ from finance_context.layout.periods import (
 )
 from finance_context.layout.units import is_unit_text
 
+# `должен` is a whole word: the bare stem also hits `задолженность`.
+# `проверк` is a substring (`Перепроверка` has no such collision).
+# `сход` allows an optional `не`/`ра` prefix, so `Несходимость` matches
+# and `Исходящее` does not. `контроль` stays at a word start.
 _CHECK = re.compile(
-    r"check|проверк|контроль|tie[- ]?out|plug\b|сход[ия]|должен",
+    r"check|tie[- ]?out|plug\b|проверк|"
+    r"\bконтроль|\b(?:не|ра)?сход[ия]|\bдолж(?:ен|на|но|ны)\b",
     re.IGNORECASE,
 )
 
@@ -57,6 +62,8 @@ _SCENARIO_LABEL = re.compile(
 
 
 _PLACEHOLDER_LABEL = re.compile(r"^(spare|none)$", re.IGNORECASE)
+# A dash typed in place of a value: `-`, `–`, `—`.
+_DASH = re.compile(r"\s*[-\u2013\u2014]\s*")
 
 
 _RELATIVE_LABEL = re.compile(
@@ -348,7 +355,10 @@ def _data_rows(
             period_cols=period_cols,
             date1904=date1904,
         )
-        if kind == "abstract" and _has_scalar_value(probe, by_row[row_n], date1904):
+        if kind == "abstract" and (
+            _has_scalar_value(probe, by_row[row_n], date1904)
+            or _is_blank_data_row(by_row[row_n], label_cell, period_cols, date1904)
+        ):
             in_check = any(_CHECK.search(item.label) for item in section_stack) or any(
                 prev.check_row for prev in _ancestors(out, indent)
             )
@@ -533,6 +543,28 @@ def _has_scalar_value(probe: LayoutRow, row_cells: list[dict], date1904: bool) -
             continue
         text = _text(_cell_at(row_cells, item.col) or {}, date1904)
         if text and _is_number(text):
+            return True
+    return False
+
+
+def _is_blank_data_row(
+    row_cells: list[dict], label_cell: dict, period_cols: set[int], date1904: bool
+) -> bool:
+    """A data line with nothing to show, not a section title.
+
+    A formula beside the label (`=IF(ISERROR(E9),"",E9)` returning blank) or a dash
+    placeholder (`-`) in a period column marks a list item whose values are empty.
+    A section title carries only its label, or formulas that print period captions.
+    """
+    label_col = int(label_cell["col"])
+    for cell in row_cells:
+        col = int(cell["col"])
+        if col == label_col:
+            continue
+        text = _text(cell, date1904) or ""
+        if cell.get("formula_raw") and classify_atom(text) is None:
+            return True
+        if col in period_cols and _DASH.fullmatch(text):
             return True
     return False
 

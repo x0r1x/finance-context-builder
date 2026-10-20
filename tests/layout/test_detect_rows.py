@@ -54,6 +54,104 @@ def test_check_row_is_marker_not_finding() -> None:
     assert "candidates" not in dumped
 
 
+def test_check_stem_inside_word_is_not_check_row() -> None:
+    cells = [
+        _c("BS", "A1", "Item"),
+        _c("BS", "B1", "2023"),
+        _c("BS", "C1", "2024"),
+        _c("BS", "A2", "Задолженность поставщикам, в т.ч."),
+        _c("BS", "B2", "50"),
+        _c("BS", "C2", "60"),
+        _c("BS", "A3", "  - перед подрядчиками"),
+        _c("BS", "B3", "20"),
+        _c("BS", "C3", "25"),
+        _c("BS", "A4", "Всего задолженность"),
+        _c("BS", "B4", "50", formula="=B2"),
+        _c("BS", "C4", "60", formula="=C2"),
+        _c("BS", "A5", "Итог должен быть равен нулю"),
+        _c("BS", "B5", "0", formula="=B4-B2"),
+        _c("BS", "C5", "0", formula="=C4-C2"),
+        _c("BS", "A6", "Сходимость остатков"),
+        _c("BS", "B6", "0"),
+        _c("BS", "C6", "0"),
+    ]
+    layout = detect_layout(cells)
+    rows = {r.label.strip(): r for r in layout.sheets[0].blocks[0].rows}
+    real = ("Задолженность поставщикам, в т.ч.", "- перед подрядчиками", "Всего задолженность")
+    for label in real:
+        row = rows[label]
+        assert row.check_row is False, label
+        assert row.kind == "fact", label
+    assert rows["Итог должен быть равен нулю"].check_row is True
+    assert rows["Итог должен быть равен нулю"].kind == "helper"
+    assert rows["Сходимость остатков"].check_row is True
+    assert rows["Сходимость остатков"].kind == "helper"
+
+
+def test_check_prefixes_and_balance_words() -> None:
+    """Prefixed check stems stay checks; lookalikes and должность stay facts."""
+    checks = [
+        "Несходимость",
+        "Расходимость",
+        "Перепроверка",
+        "Сходимость",
+        "Сходятся",
+        "Сходящиеся",
+        "Сумма должна сойтись",
+        "Итог должно быть нулём",
+        "Строки должны совпасть",
+    ]
+    facts = [
+        "Исходящее сальдо",
+        "Исходящий остаток",
+        "Нисходящий поток",
+        "Восходящий тренд",
+        "Происходящие операции",
+        "Должность",
+        "Подконтрольные общества",
+        "Бесконтрольно",
+    ]
+    cells = [
+        _c("BS", "A1", "Item"),
+        _c("BS", "B1", "2023"),
+        _c("BS", "C1", "2024"),
+    ]
+    row = 2
+    for label in checks:
+        cells += [
+            _c("BS", f"A{row}", label),
+            _c("BS", f"B{row}", "0"),
+            _c("BS", f"C{row}", "0"),
+        ]
+        row += 1
+    for label in facts:
+        cells += [
+            _c("BS", f"A{row}", label),
+            _c("BS", f"B{row}", "10"),
+            _c("BS", f"C{row}", "25"),
+        ]
+        row += 1
+    cells += [
+        _c("BS", f"A{row}", "Задолженность"),
+        _c("BS", f"A{row + 1}", "  перед поставщиками"),
+        _c("BS", f"B{row + 1}", "15"),
+        _c("BS", f"C{row + 1}", "16"),
+    ]
+    layout = detect_layout(cells)
+    rows = {item.label: item for item in layout.sheets[0].blocks[0].rows}
+    for label in checks:
+        assert rows[label].check_row is True, label
+        assert rows[label].kind == "helper", label
+    for label in facts:
+        assert rows[label].check_row is False, label
+        assert rows[label].kind == "fact", label
+    assert rows["Задолженность"].kind == "abstract"
+    assert rows["Задолженность"].check_row is False
+    assert rows["перед поставщиками"].kind == "fact"
+    assert rows["перед поставщиками"].check_row is False
+    assert rows["перед поставщиками"].section_path == ["Задолженность"]
+
+
 def test_section_header_is_abstract_and_week_index_is_index() -> None:
     cells = [
         _c("Dash", "A1", "Item"),
@@ -558,3 +656,47 @@ def test_year_in_the_label_column_is_still_not_a_row_name() -> None:
     cells += [_c("ПФ", f"{col}4", v) for col, v in zip("BCD", ["4", "5", "6"], strict=True)]
     rows = detect_layout(cells).sheets[0].blocks[0].rows
     assert "2024" not in [row.label for row in rows]
+
+
+def _flat_list(second: list[dict]) -> list[dict]:
+    cells = [_c("Notes", "A1", "Item")]
+    years = ["2023", "2024", "2025"]
+    cells += [_c("Notes", f"{col}1", y) for col, y in zip("CDE", years, strict=True)]
+    cells += [_c("Notes", "A2", "Widgets owed")] + second
+    cells += [_c("Notes", "A3", "Gadgets owed")]
+    cells += [_c("Notes", f"{col}3", v) for col, v in zip("CDE", ["5", "6", "7"], strict=True)]
+    cells += [_c("Notes", "A4", "Gizmos owed")]
+    cells += [_c("Notes", f"{col}4", v) for col, v in zip("CDE", ["8", "9", "10"], strict=True)]
+    return cells
+
+
+def test_dash_placeholders_make_an_empty_line_not_a_section_title() -> None:
+    dashes = [_c("Notes", f"{col}2", "-") for col in "CDE"]
+    rows = {row.label: row for row in detect_layout(_flat_list(dashes)).sheets[0].blocks[0].rows}
+    assert rows["Widgets owed"].kind == "fact"
+    assert rows["Gadgets owed"].parent_row is None
+    assert rows["Gadgets owed"].section_path == []
+    assert rows["Gizmos owed"].parent_row is None
+
+
+def test_a_formula_beside_the_label_makes_an_empty_line_not_a_section_title() -> None:
+    blank = [_c("Notes", "B2", None, formula='IF(ISERROR(Z2),"",Z2)')]
+    rows = {row.label: row for row in detect_layout(_flat_list(blank)).sheets[0].blocks[0].rows}
+    assert rows["Widgets owed"].kind == "fact"
+    assert rows["Gadgets owed"].parent_row is None
+    assert rows["Gizmos owed"].section_path == []
+
+
+def test_a_label_only_row_still_opens_a_section_at_the_same_indent() -> None:
+    rows = {row.label: row for row in detect_layout(_flat_list([])).sheets[0].blocks[0].rows}
+    title = rows["Widgets owed"]
+    assert title.kind == "abstract"
+    assert rows["Gadgets owed"].parent_row == title.row
+    assert rows["Gizmos owed"].section_path == ["Widgets owed"]
+
+
+def test_a_formula_that_prints_period_captions_keeps_a_section_title() -> None:
+    cells = _flat_list([_c("Notes", "B2", "2 кв. 2024", formula="C1")])
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows["Widgets owed"].kind == "abstract"
+    assert rows["Gadgets owed"].parent_row == rows["Widgets owed"].row
