@@ -382,6 +382,12 @@ def test_cross_grain_reference_is_unaligned(tmp_path: Path) -> None:
     assert _lag(edges, "Quarters!C2", "Quarters!B2") == "-1"
 
 
+def test_equal_non_period_keys_are_unaligned() -> None:
+    """``value`` is not a period, so two of them are not one slot."""
+    assert calendar_lag("value", "value") == "unaligned"
+    assert calendar_lag("2024@факт", "2024@план") == "same"
+
+
 def test_ordinal_distance_keeps_a_missing_step() -> None:
     """The number is the index. A missing ``Y2`` does not compress ``Y3`` → ``Y1``."""
     assert calendar_lag("Y3", "Y1") == "-2"

@@ -202,21 +202,21 @@ def calendar_key(period_id: str) -> str:
 
 
 def calendar_lag(source_id: str, target_id: str) -> str:
-    """Distance inside one grain. One period key is ``same``.
+    """Distance inside one grain. Equal valid period keys are ``same``.
 
     Calendar grains use the calendar index. Ordinal keys ``Y`` / ``Q`` / ``M`` /
     ``P`` use the number after the letter. Another grain, or a key that is not
-    a period, is ``unaligned``. ``classify_formula`` skips that, so it is not a
-    prior step.
+    a period, is ``unaligned``, including two copies of that key.
+    ``classify_formula`` skips that, so it is not a prior step.
     """
     source = calendar_key(source_id)
     target = calendar_key(target_id)
-    if source == target:
-        return "same"
     src = period_position(source)
     tgt = period_position(target)
     if src is None or tgt is None or src[0] != tgt[0]:
         return "unaligned"
+    if source == target:
+        return "same"
     return str(tgt[1] - src[1])
 
 
