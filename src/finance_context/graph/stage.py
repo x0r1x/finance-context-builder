@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import date
 from pathlib import Path
 
 from finance_context.excel.a1 import index_to_col
@@ -21,7 +20,7 @@ from finance_context.graph.models import (
 )
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
-from finance_context.layout.periods import calendar_rank
+from finance_context.layout.periods import calendar_position
 from finance_context.layout.resolve import period_headers
 from finance_context.models.context import GraphPointer
 from finance_context.store.fs import read_parquet, write_json, write_parquet
@@ -57,7 +56,7 @@ def build_formula_graph(
         cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
 
     row_meta = _row_meta(layout)
-    period_by_cell, period_index = _period_maps(layout)
+    period_by_cell, _period_index = _period_maps(layout)
     index_rows = _index_rows(cells, row_meta, period_by_cell)
     empty_nodes = _empty_range_nodes(cell_edges, {row[0] for row in index_rows})
     index_rows.extend(
@@ -66,7 +65,7 @@ def build_formula_graph(
     write_parquet(dest_dir / "ir" / "graph_index.parquet", INDEX_COLUMNS, index_rows)
 
     period_of = {row[0]: row[4] for row in index_rows}
-    enriched = [_enrich_edge(edge, period_of, period_index) for edge in cell_edges]
+    enriched = [_enrich_edge(edge, period_of) for edge in cell_edges]
     write_parquet(
         dest_dir / "ir" / "graph_edges.parquet",
         IR_CELL_EDGE_COLUMNS,
@@ -202,42 +201,38 @@ def calendar_key(period_id: str) -> str:
     return head if sep else period_id
 
 
-def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, int]]:
-    """Cell period ids stay distinct. The index value is the calendar-key slot.
+def calendar_lag(source_id: str, target_id: str) -> str:
+    """Distance inside one grain. One calendar key is ``same``.
 
-    A calendar key's slot is ``calendar_rank``: period start within its grain,
-    not the sheet or column it was first seen in. Variant ids share that slot.
-    Keys that are not calendar periods keep first-seen order after those ranks.
+    Anything else — another grain, or a key that is not a calendar period — is
+    ``unaligned``. ``classify_formula`` skips that, so it is not a prior step.
+    """
+    source = calendar_key(source_id)
+    target = calendar_key(target_id)
+    if source == target:
+        return "same"
+    src = calendar_position(source)
+    tgt = calendar_position(target)
+    if src is None or tgt is None or src[0] != tgt[0]:
+        return "unaligned"
+    return str(tgt[1] - src[1])
+
+
+def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, int]]:
+    """Cell period ids stay distinct. Variant ids of one calendar key share its index.
+
+    The index is the absolute position from ``calendar_position``, comparable
+    only inside that grain. A key that is not a calendar period is omitted.
     """
     period_by_cell: dict[tuple[str, int], str] = {}
-    seen: list[str] = []
-    known: set[str] = set()
+    index: dict[str, int] = {}
     for sheet in layout.sheets:
         for block in sheet.blocks:
             for header in period_headers(sheet, block):
                 period_by_cell[(sheet.name, header.col)] = header.period_key
-                if header.period_key not in known:
-                    known.add(header.period_key)
-                    seen.append(header.period_key)
-    ranked: list[tuple[tuple[int, date, str], str]] = []
-    other: list[str] = []
-    placed: set[str] = set()
-    for period_id in seen:
-        key = calendar_key(period_id)
-        if key in placed:
-            continue
-        placed.add(key)
-        rank = calendar_rank(key)
-        if rank is None:
-            other.append(key)
-        else:
-            ranked.append((rank, key))
-    ranked.sort(key=lambda item: item[0])
-    slots = {key: index for index, (_rank, key) in enumerate(ranked)}
-    base = len(slots)
-    for offset, key in enumerate(other):
-        slots[key] = base + offset
-    index = {period_id: slots[calendar_key(period_id)] for period_id in seen}
+                position = calendar_position(calendar_key(header.period_key))
+                if position is not None:
+                    index[header.period_key] = position[1]
     return period_by_cell, index
 
 
@@ -376,9 +371,7 @@ def _formula_links(
     return links
 
 
-def _enrich_edge(
-    edge: dict, period_of: dict[str, str | None], period_index: dict[str, int]
-) -> dict:
+def _enrich_edge(edge: dict, period_of: dict[str, str | None]) -> dict:
     source = str(edge.get("source") or "")
     target = str(edge.get("target") or "")
     src = parse_node_id(source)
@@ -390,12 +383,8 @@ def _enrich_edge(
     tgt_p = period_of.get(target)
     if not src_p or not tgt_p:
         lag = "unaligned"
-    elif calendar_key(src_p) == calendar_key(tgt_p):
-        lag = "same"
-    elif src_p in period_index and tgt_p in period_index:
-        lag = str(period_index[tgt_p] - period_index[src_p])
     else:
-        lag = "unaligned"
+        lag = calendar_lag(src_p, tgt_p)
     out = dict(edge)
     out["col_offset"] = col_offset
     out["period_lag"] = lag

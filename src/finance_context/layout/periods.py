@@ -460,29 +460,36 @@ def is_calendar_key(key: str | None) -> bool:
     )
 
 
-def calendar_rank(key: str) -> tuple[int, date, str] | None:
-    """Grain, then the period start. ``None`` when ``key`` is not a calendar key.
+def calendar_position(key: str) -> tuple[str, int] | None:
+    """Absolute index of a calendar key inside its grain.
 
-    Years, halves, quarters, months, and days each stay in their own run.
-    ``_key_as_date`` is the start, so ``2024H1`` and ``2024H2`` do not collapse
-    the way ``parse_period_key`` does. The key string breaks a remaining tie.
+    ``None`` when ``key`` is not a calendar period. The index is the year,
+    ``2*year+half``, ``4*year+quarter``, ``12*year+month``, or the date's
+    ordinal day. A missing period stays in the count. Two grains do not share
+    an index.
     """
-    if not is_calendar_key(key):
+    if not key:
         return None
-    start = _key_as_date(key)
-    if start is None:
+    year = _YEAR_KEY.fullmatch(key)
+    if year:
+        return "year", int(year.group(1))
+    half = _HALF_KEY.fullmatch(key)
+    if half:
+        return "half", int(half.group(1)) * 2 + int(half.group(2))
+    quarter = _QUARTER_KEY.fullmatch(key)
+    if quarter:
+        return "quarter", int(quarter.group(1)) * 4 + int(quarter.group(2))
+    month = _MONTH_KEY.fullmatch(key)
+    if month:
+        return "month", int(month.group(1)) * 12 + int(month.group(2))
+    day = _DATE_KEY.fullmatch(key)
+    if day is None:
         return None
-    if _YEAR_KEY.fullmatch(key):
-        grain = 0
-    elif _HALF_KEY.fullmatch(key):
-        grain = 1
-    elif _QUARTER_KEY.fullmatch(key):
-        grain = 2
-    elif _MONTH_KEY.fullmatch(key):
-        grain = 3
-    else:
-        grain = 4
-    return grain, start, key
+    try:
+        ordinal = date(int(day.group(1)), int(day.group(2)), int(day.group(3))).toordinal()
+    except ValueError:
+        return None
+    return "day", ordinal
 
 
 def is_calendar_hit(hit: PeriodHit | None) -> bool:

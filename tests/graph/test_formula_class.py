@@ -5,6 +5,8 @@ def test_formula_class_prefers_one_financial_shape() -> None:
     assert classify_formula("=IF(A1=1,B1,0)", ["S!A1", "S!B1"], ["same", "same"]) == "conditional"
     assert classify_formula("=SUM(C9:C12)", ["S!C9:C12"], ["same"]) == "aggregation"
     assert classify_formula("=B10", ["S!B10"], ["-1"]) == "rollforward"
+    assert classify_formula("=B10", ["S!B10"], ["unaligned"]) == "same_period"
+    assert classify_formula("=B10", ["S!B10"], ["unaligned", "-1"]) == "rollforward"
     assert classify_formula("=RC[-1]", ["S!B2"], ["-1"]) == "rollforward"
     assert classify_formula("=RC[-1]", ["S!B2"], ["same"]) == "same_period"
     assert classify_formula("=RC[-1]", ["S!B2"], []) == "same_period"

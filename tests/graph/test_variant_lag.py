@@ -325,3 +325,98 @@ def test_quarter_sheet_does_not_change_year_lag(tmp_path: Path) -> None:
     assert _lag(edges, "Years!D2", "Years!C2") == "-1"
     assert _link(graph, "Years!D2")["formula_class"] == "rollforward"
     assert _link(graph, "Quarters!C2")["formula_class"] == "rollforward"
+
+
+def test_quarter_gap_is_the_true_calendar_distance(tmp_path: Path) -> None:
+    """``2016Q4`` → ``2011Q2`` is 22 quarters, not the count of columns in the book."""
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "2011Q2"),
+            _text("C1", "2016Q4"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="1"),
+            CellSpec(addr="C2", value="2", formula="=B2"),
+        ],
+    )
+    assert _link(graph, "P&L!C2")["period_id"] == "2016Q4"
+    assert _lag(edges, "P&L!C2", "P&L!B2") == "-22"
+    assert _link(graph, "P&L!C2")["formula_class"] == "cross_period"
+
+
+def test_cross_grain_reference_is_unaligned(tmp_path: Path) -> None:
+    """A quarter cell pointing at a year is not a numeric lag, so it is not a roll-forward."""
+    graph, edges = _run(
+        tmp_path,
+        sheets=[
+            SheetSpec(
+                name="Quarters",
+                cells=[
+                    _text("A1", "Item"),
+                    _text("B1", "2024Q1"),
+                    _text("C1", "2024Q2"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1", formula="=Years!D2"),
+                    CellSpec(addr="C2", value="2", formula="=B2"),
+                ],
+            ),
+            SheetSpec(
+                name="Years",
+                cells=[
+                    _text("A1", "Item"),
+                    _text("B1", "2023"),
+                    _text("C1", "2024"),
+                    _text("D1", "2025"),
+                    _text("A2", "Revenue"),
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="C2", value="2"),
+                    CellSpec(addr="D2", value="3"),
+                ],
+            ),
+        ],
+    )
+    assert _lag(edges, "Quarters!B2", "Years!D2") == "unaligned"
+    assert _link(graph, "Quarters!B2")["formula_class"] == "same_period"
+    assert _lag(edges, "Quarters!C2", "Quarters!B2") == "-1"
+
+
+def test_model_year_reference_is_unaligned(tmp_path: Path) -> None:
+    """``Y1`` is not a calendar key, so the step is not a number."""
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Year"),
+            _text("B1", "1"),
+            _text("C1", "2"),
+            _text("D1", "3"),
+            _text("A2", "Revenue"),
+            CellSpec(addr="B2", value="1"),
+            CellSpec(addr="C2", value="2", formula="=B2"),
+            CellSpec(addr="D2", value="3"),
+        ],
+    )
+    assert _link(graph, "P&L!C2")["period_id"] == "Y2"
+    assert _lag(edges, "P&L!C2", "P&L!B2") == "unaligned"
+    assert _link(graph, "P&L!C2")["formula_class"] == "same_period"
+
+
+def test_day_lag_counts_days(tmp_path: Path) -> None:
+    """Weekly dates keep a day key, and the lag is the number of days."""
+    graph, edges = _run(
+        tmp_path,
+        [
+            _text("A1", "Item"),
+            _text("B1", "11.01.2026"),
+            _text("C1", "18.01.2026"),
+            _text("D1", "25.01.2026"),
+            _text("A2", "Receipts"),
+            CellSpec(addr="B2", value="1"),
+            CellSpec(addr="C2", value="2", formula="=B2"),
+            CellSpec(addr="D2", value="3", formula="=C2"),
+        ],
+    )
+    assert _link(graph, "P&L!C2")["period_id"] == "2026-01-18"
+    assert _lag(edges, "P&L!C2", "P&L!B2") == "-7"
+    assert _lag(edges, "P&L!D2", "P&L!C2") == "-7"
+    assert _link(graph, "P&L!C2")["formula_class"] == "cross_period"
