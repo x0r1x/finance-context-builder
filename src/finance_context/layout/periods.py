@@ -460,6 +460,66 @@ def is_calendar_key(key: str | None) -> bool:
     )
 
 
+_ORDINAL_KEY = re.compile(r"^([YQMP])(\d+)$")
+
+
+def ordinal_position(key: str) -> tuple[str, int] | None:
+    """Absolute index of an ordinal period key inside its letter grain.
+
+    The axis parser emits only ``Y<n>``, ``Q<n>``, ``M<n>``, and ``P<n>``
+    (a Year / Год / Quarter / Month / Period label picks the letter). The
+    index is that number, so a missing step stays in the count. The letter is
+    the grain: ``Y`` and ``Q`` do not share an index, and neither shares one
+    with a calendar year.
+    """
+    if not key:
+        return None
+    match = _ORDINAL_KEY.fullmatch(key)
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2))
+
+
+def period_position(key: str) -> tuple[str, int] | None:
+    """Grain and absolute index for a calendar or ordinal period key."""
+    ordinal = ordinal_position(key)
+    if ordinal is not None:
+        return ordinal
+    return calendar_position(key)
+
+
+def calendar_position(key: str) -> tuple[str, int] | None:
+    """Absolute index of a calendar key inside its grain.
+
+    ``None`` when ``key`` is not a calendar period. The index is the year,
+    ``2*year+half``, ``4*year+quarter``, ``12*year+month``, or the date's
+    ordinal day. A missing period stays in the count. Two grains do not share
+    an index.
+    """
+    if not key:
+        return None
+    year = _YEAR_KEY.fullmatch(key)
+    if year:
+        return "year", int(year.group(1))
+    half = _HALF_KEY.fullmatch(key)
+    if half:
+        return "half", int(half.group(1)) * 2 + int(half.group(2))
+    quarter = _QUARTER_KEY.fullmatch(key)
+    if quarter:
+        return "quarter", int(quarter.group(1)) * 4 + int(quarter.group(2))
+    month = _MONTH_KEY.fullmatch(key)
+    if month:
+        return "month", int(month.group(1)) * 12 + int(month.group(2))
+    day = _DATE_KEY.fullmatch(key)
+    if day is None:
+        return None
+    try:
+        ordinal = date(int(day.group(1)), int(day.group(2)), int(day.group(3))).toordinal()
+    except ValueError:
+        return None
+    return "day", ordinal
+
+
 def is_calendar_hit(hit: PeriodHit | None) -> bool:
     return hit is not None and is_calendar_key(hit.period_key)
 
