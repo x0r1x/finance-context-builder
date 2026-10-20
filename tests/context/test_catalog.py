@@ -38,11 +38,9 @@ def test_catalog_has_no_value_arrays() -> None:
     blank = next(row for row in document.rows if row.label == "Blank")
     assert blank.has_formula is False
     assert document.axes[0].periods[0].period_key == "Y5"
-    assert document.axes[0].periods[0].phase == "operation"
-    assert document.axes[0].periods[0].phase_year == 1
     assert document.axes[0].periods[0].start_date == "2026-01-01"
     year = document.model_dump(mode="json")["axes"][0]["periods"][0]
-    assert year["phase_year"] == 1
+    assert year["start_date"] == "2026-01-01"
     assert "flags" not in year
     assert "group_key" not in year
 
@@ -53,27 +51,22 @@ def test_catalog_period_clocks_omit_empty_keys() -> None:
         ContextPeriod(
             col=3,
             period_key="2020-01",
-            phase="operation",
-            phase_year=1,
             group_key="2020",
             flags={"repayment": True, "availability": False},
         ),
-        ContextPeriod(col=4, period_key="undated", phase_year=9),
-        ContextPeriod(col=5, period_key="2020-02", phase="operation", phase_year=1, flags={}),
+        ContextPeriod(col=4, period_key="undated"),
+        ContextPeriod(col=5, period_key="2020-02", flags={}),
     ]
     document = build_catalog(context)
     periods = document.model_dump(mode="json")["axes"][0]["periods"]
     assert periods[0] == {
         "period_key": "2020-01",
-        "phase": "operation",
-        "phase_year": 1,
         "group_key": "2020",
         "flags": {"repayment": True, "availability": False},
     }
     assert periods[1] == {"period_key": "undated"}
-    assert "phase" not in periods[1]
-    assert "phase_year" not in periods[1]
-    assert periods[2]["phase_year"] == 1
+    assert "flags" not in periods[1]
+    assert "group_key" not in periods[1]
     assert "flags" not in periods[2]
     assert "group_key" not in periods[2]
     payload = document.model_dump(mode="json")

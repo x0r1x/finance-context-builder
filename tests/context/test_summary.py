@@ -34,7 +34,7 @@ def test_summary_keeps_counters_and_drops_links_and_caches() -> None:
     assert document.cycles[0].cycle_class == "unexpected"
     assert payload["cycles"][0]["class"] == "unexpected"
     assert document.circularity_hints[0].label == "Total"
-    assert document.warnings == ["cache missing inside the phase"]
+    assert document.warnings == ["cache missing"]
     forbidden = {"links", "values", "series", "normalized_values", "cell_ids", "defined_names"}
     assert forbidden.isdisjoint(_keys(payload))
     text = str(payload)

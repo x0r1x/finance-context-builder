@@ -18,7 +18,6 @@ def build_catalog(
     *,
     q: str | None = None,
     sheet: str | None = None,
-    disposition: str | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> CatalogDocument:
@@ -28,8 +27,6 @@ def build_catalog(
     for block in context.blocks:
         for row in block.rows:
             if sheet is not None and row.sheet != sheet:
-                continue
-            if disposition is not None and row.disposition != disposition:
                 continue
             if needle and not own_label_contains(row.label, needle):
                 continue
@@ -53,8 +50,6 @@ def _catalog_axis(axis: ContextAxis) -> CatalogAxis:
         periods=[
             CatalogPeriod(
                 period_key=period.period_key,
-                phase=period.phase,
-                phase_year=period.phase_year,
                 start_date=period.start_date,
                 end_date=period.end_date,
                 group_key=period.group_key,
@@ -72,16 +67,12 @@ def _catalog_row(row: BlockRow, axis_ids: list[str]) -> CatalogRow:
         sheet=row.sheet,
         label=row.label,
         label_path=list(row.label_path),
-        disposition=row.disposition,
         kind=row.kind,
         axis_ids=list(axis_ids),
-        period_position=row.period_position,
-        aggregation=row.aggregation,
         has_formula=bool(row.formula) or any(bool(item.formula) for item in row.series),
         hints=CatalogHints(
             unit=hints.unit,
             currency=hints.currency,
             scale=hints.scale,
-            sign=hints.sign,
         ),
     )

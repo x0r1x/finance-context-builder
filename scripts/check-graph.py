@@ -41,8 +41,6 @@ ROW_SERIES_FIELDS = (
     "value_statuses",
     "normalized_values",
     "scale_factor",
-    "period_position",
-    "aggregation",
 )
 VALUE_STATUSES = frozenset({"cached", "empty", "zero_explicit", "not_applicable"})
 FORMULA_CLASSES = frozenset(
@@ -475,10 +473,6 @@ def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:
         return ["context.md missing empty value status"]
     if isinstance(statuses, list) and "not_applicable" in statuses and "n/a" not in markdown:
         return ["context.md missing n/a value status"]
-    position = row.get("period_position")
-    aggregation = row.get("aggregation")
-    if position and aggregation and f"{position}/{aggregation}" not in markdown:
-        return [f"context.md missing time profile {position}/{aggregation}"]
     factor = row.get("scale_factor")
     if isinstance(factor, int) and factor not in (0, 1) and f"×{factor}" not in markdown:
         return [f"context.md missing scale factor ×{factor}"]
@@ -592,12 +586,7 @@ def axes_summary(context: dict[str, Any]) -> str:
         periods = [p for p in axis.get("periods") or [] if isinstance(p, dict)]
         keys = [str(p.get("period_key")) for p in periods]
         span = f"{keys[0]}..{keys[-1]}" if keys else "-"
-        construction = sum(1 for p in periods if p.get("phase") == "construction")
-        operation = sum(1 for p in periods if p.get("phase") == "operation")
-        parts.append(
-            f"axis={axis.get('id')} periods={len(periods)} span={span} "
-            f"construction={construction} operation={operation}"
-        )
+        parts.append(f"axis={axis.get('id')} periods={len(periods)} span={span}")
     blocks = [block for block in context.get("blocks") or [] if isinstance(block, dict)]
     params = sum(1 for block in blocks if block.get("kind") == "params")
     head = f"axes={len(parts)} blocks={len(blocks)} params_blocks={params}"
@@ -620,7 +609,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--axes-summary",
         action="store_true",
-        help="print one line per axis: periods and construction/operation counts",
+        help="print one line per axis: period count and span",
     )
     parser.add_argument("--trace", type=Path, help="path to trace.json")
     parser.add_argument("--trace-md", type=Path, help="path to trace.md")

@@ -23,7 +23,7 @@ from finance_context.context.observations import build_observations
 from finance_context.context.summary import build_summary
 from finance_context.graph.models import FormulaLink
 from finance_context.models.catalog import CatalogDocument
-from finance_context.models.context import ContextDocument, TimelinePhase
+from finance_context.models.context import ContextDocument
 from finance_context.models.observation import ObservationDocument
 from finance_context.models.summary import SummaryDocument
 
@@ -43,7 +43,6 @@ async def get_catalog(
     job_id: str,
     q: Annotated[str | None, Query(description=_OWN_LABEL)] = None,
     sheet: Annotated[str | None, Query()] = None,
-    disposition: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=10000)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> Response:
@@ -58,7 +57,6 @@ async def get_catalog(
         context,
         q=q,
         sheet=sheet,
-        disposition=disposition,
         limit=limit,
         offset=offset,
     )
@@ -124,7 +122,6 @@ async def get_observations(
     row_key: Annotated[list[str] | None, Query()] = None,
     q: Annotated[str | None, Query(description=_OWN_LABEL)] = None,
     period_id: Annotated[list[str] | None, Query()] = None,
-    phase: Annotated[list[TimelinePhase] | None, Query()] = None,
     precedent_depth: Annotated[int, Query(ge=0, le=3)] = 0,
     limit: Annotated[int, Query(ge=1, le=48)] = 24,
 ) -> Response:
@@ -158,7 +155,6 @@ async def get_observations(
         row_keys=row_key,
         q=q,
         period_ids=period_id,
-        phases=phase,
         precedent_depth=precedent_depth,
         limit=limit,
         precedents=lookup if precedent_depth else None,

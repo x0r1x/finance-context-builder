@@ -64,10 +64,15 @@ def file_lock(path: Path, *, blocking: bool = True) -> Iterator[bool]:
 
 
 def update_json(path: Path, mutate: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
-    """Re-read JSON under a sidecar lock, then write the mutated document."""
+    """Re-read JSON under a sidecar lock, then write the mutated document.
+
+    Returning the same object leaves a document that was loaded from disk untouched.
+    A no-op read-modify-write must not replace a write that landed after the read.
+    """
     lock_path = path.with_name(path.name + ".lock")
     with file_lock(lock_path):
         current: dict[str, Any] = {}
+        loaded_document = False
         if path.is_file():
             try:
                 loaded = json.loads(path.read_text(encoding="utf-8"))
@@ -75,7 +80,11 @@ def update_json(path: Path, mutate: Callable[[dict[str, Any]], dict[str, Any]]) 
                 loaded = None
             if isinstance(loaded, dict):
                 current = loaded
-        write_json(path, mutate(current))
+                loaded_document = True
+        updated = mutate(current)
+        if updated is current and loaded_document:
+            return
+        write_json(path, updated)
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:

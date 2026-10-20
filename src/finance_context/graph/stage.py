@@ -20,6 +20,7 @@ from finance_context.graph.models import (
 )
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
+from finance_context.layout.periods import period_position
 from finance_context.layout.resolve import period_headers
 from finance_context.models.context import GraphPointer
 from finance_context.store.fs import read_parquet, write_json, write_parquet
@@ -43,7 +44,6 @@ def build_formula_graph(
     edges: list[dict] | None = None,
     cell_edges: list[dict] | None = None,
     book_dir: Path | None = None,
-    exclusion: dict[tuple[str, int], str] | None = None,
 ) -> GraphPointer:
     book = book_dir or dest_dir
     if cells is None:
@@ -55,9 +55,8 @@ def build_formula_graph(
         cell_edges_path = book / "ir" / "cell_edges.parquet"
         cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
 
-    excluded = dict(exclusion or {})
     row_meta = _row_meta(layout)
-    period_by_cell, period_index = _period_maps(layout)
+    period_by_cell, _period_index = _period_maps(layout)
     index_rows = _index_rows(cells, row_meta, period_by_cell)
     empty_nodes = _empty_range_nodes(cell_edges, {row[0] for row in index_rows})
     index_rows.extend(
@@ -66,7 +65,7 @@ def build_formula_graph(
     write_parquet(dest_dir / "ir" / "graph_index.parquet", INDEX_COLUMNS, index_rows)
 
     period_of = {row[0]: row[4] for row in index_rows}
-    enriched = [_enrich_edge(edge, period_of, period_index) for edge in cell_edges]
+    enriched = [_enrich_edge(edge, period_of) for edge in cell_edges]
     write_parquet(
         dest_dir / "ir" / "graph_edges.parquet",
         IR_CELL_EDGE_COLUMNS,
@@ -95,8 +94,8 @@ def build_formula_graph(
         ],
     )
 
-    cycles = attach_cycle_breakers(classify_cycles(enriched), excluded)
-    hints = circularity_hints(layout, index_rows, cycles, excluded)
+    cycles = classify_cycles(enriched)
+    hints = circularity_hints(layout, index_rows, cycles)
     iterate = _workbook_iterate(book)
     doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
     doc.links = _formula_links(cells, edges, row_meta, period_by_cell, enriched)
@@ -150,35 +149,10 @@ def _cells_by_row(index_rows: list[tuple[object, ...]]) -> dict[tuple[str, int],
     return out
 
 
-def attach_cycle_breakers(
-    cycles: list[CycleRecord],
-    exclusion: dict[tuple[str, int], str],
-) -> list[CycleRecord]:
-    if not cycles:
-        return cycles
-    bridge_rows = {
-        key for key, reason in exclusion.items() if reason == "technical_bridge"
-    }
-    if not bridge_rows:
-        return cycles
-    annotated: list[CycleRecord] = []
-    for cycle in cycles:
-        breakers: list[str] = []
-        for member in cycle.members:
-            parsed = parse_node_id(member)
-            if parsed is None:
-                continue
-            if (parsed[0], parsed[2]) in bridge_rows:
-                breakers.append(member)
-        annotated.append(cycle.model_copy(update={"breakers": sorted(breakers)}))
-    return annotated
-
-
 def circularity_hints(
     layout: Layout,
     index_rows: list[tuple[object, ...]],
     cycles: list[CycleRecord],
-    exclusion: dict[tuple[str, int], str],
 ) -> list[CircularityHint]:
     if cycles:
         return []
@@ -200,26 +174,12 @@ def circularity_hints(
             )
         )
 
-    for (sheet, row), reason in exclusion.items():
-        if reason == "technical_bridge":
-            add(sheet, row, _layout_label(layout, sheet, row))
     for sheet in layout.sheets:
         for block in sheet.blocks:
             for row in block.rows:
                 if "circular" in (row.label or "").casefold():
                     add(sheet.name, row.row, row.label)
     return hints
-
-
-def _layout_label(layout: Layout, sheet: str, row: int) -> str:
-    for item in layout.sheets:
-        if item.name != sheet:
-            continue
-        for block in item.blocks:
-            for layout_row in block.rows:
-                if layout_row.row == row:
-                    return layout_row.label
-    return ""
 
 
 def _row_meta(layout: Layout) -> dict[tuple[str, int], str]:
@@ -231,20 +191,50 @@ def _row_meta(layout: Layout) -> dict[tuple[str, int], str]:
     return out
 
 
+def calendar_key(period_id: str) -> str:
+    """Lag slot for a period id. ``2024@факт`` and ``2024`` share ``2024``.
+
+    The part before ``@`` is the calendar key. The marker stays in the period id
+    so two columns of one year do not collapse in the index.
+    """
+    head, sep, _marker = period_id.partition("@")
+    return head if sep else period_id
+
+
+def calendar_lag(source_id: str, target_id: str) -> str:
+    """Distance inside one grain. Equal valid period keys are ``same``.
+
+    Calendar grains use the calendar index. Ordinal keys ``Y`` / ``Q`` / ``M`` /
+    ``P`` use the number after the letter. Another grain, or a key that is not
+    a period, is ``unaligned``, including two copies of that key.
+    ``classify_formula`` skips that, so it is not a prior step.
+    """
+    source = calendar_key(source_id)
+    target = calendar_key(target_id)
+    src = period_position(source)
+    tgt = period_position(target)
+    if src is None or tgt is None or src[0] != tgt[0]:
+        return "unaligned"
+    if source == target:
+        return "same"
+    return str(tgt[1] - src[1])
+
+
 def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, int]]:
+    """Cell period ids stay distinct. Variant ids of one period key share its index.
+
+    The index is the absolute position from ``period_position``, comparable
+    only inside that grain. A key that is not a period is omitted.
+    """
     period_by_cell: dict[tuple[str, int], str] = {}
     index: dict[str, int] = {}
-    seq = 0
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            local: dict[str, int] = {}
-            for pos, header in enumerate(period_headers(sheet, block)):
+            for header in period_headers(sheet, block):
                 period_by_cell[(sheet.name, header.col)] = header.period_key
-                if header.period_key not in local:
-                    local[header.period_key] = pos
-                if header.period_key not in index:
-                    index[header.period_key] = seq
-                    seq += 1
+                position = period_position(calendar_key(header.period_key))
+                if position is not None:
+                    index[header.period_key] = position[1]
     return period_by_cell, index
 
 
@@ -383,9 +373,7 @@ def _formula_links(
     return links
 
 
-def _enrich_edge(
-    edge: dict, period_of: dict[str, str | None], period_index: dict[str, int]
-) -> dict:
+def _enrich_edge(edge: dict, period_of: dict[str, str | None]) -> dict:
     source = str(edge.get("source") or "")
     target = str(edge.get("target") or "")
     src = parse_node_id(source)
@@ -397,12 +385,8 @@ def _enrich_edge(
     tgt_p = period_of.get(target)
     if not src_p or not tgt_p:
         lag = "unaligned"
-    elif src_p == tgt_p:
-        lag = "same"
-    elif src_p in period_index and tgt_p in period_index:
-        lag = str(period_index[tgt_p] - period_index[src_p])
     else:
-        lag = "unaligned"
+        lag = calendar_lag(src_p, tgt_p)
     out = dict(edge)
     out["col_offset"] = col_offset
     out["period_lag"] = lag

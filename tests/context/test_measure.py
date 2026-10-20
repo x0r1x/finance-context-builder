@@ -85,35 +85,6 @@ def test_pound_per_year_is_money() -> None:
     assert measure.currency == "GBP"
 
 
-def test_sign_stock_for_opening_balance() -> None:
-    measure = parse_measure(
-        label="Opening cash",
-        nature="balance",
-        time_semantics="bop",
-    )
-    assert measure.sign == "stock"
-
-
-def test_sign_inflow_from_revenue_label() -> None:
-    measure = parse_measure(label="Gross revenue")
-    assert measure.sign == "inflow"
-
-
-def test_sign_outflow_from_cost_label() -> None:
-    measure = parse_measure(label="Operating costs")
-    assert measure.sign == "outflow"
-
-
-def test_sign_outflow_for_principal_repayment() -> None:
-    measure = parse_measure(label="Principal Repayment")
-    assert measure.sign == "outflow"
-
-
-def test_sign_pre_tax_income_is_not_outflow() -> None:
-    measure = parse_measure(label="EBT (Taxable Profit)")
-    assert measure.sign != "outflow"
-
-
 def test_currency_with_thousands_suffix_is_scaled_money() -> None:
     measure = parse_measure("EUR'000")
     assert (measure.unit, measure.currency, measure.scale) == ("money", "EUR", "k")

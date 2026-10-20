@@ -13,6 +13,6 @@
 
 Block: `CF!r1`. Kind: `timeline`. grain=year Periods: 2. Rows: 1.
 
-| Label | Row | Path | Kind | Disposition | Unit | Time | Formula | Cells | 2023 (B) | 2024E (C) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Opening cash | CF\|2\|CF!r1 |  | fact |  | k£ ×1000 | bop/beginning/first | =RC[-1] |  | 100 (100000) [CF!B2] | 110 (110000) [CF!C2] |
+| Label | Row | Path | Kind | Unit | Formula | Cells | 2023 (B) | 2024E (C) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Opening cash | CF\|2\|CF!r1 |  | fact | k£ ×1000 | =RC[-1] |  | 100 (100000) [CF!B2] | 110 (110000) [CF!C2] |

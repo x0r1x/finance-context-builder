@@ -22,27 +22,9 @@
       "источник", "описание", "мероприятие", "мероприятия", "вывод", "выводы"
     ]
   },
-  "phases": {
-    "construction": [
-      "construction", "constructions", "constr",
-      "строительство", "строительный", "стройка", "строит", "смр",
-      "инвестиционный", "инвестиции"
-    ],
-    "operation": [
-      "operation", "operations", "operational", "op", "operating",
-      "эксплуатация", "эксплуатационный", "эксп",
-      "операционный", "операция", "производство", "производственный"
-    ]
-  },
-  "phase_events": [
-    "beginning", "end of", "start date", "end date",
-    "начало", "начала", "начале",
-    "окончание", "конец", "конца", "завершение", "дата", "даты", "ввод"
-  ],
-  "operation_duration": ["duration", "продолжительность", "длительность", "срок"],
-  "period_roles": {
-    "historical": ["факт", "фактический", "actual", "actuals", "hist", "historical"],
-    "forecast": [
+  "period_markers": {
+    "actual": ["факт", "фактический", "actual", "actuals", "hist", "historical"],
+    "plan": [
       "план", "плановый", "прогноз", "прогнозный", "forecast",
       "budget", "бюджет", "бюджетный", "plan", "оценка", "ожидание", "ожидаемый", "ожид"
     ]
@@ -69,7 +51,6 @@
       "base", "upside", "downside", "case", "scenario", "stress"
     ],
     "scenario_header": ["case", "scenario"],
-    "flag": ["flag", "флаг"],
     "months": {
       "1": ["jan", "january", "янв", "январь"],
       "2": ["feb", "february", "фев", "февр", "февраль"],
@@ -105,10 +86,6 @@
     "actual": ["actually"],
     "base": ["based", "basement"],
     "stress": ["stressed"],
-    "начало": ["начальный"],
-    "flag": ["flagged", "flagship"],
-    "construction": ["constructing", "constraint"],
-    "operation": ["operate", "operates", "operated"],
     "quarter": ["quarterly"]
   }
 }

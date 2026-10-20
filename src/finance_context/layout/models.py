@@ -37,7 +37,7 @@ class PeriodHit(BaseModel):
 
     kind: ColumnKind
     period_key: str
-    # Marker text after normalize_header (suffix letter or role word). Not a role.
+    # Marker text after normalize_header (suffix letter or marker word).
     variant: str | None = None
     explicit_role: bool = False
 

@@ -30,7 +30,6 @@ def build_observations(
     row_keys: Sequence[str] | None = None,
     q: str | None = None,
     period_ids: Sequence[str] | None = None,
-    phases: Sequence[str] | None = None,
     precedent_depth: int = 0,
     limit: int = 24,
     precedents: PrecedentLookup | None = None,
@@ -41,7 +40,6 @@ def build_observations(
     if not keys and not needle:
         raise ValueError("selector_required")
     periods = set(period_ids or [])
-    phase_set = set(phases or [])
     by_pair = _links_by_pair(links)
     axes = {axis.id: axis for axis in context.axes}
     found: list[Observation] = []
@@ -56,7 +54,6 @@ def build_observations(
                         row,
                         by_pair,
                         periods=periods,
-                        phases=phase_set,
                     )
                 )
             else:
@@ -67,7 +64,6 @@ def build_observations(
                         axes,
                         by_pair,
                         periods=periods,
-                        phases=phase_set,
                     )
                 )
     kept = found[:limit]
@@ -151,7 +147,6 @@ def _unit(row: BlockRow) -> ObservationUnit:
         kind=hints.unit,
         currency=hints.currency,
         scale=hints.scale,
-        sign=hints.sign,
     )
 
 
@@ -180,7 +175,6 @@ def _timeline_row(
     by_pair: dict[tuple[str, str], list[FormulaLink]],
     *,
     periods: set[str],
-    phases: set[str],
 ) -> list[Observation]:
     series_for = {item.axis_id: item for item in row.series}
     axis_ids = list(block.axis_ids) or list(series_for)
@@ -204,8 +198,6 @@ def _timeline_row(
             normalized = series.normalized_values
         for index, period in enumerate(axis.periods):
             if periods and period.period_key not in periods:
-                continue
-            if phases and period.phase not in phases:
                 continue
             out.append(
                 _timeline_observation(
@@ -236,21 +228,16 @@ def _timeline_observation(
     return Observation(
         row_key=row.row_key,
         label=row.label,
-        disposition=row.disposition,
         period_id=period.period_key,
         value=value,
         value_status=value_status,
         normalized_value=None if normalized is None else str(normalized),
         scale_factor=row.scale_factor,
-        period_position=row.period_position,
-        aggregation=row.aggregation,
         unit=_unit(row),
         formula=_formula(row, period.period_key, cell, by_pair),
         source=ObservationSource(sheet=row.sheet, cell=cell),
         timeline=ObservationTimeline(
             axis_id=axis_id,
-            phase=period.phase,
-            phase_year=period.phase_year,
             start_date=period.start_date,
             end_date=period.end_date,
             group_key=period.group_key,
@@ -265,10 +252,7 @@ def _params_row(
     by_pair: dict[tuple[str, str], list[FormulaLink]],
     *,
     periods: set[str],
-    phases: set[str],
 ) -> list[Observation]:
-    if phases:
-        return []
     cells = sorted(
         (cell for cell in row.cells if cell.role in _VALUE_ROLES),
         key=lambda cell: cell.col,
@@ -302,14 +286,11 @@ def _params_row(
             Observation(
                 row_key=row.row_key,
                 label=row.label,
-                disposition=row.disposition,
                 period_id=period_id,
                 value=value,
                 value_status=value_status,
                 normalized_value=None if normalized is None else str(normalized),
                 scale_factor=row.scale_factor,
-                period_position=row.period_position,
-                aggregation=row.aggregation,
                 scenario=cell.header or None if cell.role in {"value", "scenario"} else None,
                 unit=_unit(row),
                 formula=_formula(row, period_id, addr, by_pair),
