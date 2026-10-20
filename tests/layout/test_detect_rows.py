@@ -85,6 +85,71 @@ def test_check_stem_inside_word_is_not_check_row() -> None:
     assert rows["Итог должен быть равен нулю"].check_row is True
     assert rows["Итог должен быть равен нулю"].kind == "helper"
     assert rows["Сходимость остатков"].check_row is True
+    assert rows["Сходимость остатков"].kind == "helper"
+
+
+def test_check_prefixes_and_balance_words() -> None:
+    """Prefixed check stems stay checks; lookalikes and должность stay facts."""
+    checks = [
+        "Несходимость",
+        "Расходимость",
+        "Перепроверка",
+        "Сходимость",
+        "Сходятся",
+        "Сходящиеся",
+        "Сумма должна сойтись",
+        "Итог должно быть нулём",
+        "Строки должны совпасть",
+    ]
+    facts = [
+        "Исходящее сальдо",
+        "Исходящий остаток",
+        "Нисходящий поток",
+        "Восходящий тренд",
+        "Происходящие операции",
+        "Должность",
+        "Подконтрольные общества",
+        "Бесконтрольно",
+    ]
+    cells = [
+        _c("BS", "A1", "Item"),
+        _c("BS", "B1", "2023"),
+        _c("BS", "C1", "2024"),
+    ]
+    row = 2
+    for label in checks:
+        cells += [
+            _c("BS", f"A{row}", label),
+            _c("BS", f"B{row}", "0"),
+            _c("BS", f"C{row}", "0"),
+        ]
+        row += 1
+    for label in facts:
+        cells += [
+            _c("BS", f"A{row}", label),
+            _c("BS", f"B{row}", "10"),
+            _c("BS", f"C{row}", "25"),
+        ]
+        row += 1
+    cells += [
+        _c("BS", f"A{row}", "Задолженность"),
+        _c("BS", f"A{row + 1}", "  перед поставщиками"),
+        _c("BS", f"B{row + 1}", "15"),
+        _c("BS", f"C{row + 1}", "16"),
+    ]
+    layout = detect_layout(cells)
+    rows = {item.label: item for item in layout.sheets[0].blocks[0].rows}
+    for label in checks:
+        assert rows[label].check_row is True, label
+        assert rows[label].kind == "helper", label
+    for label in facts:
+        assert rows[label].check_row is False, label
+        assert rows[label].kind == "fact", label
+    assert rows["Задолженность"].kind == "abstract"
+    assert rows["Задолженность"].check_row is False
+    assert rows["перед поставщиками"].kind == "fact"
+    assert rows["перед поставщиками"].check_row is False
+    assert rows["перед поставщиками"].section_path == ["Задолженность"]
 
 
 def test_section_header_is_abstract_and_week_index_is_index() -> None:
