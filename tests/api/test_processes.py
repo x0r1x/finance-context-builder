@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import time
 from pathlib import Path
 
-from finance_context.api.processes import reap_process
+from finance_context.adapters.memory_bus import MemoryJobBus
+from finance_context.api.processes import JobProcesses, reap_process
 from finance_context.app.pipeline import mark_job_failed
+from finance_context.store.paths import session_job_dir
 
 
 class _StubProcess:
@@ -45,6 +49,76 @@ def test_mark_job_failed_keeps_a_newer_generation(tmp_path: Path) -> None:
     assert stored["status"] == "running"
     assert stored["stage"] == "layout"
     assert stored["generation"] == 2
+
+
+def _exit_immediately() -> None:
+    return
+
+
+def _block_for_timeout() -> None:
+    time.sleep(30)
+
+
+def _running_meta(tmp_path: Path) -> tuple[MemoryJobBus, str, int, Path]:
+    bus = MemoryJobBus()
+    job_id = "job"
+    assert bus.enqueue(job_id)
+    generation = bus.current_generation(job_id)
+    dest = session_job_dir(tmp_path, job_id)
+    dest.mkdir(parents=True)
+    (dest / "meta.json").write_text(
+        json.dumps(
+            {
+                "job_id": job_id,
+                "status": "running",
+                "stage": "layout",
+                "generation": generation,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return bus, job_id, generation, dest
+
+
+def test_watch_does_not_time_out_a_child_another_thread_already_reaped(tmp_path: Path) -> None:
+    """GET's is_alive() can reap the child. waitpid then raises ECHILD and poll()
+    leaves returncode unset, so a later is_alive() still reports the child as alive.
+    """
+    proc = multiprocessing.get_context("spawn").Process(target=_exit_immediately)
+    proc.start()
+    proc.join(5)
+    assert proc.exitcode == 0
+    assert proc._popen is not None
+    proc._popen.returncode = None
+    assert proc.is_alive()
+
+    bus, job_id, generation, dest = _running_meta(tmp_path)
+    JobProcesses(data_dir=tmp_path, bus=bus, timeout_sec=30)._watch(proc, job_id, generation)
+
+    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert stored["status"] == "failed"
+    assert stored["error"] == "pipeline_failed"
+    record = bus.get(job_id)
+    assert record is not None
+    assert record.error == "pipeline_failed"
+
+
+def test_watch_marks_a_real_timeout_failed(tmp_path: Path) -> None:
+    proc = multiprocessing.get_context("spawn").Process(target=_block_for_timeout)
+    proc.start()
+    try:
+        bus, job_id, generation, dest = _running_meta(tmp_path)
+        JobProcesses(data_dir=tmp_path, bus=bus, timeout_sec=0.2)._watch(proc, job_id, generation)
+        stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+        assert stored["status"] == "failed"
+        assert stored["error"] == "TimeoutError"
+        record = bus.get(job_id)
+        assert record is not None
+        assert record.error == "TimeoutError"
+    finally:
+        if proc.is_alive():
+            proc.kill()
+        proc.join(5)
 
 
 def test_mark_job_failed_keeps_a_terminal_snapshot(tmp_path: Path) -> None:
