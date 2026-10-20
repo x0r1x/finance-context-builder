@@ -207,6 +207,35 @@ def test_layout_stage_hashes_parent_package_inits(tmp_path, monkeypatch) -> None
     assert after_context["layout"] != after_package["layout"]
 
 
+def test_context_only_module_does_not_restale_layout() -> None:
+    import finance_context.context as context
+    from finance_context.app import publisher
+    from finance_context.context.build import build_context
+
+    assert context.build_context is build_context
+    buckets: dict[str, list] = {name: [] for name in publisher.STAGE_ORDER}
+    for path in publisher._sources():
+        stage = publisher._stage_of(path.relative_to(publisher._PACKAGE).as_posix())
+        if stage is not None:
+            buckets[stage].append(path)
+    publisher._include_layout_imports(buckets)
+    hashed = {path.relative_to(publisher._PACKAGE).as_posix() for path in buckets["layout"]}
+    assert "context/measure.py" in hashed
+    assert "context/assemble.py" not in hashed
+    assert "context/build.py" not in hashed
+
+    assemble = publisher._PACKAGE / "context" / "assemble.py"
+    original = assemble.read_bytes()
+    before = publisher._compute_stages()
+    try:
+        assemble.write_bytes(original + b"\n")
+        after = publisher._compute_stages()
+    finally:
+        assemble.write_bytes(original)
+    assert before["layout"] == after["layout"]
+    assert before["publish"] != after["publish"]
+
+
 def test_stray_package_json_does_not_restale_layout(tmp_path, monkeypatch) -> None:
     from finance_context.app import publisher
 
