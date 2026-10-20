@@ -11,8 +11,6 @@ _AGGREGATION = re.compile(
     r"\b(?:SUM|SUMPRODUCT|AVERAGE|MIN|MAX|COUNT|COUNTA|COUNTIF|COUNTIFS|SUBTOTAL|AGGREGATE)\(",
     re.IGNORECASE,
 )
-_COL_OFFSET = re.compile(r"C\[(-?\d+)\]", re.IGNORECASE)
-_ROW_OFFSET = re.compile(r"R\[(-?\d+)\]", re.IGNORECASE)
 _A1_REF = re.compile(
     r"(?:'(?:[^']|'')+'|[A-Za-z_][\w.]*)!\$?[A-Z]{1,3}\$?\d+|\$?[A-Z]{1,3}\$?\d+",
     re.IGNORECASE,
@@ -31,13 +29,7 @@ def classify_formula(
         return "conditional"
     if _AGGREGATION.search(text):
         return "aggregation"
-    # A computed lag, including ``same`` for two variants of one calendar key,
-    # wins over an ``RC[-1]`` written in the formula.
-    if lags is None:
-        offsets = [int(item) for item in _COL_OFFSET.findall(text)]
-        offsets.extend(int(item) for item in _ROW_OFFSET.findall(text))
-    else:
-        offsets = _lag_numbers(lags)
+    offsets = _lag_numbers(lags or [])
     prior = [item for item in offsets if item < 0]
     forward = [item for item in offsets if item > 0]
     if prior or forward:
