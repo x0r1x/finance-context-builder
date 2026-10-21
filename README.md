@@ -116,7 +116,7 @@ HTTP `error` codes:
 
 `report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book. `workbook_too_large` is a finished job: the workbook's formula and range estimate, or its resident memory, is over the per-job budget. `error` is the code and `detail` is the short reason. There is no traceback.
 
-Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_MEMORY_BUDGET_BYTES` (RSS cap for one job; when unset, three quarters of the cgroup memory limit split across `MAX_CONCURRENT_JOBS`, and the remaining quarter stays with the API process), `JOB_TIMEOUT_SEC` (server default 3600), `SOFFICE_BIN` (default `soffice` / `libreoffice` on `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, and check rows stay in the block with their `kind`. The parent watches each child's resident memory and kills it when it passes the budget. The child sets `oom_score_adj` to 1000 when the kernel allows it. Each `stage_done` line carries `duration_ms`, `rss_in_mb`, `rss_out_mb`, `rss_peak_mb`, and the stage's counts. `LOG_LEVEL=DEBUG` adds `memory_budget` (estimate against the budget) and `memory_refused` when a book is turned away.
+Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_MEMORY_BUDGET_BYTES` (RSS cap for one job; when unset, three quarters of the cgroup memory limit split across `MAX_CONCURRENT_JOBS`, and the remaining quarter stays with the API process; a cap under 128 MiB is raised to that floor; with no cgroup limit the default is 1536 MiB), `JOB_TIMEOUT_SEC` (server default 3600), `SOFFICE_BIN` (default `soffice` / `libreoffice` on `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, and check rows stay in the block with their `kind`. The parent watches each child's resident memory and kills it when it passes the budget. The child sets `oom_score_adj` to 1000 when the kernel allows it. Each `stage_done` line carries `duration_ms`, `rss_in_mb`, `rss_out_mb`, `rss_peak_mb`, and the stage's counts. `LOG_LEVEL=DEBUG` adds `memory_budget` (estimate against the budget) and `memory_refused` when a book is turned away.
 
 ## Data
 
@@ -131,7 +131,13 @@ cp .env.example .env   # optional
 docker compose up --build
 ```
 
-Leave Compose running. The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`.
+Leave Compose running. The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`. The service sets `mem_limit: 4g`. At the default of two job slots that limit derives a 1536 MiB RSS cap per job. This repo has no Kubernetes manifest. A pod needs the same ceiling, and `JOB_MEMORY_BUDGET_BYTES` when that ceiling is not 4 GiB:
+
+```yaml
+resources:
+  limits:
+    memory: 4Gi
+```
 
 The image runs as `app` (uid 1000) with `HOME=/app` and includes `libreoffice-calc-nogui`. A `.xls` upload converts inside the container. Conversion writes a temporary profile under the book directory, not into the image home. `XLS_CONVERT_TIMEOUT_SEC` (default 300) stays below `JOB_TIMEOUT_SEC` (default 3600) so a hung conversion fails the job before the server stops the process. `.env` can still set `SOFFICE_BIN` and `XLS_CONVERT_TIMEOUT_SEC`; Compose does not override them. `scripts/docker-xls-smoke.sh` checks that path against a real `.xls`. It needs Docker and is not part of `uv run pytest`.
 

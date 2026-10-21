@@ -113,7 +113,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 
 `report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key` или `q` — это `selector_required`, а не вся книга. `workbook_too_large` — завершённая джоба: оценка по формулам и диапазонам или резидентная память выше бюджета одной джобы. `error` — код, `detail` — короткая причина. Трейсбэка нет.
 
-Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_MEMORY_BUDGET_BYTES` (лимит RSS одной джобы; если не задан — три четверти лимита памяти cgroup, поделённые на `MAX_CONCURRENT_JOBS`, оставшаяся четверть остаётся процессу API), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `SOFFICE_BIN` (по умолчанию `soffice` / `libreoffice` из `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper и check остаются в блоке со своим `kind`. Родитель следит за RSS ребёнка и убивает его при превышении бюджета. Ребёнок ставит `oom_score_adj` в 1000, если ядро позволяет. Каждая строка `stage_done` несёт `duration_ms`, `rss_in_mb`, `rss_out_mb`, `rss_peak_mb` и счётчики стадии. `LOG_LEVEL=DEBUG` добавляет `memory_budget` (оценка против бюджета) и `memory_refused`, если книга отклонена.
+Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_MEMORY_BUDGET_BYTES` (лимит RSS одной джобы; если не задан — три четверти лимита памяти cgroup, поделённые на `MAX_CONCURRENT_JOBS`, оставшаяся четверть остаётся процессу API; лимит ниже 128 МиБ поднимается до этого пола; без лимита cgroup берётся 1536 МиБ), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `SOFFICE_BIN` (по умолчанию `soffice` / `libreoffice` из `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper и check остаются в блоке со своим `kind`. Родитель следит за RSS ребёнка и убивает его при превышении бюджета. Ребёнок ставит `oom_score_adj` в 1000, если ядро позволяет. Каждая строка `stage_done` несёт `duration_ms`, `rss_in_mb`, `rss_out_mb`, `rss_peak_mb` и счётчики стадии. `LOG_LEVEL=DEBUG` добавляет `memory_budget` (оценка против бюджета) и `memory_refused`, если книга отклонена.
 
 ## Данные
 
@@ -128,7 +128,13 @@ cp .env.example .env   # необязательно
 docker compose up --build
 ```
 
-Оставьте Compose запущенным. API опубликован только на `127.0.0.1:8080`. Общий кэш книг и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`.
+Оставьте Compose запущенным. API опубликован только на `127.0.0.1:8080`. Общий кэш книг и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`. У сервиса `mem_limit: 4g`. При двух слотах джоб из этого лимита получается потолок RSS 1536 МиБ на джобу. Манифеста Kubernetes в репозитории нет. Поду нужен тот же потолок, а `JOB_MEMORY_BUDGET_BYTES` — если потолок не 4 ГиБ:
+
+```yaml
+resources:
+  limits:
+    memory: 4Gi
+```
 
 Образ работает от пользователя `app` (uid 1000) с `HOME=/app` и содержит `libreoffice-calc-nogui`. Загрузка `.xls` конвертируется внутри контейнера. Конвертация пишет временный профиль в каталог книги, а не в домашний каталог образа. `XLS_CONVERT_TIMEOUT_SEC` (по умолчанию 300) меньше `JOB_TIMEOUT_SEC` (по умолчанию 3600), поэтому зависшая конвертация роняет джобу раньше, чем сервер остановит процесс. `.env` по-прежнему может задать `SOFFICE_BIN` и `XLS_CONVERT_TIMEOUT_SEC`; Compose их не перезаписывает. `scripts/docker-xls-smoke.sh` проверяет этот путь на настоящем `.xls`. Скрипту нужен Docker, и он не входит в `uv run pytest`.
 

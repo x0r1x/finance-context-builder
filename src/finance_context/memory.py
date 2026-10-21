@@ -32,6 +32,11 @@ BYTES_PER_EXPANDED_CELL = 3 * 1024
 # A spawned child sits near 80 MiB after imports. A lower cap kills every book
 # during parse, before any workbook data is the cause.
 JOB_MEMORY_FLOOR_BYTES = 128 * 1024 * 1024
+# What a 4 GiB container derives with the default two slots:
+# (limit - limit // 4) // 2. Used when the cgroup reports no limit and
+# JOB_MEMORY_BUDGET_BYTES is unset.
+_CONTAINER_LIMIT_BYTES = 4 * 1024**3
+DEFAULT_JOB_BUDGET_BYTES = (_CONTAINER_LIMIT_BYTES - _CONTAINER_LIMIT_BYTES // 4) // 2
 
 _budget_warnings: set[str] = set()
 
@@ -195,13 +200,26 @@ def resolve_job_budget_bytes(
     return max(1, usable // slots)
 
 
-def budget_for_settings(settings: Settings) -> int | None:
-    return raise_budget_floor(
-        resolve_job_budget_bytes(
-            slots=settings.max_concurrent_jobs,
-            override=settings.job_memory_budget_bytes,
-        )
+def budget_for_settings(settings: Settings) -> int:
+    budget = resolve_job_budget_bytes(
+        slots=settings.max_concurrent_jobs,
+        override=settings.job_memory_budget_bytes,
     )
+    if budget is None:
+        if "default" not in _budget_warnings:
+            _budget_warnings.add("default")
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "memory_budget_default",
+                (
+                    "cgroup memory limit is unset and JOB_MEMORY_BUDGET_BYTES is unset; "
+                    f"using the default {_mib(DEFAULT_JOB_BUDGET_BYTES)} MiB job budget"
+                ),
+                budget_bytes=DEFAULT_JOB_BUDGET_BYTES,
+            )
+        budget = DEFAULT_JOB_BUDGET_BYTES
+    return raise_budget_floor(budget)
 
 
 def raise_budget_floor(budget: int | None) -> int | None:

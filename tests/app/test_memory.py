@@ -17,6 +17,7 @@ from finance_context.formulas.csr import RANGE_EXPAND_CAP, expand_range, expansi
 from finance_context.memory import (
     BYTES_PER_EXPANDED_CELL,
     BYTES_PER_FORMULA,
+    DEFAULT_JOB_BUDGET_BYTES,
     JOB_MEMORY_FLOOR_BYTES,
     assess_raw,
     cgroup_memory_limit_bytes,
@@ -87,6 +88,20 @@ def test_budget_below_the_child_baseline_is_raised(caplog) -> None:
     assert len(warnings) == 1
     assert warnings[0].configured == tiny
     assert warnings[0].budget_bytes == JOB_MEMORY_FLOOR_BYTES
+
+
+def test_unlimited_cgroup_uses_the_default_budget(monkeypatch, caplog) -> None:
+    memory._budget_warnings.clear()
+    monkeypatch.delenv("JOB_MEMORY_BUDGET_BYTES", raising=False)
+    monkeypatch.setattr(memory, "cgroup_memory_limit_bytes", lambda *_args, **_kwargs: None)
+    caplog.set_level(logging.WARNING, logger="finance_context.pipeline")
+    settings = Settings(_env_file=None, max_concurrent_jobs=2)
+    assert memory.budget_for_settings(settings) == DEFAULT_JOB_BUDGET_BYTES
+    assert memory.budget_for_settings(settings) == DEFAULT_JOB_BUDGET_BYTES
+    warnings = [record for record in caplog.records if record.event == "memory_budget_default"]
+    assert len(warnings) == 1
+    assert warnings[0].budget_bytes == DEFAULT_JOB_BUDGET_BYTES
+    assert DEFAULT_JOB_BUDGET_BYTES == (4 * 1024**3 - (4 * 1024**3) // 4) // 2
 
 
 def test_settings_blank_budget_derives(monkeypatch) -> None:
