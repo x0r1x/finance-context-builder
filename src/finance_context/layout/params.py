@@ -714,9 +714,40 @@ def _column_roles(
                 numeric_counts[col] += 1
             elif len(text) <= 24:
                 text_counts[col] += 1
+    hinted = {col: votes.most_common(1)[0][0] for col, votes in header_votes.items()}
     roles: dict[int, str] = {}
-    for col, votes in header_votes.items():
-        roles[col] = votes.most_common(1)[0][0]
+    # ``№`` names an index. The digits under it are not a value column.
+    for col in set(hinted) | set(numeric_counts):
+        caption = _column_caption(by_row, col, date1904)
+        if caption and _is_index_header(caption):
+            roles[col] = "index"
+    for col, texts in _column_bodies(by_row, date1904).items():
+        if roles.get(col) == "index":
+            continue
+        kind = _content_column_kind(texts)
+        if kind is None:
+            continue
+        # Row names can be long prose. The label hint keeps that stub column.
+        if kind in {"unit", "note"} and hinted.get(col) == "label":
+            continue
+        if kind == "value" and _period_like_caption(by_row, col, date1904):
+            roles[col] = "unknown"
+        else:
+            roles[col] = kind
+    for col, count in numeric_counts.items():
+        if count < _MIN_VALUE_ROWS or col in roles:
+            continue
+        # Formula text in a label column is the row name, not a value.
+        if hinted.get(col) == "label":
+            continue
+        # Formulas with no cached text. A header word does not hide them.
+        if _period_like_caption(by_row, col, date1904):
+            roles[col] = "unknown"
+        else:
+            roles[col] = "value"
+    for col, role in hinted.items():
+        if col not in roles:
+            roles[col] = role
     for cells in by_row.values():
         visible = [cell for cell in cells if not cell.get("hidden")]
         if not any(_header_role(_text(cell, date1904) or "") for cell in visible):
@@ -736,22 +767,6 @@ def _column_roles(
     graph_col = _active_value_col(edges, sheet)
     if graph_col is not None and _column_caption(by_row, graph_col, date1904):
         roles[graph_col] = "value"
-    for col, count in numeric_counts.items():
-        if count < _MIN_VALUE_ROWS:
-            continue
-        # A column of numbers is a value. A short header such as ``Base`` stays
-        # the header text; it does not choose a role. Index and unit votes stand.
-        if roles.get(col) not in {None, "unknown"}:
-            continue
-        caption = _column_caption(by_row, col, date1904)
-        named = _named_column_role(caption) if caption else None
-        if named is not None:
-            roles[col] = named
-        elif caption and period_like_header(caption):
-            roles[col] = "unknown"
-        else:
-            roles[col] = "value"
-    _apply_value_column_roles(roles, by_row, date1904)
     return roles
 
 
@@ -768,24 +783,11 @@ def _numeric_columns(by_row: dict[int, list[dict]], date1904: bool) -> Counter[i
     return counts
 
 
-def _apply_value_column_roles(
-    roles: dict[int, str],
-    by_row: dict[int, list[dict]],
-    date1904: bool,
-) -> None:
-    """A column of unit tokens or prose is ``unit`` or ``note`` even with a weak header.
-
-    The header word is a boost. A strong value signal wins over it. Scenario,
-    index, label and numeric value columns stay as they are.
-    """
-    for col, texts in _column_bodies(by_row, date1904).items():
-        role = roles.get(col)
-        if role in {"index", "label", "value"}:
-            continue
-        kind = _value_column_kind(texts)
-        if kind is None:
-            continue
-        roles[col] = kind
+def _period_like_caption(
+    by_row: dict[int, list[dict]], col: int, date1904: bool
+) -> bool:
+    caption = _column_caption(by_row, col, date1904)
+    return bool(caption and period_like_header(caption))
 
 
 def _column_bodies(
@@ -809,16 +811,45 @@ def _column_bodies(
     return bodies
 
 
-def _value_column_kind(texts: list[str]) -> str | None:
+def _content_column_kind(texts: list[str]) -> str | None:
+    """Role of a column from its cells. ``None`` when the column is empty or sparse.
+
+    Numbers are ``value``. Short measure tokens are ``unit``. Free-form text with
+    high distinctness is ``note``. A header word is not an input here.
+    """
     if len(texts) < 2:
         return None
-    units = sum(1 for text in texts if is_unit_text(text))
-    notes = sum(1 for text in texts if _is_free_text(text))
-    if units / len(texts) >= _VALUE_SHARE and units >= 2:
+    total = len(texts)
+    numeric = sum(1 for text in texts if _is_number(text))
+    if numeric >= _MIN_VALUE_ROWS and numeric / total >= _VALUE_SHARE:
+        return "value"
+    units = sum(1 for text in texts if _is_measure_token(text))
+    if units >= 2 and units / total >= _VALUE_SHARE:
         return "unit"
-    if notes / len(texts) >= _VALUE_SHARE and notes >= 2:
+    notes = [text for text in texts if _is_free_text(text)]
+    distinct = {text.casefold().replace("ё", "е") for text in notes}
+    if (
+        len(notes) >= 2
+        and len(notes) / total >= _VALUE_SHARE
+        and len(distinct) >= 2
+        and len(distinct) / len(notes) >= 0.5
+    ):
         return "note"
     return None
+
+
+def _is_measure_token(text: str) -> bool:
+    """A short unit token. Ordinary repeated words are not measures."""
+    if _is_number(text) or _is_free_text(text):
+        return False
+    if is_unit_text(text):
+        return True
+    stripped = text.strip()
+    if len(stripped) > 16:
+        return False
+    from finance_context.context.measure import parse_measure
+
+    return parse_measure(stripped).unit is not None
 
 
 def _is_free_text(text: str) -> bool:
@@ -1156,12 +1187,13 @@ _HEADER_QUALIFIER_WORD_CHARS = 20
 
 
 def _header_role(text: str) -> str | None:
-    """Format-word role of a header cell.
+    """Header-word hint for a column whose cells do not decide the role.
 
     An exact normalized caption wins. Otherwise the first word may carry the role
     when at most two short qualifiers follow it (``Комментарии КП``,
     ``Источник информации``, ``Source of information``). The qualifier is not
     classified: ``Значение базовое`` stays a value column and keeps its text.
+    A clear content signal ignores this hint.
     """
     folded = text.replace("Ё", "Е").replace("ё", "е")
     n = re.sub(r"[\W_]+", " ", folded.casefold()).strip()

@@ -836,3 +836,221 @@ def test_unit_and_note_columns_follow_the_values_under_an_unknown_header() -> No
     assert headers["Bull"] == "value"
     assert headers["Мера"] == "unit"
     assert headers["Пояснение"] == "note"
+
+
+def test_unit_column_without_a_header_word() -> None:
+    """Short repeated measure tokens are a unit column with no unit word in the header."""
+    cells = [_c("Допущения", "A1", "Параметр"), _c("Допущения", "B1", "Значение")]
+    for row, (label, value, unit) in enumerate(
+        [("Цена", "12", "руб."), ("Доля", "0.4", "руб."), ("Ставка", "0.2", "руб.")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", unit),
+        ]
+    row = detect_layout(cells).sheets[0].blocks[0].rows[0]
+    assert [(cell.col, cell.role) for cell in row.cells] == [(2, "value"), (3, "unit")]
+
+
+def test_note_column_without_a_header_word() -> None:
+    """Distinct free-form text is a note column with no note word in the header."""
+    notes = [
+        "допущение взято из бизнес-плана компании",
+        "смотри приложение к финансовой модели",
+        "пояснение для инвестиционного комитета",
+    ]
+    cells = [_c("Допущения", "A1", "Параметр"), _c("Допущения", "B1", "Значение")]
+    for row, (label, value, note) in enumerate(
+        zip(["Цена", "Доля", "Ставка"], ["12", "0.4", "0.2"], notes, strict=True),
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", note),
+        ]
+    row = detect_layout(cells).sheets[0].blocks[0].rows[0]
+    assert [(cell.col, cell.role) for cell in row.cells] == [(2, "value"), (3, "note")]
+
+
+def test_repeated_unit_tokens_win_over_a_note_header() -> None:
+    """A note header does not override a column of short repeated unit tokens."""
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+        _c("Допущения", "C1", "Примечание"),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "0.4"), ("Ставка", "0.2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", "руб."),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Примечание"] == "unit"
+
+
+def test_empty_column_uses_the_header_word() -> None:
+    """An empty column has no content signal, so the header word is the role."""
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+        _c("Допущения", "C1", "Примечание"),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "0.4"), ("Ставка", "0.2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Примечание"] == "note"
+
+
+@pytest.mark.parametrize("header", ["Ед. изм.", "Примечание"])
+def test_digits_only_column_stays_value_under_a_role_header(header: str) -> None:
+    """Digits decide value. A unit or note header does not relabel that column."""
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", header),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "4"), ("Ставка", "2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+        ]
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [(item.text, item.role) for item in headers] == [(header, "value")]
+
+
+def test_long_row_names_stay_the_label_column() -> None:
+    """Long distinct row names stay the stub. They are not a note column."""
+    labels = [
+        "цена реализации продукции компании",
+        "доля операционных расходов в выручке",
+        "ставка налога на прибыль организации",
+    ]
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+    ]
+    for row, (label, value) in enumerate(zip(labels, ["12", "0.4", "0.2"], strict=True), start=2):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.label_col == 1
+    assert [row.label for row in block.rows] == labels
+    assert [(header.col, header.role) for header in block.axis.headers] == [(2, "value")]
+
+
+def test_unit_tokens_win_over_a_value_header() -> None:
+    """A value header does not override a column of short repeated unit tokens."""
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Base"),
+        _c("Допущения", "C1", "Значение"),
+    ]
+    for row, (label, base) in enumerate(
+        [("Цена", "10"), ("Доля", "11"), ("Ставка", "12")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", base),
+            _c("Допущения", f"C{row}", "руб."),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Base"] == "value"
+    assert headers["Значение"] == "unit"
+
+
+def test_repeated_prose_is_unknown_without_a_header_word() -> None:
+    """Identical long text is not a note. A short non-word caption stays unknown."""
+    prose = "одно и то же пояснение повторяется в каждой строке"
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+        _c("Допущения", "C1", "Поле"),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "0.4"), ("Ставка", "0.2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", prose),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Значение"] == "value"
+    assert headers["Поле"] == "unknown"
+
+
+def test_repeated_prose_keeps_the_note_header() -> None:
+    """Low distinctness is ambiguous, so the note header word still applies."""
+    prose = "одно и то же пояснение повторяется в каждой строке"
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+        _c("Допущения", "C1", "Примечание"),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "0.4"), ("Ставка", "0.2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", prose),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Примечание"] == "note"
+
+
+def test_formula_names_under_a_label_header_stay_the_stub() -> None:
+    """Formula text in the label column is the row name, not a value or a note."""
+    labels = [
+        "цена реализации продукции компании",
+        "доля операционных расходов в выручке",
+        "ставка налога на прибыль организации",
+    ]
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+    ]
+    for row, (label, value) in enumerate(zip(labels, ["12", "0.4", "0.2"], strict=True), start=2):
+        cells += [
+            _c("Допущения", f"A{row}", label, formula=f"=A{row}"),
+            _c("Допущения", f"B{row}", value),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.label_col == 1
+    assert [row.label for row in block.rows] == labels
+    assert [(header.col, header.role) for header in block.axis.headers] == [(2, "value")]
