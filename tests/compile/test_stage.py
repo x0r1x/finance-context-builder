@@ -8,6 +8,7 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.excel import parse_workbook
 from finance_context.formulas import compile_workbook
+from finance_context.formulas.models import IrCell, release_cell_asts
 from finance_context.formulas.stage import compile_schema_id
 
 
@@ -146,3 +147,18 @@ def test_array_constant_keeps_en_argument_separator(tmp_path: Path, dest: Path) 
     targets = {e["target"] for e in edges if e["source"] == "Inputs!C1"}
     assert targets == {"Inputs!A1", "Inputs!B1"}
     assert by[("Inputs", "D1")]["unparsed"] is False
+
+
+def test_compiled_cell_is_a_slot_object_that_still_copies_like_a_row() -> None:
+    cell = IrCell(sheet="P&L", row=2, col=1, addr="A2", formula_raw="=B2", ast_json='{"op":"ref"}')
+    copied = dict(cell)
+    copied["merge_end_col"] = 4
+    assert isinstance(cell, IrCell)
+    assert cell["sheet"] == "P&L"
+    assert cell.get("formula_raw") == "=B2"
+    assert cell.get("missing", 7) == 7
+    assert copied["merge_end_col"] == 4
+    assert copied["ast_json"] == '{"op":"ref"}'
+    release_cell_asts([cell, copied])
+    assert cell.ast_json is None
+    assert "ast_json" not in copied

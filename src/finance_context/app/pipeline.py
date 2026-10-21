@@ -14,7 +14,7 @@ from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, ensure_xlsx, has_source
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.csr import as_cell_edge
-from finance_context.formulas.models import as_edge
+from finance_context.formulas.models import as_edge, as_ir_cell, release_cell_asts
 from finance_context.formulas.stage import compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
 from finance_context.layout.models import Layout
@@ -215,6 +215,7 @@ class Pipeline:
         cells = ir_cells
         edges = ir_edges
         relations = formula_relations(layout, ir_cells)
+        release_cell_asts(ir_cells)
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status()
         set_stage("graph", status="running")
@@ -413,7 +414,11 @@ def _read_ir(dest_dir: Path) -> tuple[list[dict], list, list]:
     edges = read_parquet(edges_path) if edges_path.is_file() else []
     cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
     cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
-    return cells, [as_edge(edge) for edge in edges], [as_cell_edge(edge) for edge in cell_edges]
+    return (
+        [as_ir_cell(cell) for cell in cells],
+        [as_edge(edge) for edge in edges],
+        [as_cell_edge(edge) for edge in cell_edges],
+    )
 
 
 def _raise_if_cancelled(progress: object | None) -> None:

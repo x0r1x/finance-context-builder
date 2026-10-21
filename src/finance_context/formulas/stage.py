@@ -7,7 +7,13 @@ from pathlib import Path
 from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.formulas.csr import expand_cell_edges, expanded_edge_count
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
-from finance_context.formulas.models import CompileResult, Edge, ParsedFormula
+from finance_context.formulas.models import (
+    CompileResult,
+    Edge,
+    IrCell,
+    ParsedFormula,
+    cell_parquet_row,
+)
 from finance_context.formulas.names import resolve_defined_name_edges
 from finance_context.memory import check_budget, usage_for_book
 from finance_context.store.fs import read_parquet, write_json, write_parquet
@@ -72,7 +78,7 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
     meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
     raw_rows = read_parquet(dest_dir / "raw" / "cells.parquet")
-    ir_rows: list[tuple[object, ...]] = []
+    cells: list[IrCell] = []
     edges: list[Edge] = []
     extra_nodes: list[str] = []
     formula_count = 0
@@ -90,20 +96,22 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
                 ast_json = json.dumps(parsed.ast, ensure_ascii=False)
             edges.extend(parsed.edges)
         release()
-        ir_rows.append(
-            (
-                row["sheet"],
-                row["row"],
-                row["col"],
-                row["addr"],
-                row.get("formula_raw"),
-                template,
-                unparsed,
-                row.get("cached_value"),
-                row.get("hidden"),
-                row.get("number_format"),
-                row.get("comment"),
-                ast_json,
+        sheet = row["sheet"]
+        addr = row["addr"]
+        cells.append(
+            IrCell(
+                sheet=sheet if isinstance(sheet, str) else str(sheet),
+                row=int(row["row"]),
+                col=int(row["col"]),
+                addr=addr if isinstance(addr, str) else str(addr),
+                formula_raw=row.get("formula_raw"),
+                formula_template=template,
+                unparsed=unparsed,
+                cached_value=row.get("cached_value"),
+                hidden=row.get("hidden"),
+                number_format=row.get("number_format"),
+                comment=row.get("comment"),
+                ast_json=ast_json,
             )
         )
     resolve_defined_name_edges(edges, meta.get("defined_names"))
@@ -149,19 +157,19 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
         )
         for edge in cell_edges
     ]
-    write_parquet(dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, ir_rows)
+    write_parquet(
+        dest_dir / "ir" / "cells.parquet",
+        IR_CELL_COLUMNS,
+        [cell_parquet_row(cell) for cell in cells],
+    )
     write_parquet(dest_dir / "ir" / "edges.parquet", IR_EDGE_COLUMNS, edge_rows)
     write_parquet(dest_dir / "ir" / "cell_edges.parquet", IR_CELL_EDGE_COLUMNS, cell_edge_rows)
     write_json(
         dest_dir / "ir" / "compile.json",
         {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
     )
-    result = CompileResult(
-        cells=_as_dicts(IR_CELL_COLUMNS, ir_rows),
-        edges=edges,
-        cell_edges=cell_edges,
-    )
-    del ir_rows, edge_rows, cell_edge_rows
+    result = CompileResult(cells=cells, edges=edges, cell_edges=cell_edges)
+    del edge_rows, cell_edge_rows
     return result
 
 
@@ -258,13 +266,6 @@ def _release_parsed(
                 cache.pop(key, None)
 
     return release
-
-
-def _as_dicts(
-    columns: tuple[tuple[str, str], ...], rows: list[tuple[object, ...]]
-) -> list[dict[str, object]]:
-    names = [name for name, _dtype in columns]
-    return [dict(zip(names, row, strict=True)) for row in rows]
 
 
 def compile_schema_id() -> str:
