@@ -18,40 +18,23 @@ from finance_context.store.fs import read_parquet, read_parquet_columns
 # Same logger as stage_done and the layout step timings, so one formatter and one stream.
 _LOGGER = logging.getLogger("finance_context.pipeline")
 
-# A quarter of the container stays with the API process. The rest is split
-# across the concurrent job slots.
-_HEADROOM_DENOMINATOR = 4
 # Above this, cgroup v1 is reporting "no limit" (page_counter max).
 _UNLIMITED_BYTES = 1 << 60
 
-# RSS peaks include the child after imports. Re-measured after preflight
-# counts parsed edges: a 40k-formula workbook peaks near 571 MiB, a 4000×96
-# timeline near 2072 MiB, and 960 whole-column SUMIF rows near 437 MiB.
-# 128 MiB plus 5 KiB per formula and 1 KiB per expanded cell stays above the
-# timeline and SUMIF peaks. The 40k-formula estimate is 544 MiB, under that
-# graph peak, and still under the 1536 MiB default job budget.
-ESTIMATE_BASE_BYTES = 128 * 1024 * 1024
-BYTES_PER_FORMULA = 5 * 1024
-BYTES_PER_EXPANDED_CELL = 1 * 1024
-
-# A spawned child sits near 80 MiB after imports. A configured cap under this
-# cannot hold the process, so the job is refused. A derived cgroup share under
-# this is kept: raising it would spend the quarter reserved for the API.
-JOB_MEMORY_FLOOR_BYTES = 128 * 1024 * 1024
-# What a 4 GiB container derives with the default two slots:
-# (limit - limit // 4) // 2. Used when the cgroup reports no limit and
-# JOB_MEMORY_BUDGET_BYTES is unset.
-_CONTAINER_LIMIT_BYTES = 4 * 1024**3
-DEFAULT_JOB_BUDGET_BYTES = (_CONTAINER_LIMIT_BYTES - _CONTAINER_LIMIT_BYTES // 4) // 2
+# Coefficients live on Settings (JOB_ESTIMATE_*). Fitted after parsed-edge
+# preflight: 132 MiB + 3840 bytes/formula + 960/expanded cell + 960/present
+# cell. Highest-stage peaks and the ceiling estimate sit between 1.07 and
+# 1.15. The 40k-formula book stays under the 1536 MiB default; the
+# 380k-formula timeline does not.
 
 _budget_warnings: set[str] = set()
+_logged_effective = False
 
 MEMORY_ERROR_DETAIL = "This workbook ran out of memory while it was being read."
 
 _PROC_CGROUP = Path("/proc/self/cgroup")
 _SYS_CGROUP = Path("/sys/fs/cgroup")
 _OOM_SCORE = Path("/proc/self/oom_score_adj")
-_OOM_SCORE_ADJ = "1000"
 
 _STRING = re.compile(r'"(?:[^"]|"")*"')
 _FORMULA_REF = re.compile(
@@ -81,6 +64,7 @@ class WorkbookEstimate:
     cells: int
     formulas: int
     expanded_cells: int
+    present_cells: int
     estimate_bytes: int
 
 
@@ -109,10 +93,12 @@ def _rss_from_statm(path: Path) -> int | None:
     return pages * os.sysconf("SC_PAGE_SIZE")
 
 
-def prefer_oom_kill(path: Path = _OOM_SCORE) -> None:
+def prefer_oom_kill(path: Path = _OOM_SCORE, *, score: int | None = None) -> None:
     """Ask the kernel to reclaim this process first. Best effort, unprivileged."""
+    if score is None:
+        score = Settings().job_oom_score_adj
     try:
-        path.write_text(_OOM_SCORE_ADJ, encoding="utf-8")
+        path.write_text(str(int(score)), encoding="utf-8")
     except OSError:
         return
 
@@ -189,6 +175,7 @@ def _finite_limit(path: Path) -> int | None:
 def resolve_job_budget_bytes(
     *,
     slots: int,
+    reserve_fraction: float,
     override: int | None = None,
     limit_bytes: int | None = None,
     read_cgroup: bool = True,
@@ -201,7 +188,8 @@ def resolve_job_budget_bytes(
         limit = cgroup_memory_limit_bytes()
     if limit is None or limit <= 0:
         return None
-    usable = limit - (limit // _HEADROOM_DENOMINATOR)
+    reserve = int(limit * reserve_fraction)
+    usable = max(1, limit - reserve)
     slots = max(1, int(slots))
     return max(1, usable // slots)
 
@@ -209,9 +197,11 @@ def resolve_job_budget_bytes(
 def budget_for_settings(settings: Settings) -> int:
     budget = resolve_job_budget_bytes(
         slots=settings.max_concurrent_jobs,
+        reserve_fraction=settings.job_memory_api_reserve_fraction,
         override=settings.job_memory_budget_bytes,
     )
     if budget is None:
+        budget = settings.job_memory_default_budget_bytes
         if "default" not in _budget_warnings:
             _budget_warnings.add("default")
             log_event(
@@ -220,12 +210,12 @@ def budget_for_settings(settings: Settings) -> int:
                 "memory_budget_default",
                 (
                     "cgroup memory limit is unset and JOB_MEMORY_BUDGET_BYTES is unset; "
-                    f"using the default {_mib(DEFAULT_JOB_BUDGET_BYTES)} MiB job budget"
+                    f"using the default {_mib(budget)} MiB job budget"
                 ),
-                budget_bytes=DEFAULT_JOB_BUDGET_BYTES,
+                budget_bytes=budget,
             )
-        budget = DEFAULT_JOB_BUDGET_BYTES
-    if budget < JOB_MEMORY_FLOOR_BYTES and "floor" not in _budget_warnings:
+    floor = settings.job_memory_floor_bytes
+    if budget < floor and "floor" not in _budget_warnings:
         _budget_warnings.add("floor")
         configured = settings.job_memory_budget_bytes
         if configured is not None and configured > 0:
@@ -246,26 +236,62 @@ def budget_for_settings(settings: Settings) -> int:
             budget_bytes=budget,
             configured=configured,
         )
+    _log_effective_memory(settings, budget)
     return budget
 
 
 def unusable_cap_detail(settings: Settings) -> str | None:
     """A configured cap under the child baseline cannot run a job."""
     configured = settings.job_memory_budget_bytes
-    if configured is None or configured <= 0 or configured >= JOB_MEMORY_FLOOR_BYTES:
+    floor = settings.job_memory_floor_bytes
+    if configured is None or configured <= 0 or configured >= floor:
         return None
     return (
         "JOB_MEMORY_BUDGET_BYTES is "
-        f"{_mib(configured)} MiB, below the {_mib(JOB_MEMORY_FLOOR_BYTES)} MiB "
+        f"{_mib(configured)} MiB, below the {_mib(floor)} MiB "
         "this process needs before it reads a workbook."
     )
 
 
-def estimate_bytes(*, formulas: int, expanded_cells: int) -> int:
+def _log_effective_memory(settings: Settings, budget: int) -> None:
+    """One DEBUG memory_budget line with the knobs this process is using."""
+    global _logged_effective
+    if _logged_effective:
+        return
+    _logged_effective = True
+    log_event(
+        _LOGGER,
+        logging.DEBUG,
+        "memory_budget",
+        "effective memory settings",
+        estimate_base_bytes=settings.job_estimate_base_bytes,
+        bytes_per_formula=settings.job_estimate_bytes_per_formula,
+        bytes_per_expanded_cell=settings.job_estimate_bytes_per_expanded_cell,
+        bytes_per_present_cell=settings.job_estimate_bytes_per_present_cell,
+        floor_bytes=settings.job_memory_floor_bytes,
+        api_reserve_fraction=settings.job_memory_api_reserve_fraction,
+        default_budget_bytes=settings.job_memory_default_budget_bytes,
+        watch_interval_sec=settings.job_memory_watch_interval_sec,
+        range_expand_cap=settings.range_expand_cap,
+        oom_score_adj=settings.job_oom_score_adj,
+        preflight_refusal=settings.job_memory_preflight_refusal,
+        budget_bytes=budget,
+    )
+
+
+def estimate_bytes(
+    *,
+    formulas: int,
+    expanded_cells: int,
+    present_cells: int,
+    settings: Settings | None = None,
+) -> int:
+    chosen = settings if settings is not None else Settings()
     return (
-        ESTIMATE_BASE_BYTES
-        + formulas * BYTES_PER_FORMULA
-        + expanded_cells * BYTES_PER_EXPANDED_CELL
+        chosen.job_estimate_base_bytes
+        + formulas * chosen.job_estimate_bytes_per_formula
+        + expanded_cells * chosen.job_estimate_bytes_per_expanded_cell
+        + present_cells * chosen.job_estimate_bytes_per_present_cell
     )
 
 
@@ -342,15 +368,22 @@ def usage_for_book(dest_dir: Path):
     return sheet_usage(nodes)
 
 
-def assess_raw(dest_dir: Path, usage: object | None = None) -> WorkbookEstimate:
+def assess_raw(
+    dest_dir: Path, usage: object | None = None, settings: Settings | None = None
+) -> WorkbookEstimate:
     """Size check from the same parsed edges compile expands, before that expansion."""
     # Imported lazily: formulas/__init__ pulls compile, which imports this module.
-    from finance_context.formulas.csr import expanded_edge_count
+    from finance_context.formulas.csr import (
+        SheetUsage,
+        expanded_edge_count,
+        present_cell_count,
+    )
     from finance_context.formulas.engine import FormulaEngine
 
+    chosen = settings if settings is not None else Settings()
     path = dest_dir / "raw" / "cells.parquet"
     if not path.is_file():
-        return WorkbookEstimate(0, 0, 0, 0)
+        return WorkbookEstimate(0, 0, 0, 0, 0)
     rows = read_parquet(path)
     if usage is None:
         usage = usage_for_book(dest_dir)
@@ -370,11 +403,18 @@ def assess_raw(dest_dir: Path, usage: object | None = None) -> WorkbookEstimate:
         addr = str(row.get("addr") or "A1")
         parsed = engine.parse(str(formula), sheet=sheet, addr=addr)
         expanded += expanded_edge_count(parsed.edges, usage=usage)  # type: ignore[arg-type]
+    present = present_cell_count(usage) if isinstance(usage, SheetUsage) else 0
     return WorkbookEstimate(
         cells=len(rows),
         formulas=formulas,
         expanded_cells=expanded,
-        estimate_bytes=estimate_bytes(formulas=formulas, expanded_cells=expanded),
+        present_cells=present,
+        estimate_bytes=estimate_bytes(
+            formulas=formulas,
+            expanded_cells=expanded,
+            present_cells=present,
+            settings=chosen,
+        ),
     )
 
 
@@ -382,12 +422,20 @@ def check_budget(
     *,
     formulas: int,
     expanded_cells: int,
+    present_cells: int,
     budget: int | None,
     source: str,
+    settings: Settings | None = None,
 ) -> int:
     """Log the estimate and refuse when it is already over the job budget."""
+    chosen = settings if settings is not None else Settings()
     started = time.monotonic()
-    estimate = estimate_bytes(formulas=formulas, expanded_cells=expanded_cells)
+    estimate = estimate_bytes(
+        formulas=formulas,
+        expanded_cells=expanded_cells,
+        present_cells=present_cells,
+        settings=chosen,
+    )
     duration_ms = int((time.monotonic() - started) * 1000)
     log_event(
         _LOGGER,
@@ -401,7 +449,7 @@ def check_budget(
         estimate_bytes=estimate,
         budget_bytes=budget,
     )
-    if budget is not None and estimate > budget:
+    if chosen.job_memory_preflight_refusal and budget is not None and estimate > budget:
         detail = too_large_detail(estimate, budget)
         log_event(
             _LOGGER,

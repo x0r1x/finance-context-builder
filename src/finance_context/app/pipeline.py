@@ -13,7 +13,11 @@ from finance_context.context.build import build_context
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, ensure_xlsx, has_source
 from finance_context.excel.stage import parse_workbook
-from finance_context.formulas.csr import as_cell_edge
+from finance_context.formulas.csr import (
+    as_cell_edge,
+    bind_range_expand_cap,
+    reset_range_expand_cap,
+)
 from finance_context.formulas.models import as_edge, as_ir_cell, release_cell_asts
 from finance_context.formulas.stage import compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
@@ -111,15 +115,19 @@ class Pipeline:
             return ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
         if not has_source(book):
             raise ContextError("empty_file", "source.xlsx missing")
-        return self._run_loaded(
-            dest_dir,
-            job_id=job_id,
-            source_filename=source_filename,
-            content_sha256=content_sha256,
-            progress=progress,
-            generation=generation,
-            shared_dir=book if book != dest_dir else None,
-        )
+        token = bind_range_expand_cap(self.settings.range_expand_cap)
+        try:
+            return self._run_loaded(
+                dest_dir,
+                job_id=job_id,
+                source_filename=source_filename,
+                content_sha256=content_sha256,
+                progress=progress,
+                generation=generation,
+                shared_dir=book if book != dest_dir else None,
+            )
+        finally:
+            reset_range_expand_cap(token)
 
     def _run_loaded(
         self,
@@ -170,7 +178,9 @@ class Pipeline:
 
             def parse_and_count():
                 parse_workbook(ensure_xlsx(book, self.converter), book)
-                counted = assess_raw(book, usage_box[0] or book_usage())
+                counted = assess_raw(
+                    book, usage_box[0] or book_usage(), settings=self.settings
+                )
                 parse_profile["cells"] = counted.cells
                 parse_profile["formulas"] = counted.formulas
                 parse_profile["estimate_bytes"] = counted.estimate_bytes
@@ -184,12 +194,14 @@ class Pipeline:
         if not ir_is_current(book):
             budget = budget_for_settings(self.settings)
             if estimate is None:
-                estimate = assess_raw(book, book_usage())
+                estimate = assess_raw(book, book_usage(), settings=self.settings)
             check_budget(
                 formulas=estimate.formulas,
                 expanded_cells=estimate.expanded_cells,
+                present_cells=estimate.present_cells,
                 budget=budget,
                 source="preflight",
+                settings=self.settings,
             )
             profile: dict[str, int] = {
                 "cells": estimate.cells,
@@ -201,7 +213,10 @@ class Pipeline:
 
             def compile_and_count():
                 compiled_book = compile_workbook(
-                    book, memory_budget=budget, usage=book_usage()
+                    book,
+                    memory_budget=budget,
+                    usage=book_usage(),
+                    settings=self.settings,
                 )
                 profile["cells"] = len(compiled_book.cells)
                 profile["edges"] = len(compiled_book.edges)
@@ -324,8 +339,8 @@ def run_job_process(
     data_dir: str, job_id: str, generation: int = 0, session_id: str = "local"
 ) -> None:
     """Entry point for a spawned interpreter. Runs one book on this process's main thread."""
-    prefer_oom_kill()
     settings = Settings(data_dir=Path(data_dir), session_id=session_id)
+    prefer_oom_kill(score=settings.job_oom_score_adj)
     configure_logging(level=settings.log_level, json_output=settings.log_json)
     _install_stage_pause()
     dest = session_job_dir(settings.data_dir, job_id, settings.session_id)

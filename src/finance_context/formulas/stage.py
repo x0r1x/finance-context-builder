@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, parse_addr
-from finance_context.formulas.csr import expand_cell_edges, expanded_edge_count
+from finance_context.formulas.csr import (
+    SheetUsage,
+    expand_cell_edges,
+    expanded_edge_count,
+    present_cell_count,
+)
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
 from finance_context.formulas.models import (
     CompileResult,
@@ -16,6 +21,7 @@ from finance_context.formulas.models import (
 )
 from finance_context.formulas.names import resolve_defined_name_edges
 from finance_context.memory import check_budget, usage_for_book
+from finance_context.settings import Settings
 from finance_context.store.fs import read_parquet, write_json, write_parquet
 
 COMPILE_FILES = ("cells.parquet", "edges.parquet", "cell_edges.parquet")
@@ -75,7 +81,11 @@ def canonical_node_id(sheet: str, addr: str) -> str:
 
 
 def compile_workbook(
-    dest_dir: Path, *, memory_budget: int | None = None, usage: object | None = None
+    dest_dir: Path,
+    *,
+    memory_budget: int | None = None,
+    usage: object | None = None,
+    settings: object | None = None,
 ) -> CompileResult:
     meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
@@ -125,11 +135,15 @@ def compile_workbook(
     presence = _presence_index(dest_dir)
     if usage is None:
         usage = usage_for_book(dest_dir)
+    chosen = settings if isinstance(settings, Settings) else Settings()
+    present = present_cell_count(usage) if isinstance(usage, SheetUsage) else 0
     check_budget(
         formulas=formula_count,
         expanded_cells=expanded_edge_count(edges, usage=usage),
+        present_cells=present,
         budget=memory_budget,
         source="compile",
+        settings=chosen,
     )
     cell_edges = expand_cell_edges(
         edges, known, known_sheets=sheets, presence=presence, usage=usage

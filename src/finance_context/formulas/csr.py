@@ -3,13 +3,15 @@ from __future__ import annotations
 import bisect
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 from finance_context.excel.a1 import col_to_index, format_addr, index_to_col
 from finance_context.formulas.models import Edge
+from finance_context.settings import DEFAULT_RANGE_EXPAND_CAP
 
-RANGE_EXPAND_CAP = 2000
+_RANGE_CAP: ContextVar[int | None] = ContextVar("finance_range_expand_cap", default=None)
 _EXCEL_MAX_ROW = 1_048_576
 _EXCEL_MAX_COL = 16_384
 
@@ -77,6 +79,25 @@ class SheetUsage:
 
     def sheet_name(self, sheet: str) -> str:
         return self.canonical.get(sheet.casefold(), sheet)
+
+
+def bind_range_expand_cap(cap: int) -> Token[int | None]:
+    """Use this job's ``RANGE_EXPAND_CAP`` until the token is reset."""
+    return _RANGE_CAP.set(cap)
+
+
+def reset_range_expand_cap(token: Token[int | None]) -> None:
+    _RANGE_CAP.reset(token)
+
+
+def active_range_cap() -> int:
+    bound = _RANGE_CAP.get()
+    return DEFAULT_RANGE_EXPAND_CAP if bound is None else bound
+
+
+def present_cell_count(usage: SheetUsage) -> int:
+    """Present cells already indexed on ``usage``. No parquet read."""
+    return sum(len(rows) for columns in usage.rows_by_col.values() for rows in columns.values())
 
 
 def sheet_usage(nodes: Iterable[str]) -> SheetUsage:
@@ -181,9 +202,10 @@ def _present_pairs(
 
 
 def expansion_count(
-    target: str, cap: int = RANGE_EXPAND_CAP, usage: SheetUsage | None = None
+    target: str, cap: int | None = None, usage: SheetUsage | None = None
 ) -> int:
     """How many cells expand_range would emit. A whole column is not materialised."""
+    cap = active_range_cap() if cap is None else cap
     try:
         sheet, body = split_sheet_ref(target)
     except ValueError:
@@ -219,7 +241,7 @@ def expanded_edge_count(edges: list[Edge], usage: SheetUsage | None = None) -> i
 
 
 def expand_range(
-    target: str, cap: int = RANGE_EXPAND_CAP, usage: SheetUsage | None = None
+    target: str, cap: int | None = None, usage: SheetUsage | None = None
 ) -> tuple[list[str], bool]:
     """Expand a range.
 
@@ -228,6 +250,7 @@ def expand_range(
     truncated, including the holes inside that prefix. Without `usage`, the cap
     is the same safety bound. Sheet names resolve to the workbook spelling.
     """
+    cap = active_range_cap() if cap is None else cap
     sheet, body = split_sheet_ref(target)
     if usage is not None:
         sheet = usage.sheet_name(sheet)

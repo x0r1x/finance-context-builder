@@ -10,7 +10,6 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from finance_context.excel import parse_workbook
 from finance_context.formulas import compile_workbook
 from finance_context.formulas.csr import (
-    RANGE_EXPAND_CAP,
     expand_cell_edges,
     expand_range,
     expansion_count,
@@ -19,6 +18,7 @@ from finance_context.formulas.csr import (
 from finance_context.formulas.models import Edge
 from finance_context.layout.adjacency import row_adjacency
 from finance_context.memory import assess_raw
+from finance_context.settings import DEFAULT_RANGE_EXPAND_CAP as RANGE_EXPAND_CAP
 
 
 def _used(rows: int = 30) -> object:

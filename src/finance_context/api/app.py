@@ -37,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_id=settings.session_id,
         memory_budget_bytes=budget_for_settings(settings),
         unusable_detail=unusable_cap_detail(settings),
+        watch_interval_sec=settings.job_memory_watch_interval_sec,
     )
 
     @asynccontextmanager

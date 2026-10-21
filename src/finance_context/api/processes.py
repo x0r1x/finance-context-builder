@@ -15,7 +15,6 @@ from finance_context.observability import log_event
 from finance_context.store.paths import LOCAL_SESSION, session_job_dir
 
 _LOGGER = logging.getLogger("finance_context.processes")
-_RSS_POLL_SEC = 0.2
 
 _TERMINAL = {"succeeded", "degraded", "needs_input", "failed"}
 
@@ -56,6 +55,7 @@ class JobProcesses:
         session_id: str = LOCAL_SESSION,
         memory_budget_bytes: int | None = None,
         unusable_detail: str | None = None,
+        watch_interval_sec: float = 0.2,
     ) -> None:
         self._data_dir = str(data_dir)
         self._session_id = session_id or LOCAL_SESSION
@@ -66,6 +66,7 @@ class JobProcesses:
             memory_budget_bytes if memory_budget_bytes and memory_budget_bytes > 0 else None
         )
         self._unusable_detail = unusable_detail
+        self._watch_interval = watch_interval_sec if watch_interval_sec > 0 else 0.2
         self._procs: dict[str, multiprocessing.Process] = {}
         self._generations: dict[str, int] = {}
         self._closed: set[tuple[str, int]] = set()
@@ -215,12 +216,12 @@ class JobProcesses:
             deadline = time.monotonic() + self._timeout
         while True:
             if deadline is None:
-                slice_s = _RSS_POLL_SEC
+                slice_s = self._watch_interval
             else:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return True, False, 0
-                slice_s = min(_RSS_POLL_SEC, remaining)
+                slice_s = min(self._watch_interval, remaining)
             if wait_for_exit([proc.sentinel], slice_s):
                 proc.join()
                 return False, False, 0

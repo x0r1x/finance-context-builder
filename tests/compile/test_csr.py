@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from finance_context.formulas.csr import RANGE_EXPAND_CAP, expand_cell_edges
+from finance_context.formulas.csr import expand_cell_edges
 from finance_context.formulas.models import Edge
+from finance_context.settings import DEFAULT_RANGE_EXPAND_CAP as RANGE_EXPAND_CAP
 
 
 def test_range_expansion_caps_at_2000_and_sets_truncated() -> None:

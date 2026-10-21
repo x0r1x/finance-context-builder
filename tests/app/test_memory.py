@@ -7,19 +7,16 @@ import multiprocessing
 import os
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context import memory
 from finance_context.app.pipeline import _timed, run_job_process
 from finance_context.errors import ContextError
 from finance_context.excel import parse_workbook
-from finance_context.formulas.csr import RANGE_EXPAND_CAP, expand_range, expansion_count
+from finance_context.formulas.csr import expand_range, expansion_count
 from finance_context.memory import (
-    BYTES_PER_EXPANDED_CELL,
-    BYTES_PER_FORMULA,
-    DEFAULT_JOB_BUDGET_BYTES,
-    ESTIMATE_BASE_BYTES,
-    JOB_MEMORY_FLOOR_BYTES,
     assess_raw,
     cgroup_memory_limit_bytes,
     check_budget,
@@ -30,7 +27,16 @@ from finance_context.memory import (
     unusable_cap_detail,
 )
 from finance_context.observability import JsonFormatter
-from finance_context.settings import Settings
+from finance_context.settings import (
+    DEFAULT_ESTIMATE_BASE_BYTES,
+    DEFAULT_ESTIMATE_BYTES_PER_EXPANDED_CELL,
+    DEFAULT_ESTIMATE_BYTES_PER_FORMULA,
+    DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL,
+    DEFAULT_MEMORY_BUDGET_BYTES,
+    DEFAULT_MEMORY_FLOOR_BYTES,
+    DEFAULT_RANGE_EXPAND_CAP,
+    Settings,
+)
 from finance_context.store.paths import session_job_dir, shared_book_dir
 
 
@@ -44,23 +50,25 @@ def test_expansion_count_matches_expand_range_including_the_cap() -> None:
     wide = "Sheet1!B1:B2500"
     cells, truncated = expand_range(wide)
     assert truncated is True
-    assert len(cells) == RANGE_EXPAND_CAP
-    assert expansion_count(wide) == RANGE_EXPAND_CAP
-    assert expansion_count("Data!$A:$A") == RANGE_EXPAND_CAP
-    assert expansion_count("Data!1:1") == RANGE_EXPAND_CAP
+    assert len(cells) == DEFAULT_RANGE_EXPAND_CAP
+    assert expansion_count(wide) == DEFAULT_RANGE_EXPAND_CAP
+    assert expansion_count("Data!$A:$A") == DEFAULT_RANGE_EXPAND_CAP
+    assert expansion_count("Data!1:1") == DEFAULT_RANGE_EXPAND_CAP
 
 
 def test_formula_targets_count_whole_columns_and_skip_strings() -> None:
     formula = '=SUMIF(Data!$A:$A,$A2,Data!C:C)&"A1:A9"'
     targets = formula_targets(formula, "Report")
     assert targets == ["Data!$A:$A", "Report!$A2", "Data!C:C"]
-    assert sum(expansion_count(target) for target in targets) == RANGE_EXPAND_CAP * 2 + 1
+    assert sum(expansion_count(target) for target in targets) == DEFAULT_RANGE_EXPAND_CAP * 2 + 1
     assert formula_targets("=SUM(A1 : A5000)", "Report") == ["Report!A1:A5000"]
 
 
 def test_budget_reserves_a_quarter_and_splits_the_rest() -> None:
     limit = 4_000_000_000
-    budget = resolve_job_budget_bytes(slots=2, limit_bytes=limit, read_cgroup=False)
+    budget = resolve_job_budget_bytes(
+        slots=2, limit_bytes=limit, read_cgroup=False, reserve_fraction=0.25
+    )
     assert budget == (limit - limit // 4) // 2
 
 
@@ -70,12 +78,18 @@ def test_budget_override_is_the_per_job_cap() -> None:
         override=1234,
         limit_bytes=4_000_000_000,
         read_cgroup=False,
+        reserve_fraction=0.25,
     )
     assert budget == 1234
 
 
 def test_unlimited_cgroup_has_no_budget() -> None:
-    assert resolve_job_budget_bytes(slots=2, limit_bytes=None, read_cgroup=False) is None
+    assert (
+        resolve_job_budget_bytes(
+            slots=2, limit_bytes=None, read_cgroup=False, reserve_fraction=0.25
+        )
+        is None
+    )
 
 
 def test_budget_below_the_child_baseline_is_not_raised(monkeypatch, caplog) -> None:
@@ -96,7 +110,7 @@ def test_budget_below_the_child_baseline_is_not_raised(monkeypatch, caplog) -> N
     monkeypatch.setattr(memory, "cgroup_memory_limit_bytes", lambda *_a, **_k: 256 * 1024 * 1024)
     derived = Settings(_env_file=None, max_concurrent_jobs=2, job_memory_budget_bytes=None)
     share = (256 * 1024 * 1024 - (256 * 1024 * 1024) // 4) // 2
-    assert share < JOB_MEMORY_FLOOR_BYTES
+    assert share < DEFAULT_MEMORY_FLOOR_BYTES
     assert memory.budget_for_settings(derived) == share
     assert unusable_cap_detail(derived) is None
 
@@ -107,12 +121,12 @@ def test_unlimited_cgroup_uses_the_default_budget(monkeypatch, caplog) -> None:
     monkeypatch.setattr(memory, "cgroup_memory_limit_bytes", lambda *_args, **_kwargs: None)
     caplog.set_level(logging.WARNING, logger="finance_context.pipeline")
     settings = Settings(_env_file=None, max_concurrent_jobs=2)
-    assert memory.budget_for_settings(settings) == DEFAULT_JOB_BUDGET_BYTES
-    assert memory.budget_for_settings(settings) == DEFAULT_JOB_BUDGET_BYTES
+    assert memory.budget_for_settings(settings) == DEFAULT_MEMORY_BUDGET_BYTES
+    assert memory.budget_for_settings(settings) == DEFAULT_MEMORY_BUDGET_BYTES
     warnings = [record for record in caplog.records if record.event == "memory_budget_default"]
     assert len(warnings) == 1
-    assert warnings[0].budget_bytes == DEFAULT_JOB_BUDGET_BYTES
-    assert DEFAULT_JOB_BUDGET_BYTES == (4 * 1024**3 - (4 * 1024**3) // 4) // 2
+    assert warnings[0].budget_bytes == DEFAULT_MEMORY_BUDGET_BYTES
+    assert DEFAULT_MEMORY_BUDGET_BYTES == (4 * 1024**3 - (4 * 1024**3) // 4) // 2
 
 
 def test_settings_blank_budget_derives(monkeypatch) -> None:
@@ -144,10 +158,18 @@ def test_cgroup_v1_ignores_the_unlimited_sentinel(tmp_path: Path) -> None:
     assert cgroup_memory_limit_bytes(proc, sysfs) == 4000
 
 
-def test_estimate_is_linear_in_formulas_and_expanded_cells() -> None:
-    assert estimate_bytes(formulas=2, expanded_cells=3) == (
-        ESTIMATE_BASE_BYTES + 2 * BYTES_PER_FORMULA + 3 * BYTES_PER_EXPANDED_CELL
+def test_estimate_is_linear_in_formulas_expanded_cells_and_present_cells() -> None:
+    settings = Settings(_env_file=None)
+    assert estimate_bytes(formulas=2, expanded_cells=3, present_cells=4, settings=settings) == (
+        DEFAULT_ESTIMATE_BASE_BYTES
+        + 2 * DEFAULT_ESTIMATE_BYTES_PER_FORMULA
+        + 3 * DEFAULT_ESTIMATE_BYTES_PER_EXPANDED_CELL
+        + 4 * DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL
     )
+    assert settings.job_estimate_base_bytes == 132 * 1024 * 1024
+    assert settings.job_estimate_bytes_per_formula == 3840
+    assert settings.job_estimate_bytes_per_expanded_cell == 960
+    assert settings.job_estimate_bytes_per_present_cell == 960
 
 
 def test_stage_done_carries_rss_counts_and_budget() -> None:
@@ -184,7 +206,14 @@ def test_stage_done_carries_rss_counts_and_budget() -> None:
 
 def test_check_budget_refuses_with_a_human_message() -> None:
     try:
-        check_budget(formulas=10, expanded_cells=10, budget=1, source="preflight")
+        check_budget(
+            formulas=10,
+            expanded_cells=10,
+            present_cells=10,
+            budget=1,
+            source="preflight",
+            settings=Settings(_env_file=None),
+        )
     except ContextError as exc:
         assert exc.code == "workbook_too_large"
         assert "too large" in exc.detail
@@ -235,9 +264,8 @@ def test_run_job_process_refuses_over_budget_without_a_traceback(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     # The floor lifts a 1-byte cap, so the refusal has to sit above that floor.
-    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", str(JOB_MEMORY_FLOOR_BYTES))
-    monkeypatch.setattr(memory, "BYTES_PER_FORMULA", JOB_MEMORY_FLOOR_BYTES)
-    monkeypatch.setattr(memory, "BYTES_PER_EXPANDED_CELL", JOB_MEMORY_FLOOR_BYTES)
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", str(256 * 1024 * 1024))
+    monkeypatch.setenv("JOB_ESTIMATE_BYTES_PER_FORMULA", str(512 * 1024 * 1024))
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("LOG_JSON", "true")
     job_id = "job"
@@ -366,5 +394,145 @@ def test_assess_raw_counts_formulas(tmp_path: Path, dest: Path) -> None:
     assert estimate.formulas == 1
     assert estimate.expanded_cells >= 1
     assert estimate.estimate_bytes == estimate_bytes(
-        formulas=estimate.formulas, expanded_cells=estimate.expanded_cells
+        formulas=estimate.formulas,
+        expanded_cells=estimate.expanded_cells,
+        present_cells=estimate.present_cells,
+        settings=Settings(_env_file=None),
     )
+
+
+def test_env_overrides_estimate_budget_and_refusal(monkeypatch) -> None:
+    monkeypatch.setenv("JOB_ESTIMATE_BASE_BYTES", "1000")
+    monkeypatch.setenv("JOB_ESTIMATE_BYTES_PER_FORMULA", "10")
+    monkeypatch.setenv("JOB_ESTIMATE_BYTES_PER_EXPANDED_CELL", "3")
+    monkeypatch.setenv("JOB_ESTIMATE_BYTES_PER_PRESENT_CELL", "7")
+    monkeypatch.setenv("JOB_MEMORY_API_RESERVE_FRACTION", "0.5")
+    monkeypatch.setenv("JOB_MEMORY_DEFAULT_BUDGET_BYTES", "4096")
+    monkeypatch.setenv("JOB_MEMORY_PREFLIGHT_REFUSAL", "false")
+    monkeypatch.setattr(memory, "cgroup_memory_limit_bytes", lambda *_args, **_kwargs: None)
+    memory._budget_warnings.clear()
+    settings = Settings(_env_file=None)
+    assert estimate_bytes(
+        formulas=2, expanded_cells=4, present_cells=5, settings=settings
+    ) == 1000 + 20 + 12 + 35
+    assert memory.budget_for_settings(settings) == 4096
+    assert (
+        resolve_job_budget_bytes(
+            slots=2,
+            limit_bytes=1000,
+            read_cgroup=False,
+            reserve_fraction=settings.job_memory_api_reserve_fraction,
+        )
+        == 250
+    )
+    check_budget(
+        formulas=2,
+        expanded_cells=4,
+        present_cells=5,
+        budget=1,
+        source="preflight",
+        settings=settings,
+    )
+
+
+def test_bad_memory_settings_name_the_variable(monkeypatch) -> None:
+    monkeypatch.setenv("JOB_MEMORY_API_RESERVE_FRACTION", "1")
+    with pytest.raises(ValidationError, match="JOB_MEMORY_API_RESERVE_FRACTION"):
+        Settings(_env_file=None)
+    monkeypatch.setenv("JOB_MEMORY_API_RESERVE_FRACTION", "0.25")
+    monkeypatch.setenv("JOB_ESTIMATE_BASE_BYTES", "0")
+    with pytest.raises(ValidationError, match="JOB_ESTIMATE_BASE_BYTES"):
+        Settings(_env_file=None)
+    monkeypatch.setenv("JOB_ESTIMATE_BASE_BYTES", str(DEFAULT_ESTIMATE_BASE_BYTES))
+    monkeypatch.setenv("JOB_OOM_SCORE_ADJ", "1001")
+    with pytest.raises(ValidationError, match="JOB_OOM_SCORE_ADJ"):
+        Settings(_env_file=None)
+    monkeypatch.setenv("JOB_OOM_SCORE_ADJ", "1000")
+    monkeypatch.setenv("JOB_MEMORY_WATCH_INTERVAL_SEC", "0")
+    with pytest.raises(ValidationError, match="JOB_MEMORY_WATCH_INTERVAL_SEC"):
+        Settings(_env_file=None)
+
+
+def test_effective_memory_settings_are_logged_once(monkeypatch, caplog) -> None:
+    memory._logged_effective = False
+    memory._budget_warnings.clear()
+    monkeypatch.setattr(memory, "cgroup_memory_limit_bytes", lambda *_args, **_kwargs: None)
+    caplog.set_level(logging.DEBUG, logger="finance_context.pipeline")
+    settings = Settings(_env_file=None)
+    memory.budget_for_settings(settings)
+    memory.budget_for_settings(settings)
+    rows = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "effective memory settings"
+    ]
+    assert len(rows) == 1
+    assert rows[0].event == "memory_budget"
+    assert rows[0].estimate_base_bytes == DEFAULT_ESTIMATE_BASE_BYTES
+    assert rows[0].bytes_per_formula == DEFAULT_ESTIMATE_BYTES_PER_FORMULA
+    assert rows[0].bytes_per_present_cell == DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL
+    assert rows[0].range_expand_cap == DEFAULT_RANGE_EXPAND_CAP
+    assert rows[0].preflight_refusal is True
+    assert rows[0].budget_bytes == DEFAULT_MEMORY_BUDGET_BYTES
+
+
+def test_preflight_switch_off_lets_the_child_finish(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("JOB_MEMORY_PREFLIGHT_REFUSAL", "false")
+    monkeypatch.setenv("JOB_ESTIMATE_BYTES_PER_FORMULA", str(2 * 1024**3))
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", str(8 * 1024**3))
+    job_id = "job"
+    shared = shared_book_dir(tmp_path, job_id)
+    shared.mkdir(parents=True)
+    _book(shared / "source.xlsx")
+    previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
+    try:
+        run_job_process(str(tmp_path), job_id)
+    finally:
+        Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
+    meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["status"] == "succeeded"
+
+
+def test_range_cap_env_truncates_in_the_child(tmp_path: Path, monkeypatch) -> None:
+    from finance_context.store.fs import read_parquet
+
+    monkeypatch.setenv("RANGE_EXPAND_CAP", "3")
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", str(8 * 1024**3))
+    job_id = "cap"
+    shared = shared_book_dir(tmp_path, job_id)
+    shared.mkdir(parents=True)
+    build_xlsx(
+        shared / "source.xlsx",
+        sheets=[
+            SheetSpec(
+                name="Data",
+                cells=[
+                    *[CellSpec(addr=f"A{row}", value="1") for row in range(1, 11)],
+                    CellSpec(addr="B1", value="1", formula="=SUM(A1:A10)"),
+                ],
+            )
+        ],
+    )
+    previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
+    try:
+        run_job_process(str(tmp_path), job_id)
+    finally:
+        Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
+    edges = read_parquet(shared / "ir" / "cell_edges.parquet")
+    assert len(edges) == 3
+    assert all(edge["truncated"] for edge in edges)
+
+
+def _score_from_env() -> None:
+    prefer_oom_kill()
+    score = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8").strip()
+    if score != os.environ["JOB_OOM_SCORE_ADJ"]:
+        raise SystemExit(score or "empty")
+
+
+def test_oom_score_env_reaches_a_spawned_child(monkeypatch) -> None:
+    monkeypatch.setenv("JOB_OOM_SCORE_ADJ", "17")
+    proc = multiprocessing.get_context("spawn").Process(target=_score_from_env)
+    proc.start()
+    proc.join(10)
+    assert proc.exitcode == 0
