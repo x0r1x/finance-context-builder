@@ -738,8 +738,9 @@ def _column_roles(
     for col, count in numeric_counts.items():
         if count < _MIN_VALUE_ROWS or col in roles:
             continue
-        # Formula text in a label column is the row name, not a value.
-        if hinted.get(col) == "label":
+        # A label hint is the stub. A note or unit hint keeps a mixed column.
+        # Numbers with no other body text are already ``value`` from content.
+        if hinted.get(col) in {"label", "note", "unit"}:
             continue
         # Cached numbers the content pass did not take. Text formulas stay out.
         if _period_like_caption(by_row, col, date1904):

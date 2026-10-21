@@ -1175,3 +1175,44 @@ def test_numeric_formula_cache_stays_value_under_a_note_header() -> None:
     )
     assert built["headers"]["Примечание"].role == "value"
     assert built["headers"]["Значение"].role == "value"
+
+
+def test_mixed_numbers_under_a_note_header_stay_note() -> None:
+    """Three numbers among short text are not a value column when the header is a note."""
+    shorts = ("aa", "bb", "cc", "dd", "ee", "ff", "gg")
+    body = [
+        (f"row{i}", str(i + 1) if i < 3 else shorts[i - 3], "10") for i in range(10)
+    ]
+    built = _params_rows(["Параметр", "Примечание", "Значение"], body)
+    assert built["headers"]["Примечание"].role == "note"
+    assert built["headers"]["Значение"].role == "value"
+
+
+def test_mixed_numbers_under_a_unit_header_stay_unit() -> None:
+    """A unit header keeps a mixed column that is not mostly numbers."""
+    shorts = ("aa", "bb", "cc", "dd", "ee", "ff", "gg")
+    body = [
+        (f"row{i}", str(i + 1) if i < 3 else shorts[i - 3], "10") for i in range(10)
+    ]
+    built = _params_rows(["Параметр", "Ед. изм.", "Значение"], body)
+    assert built["headers"]["Ед. изм."].role == "unit"
+
+
+def test_sparse_numbers_under_a_note_header_stay_value() -> None:
+    """Three numbers and no other body text are a value column even under a note header."""
+    built = _params_rows(
+        ["Параметр", "Примечание", "Значение"],
+        [("Цена", "12", "1"), ("Доля", "4", "2"), ("Ставка", "2", "3")],
+    )
+    assert built["headers"]["Примечание"].role == "value"
+
+
+def test_mixed_numbers_without_a_header_word_stay_value() -> None:
+    """A mixed column with no header word stays a value series, as on main."""
+    shorts = ("aa", "bb", "cc", "dd", "ee", "ff", "gg")
+    body = [
+        (f"row{i}", str(i + 1) if i < 3 else shorts[i - 3], "10") for i in range(10)
+    ]
+    built = _params_rows(["Параметр", "Поле", "Значение"], body)
+    assert built["headers"]["Поле"].role == "value"
+    assert built["headers"]["Поле"].period_key == "поле"
