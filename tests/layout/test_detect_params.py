@@ -1,15 +1,28 @@
 from __future__ import annotations
 
-import re
-
 import pytest
 
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 
 
+def _expected_slug(text: str) -> str:
+    """Casefolded header slug. Unicode letters stay; nothing is transliterated."""
+    parts: list[str] = []
+    token: list[str] = []
+    for char in text.casefold():
+        if char.isalpha() or "0" <= char <= "9":
+            token.append(char)
+        elif token:
+            parts.append("".join(token))
+            token = []
+    if token:
+        parts.append("".join(token))
+    return "-".join(parts)
+
+
 def _value_key(text: str, _col: int) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")
+    slug = _expected_slug(text)
     if not slug or not any(char.isalpha() for char in slug):
         return "value"
     return slug
@@ -357,8 +370,21 @@ def test_case_names_are_value_columns_with_their_own_keys(heads: list[str]) -> N
     ]
 
 
-def test_a_digit_only_slug_does_not_split_shared_value_columns() -> None:
-    """Long captions whose letters do not survive the slug keep the key ``value``."""
+def test_cyrillic_headers_in_one_block_get_distinct_keys() -> None:
+    """Letters stay in the slug. ``ё`` is not folded into ``е``."""
+    heads = ["Параметр", "Базовый", "Стресс", "Ёлка", "Елка"]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCDE", heads, strict=True)]
+    for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells.append(_c("Cases", f"A{row}", label))
+        for col, amount in zip("BCDE", ["10", "11", "12", "13"], strict=True):
+            cells.append(_c("Cases", f"{col}{row}", amount))
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [header.role for header in headers] == ["value", "value", "value", "value"]
+    assert [header.text for header in headers] == heads[1:]
+    assert [header.period_key for header in headers] == ["базовый", "стресс", "ёлка", "елка"]
+
+
+def test_cyrillic_headers_keep_letters_and_digits_in_the_key() -> None:
     heads = [
         "Параметр",
         "альфа бета гамма 11112222",
@@ -372,11 +398,34 @@ def test_a_digit_only_slug_does_not_split_shared_value_columns() -> None:
             _c("Cases", f"C{row}", "11"),
         ]
     headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
-    assert [(header.role, header.period_key) for header in headers] == [
-        ("value", "value"),
-        ("value", "value"),
-    ]
+    assert [header.role for header in headers] == ["value", "value"]
     assert [header.text for header in headers] == heads[1:]
+    assert [header.period_key for header in headers] == [
+        "альфа-бета-гамма-11112222",
+        "дельта-эпсилон-зета-33334444",
+    ]
+
+
+def test_digit_only_headers_do_not_become_the_key() -> None:
+    """A header with no letter is not a name, so the digits are not the key."""
+    from finance_context.layout.params import _header_slug
+
+    assert _header_slug("11112222") == ""
+    assert _header_slug("33334444") == ""
+    assert _header_slug("---") == ""
+    heads = ["Параметр", "11112222", "33334444"]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABC", heads, strict=True)]
+    for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells += [
+            _c("Cases", f"A{row}", label),
+            _c("Cases", f"B{row}", "10"),
+            _c("Cases", f"C{row}", "11"),
+        ]
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [header.role for header in headers] == ["value", "value"]
+    assert [header.period_key for header in headers] == ["value", "value"]
+    assert "11112222" not in {header.period_key for header in headers}
+    assert "33334444" not in {header.period_key for header in headers}
 
 
 def test_case_run_name_comes_from_the_row_label() -> None:
@@ -421,7 +470,7 @@ def test_case_run_with_a_cyrillic_label_does_not_use_the_cell_digit() -> None:
     case = next(block for block in blocks if block.kind == "params")
     headers = case.axis.headers
     assert [header.text for header in headers] == ["Кейс 1", "Кейс 2", "Кейс 3"]
-    assert [header.period_key for header in headers] == ["value-b", "value-c", "value-d"]
+    assert [header.period_key for header in headers] == ["кейс-1", "кейс-2", "кейс-3"]
 
 
 def test_a_value_caption_keeps_the_value_key_beside_case_columns() -> None:

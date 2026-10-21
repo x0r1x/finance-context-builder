@@ -975,9 +975,10 @@ def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
 
     A header the closed list already calls a value (``Значение``, ``Value``)
     keeps ``value``. Any other header takes a slug of its own text, so ``Base``
-    and ``Upside`` do not collapse onto one observation. A slug with no letter
-    is not a name (digits left after the words are not the header), so the
-    column keeps ``value``. A repeated name becomes ``value-<column>``.
+    and ``Upside``, and ``Базовый`` and ``Стресс``, do not collapse onto one
+    observation. The slug keeps Unicode letters and does not transliterate.
+    A slug with no letter is not a name, so that column keeps ``value``.
+    A repeated name becomes ``value-<column>``.
     """
     if sum(1 for header in headers if header.role == "value") < 2:
         return headers
@@ -1002,11 +1003,22 @@ def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
 
 
 def _slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")
+    """Casefolded header slug. Unicode letters stay; nothing is transliterated."""
+    parts: list[str] = []
+    token: list[str] = []
+    for char in text.casefold():
+        if char.isalpha() or "0" <= char <= "9":
+            token.append(char)
+        elif token:
+            parts.append("".join(token))
+            token = []
+    if token:
+        parts.append("".join(token))
+    return "-".join(parts)
 
 
 def _header_slug(text: str) -> str:
-    """Slug of a header name. Digits with no letter are not a name."""
+    """Slug of a header name. A slug with no letter is not a name."""
     slug = _slug(text)
     if not any(char.isalpha() for char in slug):
         return ""
