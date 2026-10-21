@@ -205,6 +205,70 @@ def test_bare_fact_column_stays_unknown() -> None:
     assert _keys(cells) == ["2024", "2025"]
 
 
+def test_total_word_with_a_sum_formula_is_a_total_column() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Итого"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "30", formula="=SUM(B2:C2)"),
+    ]
+    assert _keys(cells) == ["2023", "2024", "total"]
+
+
+def test_total_word_alone_is_not_a_period() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Итого"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "99"),
+        _cell("A3", "Cost"),
+        _cell("B3", "1"),
+        _cell("C3", "2"),
+        _cell("D3", "5"),
+    ]
+    assert _keys(cells) == ["2023", "2024"]
+
+
+def test_sum_of_the_periods_is_a_total_without_the_word() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Check"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "30", formula="=SUM(B2:C2)"),
+        _cell("A3", "Cost"),
+        _cell("B3", "1"),
+        _cell("C3", "2"),
+        _cell("D3", "3", formula="=SUM(B3:C3)"),
+    ]
+    assert _keys(cells) == ["2023", "2024", "total"]
+
+
+def test_hinted_total_accepts_one_matching_row() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Total"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "30"),
+    ]
+    assert _keys(cells) == ["2023", "2024", "total"]
+
+
 def test_unresolved_tail_and_banner_leave_plain_keys_and_warn() -> None:
     cells = _sheet(
         ["2024 факт", "2024 план"],

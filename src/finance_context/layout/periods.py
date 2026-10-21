@@ -237,8 +237,6 @@ def classify_header(text: str | None) -> PeriodHit | None:
 def _classify(token: str | None, raw: str) -> PeriodHit | None:
     """``classify_header`` of a normalized header. ``token`` keys the lexicon."""
     del token
-    if _listed(raw, "structural", "total"):
-        return PeriodHit(kind="total", period_key="total", explicit_role=True)
     if _listed(raw, "structural", "stub"):
         return PeriodHit(kind="stub", period_key="stub", explicit_role=True)
     if is_scenario_caption(raw):

@@ -16,7 +16,6 @@ dependencies = [
     "scipy>=1.13",
     "typer>=0.16",
     "uvicorn>=0.32",
-    "snowballstemmer>=3.1.1",
     "xlrd>=2.0.2",
 ]
 

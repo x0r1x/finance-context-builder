@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from finance_context.layout.lexicon import is_total_word
 from finance_context.layout.periods import (
     apply_grain,
     classify_atom,
@@ -79,9 +80,10 @@ def test_bare_fact_and_plan_are_not_periods() -> None:
     assert classify_header("План") is None
 
 
-def test_scenario_and_total_and_stub() -> None:
+def test_scenario_and_total_hint_and_stub() -> None:
     assert classify_header("Upside").kind == "scenario"  # type: ignore[union-attr]
-    assert classify_header("Итого").kind == "total"  # type: ignore[union-attr]
+    assert classify_header("Итого") is None
+    assert is_total_word("Итого")
     assert classify_header("stub").kind == "stub"  # type: ignore[union-attr]
 
 

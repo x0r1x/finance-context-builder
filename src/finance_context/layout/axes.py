@@ -41,6 +41,7 @@ from finance_context.layout.rows import (
     _row_layers,
     _year_banner_by_column,
 )
+from finance_context.layout.totals import apply_total_columns
 
 _FLAG_LABEL = re.compile(
     r"\b(flag|flags|construction|ops|operating|online|toggle|switch|binary)\b",
@@ -661,7 +662,14 @@ def _axes_from_band(
             date1904=date1904,
             banner_row=min(band_rows) - 1,
         )
-        periods = disambiguate_period_keys(marked)
+        totaled = apply_total_columns(
+            marked,
+            header_row=header_row,
+            by_row=by_row,
+            date1904=date1904,
+            band_rows=band_rows,
+        )
+        periods = disambiguate_period_keys(totaled)
         axes.append(
             TimeAxis(
                 id=axis_id,

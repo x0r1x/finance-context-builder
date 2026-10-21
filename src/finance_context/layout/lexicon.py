@@ -1,46 +1,27 @@
-"""RU/EN words the layout reads: param headers, period words and units.
+"""Closed lists of format words. The parser does not stem and does not overlay.
 
-Fact and plan are not words here. A duplicate date is split by geometry in
-``markers.py``, and the suffix is the residual text.
-
-
-Words live in ``lexicon.json`` next to this module. A word matches whole. A longer
-word matches when its Snowball stem agrees with the entry, or when only a
-grammatical ending differs (``кварталу`` / ``квартал``). Words of at most three
-letters stay exact, so ``кв`` is not ``кВт`` and ``г`` is not ``график``.
-``stem_block`` lists collisions the stemmer must not accept (``кВт``, ``график``,
-``группа``, ``based``, ``stressed``, ``quarterly``).
-A trailing ``*`` is still read as a root, not as "any ending". A word with a space
-is a phrase (``end of``).
-
-``structural`` holds the patterns that used to be hardcoded: totals, stubs,
-scenario names, month names, quarter and month axis labels, period bounds, and
-scenario-table header words. The package file is validated on load.
-
-``FINANCE_CONTEXT_LEXICON`` may point at a JSON file with the same shape. Its
-lists are added to the package lists and its objects are merged. The publisher
-hashes that file into the layout stage, so an overlay restales layout.
+Calendar words, month names, totals, stubs, units-as-headers and the scenario
+lists that stage 3 still reads live here. A word matches whole. A longer word
+matches only when the extra part is one grammatical ending from ``_INFLECTIONS``.
+Words of at most three letters stay exact, so ``кв`` is not ``квота`` and ``г``
+is not ``график``. There is no stemmer and no user lexicon file.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
-from functools import cache, lru_cache
-from importlib import resources
-from pathlib import Path
-from typing import Any
+from functools import cache
 
-import snowballstemmer
-from pydantic import BaseModel, ConfigDict, ValidationError
-
-_RU = snowballstemmer.stemmer("russian")
-_EN = snowballstemmer.stemmer("english")
 _SHORT = 3
-# Stems do not depend on the lexicon. One workbook repeats the same few
-# thousand words, and a server keeps the cache across jobs.
-_STEM_CACHE = 1 << 16
+# Citation ending -> the other endings of that closed paradigm.
+# ``ый``/``ой`` are adjectives (``базовый`` / ``базовое``). ``ий`` and ``ие`` are
+# nouns (``сценарий`` / ``сценария``, ``полугодие`` / ``полугодия``).
+_PARADIGMS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("ый", frozenset({"ый", "ая", "ое", "ого", "ому", "ым", "ую", "ые", "ых", "ыми"})),
+    ("ой", frozenset({"ой", "ая", "ое", "ого", "ому", "ым", "ую", "ые", "ых", "ыми"})),
+    ("ий", frozenset({"ий", "ия", "ию", "ием", "ии", "иев", "иям", "иях", "иями"})),
+    ("ие", frozenset({"е", "я", "ю", "ем", "и"})),
+)
 _INFLECTIONS = frozenset(
     {
         "а",
@@ -71,200 +52,278 @@ _INFLECTIONS = frozenset(
     }
 )
 
+_HEADER_ROLES: dict[str, tuple[str, ...]] = {
+    "label": (
+        "parameter",
+        "parameters",
+        "item",
+        "check",
+        "assumption",
+        "assumptions",
+        "параметр",
+        "параметры",
+        "параметры проекта",
+        "показатель",
+        "показатели",
+        "статья",
+        "статья затрат",
+        "наименование",
+        "наименование показателя",
+        "допущение",
+        "допущения",
+        "предпосылка",
+        "предпосылки",
+        "проверка",
+        "исходные данные",
+    ),
+    "value": (
+        "value",
+        "values",
+        "active",
+        "result",
+        "chosen",
+        "значение",
+        "значения",
+        "значение руб",
+        "величина",
+        "результат",
+    ),
+    "unit": (
+        "unit",
+        "units",
+        "unit of measure",
+        "uom",
+        "ед",
+        "ед изм",
+        "ед измерения",
+        "единица",
+        "единицы",
+        "единица изм",
+        "единица измерения",
+        "единицы измерения",
+        "размерность",
+    ),
+    "note": (
+        "note",
+        "notes",
+        "comment",
+        "comments",
+        "comment s",
+        "source",
+        "sources",
+        "примечание",
+        "примечания",
+        "комментарий",
+        "комментарии",
+        "источник",
+        "описание",
+        "мероприятие",
+        "мероприятия",
+        "вывод",
+        "выводы",
+    ),
+}
 
-class _Structural(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    total: list[str]
-    stub: list[str]
-    scenario: list[str]
-    scenario_adjectives: list[str]
-    scenario_evidence: list[str]
-    scenario_header: list[str]
-    months: dict[str, list[str]]
-    quarter_label: list[str]
-    month_label: list[str]
-    period_start: list[str]
-    period_end: list[str]
+_PERIOD_WORDS: dict[str, tuple[str, ...]] = {
+    "quarter": ("кв", "квартал", "quarter"),
+    "half": ("полугодие", "half", "пол"),
+    "year": ("г", "гг", "год", "года", "году"),
+}
 
+_TOTAL_WORDS = ("итого", "всего", "total", "sum", "итог")
+_STUB_WORDS = ("stub", "частичный", "partial")
 
-class _LexiconModel(BaseModel):
-    """Package lexicon. An overlay may add keys; the package file may not."""
+_SCENARIO = (
+    "base",
+    "base case",
+    "upside",
+    "downside",
+    "stress",
+    "негативный",
+    "позитивный",
+    "сценарий",
+)
+_SCENARIO_ADJECTIVES = (
+    "базовый",
+    "пессимистичный",
+    "оптимистичный",
+    "негативный",
+    "позитивный",
+    "консервативный",
+    "стрессовый",
+)
+_SCENARIO_EVIDENCE = (
+    "базовый",
+    "консервативный",
+    "оптимистичный",
+    "пессимистичный",
+    "стрессовый",
+    "стресс",
+    "сценарий",
+    "base",
+    "upside",
+    "downside",
+    "case",
+    "scenario",
+    "stress",
+)
+_SCENARIO_HEADER = ("case", "scenario")
 
-    model_config = ConfigDict(extra="forbid")
-    header_roles: dict[str, list[str]]
-    period_words: dict[str, list[str]]
-    structural: _Structural
-    stem_block: dict[str, list[str]] = {}
+# Citation forms. ``month_numbers`` adds the closed set of case endings.
+_MONTH_CITATIONS: dict[str, tuple[str, ...]] = {
+    "1": ("jan", "january", "янв", "январь"),
+    "2": ("feb", "february", "фев", "февр", "февраль"),
+    "3": ("mar", "march", "мар", "март"),
+    "4": ("apr", "april", "апр", "апрель"),
+    "5": ("may", "май"),
+    "6": ("jun", "june", "июн", "июнь"),
+    "7": ("jul", "july", "июл", "июль"),
+    "8": ("aug", "august", "авг", "август"),
+    "9": ("sep", "sept", "september", "сен", "сент", "сентябрь"),
+    "10": ("oct", "october", "окт", "октябрь"),
+    "11": ("nov", "november", "ноя", "нояб", "ноябрь"),
+    "12": ("dec", "december", "дек", "декабрь"),
+}
 
+_QUARTER_LABEL = ("квартал", "квартальный", "quarter", "quarterly")
+_MONTH_LABEL = ("месяц", "month")
+_PERIOD_START = (
+    "начало периода",
+    "начала периода",
+    "start of period",
+    "period start",
+)
+_PERIOD_END = (
+    "конец периода",
+    "конца периода",
+    "end of period",
+    "period end",
+)
 
-def overlay_path() -> Path | None:
-    raw = os.environ.get("FINANCE_CONTEXT_LEXICON", "").strip()
-    if not raw:
-        return None
-    path = Path(raw)
-    return path if path.is_file() else None
+# Surfaces that sit beside a date and are not period words. The residual
+# peel rejects them. This is a closed list, not a stemmer block.
+_NOT_PERIOD = frozenset(
+    {
+        "квт",
+        "квота",
+        "квот",
+        "квм",
+        "квартира",
+        "график",
+        "группа",
+        "годовой",
+        "based",
+        "basement",
+        "stressed",
+        "quarterly",
+    }
+)
+
+_LISTS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("header_roles", "label"): _HEADER_ROLES["label"],
+    ("header_roles", "value"): _HEADER_ROLES["value"],
+    ("header_roles", "unit"): _HEADER_ROLES["unit"],
+    ("header_roles", "note"): _HEADER_ROLES["note"],
+    ("period_words", "quarter"): _PERIOD_WORDS["quarter"],
+    ("period_words", "half"): _PERIOD_WORDS["half"],
+    ("period_words", "year"): _PERIOD_WORDS["year"],
+    ("structural", "total"): _TOTAL_WORDS,
+    ("structural", "stub"): _STUB_WORDS,
+    ("structural", "scenario"): _SCENARIO,
+    ("structural", "scenario_adjectives"): _SCENARIO_ADJECTIVES,
+    ("structural", "scenario_evidence"): _SCENARIO_EVIDENCE,
+    ("structural", "scenario_header"): _SCENARIO_HEADER,
+    ("structural", "quarter_label"): _QUARTER_LABEL,
+    ("structural", "month_label"): _MONTH_LABEL,
+    ("structural", "period_start"): _PERIOD_START,
+    ("structural", "period_end"): _PERIOD_END,
+}
 
 
 def data_token() -> str:
-    path = overlay_path()
-    if path is None:
-        return "package"
-    return f"{path}:{path.stat().st_mtime_ns}"
-
-
-def _package_text() -> str:
-    return resources.files(__package__).joinpath("lexicon.json").read_text(encoding="utf-8")
-
-
-def _validate(data: dict[str, Any], *, package: bool) -> None:
-    model = _LexiconModel if package else _OverlayModel
-    try:
-        model.model_validate(data)
-    except ValidationError as exc:
-        raise ValueError(f"lexicon schema: {exc}") from exc
-
-
-class _OverlayModel(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    header_roles: dict[str, list[str]] | None = None
-    period_words: dict[str, list[str]] | None = None
-    structural: dict[str, Any] | None = None
-    stem_block: dict[str, list[str]] | None = None
-
-
-def _merge(base: Any, over: Any) -> Any:
-    if isinstance(base, dict) and isinstance(over, dict):
-        merged = dict(base)
-        for key, value in over.items():
-            merged[key] = _merge(merged[key], value) if key in merged else value
-        return merged
-    if isinstance(base, list) and isinstance(over, list):
-        seen: list[Any] = []
-        for item in [*base, *over]:
-            if item not in seen:
-                seen.append(item)
-        return seen
-    return over
-
-
-@cache
-def _load(token: str) -> dict[str, Any]:
-    base = json.loads(_package_text())
-    _validate(base, package=True)
-    path = overlay_path() if token != "package" else None
-    if path is None:
-        return base
-    overlay = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(overlay, dict):
-        raise ValueError("lexicon schema: overlay must be an object")
-    _validate(overlay, package=False)
-    merged = _merge(base, overlay)
-    _validate(merged, package=True)
-    return merged
-
-
-def _data() -> dict[str, Any]:
-    return _load(data_token())
+    """Stable token. Format words are code, so nothing outside the package restales them."""
+    return "format-words"
 
 
 def words(*path: str) -> tuple[str, ...]:
-    node: Any = _data()
-    for key in path:
-        node = node[key]
-    return tuple(node)
+    return _LISTS[path]
+
+
+def is_total_word(text: str | None) -> bool:
+    """A total hint. Arithmetic, not this word, decides the column."""
+    folded = _fold(text or "").strip(".")
+    return bool(folded) and any(matches_entry(folded, entry) for entry in _TOTAL_WORDS)
 
 
 def blocked_surface(surface: str) -> bool:
-    """True when ``surface`` is listed in ``stem_block`` for any root."""
+    """True when residual text is a known non-period lookalike."""
     folded = _fold(surface).strip(".")
-    table = _data().get("stem_block") or {}
-    for items in table.values():
-        for item in items:
-            if folded == _fold(str(item)).strip("."):
-                return True
-    return False
-
-
-def _root(entry: str) -> str:
-    return entry[:-1] if entry.endswith("*") else entry
+    return folded in _NOT_PERIOD
 
 
 def _fold(text: str) -> str:
     return text.casefold().replace("ё", "е")
 
 
-@lru_cache(maxsize=_STEM_CACHE)
-def _stem(word: str) -> str:
-    folded = _fold(word)
-    if re.search(r"[а-я]", folded):
-        return _RU.stemWord(folded)
-    return _EN.stemWord(folded)
-
-
-def _block_keys(root: str) -> set[str]:
-    table = _data().get("stem_block") or {}
-    found: set[str] = set()
-    for key in (root, _stem(root)):
-        for item in table.get(key) or []:
-            found.add(_fold(item).strip("."))
-    return found
-
-
-def _stem_equal(token: str, root: str) -> bool:
-    """Snowball agreement, only when the stem still covers most of the root."""
-    left = _stem(token)
-    right = _stem(root)
-    if len(left) < 4 or len(right) < 4 or left != right:
-        return False
-    return len(right) >= len(root) - 3
-
-
 def matches_entry(surface: str, entry: str) -> bool:
-    """True when ``surface`` is ``entry`` or the same stem, and not a collision."""
+    """True when ``surface`` is ``entry``, or ``entry`` plus one listed ending."""
     token = _fold(surface).strip(".")
-    root = _fold(_root(entry)).strip(".")
+    root = _fold(entry).strip(".")
     if not token or not root:
         return False
-    if " " in root:
-        return token == root
     if token == root:
         return True
-    if token in _block_keys(root):
+    if token in _NOT_PERIOD or " " in root or len(root) <= _SHORT:
         return False
-    if len(root) <= _SHORT:
-        return False
-    if _stem_equal(token, root):
+    if token.startswith(root) and token[len(root) :] in _INFLECTIONS:
         return True
-    return bool(token.startswith(root) and token[len(root) :] in _INFLECTIONS)
+    return _same_paradigm(token, root)
 
 
 def accepts(*path: str, surface: str) -> bool:
     return any(matches_entry(surface, entry) for entry in words(*path))
 
 
+def _paradigm(root: str) -> tuple[str, frozenset[str]] | None:
+    """Stem and endings when ``root`` is a citation form, not a bare suffix."""
+    for ending, forms in _PARADIGMS:
+        if not root.endswith(ending) or len(root) - len(ending) < 4:
+            continue
+        if ending == "ие":
+            return root[:-1], forms
+        return root[: -len(ending)], forms
+    return None
+
+
+def _same_paradigm(token: str, root: str) -> bool:
+    found = _paradigm(root)
+    if found is None or not token.startswith(found[0]):
+        return False
+    return token[len(found[0]) :] in found[1]
+
+
 def _candidate(entry: str) -> str:
-    """A regex that may over-match. ``accepts`` is the real test."""
-    root = _fold(_root(entry))
+    root = _fold(entry)
     if " " in root or len(root) <= _SHORT:
         return re.escape(root)
-    stem = _stem(root)
-    if len(stem) >= 4 and root.startswith(stem) and len(root) - len(stem) <= 3:
-        return re.escape(stem) + r"\w*"
+    found = _paradigm(root)
+    if found is not None:
+        endings = "|".join(re.escape(item) for item in sorted(found[1], key=len, reverse=True))
+        return rf"{re.escape(found[0])}(?:{endings})"
     endings = "|".join(re.escape(item) for item in sorted(_INFLECTIONS, key=len, reverse=True))
     return rf"{re.escape(root)}(?:{endings})?"
 
 
 @cache
-def _pattern(token: str, path: tuple[str, ...]) -> str:
-    del token
+def _pattern(path: tuple[str, ...]) -> str:
     items = sorted(words(*path), key=len, reverse=True)
     alts = [_candidate(entry) for entry in items]
     return rf"(?:{'|'.join(alts)})(?![^\W\d_])"
 
 
 def pattern(*path: str) -> str:
-    """Candidate regex. Callers that embed it must confirm the hit with ``accepts``."""
-    return _pattern(data_token(), path)
+    """Candidate regex. Callers that embed it confirm the hit with ``accepts``."""
+    return _pattern(path)
 
 
 class _Hit:
@@ -285,44 +344,33 @@ class _Searcher:
     def search(self, text: str) -> _Hit | None:
         folded = _fold(text)
         for entry in words(*self.path):
-            root = _fold(_root(entry))
+            root = _fold(entry)
             if " " not in root:
                 continue
             if re.search(rf"(?<!\w){re.escape(root)}(?![^\W\d_])", folded):
                 return _Hit(root)
-        for match in re.finditer(rf"(?<!\w){_pattern(data_token(), self.path)}", folded):
+        for match in re.finditer(rf"(?<!\w){_pattern(self.path)}", folded):
             if accepts(*self.path, surface=match.group(0)):
                 return _Hit(match.group(0))
         return None
 
 
 @cache
-def _searcher(token: str, path: tuple[str, ...]) -> _Searcher:
-    del token
+def _searcher(path: tuple[str, ...]) -> _Searcher:
     return _Searcher(path)
 
 
 def searcher(*path: str) -> _Searcher:
-    """Scan of one normalized label. Built once per word list and lexicon token."""
-    return _searcher(data_token(), path)
+    """Scan of one normalized label. Built once per word list."""
+    return _searcher(path)
 
 
 def header_role_map() -> dict[str, str]:
-    return _header_roles(data_token())
-
-
-@cache
-def _header_roles(token: str) -> dict[str, str]:
-    del token
-    return {
-        word: role
-        for role in ("label", "value", "unit", "note")
-        for word in words("header_roles", role)
-    }
+    return {word: role for role, items in _HEADER_ROLES.items() for word in items}
 
 
 def month_numbers() -> dict[str, int]:
-    return _months(data_token())
+    return _months()
 
 
 def _ru_cases(name: str) -> set[str]:
@@ -339,10 +387,9 @@ def _ru_cases(name: str) -> set[str]:
 
 
 @cache
-def _months(token: str) -> dict[str, int]:
-    del token
+def _months() -> dict[str, int]:
     found: dict[str, int] = {}
-    for key, forms in _data()["structural"]["months"].items():
+    for key, forms in _MONTH_CITATIONS.items():
         number = int(key)
         for form in forms:
             folded = _fold(form).rstrip(".")
@@ -373,7 +420,7 @@ def is_scenario_caption(text: str) -> bool:
     """A whole period header that names a case: ``Upside``, ``базовый сценарий``."""
     compact = _scenario_compact(text)
     for entry in words("structural", "scenario"):
-        root = _fold(_root(entry))
+        root = _fold(entry)
         if " " in root and compact == root:
             return True
         if " " not in root and matches_entry(compact, entry):
