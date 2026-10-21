@@ -18,6 +18,7 @@ from finance_context.memory import (
     BYTES_PER_EXPANDED_CELL,
     BYTES_PER_FORMULA,
     DEFAULT_JOB_BUDGET_BYTES,
+    ESTIMATE_BASE_BYTES,
     JOB_MEMORY_FLOOR_BYTES,
     assess_raw,
     cgroup_memory_limit_bytes,
@@ -135,7 +136,7 @@ def test_cgroup_v1_ignores_the_unlimited_sentinel(tmp_path: Path) -> None:
 
 def test_estimate_is_linear_in_formulas_and_expanded_cells() -> None:
     assert estimate_bytes(formulas=2, expanded_cells=3) == (
-        2 * BYTES_PER_FORMULA + 3 * BYTES_PER_EXPANDED_CELL
+        ESTIMATE_BASE_BYTES + 2 * BYTES_PER_FORMULA + 3 * BYTES_PER_EXPANDED_CELL
     )
 
 

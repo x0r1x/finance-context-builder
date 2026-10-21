@@ -23,11 +23,14 @@ _HEADROOM_DENOMINATOR = 4
 # Above this, cgroup v1 is reporting "no limit" (page_counter max).
 _UNLIMITED_BYTES = 1 << 60
 
-# Profiled after the light compile objects. About 4 KiB of formula overhead
-# plus 3 KiB for each expanded cell. A book of 40k formulas and 169k cell
-# edges peaks near 580 MB and estimates near 650 MB.
-BYTES_PER_FORMULA = 4 * 1024
-BYTES_PER_EXPANDED_CELL = 3 * 1024
+# RSS peaks include the child after imports. Profiled after slot cells:
+# a 40k-formula workbook peaks near 547 MiB, a 4000×96 timeline near 2041 MiB,
+# and 960 whole-column SUMIF rows near 436 MiB. The constant plus 5 KiB per
+# formula and 1 KiB per expanded cell sits about 5–17% above each of those
+# peaks, and still under a 1536 MiB job budget for the 40k-formula book.
+ESTIMATE_BASE_BYTES = 128 * 1024 * 1024
+BYTES_PER_FORMULA = 5 * 1024
+BYTES_PER_EXPANDED_CELL = 1 * 1024
 
 # A spawned child sits near 80 MiB after imports. A lower cap kills every book
 # during parse, before any workbook data is the cause.
@@ -243,7 +246,11 @@ def raise_budget_floor(budget: int | None) -> int | None:
 
 
 def estimate_bytes(*, formulas: int, expanded_cells: int) -> int:
-    return formulas * BYTES_PER_FORMULA + expanded_cells * BYTES_PER_EXPANDED_CELL
+    return (
+        ESTIMATE_BASE_BYTES
+        + formulas * BYTES_PER_FORMULA
+        + expanded_cells * BYTES_PER_EXPANDED_CELL
+    )
 
 
 def too_large_detail(estimate: int, budget: int) -> str:
