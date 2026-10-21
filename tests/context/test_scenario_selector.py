@@ -41,7 +41,7 @@ def _scenario_matrix() -> list[dict]:
         _c("Input Assumptions", "G8", "36.5"),
         _c("Input Assumptions", "B9", "Tax Rate"),
         _c("Input Assumptions", "C9", "%"),
-        _c("Input Assumptions", "D9", "0.3"),
+        _c("Input Assumptions", "D9", "0.3", formula="=INDEX(F9:G9,$D$3)"),
         _c("Input Assumptions", "F9", "0.3"),
         _c("Input Assumptions", "G9", "0.3"),
         _c("Input Assumptions", "B10", "Toll Rate"),

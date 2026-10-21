@@ -36,7 +36,7 @@ def detect_params_block(
         return _grid_title_block(sheet, by_row, date1904)
     roles = _column_roles(by_row, date1904, sheet, edges or [])
     label_col = _label_column(by_row, date1904, roles)
-    value_cols = [col for col, role in roles.items() if role in {"value", "scenario"}]
+    value_cols = [col for col, role in roles.items() if role == "value"]
     if not value_cols:
         # Numbers under headers the lexicon does not know stay as ``unknown``
         # columns. Context warns about them; dropping the table would be silent.
@@ -44,10 +44,11 @@ def detect_params_block(
         value_cols = [col for col, role in roles.items() if role == "unknown" and numeric[col]]
     if label_col is None or not value_cols:
         return None
-    header_rows, header_row = _header_rows(by_row, date1904, roles, label_col)
+    switches = selector_rows(by_row, date1904)
+    header_rows, header_row = _header_rows(by_row, date1904, roles, label_col, switches)
     check_table = _is_check_table(by_row, header_rows, date1904)
     data_rows = _params_data_rows(
-        by_row, date1904, label_col, roles, header_rows, check_table
+        by_row, date1904, label_col, roles, header_rows, check_table, switches
     )
     content_rows = [row for row in data_rows if row.kind in {"fact", "helper"}]
     if len(content_rows) < _MIN_VALUE_ROWS:
@@ -341,15 +342,73 @@ def _scenario_block(
 
 
 def is_scenario_selector_label(text: str | None) -> bool:
-    """Label of the chosen-scenario control row.
+    """Tie-break hint for a chosen-scenario control row.
 
-    A geometric stand-in is not reliable: the row under the headers is often an
-    ordinary integer input, and a heavily referenced cell is often an ordinary
-    driver. The label stays the criterion. Case columns on this row stay in the
-    series once their role is ``value``.
+    The row itself comes from :func:`selector_rows`. This phrase only picks
+    among several constants that formulas use as an index.
     """
     blob = re.sub(r"[^a-z0-9]+", " ", (text or "").casefold()).strip()
     return bool(blob and _SELECTOR_LABEL.search(blob))
+
+
+_INDEX_CALL = re.compile(r"\bINDEX\s*\(([^()]*)\)", re.IGNORECASE)
+_CHOOSE_CALL = re.compile(r"\bCHOOSE\s*\(([^()]*)\)", re.IGNORECASE)
+_OFFSET_CALL = re.compile(r"\bOFFSET\s*\(([^()]*)\)", re.IGNORECASE)
+_SWITCH_CELL = re.compile(r"^\$?[A-Z]{1,3}\$?\d+$", re.IGNORECASE)
+
+
+def selector_rows(by_row: dict[int, list[dict]], date1904: bool) -> set[int]:
+    """Rows whose constant cell other rows use to pick a column.
+
+    The cell is an argument of ``INDEX``, ``CHOOSE``, or ``OFFSET``, it is not
+    itself a formula, and at least two other rows reference it. A same-row
+    ``OFFSET``, or an ``IF`` that merely mentions a driver, is not a switch.
+    When more than one row qualifies, a selector label keeps its row.
+    """
+    by_addr: dict[str, tuple[int, dict]] = {}
+    for row_n, cells in by_row.items():
+        for cell in cells:
+            addr = str(cell.get("addr") or "").replace("$", "").upper()
+            if addr:
+                by_addr[addr] = (row_n, cell)
+    referenced: dict[str, set[int]] = defaultdict(set)
+    for row_n, cells in by_row.items():
+        for cell in cells:
+            formula = str(cell.get("formula_raw") or "")
+            if not formula:
+                continue
+            for addr in _switch_args(formula):
+                referenced[addr].add(row_n)
+    candidates: set[int] = set()
+    for addr, rows in referenced.items():
+        found = by_addr.get(addr)
+        if found is None:
+            continue
+        target_row, target = found
+        if target.get("formula_raw"):
+            continue
+        if len(rows - {target_row}) < 2:
+            continue
+        candidates.add(target_row)
+    if len(candidates) < 2:
+        return candidates
+    labeled = {
+        row
+        for row in candidates
+        if is_scenario_selector_label(_left_text(by_row.get(row, []), date1904))
+    }
+    return labeled or candidates
+
+
+def _switch_args(formula: str) -> set[str]:
+    found: set[str] = set()
+    for pattern, skip in ((_INDEX_CALL, 1), (_CHOOSE_CALL, 0), (_OFFSET_CALL, 1)):
+        for match in pattern.finditer(formula):
+            parts = [part.strip() for part in match.group(1).split(",")]
+            for part in parts[skip:]:
+                if _SWITCH_CELL.match(part):
+                    found.add(part.replace("$", "").upper())
+    return found
 
 
 def _run_column_name(label: str, place: int) -> str:
@@ -522,7 +581,7 @@ def _apply_value_column_roles(
     """
     for col, texts in _column_bodies(by_row, date1904).items():
         role = roles.get(col)
-        if role in {"scenario", "index", "label", "value"}:
+        if role in {"index", "label", "value"}:
             continue
         kind = _value_column_kind(texts)
         if kind is None:
@@ -608,7 +667,7 @@ def _label_column(
                 continue
             text = _text(cell, date1904)
             col = int(cell["col"])
-            if roles.get(col) in {"value", "unit", "scenario", "note", "unknown", "index"}:
+            if roles.get(col) in {"value", "unit", "note", "unknown", "index"}:
                 continue
             if not text or _is_number(text) or len(text) > _PROSE_MIN:
                 continue
@@ -624,11 +683,12 @@ def _header_rows(
     date1904: bool,
     roles: dict[int, str],
     label_col: int | None = None,
+    switches: set[int] | None = None,
 ) -> tuple[set[int], int]:
+    chosen = switches or set()
     hits: list[int] = []
     for row_n in sorted(by_row):
-        left = _left_text(by_row[row_n], date1904)
-        if is_scenario_selector_label(left):
+        if row_n in chosen:
             continue
         named = 0
         scenario_names = 0
@@ -644,7 +704,7 @@ def _header_rows(
                 continue
             if _header_role(text):
                 named += 1
-            elif roles.get(int(cell["col"])) in {"scenario", "value"} and not _is_number(text):
+            elif roles.get(int(cell["col"])) == "value" and not _is_number(text):
                 scenario_names += 1
         # A data row can carry several short texts. It is a header only when it
         # has no numbers, the way a scenario-name row does.
@@ -674,7 +734,9 @@ def _params_data_rows(
     roles: dict[int, str],
     header_rows: set[int],
     check_table: bool = False,
+    switches: set[int] | None = None,
 ) -> list[LayoutRow]:
+    chosen = switches or set()
     out: list[LayoutRow] = []
     section_stack: list[LayoutRow] = []
     for row_n in sorted(by_row):
@@ -691,7 +753,7 @@ def _params_data_rows(
         tagged = _row_cells(cells, roles, label_col, date1904, include_hidden=row_hidden)
         numeric_value = False
         for item in tagged:
-            if item.role not in {"value", "scenario", "unknown"}:
+            if item.role not in {"value", "unknown"}:
                 continue
             cell = _cell_at(cells, item.col)
             text = _text(cell, date1904) if cell else None
@@ -702,9 +764,7 @@ def _params_data_rows(
                 numeric_value = True
                 break
         check_row = bool(_CHECK.search(label)) or check_table
-        selector = is_scenario_selector_label(label)
-        if selector:
-            tagged = [item for item in tagged if item.role != "scenario"]
+        if row_n in chosen:
             kind = "flag"
         elif _is_section_label(label, numeric_value):
             kind = "abstract"
@@ -786,7 +846,6 @@ def _axis_headers(
             if not text or _is_number(text):
                 continue
             if _header_role(text) in {None, "label"} and roles.get(col) not in {
-                "scenario",
                 "value",
                 "unit",
                 "note",
@@ -809,7 +868,7 @@ def _axis_headers(
                 col=col,
                 text=text,
                 role=role,  # type: ignore[arg-type]
-                period_key=_slug(text) if role == "scenario" else role,
+                period_key=role,
             )
         )
     return _separate_value_keys(headers)
@@ -976,9 +1035,10 @@ def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
     A header the closed list already calls a value (``Значение``, ``Value``)
     keeps ``value``. Any other header takes a slug of its own text, so ``Base``
     and ``Upside``, and ``Базовый`` and ``Стресс``, do not collapse onto one
-    observation. The slug keeps Unicode letters and does not transliterate.
-    A slug with no letter is not a name, so that column keeps ``value``.
-    A repeated name becomes ``value-<column>``.
+    observation. The slug keeps Unicode letters. ``ё`` folds to ``е``.
+    A slug with no letter is not a name, so the first such column keeps
+    ``value`` and a repeated one becomes ``value-<column>``. A repeated name
+    becomes ``value-<column>`` too.
     """
     if sum(1 for header in headers if header.role == "value") < 2:
         return headers
@@ -989,12 +1049,9 @@ def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
             separated.append(header)
             continue
         if _header_role(header.text) == "value":
-            separated.append(header.model_copy(update={"period_key": "value"}))
-            continue
-        key = _header_slug(header.text)
-        if not key:
-            separated.append(header.model_copy(update={"period_key": "value"}))
-            continue
+            key = "value"
+        else:
+            key = _header_slug(header.text) or "value"
         if key in used:
             key = f"value-{index_to_col(header.col).lower()}"
         used.add(key)
@@ -1003,10 +1060,10 @@ def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
 
 
 def _slug(text: str) -> str:
-    """Casefolded header slug. Unicode letters stay; nothing is transliterated."""
+    """Casefolded header slug. Unicode letters stay. ``ё`` folds to ``е``."""
     parts: list[str] = []
     token: list[str] = []
-    for char in text.casefold():
+    for char in text.casefold().replace("ё", "е"):
         if char.isalpha() or "0" <= char <= "9":
             token.append(char)
         elif token:

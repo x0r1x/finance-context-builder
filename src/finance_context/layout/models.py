@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer
 # Params-block column roles and non-period cells. Not a period classification.
 ColumnRole = Literal[
     "stub",
-    "scenario",
     "total",
     "relative",
     "label",
@@ -18,7 +17,7 @@ ColumnRole = Literal[
     "unknown",
 ]
 # Internal period-column classification. Not written to context.json.
-ColumnKind = Literal["period", "total", "stub", "scenario", "relative"]
+ColumnKind = Literal["period", "total", "stub", "relative"]
 RowKind = Literal["fact", "abstract", "index", "helper", "flag"]
 BlockKind = Literal["timeline", "params"]
 
@@ -27,7 +26,7 @@ STRUCTURAL_PERIOD_KEYS = frozenset({"total", "stub"})
 
 
 def is_series_column(kind: str | None, period_key: str) -> bool:
-    """A timeline value column, not a total, stub, or scenario."""
+    """A timeline value column, not a total or a stub."""
     return kind in SERIES_KINDS and period_key not in STRUCTURAL_PERIOD_KEYS
 
 
@@ -45,7 +44,7 @@ class PeriodHit(BaseModel):
 class AxisHeader(BaseModel):
     col: int
     text: str
-    # Params columns only (value/unit/note/scenario/...). Period columns leave this empty.
+    # Params columns only (value/unit/note/...). Period columns leave this empty.
     role: str | None = None
     kind: ColumnKind | None = None
     variant: str | None = Field(default=None, exclude=True)

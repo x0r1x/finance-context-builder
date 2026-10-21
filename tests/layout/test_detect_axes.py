@@ -274,7 +274,6 @@ def test_explicit_period_marker_stays_a_period_column() -> None:
     assert {h.kind for h in block.axis.headers} <= {
         "period",
         "stub",
-        "scenario",
         "total",
         "relative",
     }

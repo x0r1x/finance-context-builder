@@ -72,7 +72,7 @@ def test_params_block_from_scenario_matrix() -> None:
         _c("Input Assumptions", "G8", "36.5"),
         _c("Input Assumptions", "B9", "Tax Rate"),
         _c("Input Assumptions", "C9", "%"),
-        _c("Input Assumptions", "D9", "0.3"),
+        _c("Input Assumptions", "D9", "0.3", formula="=INDEX(F9:G9,$D$3)"),
         _c("Input Assumptions", "F9", "0.3"),
         _c("Input Assumptions", "G9", "0.3"),
         _c("Input Assumptions", "B10", "Toll Rate"),
@@ -128,6 +128,86 @@ def test_params_block_from_scenario_matrix() -> None:
     assert unit_kind_from_text("veh/year") == "count"
     assert unit_kind_from_text("MWh p.a.") == "count"
     assert unit_kind_from_text("Index") == "ratio"
+
+
+def test_index_switch_is_a_selector_without_the_label() -> None:
+    """A constant INDEX argument used on other rows is the selector."""
+    cells = [
+        _c("Input", "B2", "Base"),
+        _c("Input", "C2", "Upside"),
+        _c("Input", "A3", "Выбор"),
+        _c("Input", "D3", "1"),
+        _c("Input", "B3", "1"),
+        _c("Input", "C3", "2"),
+        _c("Input", "A4", "Price"),
+        _c("Input", "D4", "10", formula="=INDEX(B4:C4,$D$3)"),
+        _c("Input", "B4", "10"),
+        _c("Input", "C4", "12"),
+        _c("Input", "A5", "Share"),
+        _c("Input", "D5", "0.2", formula="=INDEX(B5:C5,$D$3)"),
+        _c("Input", "B5", "0.2"),
+        _c("Input", "C5", "0.3"),
+        _c("Input", "A6", "Rate"),
+        _c("Input", "D6", "0.1", formula="=INDEX(B6:C6,$D$3)"),
+        _c("Input", "B6", "0.1"),
+        _c("Input", "C6", "0.2"),
+    ]
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows["Выбор"].kind == "flag"
+
+
+def test_selector_label_without_a_switch_is_a_fact_row() -> None:
+    cells = [
+        _c("Input", "B2", "Base"),
+        _c("Input", "C2", "Upside"),
+        _c("Input", "A3", "Scenario Chosen"),
+        _c("Input", "D3", "1"),
+        _c("Input", "B3", "1"),
+        _c("Input", "C3", "2"),
+        _c("Input", "A4", "Price"),
+        _c("Input", "D4", "10"),
+        _c("Input", "B4", "10"),
+        _c("Input", "C4", "12"),
+        _c("Input", "A5", "Share"),
+        _c("Input", "D5", "0.2"),
+        _c("Input", "B5", "0.2"),
+        _c("Input", "C5", "0.3"),
+        _c("Input", "A6", "Rate"),
+        _c("Input", "D6", "0.1"),
+        _c("Input", "B6", "0.1"),
+        _c("Input", "C6", "0.2"),
+    ]
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows["Scenario Chosen"].kind == "fact"
+
+
+def test_selector_label_breaks_a_tie_between_two_switches() -> None:
+    cells = [
+        _c("Input", "B1", "Base"),
+        _c("Input", "C1", "Upside"),
+        _c("Input", "A2", "Scenario Chosen"),
+        _c("Input", "D2", "1"),
+        _c("Input", "A3", "Other"),
+        _c("Input", "E3", "2"),
+        _c("Input", "A4", "Price"),
+        _c("Input", "B4", "10"),
+        _c("Input", "C4", "12"),
+        _c("Input", "D4", "10", formula="=INDEX(B4:C4,$D$2)"),
+        _c("Input", "E4", "1", formula="=OFFSET(B4,0,$E$3)"),
+        _c("Input", "A5", "Share"),
+        _c("Input", "B5", "0.2"),
+        _c("Input", "C5", "0.3"),
+        _c("Input", "D5", "0.2", formula="=INDEX(B5:C5,$D$2)"),
+        _c("Input", "E5", "2", formula="=OFFSET(B5,0,$E$3)"),
+        _c("Input", "A6", "Rate"),
+        _c("Input", "B6", "0.1"),
+        _c("Input", "C6", "0.2"),
+        _c("Input", "D6", "0.1", formula="=INDEX(B6:C6,$D$2)"),
+        _c("Input", "E6", "3", formula="=OFFSET(B6,0,$E$3)"),
+    ]
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows["Scenario Chosen"].kind == "flag"
+    assert rows["Other"].kind == "fact"
 
 
 def test_params_block_from_parameter_table() -> None:
@@ -371,7 +451,6 @@ def test_case_names_are_value_columns_with_their_own_keys(heads: list[str]) -> N
 
 
 def test_cyrillic_headers_in_one_block_get_distinct_keys() -> None:
-    """Letters stay in the slug. ``ё`` is not folded into ``е``."""
     heads = ["Параметр", "Базовый", "Стресс", "Ёлка", "Елка"]
     cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCDE", heads, strict=True)]
     for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
@@ -381,7 +460,7 @@ def test_cyrillic_headers_in_one_block_get_distinct_keys() -> None:
     headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
     assert [header.role for header in headers] == ["value", "value", "value", "value"]
     assert [header.text for header in headers] == heads[1:]
-    assert [header.period_key for header in headers] == ["базовый", "стресс", "ёлка", "елка"]
+    assert [header.period_key for header in headers] == ["базовый", "стресс", "елка", "value-e"]
 
 
 def test_cyrillic_headers_keep_letters_and_digits_in_the_key() -> None:
@@ -423,7 +502,7 @@ def test_digit_only_headers_do_not_become_the_key() -> None:
         ]
     headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
     assert [header.role for header in headers] == ["value", "value"]
-    assert [header.period_key for header in headers] == ["value", "value"]
+    assert [header.period_key for header in headers] == ["value", "value-c"]
     assert "11112222" not in {header.period_key for header in headers}
     assert "33334444" not in {header.period_key for header in headers}
 

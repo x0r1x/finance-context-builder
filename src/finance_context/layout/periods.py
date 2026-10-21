@@ -146,13 +146,14 @@ def marker_token(variant: str | None) -> str:
     """Casefolded variant marker used in ``<period_key>@<marker>``.
 
     ``variant`` is the marker as recognized after ``normalize_header`` (NFKC,
-    ё→е, collapsed whitespace, lookalike folding on a period token). ``casefold``
-    is the only further step: ``Факт`` and ``факт`` share ``факт``, and a suffix
-    ``E`` becomes ``e``. The lexicon stem is not applied.
+    collapsed whitespace, lookalike folding on a period token). ``casefold``
+    and ``ё``→``е`` are the further steps: ``Факт`` and ``факт`` share ``факт``,
+    ``Расчёт`` and ``Расчет`` share ``расчет``, and a suffix ``E`` becomes ``e``.
+    The lexicon stem is not applied.
     """
     if not variant:
         return ""
-    return variant.casefold()
+    return variant.casefold().replace("ё", "е")
 
 
 # Lookalikes folded only inside a token that already contains a digit.

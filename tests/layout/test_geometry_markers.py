@@ -92,6 +92,18 @@ def test_tail_splits_a_repeated_year() -> None:
     assert _keys(cells) == ["2024@факт", "2024@план"]
 
 
+def test_yo_and_ye_are_the_same_marker() -> None:
+    from finance_context.layout.params import _slug
+    from finance_context.layout.periods import marker_token
+
+    assert _slug("Расчётный") == _slug("Расчетный") == "расчетный"
+    assert _slug("Ёлка") == _slug("Елка") == "елка"
+    assert marker_token("Расчёт") == marker_token("Расчет") == "расчет"
+    assert marker_token("Ё") == "е"
+    cells = _sheet(["2024 расчёт", "2024 расчет"])
+    assert _keys(cells) == ["2024", "2024"]
+
+
 def test_merged_banner_stops_at_the_merge() -> None:
     cells = _sheet(
         ["2024", "2024", "2024", "2024"],

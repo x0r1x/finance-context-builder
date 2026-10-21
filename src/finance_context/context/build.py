@@ -18,7 +18,7 @@ from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.layout.adjacency import row_adjacency
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
-from finance_context.layout.params import is_scenario_selector_label
+from finance_context.layout.params import selector_rows
 from finance_context.layout.periods import (
     classify_header,
     display_cell_text,
@@ -60,6 +60,13 @@ def build_context(
 ) -> ContextDocument:
     relations = list(relations or [])
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+    by_sheet_row: dict[str, dict[int, list[dict]]] = {}
+    for cell in cells:
+        by_sheet_row.setdefault(cell["sheet"], {}).setdefault(int(cell["row"]), []).append(cell)
+    date1904 = bool(workbook_meta.get("date1904"))
+    switches = {
+        name: selector_rows(rows, date1904) for name, rows in by_sheet_row.items()
+    }
     axes, timeline_warnings = build_axes(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
@@ -155,7 +162,7 @@ def build_context(
                 series: list[RowSeries] = []
                 for axis_id, headers in views:
                     row_headers = headers
-                    if is_scenario_selector_label(layout_row.label):
+                    if layout_row.row in switches.get(sheet.name, ()):
                         row_headers = [header for header in headers if header.role == "value"]
                     fingerprint, exceptions, summary = _row_formula_and_numbers(
                         sheet_name=sheet.name,
@@ -312,7 +319,7 @@ def _block_views(
         headers = [
             header
             for header in (block.axis.headers if block.axis is not None else [])
-            if header.role in {"value", "scenario", "unknown"}
+            if header.role in {"value", "unknown"}
         ]
         return [(block.block_id, headers)]
     views: list[tuple[str, list[AxisHeader]]] = []
@@ -647,7 +654,7 @@ def _period_dict(header: AxisHeader) -> dict[str, object]:
         "text": header.text,
         "period_key": header.period_key,
     }
-    # Params columns keep value/unit/note/scenario. Period columns have no role.
+    # Params columns keep value/unit/note. Period columns have no role.
     if header.role:
         item["role"] = header.role
     if header.hidden:
