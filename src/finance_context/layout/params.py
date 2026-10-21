@@ -4,9 +4,9 @@ import re
 from collections import Counter, defaultdict
 
 from finance_context.excel.a1 import index_to_col, parse_addr
-from finance_context.layout.lexicon import has_scenario_evidence, header_role_map, searcher
+from finance_context.layout.lexicon import header_role_map
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
-from finance_context.layout.periods import display_cell_text
+from finance_context.layout.periods import display_cell_text, period_like_header
 from finance_context.layout.units import is_unit_text
 from finance_context.layout.units import unit_kind_from_text as unit_kind_from_text
 
@@ -157,10 +157,10 @@ def carve_params_regions(
 ) -> tuple[list[LayoutRow], list[Block]]:
     """Split scenario and constant tables out of a timeline block.
 
-    A row run with no value right of a `Case Number 1..n` header is a scenario table,
-    not years. Rows above it with values only left of the ruler are a constants table.
+    A short contiguous run ``1..n`` inside the period columns is a case table, not
+    years. Rows above it with values only left of the ruler are a constants table.
     """
-    header = _scenario_header(rows, by_row, date1904, period_cols)
+    header = _case_run(rows, by_row, date1904, period_cols)
     if header is None:
         return rows, []
     header_row, span = header
@@ -194,15 +194,14 @@ def carve_params_regions(
     return [row for row in rows if row.row not in carved], blocks
 
 
-def _scenario_header(
+def _case_run(
     rows: list[LayoutRow],
     by_row: dict[int, list[dict]],
     date1904: bool,
     period_cols: set[int],
 ) -> tuple[LayoutRow, list[int]] | None:
+    """A contiguous ``1, 2, 3…`` inside the period columns, shorter than the axis."""
     for row in rows:
-        if searcher("structural", "scenario_header").search(row.label) is None:
-            continue
         run: list[int] = []
         for cell in sorted(by_row[row.row], key=lambda item: int(item["col"])):
             col = int(cell["col"])
@@ -306,7 +305,6 @@ def _scenario_block(
     label_col: int,
 ) -> Block:
     body = [_restate_static_kind(row) for row in rows if row.row != header_row.row]
-    prefix = re.sub(r"\s*(number|no\.?|#|№)\s*$", "", header_row.label, flags=re.I).strip()
     headers: list[AxisHeader] = []
     for cell in sorted(by_row[header_row.row], key=lambda item: int(item["col"])):
         col = int(cell["col"])
@@ -317,9 +315,14 @@ def _scenario_block(
             headers.append(
                 AxisHeader(col=col, text=text.strip(), role="value", period_key="value")
             )
-    for number, col in enumerate(span, start=1):
-        name = f"{prefix or 'Case'} {number}"
-        headers.append(AxisHeader(col=col, text=name, role="scenario", period_key=_slug(name)))
+    used = {header.period_key for header in headers}
+    for col in span:
+        text = (_text(_cell_at(by_row[header_row.row], col), date1904) or "").strip()
+        key = _slug(text)
+        if not key or key in used:
+            key = f"value-{index_to_col(col).lower()}"
+        used.add(key)
+        headers.append(AxisHeader(col=col, text=text, role="value", period_key=key))
     captions = {header.col: header.text for header in headers if header.role == "value"}
     for row in body:
         for item in row.cells:
@@ -454,20 +457,21 @@ def _column_roles(
     if graph_col is not None and _column_caption(by_row, graph_col, date1904):
         roles[graph_col] = "value"
     for col, count in numeric_counts.items():
-        if col in roles:
-            continue
         if count < _MIN_VALUE_ROWS:
+            continue
+        # A column of numbers is a value. A short header such as ``Base`` stays
+        # the header text; it does not choose a role. Index and unit votes stand.
+        if roles.get(col) not in {None, "unknown"}:
             continue
         caption = _column_caption(by_row, col, date1904)
         named = _named_column_role(caption) if caption else None
         if named is not None:
             roles[col] = named
-        elif caption and _header_role(caption) is None and len(caption) <= 24:
+        elif caption and period_like_header(caption):
             roles[col] = "unknown"
         else:
             roles[col] = "value"
     _apply_value_column_roles(roles, by_row, date1904)
-    _promote_scenario_siblings(roles, by_row, date1904)
     return roles
 
 
@@ -545,53 +549,15 @@ def _is_free_text(text: str) -> bool:
 
 
 def _named_column_role(text: str) -> str | None:
-    """A caption with positive evidence: index, or a scenario word. Not a guess."""
+    """Index is the one caption that names its role. Other captions stay verbatim."""
     if _is_index_header(text):
         return "index"
-    if _is_scenario_header(text):
-        return "scenario"
     return None
 
 
 def _is_index_header(text: str) -> bool:
     compact = re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
     return bool(_INDEX_HEADER.fullmatch(compact))
-
-
-def _is_scenario_header(text: str) -> bool:
-    return has_scenario_evidence(text)
-
-
-def _promote_scenario_siblings(
-    roles: dict[int, str],
-    by_row: dict[int, list[dict]],
-    date1904: bool,
-) -> None:
-    """A short numeric column beside an evidenced scenario column is the same set.
-
-    «Bull» next to «Base», with numbers on the same parameter rows, is a case.
-    «Отрасль» with text in those rows is not.
-    """
-    evidenced = [col for col, role in roles.items() if role == "scenario"]
-    if not evidenced:
-        return
-    numeric_rows: dict[int, set[int]] = defaultdict(set)
-    for row_n, cells in by_row.items():
-        for cell in cells:
-            if cell.get("hidden"):
-                continue
-            text = _text(cell, date1904)
-            if text and _is_number(text):
-                numeric_rows[int(cell["col"])].add(int(row_n))
-    for col, role in list(roles.items()):
-        if role != "unknown":
-            continue
-        caption = _column_caption(by_row, col, date1904)
-        if not caption or len(caption) > 24 or _header_role(caption) or _is_index_header(caption):
-            continue
-        shared = numeric_rows.get(col, set())
-        if any(len(shared & numeric_rows.get(other, set())) >= 2 for other in evidenced):
-            roles[col] = "scenario"
 
 
 def _column_caption(
@@ -824,7 +790,7 @@ def _axis_headers(
                 period_key=_slug(text) if role == "scenario" else role,
             )
         )
-    return headers
+    return _separate_value_keys(headers)
 
 
 def _stub_role(cell: dict, row: int, date1904: bool) -> str | None:
@@ -914,9 +880,8 @@ def _header_role(text: str) -> str | None:
 
     An exact normalized caption wins. Otherwise the first word may carry the role
     when at most two short qualifiers follow it (``Комментарии КП``,
-    ``Источник информации``, ``Source of information``). A value, label, or unit
-    head whose qualifier is a scenario word stays unmatched, so that caption can
-    still be a scenario column.
+    ``Источник информации``, ``Source of information``). The qualifier is not
+    classified: ``Значение базовое`` stays a value column and keeps its text.
     """
     folded = text.replace("Ё", "Е").replace("ё", "е")
     n = re.sub(r"[\W_]+", " ", folded.casefold()).strip()
@@ -931,8 +896,6 @@ def _header_role(text: str) -> str | None:
         return None
     tail = parts[1:]
     if any(len(word) > _HEADER_QUALIFIER_WORD_CHARS for word in tail):
-        return None
-    if role != "note" and has_scenario_evidence(" ".join(tail)):
         return None
     return role
 
@@ -985,6 +948,33 @@ def _is_number(text: str) -> bool:
     return True
 
 
+def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
+    """Several value columns need distinct keys. One value column stays ``value``.
+
+    A header the closed list already calls a value (``Значение``, ``Value``)
+    keeps ``value``. Any other header takes a slug of its own text, so ``Base``
+    and ``Upside`` do not collapse onto one observation. An empty or repeated
+    slug becomes ``value-<column>``. Columns that still share ``value`` stay
+    shared.
+    """
+    if sum(1 for header in headers if header.role == "value") < 2:
+        return headers
+    used: set[str] = set()
+    separated: list[AxisHeader] = []
+    for header in headers:
+        if header.role != "value":
+            separated.append(header)
+            continue
+        if _header_role(header.text) == "value":
+            separated.append(header.model_copy(update={"period_key": "value"}))
+            continue
+        key = _slug(header.text)
+        if not key or key in used:
+            key = f"value-{index_to_col(header.col).lower()}"
+        used.add(key)
+        separated.append(header.model_copy(update={"period_key": key}))
+    return separated
+
+
 def _slug(text: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")
-    return slug or "scenario"
+    return re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")

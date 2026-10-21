@@ -542,8 +542,9 @@ def test_graph_selects_active_value_column() -> None:
     ]
     layout = detect_layout(cells, edges=edges)
     block = layout.sheets[0].blocks[0]
-    value_cols = {header.col for header in block.axis.headers if header.role == "value"}
-    assert value_cols == {4}
+    headers = {header.col: (header.role, header.text) for header in block.axis.headers}
+    assert headers[3] == ("value", "Base")
+    assert headers[4] == ("value", "Values")
 
 
 def test_unit_caption_does_not_replace_the_debt_section() -> None:

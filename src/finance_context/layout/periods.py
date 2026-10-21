@@ -11,7 +11,6 @@ from finance_context.layout.lexicon import (
     accepts,
     blocked_surface,
     data_token,
-    is_scenario_caption,
     matches_entry,
     month_numbers,
     pattern,
@@ -239,8 +238,6 @@ def _classify(token: str | None, raw: str) -> PeriodHit | None:
     del token
     if _listed(raw, "structural", "stub"):
         return PeriodHit(kind="stub", period_key="stub", explicit_role=True)
-    if is_scenario_caption(raw):
-        return PeriodHit(kind="scenario", period_key=raw.casefold(), explicit_role=True)
     return _one_calendar(raw)
 
 
@@ -519,7 +516,6 @@ def compose_period(
             atom
             for atom in calendar
             if atom.period_key in {"total", "stub"}
-            or (atom.column_kind == "scenario" and atom.period_key)
         ),
         None,
     )
@@ -933,7 +929,7 @@ def _compose_mark(atoms: list[HeaderAtom]) -> tuple[ColumnKind, str | None, bool
         if atom.explicit_role and atom.variant and atom.column_kind in {"period", "stub", None}:
             return atom.column_kind or "period", atom.variant, True
     for atom in atoms:
-        if atom.column_kind in {"total", "stub", "scenario"}:
+        if atom.column_kind in {"total", "stub"}:
             return atom.column_kind, atom.variant, True
     return "period", None, False
 

@@ -17,8 +17,6 @@ def test_quarter_inflection_is_the_listed_ending() -> None:
     assert not accepts("period_words", "year", surface="график")
     assert accepts("period_words", "half", surface="полугодия")
     assert accepts("structural", "quarter_label", surface="квартального")
-    assert accepts("structural", "scenario_adjectives", surface="базовое")
-    assert accepts("structural", "scenario", surface="сценария")
 
 
 def test_month_cases_map_to_the_month_number() -> None:
@@ -43,7 +41,6 @@ def test_false_friends_are_not_period_surfaces() -> None:
     assert blocked_surface("кВт")
     assert not blocked_surface("год")
     assert accepts("structural", "quarter_label", surface="quarterly")
-    assert not accepts("structural", "scenario", surface="stressed")
     assert not accepts("period_words", "quarter", surface="quarterly")
 
 

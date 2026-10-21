@@ -1,7 +1,7 @@
-"""Tables whose column headers the lexicon does not know stay in the context.
+"""Numeric params columns stay in the context as values. The header text is kept.
 
 Each book has one sheet: a label column, a header row, and four rows of numbers.
-A miss is a block with ``unknown`` columns and a warning, never an empty context.
+A period-like header that does not form an axis stays ``unknown`` and warns.
 """
 
 from __future__ import annotations
@@ -64,25 +64,25 @@ def _unknown_columns(doc: ContextDocument) -> dict[str, list[str | None]]:
         ["Параметр", "Мин", "Макс"],
     ],
 )
-def test_side_by_side_numeric_columns_stay_unknown(tmp_path: Path, header: list[str]) -> None:
+def test_side_by_side_numeric_columns_are_values(tmp_path: Path, header: list[str]) -> None:
     doc = _run(tmp_path, header)
-    columns = _unknown_columns(doc)
-    assert list(columns) == header[1:]
-    for col, text in enumerate(header[1:], start=1):
-        assert columns[text] == [str(100 * row + col) for row in range(1, 5)]
-    warning = next(item for item in doc.warnings if "Unrecognized column headers" in item)
-    assert all(f"«{text}»" in warning for text in header[1:])
-    assert "scenario" not in warning
-    assert warning in (tmp_path / "job" / "context.md").read_text(encoding="utf-8")
+    block = doc.blocks[0]
+    assert [period["text"] for period in block.periods] == header[1:]
+    assert [period["role"] for period in block.periods] == ["value"] * (len(header) - 1)
+    for col in range(1, len(header)):
+        assert [row.series[0].values[col - 1] for row in block.rows] == [
+            str(100 * row_n + col) for row_n in range(1, 5)
+        ]
+    assert not any("Unrecognized column headers" in item for item in doc.warnings)
+    assert not any("scenario" in item for item in doc.warnings)
 
 
-def test_single_unknown_value_column_is_kept_without_a_scenario_hint(tmp_path: Path) -> None:
+def test_single_numeric_column_is_a_value_and_the_unit_column_stays(tmp_path: Path) -> None:
     doc = _run(tmp_path, ["Item", "Amount", "Unit"], unit_col=True)
-    columns = _unknown_columns(doc)
-    assert columns == {"Amount": ["101", "201", "301", "401"]}
-    warning = next(item for item in doc.warnings if "Unrecognized column headers" in item)
-    assert "«Amount»" in warning
-    assert "scenario" not in warning
+    periods = {period["text"]: period["role"] for period in doc.blocks[0].periods}
+    assert periods["Amount"] == "value"
+    assert [row.series[0].values[0] for row in doc.blocks[0].rows] == ["101", "201", "301", "401"]
+    assert not any("scenario" in item for item in doc.warnings)
     units = {
         cell.cached_value for row in doc.blocks[0].rows for cell in row.cells if cell.role == "unit"
     }

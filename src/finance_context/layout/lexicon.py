@@ -1,10 +1,10 @@
 """Closed lists of format words. The parser does not stem and does not overlay.
 
-Calendar words, month names, totals, stubs, units-as-headers and the scenario
-lists that stage 3 still reads live here. A word matches whole. A longer word
-matches only when the extra part is one grammatical ending from ``_INFLECTIONS``.
-Words of at most three letters stay exact, so ``кв`` is not ``квота`` and ``г``
-is not ``график``. There is no stemmer and no user lexicon file.
+Calendar words, month names, totals, stubs and units-as-headers live here.
+A word matches whole. A longer word matches only when the extra part is one
+grammatical ending from ``_INFLECTIONS`` or one closed paradigm. Words of at
+most three letters stay exact, so ``кв`` is not ``квота`` and ``г`` is not
+``график``. There is no stemmer and no user lexicon file.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from functools import cache
 
 _SHORT = 3
 # Citation ending -> the other endings of that closed paradigm.
-# ``ый``/``ой`` are adjectives (``базовый`` / ``базовое``). ``ий`` and ``ие`` are
-# nouns (``сценарий`` / ``сценария``, ``полугодие`` / ``полугодия``).
+# ``ый``/``ой`` are adjectives (``квартальный`` / ``квартальное``). ``ий`` and ``ие`` are
+# nouns (``комментарий`` / ``комментария``, ``полугодие`` / ``полугодия``).
 _PARADIGMS: tuple[tuple[str, frozenset[str]], ...] = (
     ("ый", frozenset({"ый", "ая", "ое", "ого", "ому", "ым", "ую", "ые", "ых", "ыми"})),
     ("ой", frozenset({"ой", "ая", "ое", "ого", "ому", "ым", "ую", "ые", "ых", "ыми"})),
@@ -133,42 +133,6 @@ _PERIOD_WORDS: dict[str, tuple[str, ...]] = {
 _TOTAL_WORDS = ("итого", "всего", "total", "sum", "итог")
 _STUB_WORDS = ("stub", "частичный", "partial")
 
-_SCENARIO = (
-    "base",
-    "base case",
-    "upside",
-    "downside",
-    "stress",
-    "негативный",
-    "позитивный",
-    "сценарий",
-)
-_SCENARIO_ADJECTIVES = (
-    "базовый",
-    "пессимистичный",
-    "оптимистичный",
-    "негативный",
-    "позитивный",
-    "консервативный",
-    "стрессовый",
-)
-_SCENARIO_EVIDENCE = (
-    "базовый",
-    "консервативный",
-    "оптимистичный",
-    "пессимистичный",
-    "стрессовый",
-    "стресс",
-    "сценарий",
-    "base",
-    "upside",
-    "downside",
-    "case",
-    "scenario",
-    "stress",
-)
-_SCENARIO_HEADER = ("case", "scenario")
-
 # Citation forms. ``month_numbers`` adds the closed set of case endings.
 _MONTH_CITATIONS: dict[str, tuple[str, ...]] = {
     "1": ("jan", "january", "янв", "январь"),
@@ -212,9 +176,6 @@ _NOT_PERIOD = frozenset(
         "график",
         "группа",
         "годовой",
-        "based",
-        "basement",
-        "stressed",
         "quarterly",
     }
 )
@@ -229,10 +190,6 @@ _LISTS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("period_words", "year"): _PERIOD_WORDS["year"],
     ("structural", "total"): _TOTAL_WORDS,
     ("structural", "stub"): _STUB_WORDS,
-    ("structural", "scenario"): _SCENARIO,
-    ("structural", "scenario_adjectives"): _SCENARIO_ADJECTIVES,
-    ("structural", "scenario_evidence"): _SCENARIO_EVIDENCE,
-    ("structural", "scenario_header"): _SCENARIO_HEADER,
     ("structural", "quarter_label"): _QUARTER_LABEL,
     ("structural", "month_label"): _MONTH_LABEL,
     ("structural", "period_start"): _PERIOD_START,
@@ -408,40 +365,3 @@ def _expand_month(folded: str) -> bool:
     if folded.endswith(("ь", "й")):
         return True
     return len(folded) >= 4
-
-
-def _scenario_compact(text: str) -> str:
-    folded = _fold(text).strip()
-    folded = re.sub(r"\s*[:\-–—−]\s*", " ", folded)
-    return re.sub(r"\s+", " ", folded).strip()
-
-
-def is_scenario_caption(text: str) -> bool:
-    """A whole period header that names a case: ``Upside``, ``базовый сценарий``."""
-    compact = _scenario_compact(text)
-    for entry in words("structural", "scenario"):
-        root = _fold(entry)
-        if " " in root and compact == root:
-            return True
-        if " " not in root and matches_entry(compact, entry):
-            return True
-    parts = compact.split()
-    if len(parts) != 2:
-        return False
-    if matches_entry(parts[0], "сценарий"):
-        return True
-    adjectives = words("structural", "scenario_adjectives")
-    if not any(matches_entry(parts[0], item) for item in adjectives):
-        return False
-    return matches_entry(parts[1], "сценарий")
-
-
-def has_scenario_evidence(text: str) -> bool:
-    """Positive scenario wording. A bare short caption is not evidence."""
-    folded = _fold(text)
-    if is_scenario_caption(folded):
-        return True
-    for token in re.findall(r"[^\W\d_]+", folded):
-        if any(matches_entry(token, entry) for entry in words("structural", "scenario_evidence")):
-            return True
-    return False

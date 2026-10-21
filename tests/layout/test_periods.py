@@ -81,7 +81,7 @@ def test_bare_fact_and_plan_are_not_periods() -> None:
 
 
 def test_scenario_and_total_hint_and_stub() -> None:
-    assert classify_header("Upside").kind == "scenario"  # type: ignore[union-attr]
+    assert classify_header("Upside") is None
     assert classify_header("Итого") is None
     assert is_total_word("Итого")
     assert classify_header("stub").kind == "stub"  # type: ignore[union-attr]
@@ -608,11 +608,8 @@ def test_words_that_start_like_a_month_are_not_months(text: str) -> None:
         "Стрессовый сценарий",
     ],
 )
-def test_scenario_headers_accept_either_word_order(text: str) -> None:
-    hit = classify_header(text)
-    assert hit is not None
-    assert hit.kind == "scenario"
-    assert hit.explicit_role is True
+def test_case_names_are_not_periods(text: str) -> None:
+    assert classify_header(text) is None
 
 
 @pytest.mark.parametrize(

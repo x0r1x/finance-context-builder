@@ -41,12 +41,15 @@ def test_scenario_table_is_a_params_block_with_live_and_case_columns() -> None:
     sheet = _layout().sheets[0]
     scenario = next(block for block in sheet.blocks if block.block_id == f"{SHEET}!r49")
     assert scenario.kind == "params"
-    headers = [(header.col, header.role, header.text) for header in scenario.axis.headers]
+    headers = [
+        (header.col, header.role, header.text, header.period_key)
+        for header in scenario.axis.headers
+    ]
     assert headers == [
-        (12, "value", "Live Case"),
-        (14, "scenario", "Case 1"),
-        (15, "scenario", "Case 2"),
-        (16, "scenario", "Case 3"),
+        (12, "value", "Live Case", "value"),
+        (14, "value", "1", "1"),
+        (15, "value", "2", "2"),
+        (16, "value", "3", "3"),
     ]
     assert 49 not in {row.row for row in scenario.rows}
     assert {50, 51, 64} <= {row.row for row in scenario.rows}

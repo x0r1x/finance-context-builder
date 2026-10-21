@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from finance_context.excel.a1 import parse_addr
+from finance_context.excel.a1 import index_to_col, parse_addr
 from finance_context.layout.detect import detect_layout
+
+
+def _value_key(text: str, col: int) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")
+    return slug or f"value-{index_to_col(col).lower()}"
 
 
 def _c(
@@ -88,7 +95,7 @@ def test_params_block_from_scenario_matrix() -> None:
     assert all(cell.role != "scenario" for cell in selector.cells)
     by_col = {header.col: header for header in block.axis.headers}
     assert by_col[6].text == "Base Case"
-    assert by_col[6].role == "scenario"
+    assert by_col[6].role == "value"
     assert by_col[7].text == "Scenario 2"
     assert block.label_col == 2
     unit_cols = {cell.role for cell in labels["Tax Rate"].cells}
@@ -150,7 +157,7 @@ def test_params_block_from_parameter_table() -> None:
     roles = {cell.role for cell in tax.cells}
     assert "unit" in roles
     assert "value" in roles
-    assert "scenario" in roles
+    assert "scenario" not in roles
 
 
 def test_russian_param_headers_name_value_unit_and_note_columns() -> None:
@@ -334,18 +341,36 @@ def test_unknown_short_param_header_is_not_a_scenario_column() -> None:
         ["Parameter", "Base case", "Upside", "Downside"],
     ],
 )
-def test_scenario_words_mark_scenario_columns(heads: list[str]) -> None:
+def test_case_names_are_value_columns_with_their_own_keys(heads: list[str]) -> None:
     cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
     for r, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
         cells.append(_c("Cases", f"A{r}", label))
         for col, amount in zip("BCD", ["10", "11", "12"], strict=True):
             cells.append(_c("Cases", f"{col}{r}", amount))
     headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
-    assert [header.role for header in headers] == ["scenario", "scenario", "scenario"]
+    assert [header.role for header in headers] == ["value", "value", "value"]
     assert [header.text for header in headers] == heads[1:]
+    assert [header.period_key for header in headers] == [
+        _value_key(text, col) for text, col in zip(heads[1:], (2, 3, 4), strict=True)
+    ]
 
 
-def test_numeric_siblings_of_a_scenario_column_stay_scenarios() -> None:
+def test_a_value_caption_keeps_the_value_key_beside_case_columns() -> None:
+    heads = ["Параметр", "Значение", "Base", "Upside"]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
+    for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells.append(_c("Cases", f"A{row}", label))
+        for col, amount in zip("BCD", ["10", "11", "12"], strict=True):
+            cells.append(_c("Cases", f"{col}{row}", amount))
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [(header.text, header.role, header.period_key) for header in headers] == [
+        ("Значение", "value", "value"),
+        ("Base", "value", "base"),
+        ("Upside", "value", "upside"),
+    ]
+
+
+def test_numeric_case_columns_are_values_and_a_short_caption_stays_unknown() -> None:
     heads = ["Параметр", "Base", "Bull", "Отрасль"]
     cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
     body = [
@@ -362,9 +387,12 @@ def test_numeric_siblings_of_a_scenario_column_stay_scenarios() -> None:
         ]
     block = detect_layout(cells).sheets[0].blocks[0]
     headers = {header.text: header.role for header in block.axis.headers}
-    assert headers["Base"] == "scenario"
-    assert headers["Bull"] == "scenario"
+    assert headers["Base"] == "value"
+    assert headers["Bull"] == "value"
     assert headers["Отрасль"] == "unknown"
+    keys = {header.text: header.period_key for header in block.axis.headers}
+    assert keys["Base"] == "base"
+    assert keys["Bull"] == "bull"
 
 
 @pytest.mark.parametrize("caption", ["№ п/п", "№", "#", "No."])
@@ -407,8 +435,8 @@ def test_note_head_word_keeps_a_short_qualifier() -> None:
     assert _header_role("Периодичность") is None
     assert _header_role("Значение, руб.") == "value"
     assert _header_role("Источник информации для всей модели и всех приложений") is None
-    assert _header_role("Значение базовое") is None
-    assert _header_role("Value upside") is None
+    assert _header_role("Значение базовое") == "value"
+    assert _header_role("Value upside") == "value"
 
 
 def test_qualified_note_columns_stay_notes_and_scenario_captions_stay_scenarios() -> None:
@@ -435,7 +463,7 @@ def test_qualified_note_columns_stay_notes_and_scenario_captions_stay_scenarios(
     }
     assert headers["Комментарии КП"] == "note"
     assert headers["Источник информации"] == "note"
-    assert headers["Значение базовое"] == "scenario"
+    assert headers["Значение базовое"] == "value"
     assert headers["Отрасль"] == "unknown"
 
 
@@ -469,7 +497,7 @@ def test_unit_and_note_columns_follow_the_values_under_an_unknown_header() -> No
         header.text: header.role
         for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
     }
-    assert headers["Base"] == "scenario"
-    assert headers["Bull"] == "scenario"
+    assert headers["Base"] == "value"
+    assert headers["Bull"] == "value"
     assert headers["Мера"] == "unit"
     assert headers["Пояснение"] == "note"
