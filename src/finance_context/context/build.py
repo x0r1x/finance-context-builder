@@ -421,11 +421,9 @@ def _formula_neighbors(
     precedents: dict[tuple[str, int], list[str]],
     dependents: dict[tuple[str, int], list[str]],
 ) -> list[str]:
-    seen: list[str] = []
-    for ref in [*precedents.get((sheet, row), []), *dependents.get((sheet, row), [])]:
-        if ref not in seen:
-            seen.append(ref)
-    return seen
+    return list(
+        dict.fromkeys([*precedents.get((sheet, row), []), *dependents.get((sheet, row), [])])
+    )
 
 
 

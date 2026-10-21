@@ -16,7 +16,7 @@ from finance_context.api.routes import router
 from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline, mark_job_failed
 from finance_context.errors import ContextError
-from finance_context.memory import budget_for_settings
+from finance_context.memory import budget_for_settings, unusable_cap_detail
 from finance_context.observability import configure_logging, log_event
 from finance_context.settings import Settings
 
@@ -36,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_concurrent_jobs=settings.max_concurrent_jobs,
         session_id=settings.session_id,
         memory_budget_bytes=budget_for_settings(settings),
+        unusable_detail=unusable_cap_detail(settings),
     )
 
     @asynccontextmanager

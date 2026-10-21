@@ -74,7 +74,9 @@ def canonical_node_id(sheet: str, addr: str) -> str:
     return f"{sheet}!{format_addr(col, row)}"
 
 
-def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> CompileResult:
+def compile_workbook(
+    dest_dir: Path, *, memory_budget: int | None = None, usage: object | None = None
+) -> CompileResult:
     meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
     raw_rows = read_parquet(dest_dir / "raw" / "cells.parquet")
@@ -121,7 +123,8 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
         for item in (meta.get("sheets") or [])
     }
     presence = _presence_index(dest_dir)
-    usage = usage_for_book(dest_dir)
+    if usage is None:
+        usage = usage_for_book(dest_dir)
     check_budget(
         formulas=formula_count,
         expanded_cells=expanded_edge_count(edges, usage=usage),

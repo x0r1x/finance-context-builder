@@ -26,8 +26,8 @@ from finance_context.memory import (
     estimate_bytes,
     formula_targets,
     prefer_oom_kill,
-    raise_budget_floor,
     resolve_job_budget_bytes,
+    unusable_cap_detail,
 )
 from finance_context.observability import JsonFormatter
 from finance_context.settings import Settings
@@ -55,6 +55,7 @@ def test_formula_targets_count_whole_columns_and_skip_strings() -> None:
     targets = formula_targets(formula, "Report")
     assert targets == ["Data!$A:$A", "Report!$A2", "Data!C:C"]
     assert sum(expansion_count(target) for target in targets) == RANGE_EXPAND_CAP * 2 + 1
+    assert formula_targets("=SUM(A1 : A5000)", "Report") == ["Report!A1:A5000"]
 
 
 def test_budget_reserves_a_quarter_and_splits_the_rest() -> None:
@@ -77,18 +78,27 @@ def test_unlimited_cgroup_has_no_budget() -> None:
     assert resolve_job_budget_bytes(slots=2, limit_bytes=None, read_cgroup=False) is None
 
 
-def test_budget_below_the_child_baseline_is_raised(caplog) -> None:
+def test_budget_below_the_child_baseline_is_not_raised(monkeypatch, caplog) -> None:
     memory._budget_warnings.clear()
     caplog.set_level(logging.WARNING, logger="finance_context.pipeline")
     tiny = 64 * 1024 * 1024
-    assert raise_budget_floor(tiny) == JOB_MEMORY_FLOOR_BYTES
-    assert raise_budget_floor(tiny) == JOB_MEMORY_FLOOR_BYTES
-    assert raise_budget_floor(JOB_MEMORY_FLOOR_BYTES) == JOB_MEMORY_FLOOR_BYTES
-    assert raise_budget_floor(None) is None
+    monkeypatch.delenv("JOB_MEMORY_BUDGET_BYTES", raising=False)
+    settings = Settings(_env_file=None, max_concurrent_jobs=2, job_memory_budget_bytes=tiny)
+    assert memory.budget_for_settings(settings) == tiny
+    assert memory.budget_for_settings(settings) == tiny
+    assert unusable_cap_detail(settings) is not None
     warnings = [record for record in caplog.records if record.event == "memory_budget_floor"]
     assert len(warnings) == 1
     assert warnings[0].configured == tiny
-    assert warnings[0].budget_bytes == JOB_MEMORY_FLOOR_BYTES
+    assert warnings[0].budget_bytes == tiny
+
+    memory._budget_warnings.clear()
+    monkeypatch.setattr(memory, "cgroup_memory_limit_bytes", lambda *_a, **_k: 256 * 1024 * 1024)
+    derived = Settings(_env_file=None, max_concurrent_jobs=2, job_memory_budget_bytes=None)
+    share = (256 * 1024 * 1024 - (256 * 1024 * 1024) // 4) // 2
+    assert share < JOB_MEMORY_FLOOR_BYTES
+    assert memory.budget_for_settings(derived) == share
+    assert unusable_cap_detail(derived) is None
 
 
 def test_unlimited_cgroup_uses_the_default_budget(monkeypatch, caplog) -> None:
@@ -271,11 +281,81 @@ def test_memory_error_in_the_child_is_workbook_too_large(
         run_job_process(str(tmp_path), job_id)
     finally:
         Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
-    text = capsys.readouterr().out + capsys.readouterr().err
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
     meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
     assert meta["error"] == "workbook_too_large"
     assert "ran out of memory" in meta["detail"]
     assert "Traceback" not in text
+
+
+def test_job_body_returns_only_the_workbook_too_large_detail() -> None:
+    from finance_context.api.routes.jobs import _job_body
+
+    hidden = _job_body(
+        "job",
+        {
+            "status": "failed",
+            "error": "conversion_failed",
+            "detail": "soffice exited: /tmp/secret/profile",
+        },
+    )
+    assert "detail" not in hidden
+    shown = _job_body(
+        "job",
+        {"status": "failed", "error": "workbook_too_large", "detail": "about 10 MiB"},
+    )
+    assert shown["detail"] == "about 10 MiB"
+
+
+def test_configured_cap_below_the_baseline_refuses_before_parse(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", str(64 * 1024 * 1024))
+    monkeypatch.setenv("LOG_JSON", "true")
+    job_id = "job"
+    shared = shared_book_dir(tmp_path, job_id)
+    shared.mkdir(parents=True)
+    _book(shared / "source.xlsx")
+    previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
+    try:
+        run_job_process(str(tmp_path), job_id)
+    finally:
+        Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
+    meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["error"] == "workbook_too_large"
+    assert "below" in meta["detail"]
+    assert not (shared / "raw" / "workbook.json").is_file()
+
+
+def test_preflight_follows_parsed_edges(tmp_path: Path, dest: Path) -> None:
+    data = [CellSpec(addr=f"A{row}", value="1") for row in range(1, 41)]
+    other = [CellSpec(addr=f"A{row}", value="1") for row in range(1, 4)]
+    report = [
+        CellSpec(addr="A1", value="1"),
+        CellSpec(addr="B2", value="1", formula="SUM([1]Data!A:A)"),
+        CellSpec(addr="B3", value="1", formula="SUM(Лист!A:A)"),
+        CellSpec(addr="B4", value="1", formula="DEC2HEX(A1)"),
+        CellSpec(addr="B5", value="1", formula="LOG10(A1)"),
+        CellSpec(addr="B6", value="1", formula="SUM(1:10)"),
+        CellSpec(addr="B7", value="1", formula="SUM(A1 : A5000)"),
+    ]
+    source = tmp_path / "grammar.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(name="Data", cells=data),
+            SheetSpec(name="Лист", cells=other),
+            SheetSpec(name="Report", cells=report),
+        ],
+    )
+    parse_workbook(source, dest)
+    estimate = assess_raw(dest)
+    # External column is one edge. The Cyrillic column is its 3 present cells.
+    # DEC2HEX and LOG10 are the real A1 only. SUM(1:10) and the spaced range
+    # do not parse, so they add no cells.
+    assert estimate.formulas == 6
+    assert estimate.expanded_cells == 6
 
 
 def test_assess_raw_counts_formulas(tmp_path: Path, dest: Path) -> None:

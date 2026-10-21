@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ from pathlib import Path
 from finance_context.errors import ContextError
 from finance_context.observability import log_event
 from finance_context.settings import Settings
-from finance_context.store.fs import read_parquet
+from finance_context.store.fs import read_parquet, read_parquet_columns
 
 # Same logger as stage_done and the layout step timings, so one formatter and one stream.
 _LOGGER = logging.getLogger("finance_context.pipeline")
@@ -23,17 +24,19 @@ _HEADROOM_DENOMINATOR = 4
 # Above this, cgroup v1 is reporting "no limit" (page_counter max).
 _UNLIMITED_BYTES = 1 << 60
 
-# RSS peaks include the child after imports. Profiled after slot cells:
-# a 40k-formula workbook peaks near 547 MiB, a 4000×96 timeline near 2041 MiB,
-# and 960 whole-column SUMIF rows near 436 MiB. The constant plus 5 KiB per
-# formula and 1 KiB per expanded cell sits about 5–17% above each of those
-# peaks, and still under a 1536 MiB job budget for the 40k-formula book.
+# RSS peaks include the child after imports. Re-measured after preflight
+# counts parsed edges: a 40k-formula workbook peaks near 571 MiB, a 4000×96
+# timeline near 2072 MiB, and 960 whole-column SUMIF rows near 437 MiB.
+# 128 MiB plus 5 KiB per formula and 1 KiB per expanded cell stays above the
+# timeline and SUMIF peaks. The 40k-formula estimate is 544 MiB, under that
+# graph peak, and still under the 1536 MiB default job budget.
 ESTIMATE_BASE_BYTES = 128 * 1024 * 1024
 BYTES_PER_FORMULA = 5 * 1024
 BYTES_PER_EXPANDED_CELL = 1 * 1024
 
-# A spawned child sits near 80 MiB after imports. A lower cap kills every book
-# during parse, before any workbook data is the cause.
+# A spawned child sits near 80 MiB after imports. A configured cap under this
+# cannot hold the process, so the job is refused. A derived cgroup share under
+# this is kept: raising it would spend the quarter reserved for the API.
 JOB_MEMORY_FLOOR_BYTES = 128 * 1024 * 1024
 # What a 4 GiB container derives with the default two slots:
 # (limit - limit // 4) // 2. Used when the cgroup reports no limit and
@@ -222,27 +225,40 @@ def budget_for_settings(settings: Settings) -> int:
                 budget_bytes=DEFAULT_JOB_BUDGET_BYTES,
             )
         budget = DEFAULT_JOB_BUDGET_BYTES
-    return raise_budget_floor(budget)
-
-
-def raise_budget_floor(budget: int | None) -> int | None:
-    """Lift a cap that sits under the child baseline. ``None`` stays unlimited."""
-    if budget is None or budget >= JOB_MEMORY_FLOOR_BYTES:
-        return budget
-    if "floor" not in _budget_warnings:
+    if budget < JOB_MEMORY_FLOOR_BYTES and "floor" not in _budget_warnings:
         _budget_warnings.add("floor")
+        configured = settings.job_memory_budget_bytes
+        if configured is not None and configured > 0:
+            message = (
+                "JOB_MEMORY_BUDGET_BYTES is below the child baseline; "
+                "the job is refused and the cap is not raised"
+            )
+        else:
+            message = (
+                "derived job memory budget is below the child baseline; "
+                "the cgroup share is kept and the cap is not raised"
+            )
         log_event(
             _LOGGER,
             logging.WARNING,
             "memory_budget_floor",
-            (
-                "job memory budget is below the child baseline; "
-                f"using the {_mib(JOB_MEMORY_FLOOR_BYTES)} MiB floor"
-            ),
-            budget_bytes=JOB_MEMORY_FLOOR_BYTES,
-            configured=budget,
+            message,
+            budget_bytes=budget,
+            configured=configured,
         )
-    return JOB_MEMORY_FLOOR_BYTES
+    return budget
+
+
+def unusable_cap_detail(settings: Settings) -> str | None:
+    """A configured cap under the child baseline cannot run a job."""
+    configured = settings.job_memory_budget_bytes
+    if configured is None or configured <= 0 or configured >= JOB_MEMORY_FLOOR_BYTES:
+        return None
+    return (
+        "JOB_MEMORY_BUDGET_BYTES is "
+        f"{_mib(configured)} MiB, below the {_mib(JOB_MEMORY_FLOOR_BYTES)} MiB "
+        "this process needs before it reads a workbook."
+    )
 
 
 def estimate_bytes(*, formulas: int, expanded_cells: int) -> int:
@@ -293,7 +309,7 @@ def formula_targets(formula: str, sheet: str) -> list[str]:
         )
         if not body or not owner:
             continue
-        targets.append(f"{owner}!{re.sub(r'\\s+', '', body)}")
+        targets.append(f"{owner}!{re.sub(r'\s+', '', body)}")
     return targets
 
 
@@ -319,23 +335,30 @@ def usage_for_book(dest_dir: Path):
         path = dest_dir / "raw" / name
         if not path.is_file():
             continue
-        for row in read_parquet(path):
-            node = _canonical_node(row.get("sheet"), row.get("addr"))
+        for sheet, addr in read_parquet_columns(path, ("sheet", "addr")):
+            node = _canonical_node(sheet, addr)
             if node is not None:
                 nodes.append(node)
     return sheet_usage(nodes)
 
 
-def assess_raw(dest_dir: Path) -> WorkbookEstimate:
-    """Cheap size check from the parsed cell table, before formulas are compiled."""
+def assess_raw(dest_dir: Path, usage: object | None = None) -> WorkbookEstimate:
+    """Size check from the same parsed edges compile expands, before that expansion."""
     # Imported lazily: formulas/__init__ pulls compile, which imports this module.
-    from finance_context.formulas.csr import expansion_count
+    from finance_context.formulas.csr import expanded_edge_count
+    from finance_context.formulas.engine import FormulaEngine
 
     path = dest_dir / "raw" / "cells.parquet"
     if not path.is_file():
         return WorkbookEstimate(0, 0, 0, 0)
     rows = read_parquet(path)
-    usage = usage_for_book(dest_dir)
+    if usage is None:
+        usage = usage_for_book(dest_dir)
+    locale = None
+    meta_path = dest_dir / "raw" / "workbook.json"
+    if meta_path.is_file():
+        locale = json.loads(meta_path.read_text(encoding="utf-8")).get("locale_hint")
+    engine = FormulaEngine(locale_hint=locale if isinstance(locale, str) else None)
     formulas = 0
     expanded = 0
     for row in rows:
@@ -344,8 +367,9 @@ def assess_raw(dest_dir: Path) -> WorkbookEstimate:
             continue
         formulas += 1
         sheet = str(row.get("sheet") or "")
-        for target in formula_targets(str(formula), sheet):
-            expanded += expansion_count(target, usage=usage)
+        addr = str(row.get("addr") or "A1")
+        parsed = engine.parse(str(formula), sheet=sheet, addr=addr)
+        expanded += expanded_edge_count(parsed.edges, usage=usage)  # type: ignore[arg-type]
     return WorkbookEstimate(
         cells=len(rows),
         formulas=formulas,

@@ -311,6 +311,11 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
         )
     raise ApiError(404, "not_found")
 
+# Short sentences this process writes itself. Converter stderr and workbook
+# paths stay in the log and in meta.json, not in the job response.
+_PUBLIC_DETAIL = frozenset({"workbook_too_large"})
+
+
 def _job_body(job_id: str, meta: dict) -> dict:
     body = {
         "job_id": job_id,
@@ -319,8 +324,9 @@ def _job_body(job_id: str, meta: dict) -> dict:
         "warnings": meta.get("warnings") or [],
         "error": meta.get("error"),
     }
-    if meta.get("detail"):
-        body["detail"] = meta.get("detail")
+    detail = meta.get("detail")
+    if detail and meta.get("error") in _PUBLIC_DETAIL:
+        body["detail"] = detail
     if meta.get("status") not in {"queued", "running", None}:
         body["context_json_url"] = f"/v1/context-jobs/{job_id}/context.json"
         body["context_md_url"] = f"/v1/context-jobs/{job_id}/context.md"

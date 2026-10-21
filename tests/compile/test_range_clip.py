@@ -38,9 +38,11 @@ def test_whole_column_and_oversized_ranges_keep_only_present_cells() -> None:
     assert expansion_count("Data!$A:$A") == RANGE_EXPAND_CAP
 
     oversized, oversized_truncated = expand_range("Data!C1:C2500", usage=usage)
-    assert oversized_truncated is False
-    assert oversized == [f"Data!C{row}" for row in range(1, 31)]
+    assert oversized_truncated is True
+    assert len(oversized) == RANGE_EXPAND_CAP
+    assert oversized[0] == "Data!C1"
     assert "Data!C2500" not in oversized
+    assert expansion_count("Data!C1:C2500", usage=usage) == RANGE_EXPAND_CAP
 
     whole_row, _row_truncated = expand_range("Data!1:1", usage=usage)
     assert whole_row == ["Data!A1", "Data!C1"]
@@ -123,3 +125,58 @@ def test_whole_column_sumif_edge_count_follows_used_rows(tmp_path: Path, dest: P
     ]
     precedents, _dependents = row_adjacency(formula_edges, limit=0, usage=_used(used_rows))
     assert len(precedents[("Report", 1)]) == used_rows
+
+
+def test_clipped_sheet_names_follow_the_workbook_spelling() -> None:
+    usage = sheet_usage([f"Data!A{row}" for row in range(1, 6)])
+    cells, truncated = expand_range("data!A:A", usage=usage)
+    assert truncated is False
+    assert cells == [f"Data!A{row}" for row in range(1, 6)]
+    assert expansion_count("data!A:A", usage=usage) == 5
+
+
+def test_bounded_range_over_the_cap_stays_truncated_and_keeps_holes() -> None:
+    present = [f"Data!A{row}" for row in range(1, 2002) if row != 5]
+    usage = sheet_usage(present)
+    cells, truncated = expand_range("Data!A1:A2001", usage=usage)
+    assert truncated is True
+    assert len(cells) == RANGE_EXPAND_CAP
+    assert "Data!A5" in cells
+    assert "Data!A2001" not in cells
+    assert expansion_count("Data!A1:A2001", usage=usage) == RANGE_EXPAND_CAP
+
+
+def test_lowercase_sheet_sum_keeps_canonical_precedents(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "case.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="Data",
+                cells=[CellSpec(addr=f"A{row}", value=str(row)) for row in range(1, 6)],
+            ),
+            SheetSpec(
+                name="Report",
+                cells=[
+                    CellSpec(addr="A1", value="1"),
+                    CellSpec(addr="C1", value="1", formula="SUM(data!A:A)"),
+                ],
+            ),
+        ],
+    )
+    parse_workbook(source, dest)
+    compile_workbook(dest)
+    targets = {
+        edge["target"]
+        for edge in load_parquet(dest / "ir" / "cell_edges.parquet")
+        if edge["source"] == "Report!C1"
+    }
+    assert targets == {f"Data!A{row}" for row in range(1, 6)}
+
+
+def test_row_adjacency_dedupes_without_repeating_a_target() -> None:
+    rows = 40
+    usage = sheet_usage([f"Data!A{row}" for row in range(1, rows + 1)] + ["Report!C1"])
+    edge = Edge(kind="range", source="Report!C1", target="Data!A:A")
+    precedents, _dependents = row_adjacency([edge, edge], limit=0, usage=usage)
+    assert precedents[("Report", 1)] == [f"Data!{row}" for row in range(1, rows + 1)]

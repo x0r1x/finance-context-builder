@@ -27,6 +27,7 @@ from finance_context.memory import (
     check_budget,
     prefer_oom_kill,
     rss_bytes,
+    unusable_cap_detail,
     usage_for_book,
 )
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
@@ -132,6 +133,9 @@ class Pipeline:
         shared_dir: Path | None = None,
     ) -> ContextDocument:
         book = shared_dir or dest_dir
+        blocked = unusable_cap_detail(self.settings)
+        if blocked:
+            raise ContextError("workbook_too_large", blocked)
         owner = _load_owner(dest_dir)
         source_filename = source_filename or owner.get("source_filename")
         content_sha256 = content_sha256 or owner.get("content_sha256")
@@ -154,12 +158,19 @@ class Pipeline:
 
         set_stage("parse")
         estimate = None
+        usage_box: list[object | None] = [None]
+
+        def book_usage():
+            if usage_box[0] is None:
+                usage_box[0] = usage_for_book(book)
+            return usage_box[0]
+
         if not (book / "raw" / "workbook.json").is_file():
             parse_profile: dict[str, int] = {}
 
             def parse_and_count():
                 parse_workbook(ensure_xlsx(book, self.converter), book)
-                counted = assess_raw(book)
+                counted = assess_raw(book, usage_box[0] or book_usage())
                 parse_profile["cells"] = counted.cells
                 parse_profile["formulas"] = counted.formulas
                 parse_profile["estimate_bytes"] = counted.estimate_bytes
@@ -173,7 +184,7 @@ class Pipeline:
         if not ir_is_current(book):
             budget = budget_for_settings(self.settings)
             if estimate is None:
-                estimate = assess_raw(book)
+                estimate = assess_raw(book, book_usage())
             check_budget(
                 formulas=estimate.formulas,
                 expanded_cells=estimate.expanded_cells,
@@ -189,7 +200,9 @@ class Pipeline:
                 profile["budget_bytes"] = budget
 
             def compile_and_count():
-                compiled_book = compile_workbook(book, memory_budget=budget)
+                compiled_book = compile_workbook(
+                    book, memory_budget=budget, usage=book_usage()
+                )
                 profile["cells"] = len(compiled_book.cells)
                 profile["edges"] = len(compiled_book.edges)
                 profile["cell_edges"] = len(compiled_book.cell_edges)
@@ -282,7 +295,7 @@ class Pipeline:
                 stage="done",
                 graph=graph,
                 edges=edges,
-                usage=usage_for_book(book),
+                usage=book_usage(),
             )
             build_profile["formulas"] = built.workbook.formula_count
             return built

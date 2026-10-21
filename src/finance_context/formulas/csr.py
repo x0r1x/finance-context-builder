@@ -65,21 +65,31 @@ def _rectangle(body: str) -> tuple[int, int, int, int] | None:
 
 @dataclass(frozen=True, slots=True)
 class SheetUsage:
-    """Cells that exist on each sheet, as sorted row lists per column and the reverse."""
+    """Cells that exist on each sheet, as sorted row lists per column and the reverse.
+
+    Sheet names compare case-insensitively. ``canonical`` maps the folded name to
+    the spelling stored on the cell, which is the id ``known_nodes`` uses.
+    """
 
     rows_by_col: dict[str, dict[int, tuple[int, ...]]]
     cols_by_row: dict[str, dict[int, tuple[int, ...]]]
+    canonical: dict[str, str]
+
+    def sheet_name(self, sheet: str) -> str:
+        return self.canonical.get(sheet.casefold(), sheet)
 
 
 def sheet_usage(nodes: Iterable[str]) -> SheetUsage:
     """Index present cells. Whole-column expansion intersects this instead of empty rows."""
     by_col: dict[str, dict[int, set[int]]] = {}
     by_row: dict[str, dict[int, set[int]]] = {}
+    canonical: dict[str, str] = {}
     for node in nodes:
         parsed = _node_coord(node)
         if parsed is None:
             continue
         sheet, col, row = parsed
+        canonical.setdefault(sheet.casefold(), sheet)
         by_col.setdefault(sheet, {}).setdefault(col, set()).add(row)
         by_row.setdefault(sheet, {}).setdefault(row, set()).add(col)
     return SheetUsage(
@@ -91,6 +101,7 @@ def sheet_usage(nodes: Iterable[str]) -> SheetUsage:
             sheet: {row: tuple(sorted(cols)) for row, cols in rows.items()}
             for sheet, rows in by_row.items()
         },
+        canonical=canonical,
     )
 
 
@@ -109,11 +120,11 @@ def _area(c1: int, c2: int, r1: int, r2: int) -> int:
     return (c2 - c1 + 1) * (r2 - r1 + 1)
 
 
-def _clips(c1: int, c2: int, r1: int, r2: int, cap: int) -> bool:
-    """Whole column/row, or a rectangle bigger than the safety cap."""
+def _whole_axis(c1: int, c2: int, r1: int, r2: int) -> bool:
+    """A whole column or whole row. A bounded rectangle keeps the safety cap."""
     whole_column = r1 == 1 and r2 == _EXCEL_MAX_ROW
     whole_row = c1 == 1 and c2 == _EXCEL_MAX_COL
-    return whole_column or whole_row or _area(c1, c2, r1, r2) > cap
+    return whole_column or whole_row
 
 
 def _slice_sorted(values: Sequence[int], lo: int, hi: int) -> Sequence[int]:
@@ -124,10 +135,33 @@ def _slice_sorted(values: Sequence[int], lo: int, hi: int) -> Sequence[int]:
     return values[start:end]
 
 
+def _count_span(values: Sequence[int], lo: int, hi: int) -> int:
+    if not values:
+        return 0
+    return bisect.bisect_right(values, hi) - bisect.bisect_left(values, lo)
+
+
+def _present_count(
+    sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
+) -> int:
+    """How many present cells sit in the rectangle. No pair list is built."""
+    sheet = usage.sheet_name(sheet)
+    width = c2 - c1 + 1
+    height = r2 - r1 + 1
+    if width <= height:
+        columns = usage.rows_by_col.get(sheet, {})
+        return sum(_count_span(columns.get(col, ()), r1, r2) for col in range(c1, c2 + 1))
+    rows = usage.cols_by_row.get(sheet, {})
+    return sum(
+        _count_span(cols, c1, c2) for row, cols in rows.items() if r1 <= row <= r2
+    )
+
+
 def _present_pairs(
     sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
 ) -> list[tuple[int, int]]:
     """Present cells inside the rectangle, row then column."""
+    sheet = usage.sheet_name(sheet)
     found: list[tuple[int, int]] = []
     width = c2 - c1 + 1
     height = r2 - r1 + 1
@@ -163,8 +197,8 @@ def expansion_count(
     area = _area(c1, c2, r1, r2)
     if area <= 0:
         return 0
-    if usage is not None and _clips(c1, c2, r1, r2, cap):
-        return len(_present_pairs(sheet, c1, c2, r1, r2, usage))
+    if usage is not None and _whole_axis(c1, c2, r1, r2):
+        return _present_count(sheet, c1, c2, r1, r2, usage)
     return area if area <= cap else cap
 
 
@@ -189,11 +223,14 @@ def expand_range(
 ) -> tuple[list[str], bool]:
     """Expand a range.
 
-    With `usage`, a whole column, whole row, or rectangle over the cap keeps only
-    cells that are present. Every present cell is emitted, so the range is not
-    truncated. Without `usage`, the cap is still the safety bound.
+    With `usage`, a whole column or whole row keeps the present cells and is not
+    truncated. A bounded rectangle over the cap still stops at `cap` and reports
+    truncated, including the holes inside that prefix. Without `usage`, the cap
+    is the same safety bound. Sheet names resolve to the workbook spelling.
     """
     sheet, body = split_sheet_ref(target)
+    if usage is not None:
+        sheet = usage.sheet_name(sheet)
     cell = _CELL.fullmatch(body)
     if cell:
         return [f"{sheet}!{format_addr(col_to_index(cell.group(1)), int(cell.group(2)))}"], False
@@ -201,7 +238,7 @@ def expand_range(
     if rect is None:
         return [target], False
     c1, c2, r1, r2 = rect
-    if usage is not None and _clips(c1, c2, r1, r2, cap):
+    if usage is not None and _whole_axis(c1, c2, r1, r2):
         cells = [
             f"{sheet}!{index_to_col(col)}{row}"
             for row, col in _present_pairs(sheet, c1, c2, r1, r2, usage)
@@ -417,5 +454,15 @@ def _expanded_targets(
             edge.truncated = True
         return [(cell, False, trunc) for cell in cells]
     if edge.kind in {"ref", "cross_sheet"}:
-        return [(edge.target, edge.unresolved, edge.truncated)]
+        return [(_canonical_target(edge.target, usage), edge.unresolved, edge.truncated)]
     return [(edge.target, True, edge.truncated)]
+
+
+def _canonical_target(target: str, usage: SheetUsage | None) -> str:
+    if usage is None:
+        return target
+    try:
+        sheet, body = split_sheet_ref(target)
+    except ValueError:
+        return target
+    return f"{usage.sheet_name(sheet)}!{body}"

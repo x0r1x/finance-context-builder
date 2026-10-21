@@ -47,8 +47,8 @@ def row_adjacency(
     limit: int = 8,
     usage: SheetUsage | None = None,
 ) -> tuple[dict[tuple[str, int], list[str]], dict[tuple[str, int], list[str]]]:
-    precedents: dict[tuple[str, int], list[str]] = defaultdict(list)
-    dependents: dict[tuple[str, int], list[str]] = defaultdict(list)
+    precedents: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
+    dependents: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
     for raw in edges:
         edge = as_edge(raw)
         if edge.named:
@@ -62,12 +62,10 @@ def row_adjacency(
                 continue
             src_ref = row_key_ref(*source)
             tgt_ref = row_key_ref(*target)
-            if tgt_ref not in precedents[source]:
-                precedents[source].append(tgt_ref)
-            if src_ref not in dependents[target]:
-                dependents[target].append(src_ref)
-    if limit > 0:
-        for table in (precedents, dependents):
-            for key, values in table.items():
-                table[key] = values[:limit]
-    return dict(precedents), dict(dependents)
+            precedents[source].setdefault(tgt_ref, None)
+            dependents[target].setdefault(src_ref, None)
+    cut = limit if limit > 0 else None
+    return (
+        {key: list(values)[:cut] for key, values in precedents.items()},
+        {key: list(values)[:cut] for key, values in dependents.items()},
+    )

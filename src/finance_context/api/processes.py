@@ -55,6 +55,7 @@ class JobProcesses:
         max_concurrent_jobs: int = 2,
         session_id: str = LOCAL_SESSION,
         memory_budget_bytes: int | None = None,
+        unusable_detail: str | None = None,
     ) -> None:
         self._data_dir = str(data_dir)
         self._session_id = session_id or LOCAL_SESSION
@@ -64,6 +65,7 @@ class JobProcesses:
         self._budget = (
             memory_budget_bytes if memory_budget_bytes and memory_budget_bytes > 0 else None
         )
+        self._unusable_detail = unusable_detail
         self._procs: dict[str, multiprocessing.Process] = {}
         self._generations: dict[str, int] = {}
         self._closed: set[tuple[str, int]] = set()
@@ -91,6 +93,18 @@ class JobProcesses:
     def launch(self, job_id: str) -> bool:
         """Start the child. False when this call would pass the process cap."""
         generation = self._bus.current_generation(job_id)
+        if self._unusable_detail:
+            dest = session_job_dir(Path(self._data_dir), job_id, self._session_id)
+            mark_job_failed(
+                dest,
+                job_id,
+                "workbook_too_large",
+                generation,
+                detail=self._unusable_detail,
+            )
+            self._bus.abandon(job_id, generation, "workbook_too_large")
+            self.release_reservation(job_id)
+            return True
         with self._lock:
             previous = self._procs.get(job_id)
             reserved = job_id in self._reserved
