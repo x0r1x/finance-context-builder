@@ -1,14 +1,36 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from pathlib import Path
 
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 from finance_context.layout.models import Layout
+from finance_context.observability import log_event
 from finance_context.store.fs import read_parquet, write_json
 
 _PARSE_FACTS = ("style_indent", "outline_level", "col_outline_level")
+_LOGGER = logging.getLogger("finance_context.pipeline")
+
+
+def _timed_step(event: str, msg: str, fn):
+    """Log one layout step with `duration_ms`, like pipeline `_timed`.
+
+    Job id and the current stage are left for JsonFormatter to attach.
+    """
+    started = time.monotonic()
+    try:
+        return fn()
+    finally:
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            event,
+            msg,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
 
 
 def layout_workbook(
@@ -49,17 +71,25 @@ def layout_workbook(
                 summary_below[name] = bool(sheet.get("summary_below"))
     cells = _overlay_merges(cells, meta)
     defined_names = None if meta is None else meta.get("defined_names")
-    layout = detect_layout(
-        cells,
-        date1904=date1904,
-        edges=edges,
-        hidden_sheets=hidden_sheets,
-        hidden_columns=hidden_columns,
-        hidden_rows=hidden_rows,
-        summary_below=summary_below,
-        defined_names=defined_names,
+    layout = _timed_step(
+        "layout_detect",
+        "detect_layout done",
+        lambda: detect_layout(
+            cells,
+            date1904=date1904,
+            edges=edges,
+            hidden_sheets=hidden_sheets,
+            hidden_columns=hidden_columns,
+            hidden_rows=hidden_rows,
+            summary_below=summary_below,
+            defined_names=defined_names,
+        ),
     )
-    write_json(dest_dir / "layout.json", layout.model_dump(mode="json"))
+    _timed_step(
+        "layout_write",
+        "layout.json write done",
+        lambda: write_json(dest_dir / "layout.json", layout.model_dump(mode="json")),
+    )
     return layout
 
 
@@ -108,7 +138,12 @@ def _overlay_parse_facts(dest_dir: Path, cells: list[dict]) -> list[dict]:
     if not cells or not path.is_file():
         return cells
     facts: dict[tuple[object, int, int], dict[str, int]] = {}
-    for raw in read_parquet(path):
+    raw_rows = _timed_step(
+        "layout_cells_read",
+        "raw/cells.parquet read done",
+        lambda: read_parquet(path),
+    )
+    for raw in raw_rows:
         picked: dict[str, int] = {}
         for key in _PARSE_FACTS:
             value = raw.get(key)
