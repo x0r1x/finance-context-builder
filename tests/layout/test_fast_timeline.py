@@ -47,9 +47,9 @@ def test_scenario_table_is_a_params_block_with_live_and_case_columns() -> None:
     ]
     assert headers == [
         (12, "value", "Live Case", "value"),
-        (14, "value", "1", "1"),
-        (15, "value", "2", "2"),
-        (16, "value", "3", "3"),
+        (14, "value", "Case 1", "case-1"),
+        (15, "value", "Case 2", "case-2"),
+        (16, "value", "Case 3", "case-3"),
     ]
     assert 49 not in {row.row for row in scenario.rows}
     assert {50, 51, 64} <= {row.row for row in scenario.rows}

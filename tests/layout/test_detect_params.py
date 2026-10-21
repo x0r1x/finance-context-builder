@@ -4,13 +4,15 @@ import re
 
 import pytest
 
-from finance_context.excel.a1 import index_to_col, parse_addr
+from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 
 
-def _value_key(text: str, col: int) -> str:
+def _value_key(text: str, _col: int) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")
-    return slug or f"value-{index_to_col(col).lower()}"
+    if not slug or not any(char.isalpha() for char in slug):
+        return "value"
+    return slug
 
 
 def _c(
@@ -353,6 +355,73 @@ def test_case_names_are_value_columns_with_their_own_keys(heads: list[str]) -> N
     assert [header.period_key for header in headers] == [
         _value_key(text, col) for text, col in zip(heads[1:], (2, 3, 4), strict=True)
     ]
+
+
+def test_a_digit_only_slug_does_not_split_shared_value_columns() -> None:
+    """Long captions whose letters do not survive the slug keep the key ``value``."""
+    heads = [
+        "Параметр",
+        "альфа бета гамма 11112222",
+        "дельта эпсилон зета 33334444",
+    ]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABC", heads, strict=True)]
+    for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells += [
+            _c("Cases", f"A{row}", label),
+            _c("Cases", f"B{row}", "10"),
+            _c("Cases", f"C{row}", "11"),
+        ]
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [(header.role, header.period_key) for header in headers] == [
+        ("value", "value"),
+        ("value", "value"),
+    ]
+    assert [header.text for header in headers] == heads[1:]
+
+
+def test_case_run_name_comes_from_the_row_label() -> None:
+    """The 1..n cells are values. The header is the row label plus the place."""
+    years = ["2020", "2021", "2022", "2023", "2024", "2025"]
+    cells = [_c("Model", "A1", "Item")]
+    cells += [_c("Model", f"{col}1", year) for col, year in zip("BCDEFG", years, strict=True)]
+    cells += [
+        _c("Model", "A2", "Case Number"),
+        _c("Model", "B2", "1"),
+        _c("Model", "C2", "2"),
+        _c("Model", "D2", "3"),
+        _c("Model", "A3", "Price"),
+        _c("Model", "B3", "10"),
+        _c("Model", "C3", "11"),
+        _c("Model", "D3", "12"),
+    ]
+    blocks = detect_layout(cells).sheets[0].blocks
+    case = next(block for block in blocks if block.kind == "params")
+    assert [(header.text, header.role, header.period_key) for header in case.axis.headers] == [
+        ("Case 1", "value", "case-1"),
+        ("Case 2", "value", "case-2"),
+        ("Case 3", "value", "case-3"),
+    ]
+
+
+def test_case_run_with_a_cyrillic_label_does_not_use_the_cell_digit() -> None:
+    years = ["2020", "2021", "2022", "2023", "2024", "2025"]
+    cells = [_c("Model", "A1", "Item")]
+    cells += [_c("Model", f"{col}1", year) for col, year in zip("BCDEFG", years, strict=True)]
+    cells += [
+        _c("Model", "A2", "Кейс №"),
+        _c("Model", "B2", "1"),
+        _c("Model", "C2", "2"),
+        _c("Model", "D2", "3"),
+        _c("Model", "A3", "Цена"),
+        _c("Model", "B3", "10"),
+        _c("Model", "C3", "11"),
+        _c("Model", "D3", "12"),
+    ]
+    blocks = detect_layout(cells).sheets[0].blocks
+    case = next(block for block in blocks if block.kind == "params")
+    headers = case.axis.headers
+    assert [header.text for header in headers] == ["Кейс 1", "Кейс 2", "Кейс 3"]
+    assert [header.period_key for header in headers] == ["value-b", "value-c", "value-d"]
 
 
 def test_a_value_caption_keeps_the_value_key_beside_case_columns() -> None:

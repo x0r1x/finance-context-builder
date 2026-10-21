@@ -71,7 +71,16 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
     assert selector.kind == "flag"
     assert selector.row == 3
     assert any(cell.addr == "D3" and str(cell.cached_value) == "1" for cell in selector.cells)
+    assert {cell.addr for cell in selector.cells} >= {"D3", "F3", "G3"}
     assert "1" in selector.values
+    from finance_context.context.observations import build_observations
+
+    row_keys = [row.row_key for block in doc.blocks for row in block.rows]
+    built = build_observations(doc, [], row_keys=row_keys, limit=1000)
+    selector_ids = {
+        item.period_id for item in built.observations if item.label == "Scenario Chosen"
+    }
+    assert {"value", "base-case", "scenario-2"} <= selector_ids
     rendered = render_markdown(doc)
     assert "## Parameters / Input Assumptions" in rendered
     assert "| Scenario Chosen |" in rendered

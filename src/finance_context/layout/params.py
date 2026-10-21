@@ -16,6 +16,8 @@ _MIN_VALUE_ROWS = 3
 _VALUE_SHARE = 0.6
 _NOTE_TEXT_MIN = 24
 _INDEX_HEADER = re.compile(r"^(?:№(?:\s*п\s*/\s*п)?|#|no\.?)$", re.IGNORECASE)
+# A trailing index marker on a 1..n run's label. Same closed class as an index column.
+_TRAILING_INDEX = re.compile(r"\s*(?:number|no\.?|#|№)\s*$", re.IGNORECASE)
 _CHECK = re.compile(r"check|проверк|контроль|tie[- ]?out", re.IGNORECASE)
 _CAPS_SECTION = re.compile(r"^[A-Z0-9][A-Z0-9 &/,'-]{2,}$")
 _SELECTOR_LABEL = re.compile(
@@ -316,9 +318,10 @@ def _scenario_block(
                 AxisHeader(col=col, text=text.strip(), role="value", period_key="value")
             )
     used = {header.period_key for header in headers}
-    for col in span:
-        text = (_text(_cell_at(by_row[header_row.row], col), date1904) or "").strip()
-        key = _slug(text)
+    for place, col in enumerate(span, start=1):
+        # The number in the cell is a value. The header is the row label.
+        text = _run_column_name(header_row.label, place)
+        key = _header_slug(text)
         if not key or key in used:
             key = f"value-{index_to_col(col).lower()}"
         used.add(key)
@@ -338,8 +341,27 @@ def _scenario_block(
 
 
 def is_scenario_selector_label(text: str | None) -> bool:
+    """Label of the chosen-scenario control row.
+
+    A geometric stand-in is not reliable: the row under the headers is often an
+    ordinary integer input, and a heavily referenced cell is often an ordinary
+    driver. The label stays the criterion. Case columns on this row stay in the
+    series once their role is ``value``.
+    """
     blob = re.sub(r"[^a-z0-9]+", " ", (text or "").casefold()).strip()
     return bool(blob and _SELECTOR_LABEL.search(blob))
+
+
+def _run_column_name(label: str, place: int) -> str:
+    """Header of one column in a ``1..n`` run.
+
+    The row label is the header. A trailing index marker is not part of the name.
+    ``place`` is the column's position in the run, not the number stored in the cell.
+    """
+    stem = _TRAILING_INDEX.sub("", label.strip()).strip()
+    if not stem:
+        stem = label.strip()
+    return f"{stem} {place}" if stem else str(place)
 
 
 def _looks_like_grid(by_row: dict[int, list[dict]], date1904: bool) -> bool:
@@ -953,9 +975,9 @@ def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
 
     A header the closed list already calls a value (``Значение``, ``Value``)
     keeps ``value``. Any other header takes a slug of its own text, so ``Base``
-    and ``Upside`` do not collapse onto one observation. An empty or repeated
-    slug becomes ``value-<column>``. Columns that still share ``value`` stay
-    shared.
+    and ``Upside`` do not collapse onto one observation. A slug with no letter
+    is not a name (digits left after the words are not the header), so the
+    column keeps ``value``. A repeated name becomes ``value-<column>``.
     """
     if sum(1 for header in headers if header.role == "value") < 2:
         return headers
@@ -968,8 +990,11 @@ def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
         if _header_role(header.text) == "value":
             separated.append(header.model_copy(update={"period_key": "value"}))
             continue
-        key = _slug(header.text)
-        if not key or key in used:
+        key = _header_slug(header.text)
+        if not key:
+            separated.append(header.model_copy(update={"period_key": "value"}))
+            continue
+        if key in used:
             key = f"value-{index_to_col(header.col).lower()}"
         used.add(key)
         separated.append(header.model_copy(update={"period_key": key}))
@@ -978,3 +1003,11 @@ def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")
+
+
+def _header_slug(text: str) -> str:
+    """Slug of a header name. Digits with no letter are not a name."""
+    slug = _slug(text)
+    if not any(char.isalpha() for char in slug):
+        return ""
+    return slug
