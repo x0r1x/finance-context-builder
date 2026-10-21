@@ -70,8 +70,12 @@ def _axis_candidates(
     known = set(hidden_cols or ()) | _inferred_hidden_columns(by_row)
     formula_cols = _formula_timeline_cols(by_row)
     candidates: list[tuple[list[int], TimeAxis]] = []
-    for band_rows in _header_bands(by_row, date1904):
-        for axis in _axes_from_band(sheet, band_rows, by_row, date1904, known):
+    bands = _header_bands(by_row, date1904)
+    for band_rows in bands:
+        body_end = _next_band_row(bands, max(band_rows))
+        for axis in _axes_from_band(
+            sheet, band_rows, by_row, date1904, known, body_end=body_end
+        ):
             if _period_count(axis) >= 2:
                 candidates.append((band_rows, axis))
     taken = {row_n for band_rows, _ in candidates for row_n in band_rows}
@@ -450,6 +454,12 @@ def _axis_from_relative(
     )
 
 
+def _next_band_row(bands: list[list[int]], header_row: int) -> int | None:
+    """First row of the next header band. Rows from there belong to a later table."""
+    later = [min(band) for band in bands if min(band) > header_row]
+    return min(later) if later else None
+
+
 def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[int]]:
     rows = sorted(by_row)
     bands: list[list[int]] = []
@@ -552,6 +562,7 @@ def _axes_from_band(
     by_row: dict[int, list[dict]],
     date1904: bool,
     hidden_cols: set[int] | None = None,
+    body_end: int | None = None,
 ) -> list[TimeAxis]:
     header_row = max(band_rows)
     cols = sorted(
@@ -668,6 +679,7 @@ def _axes_from_band(
             by_row=by_row,
             date1904=date1904,
             band_rows=band_rows,
+            body_end=body_end,
         )
         periods = disambiguate_period_keys(totaled)
         axes.append(

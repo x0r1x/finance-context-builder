@@ -207,6 +207,8 @@ def _fill_banner(row_cells: list[dict], axis_cols: list[int], date1904: bool) ->
     if not anchors or not axis_cols:
         return assigned
     last_axis = max(axis_cols)
+    first_axis = min(axis_cols)
+    anchors = [anchor for anchor in anchors if (anchor[2] or anchor[0]) >= first_axis]
     for index, (col, text, end) in enumerate(anchors):
         if end is not None:
             stop = end

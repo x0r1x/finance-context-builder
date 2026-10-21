@@ -313,7 +313,12 @@ def unparsed_period_shape(text: str | None) -> bool:
     return bool(grain and re.search(r"(?:19|20)\d{2}", raw))
 
 
-_YEAR_INSIDE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+# A fiscal year, a year span, or an N-month header. A bare year in other text is not one.
+_UNPARSED_YEAR_SHAPE = re.compile(
+    r"(?i)(?:fy\s*(?:19|20)?\d{2}(?:\s*/\s*\d{2,4})?"
+    r"|(?:19|20)\d{2}\s*/\s*\d{2,4}"
+    r"|\d{1,2}\s*[mм]\s*(?:19|20)\d{2})"
+)
 _MODEL_PERIOD = re.compile(
     r"(?:год|year|yr|период|period|квартал|quarter|месяц|month)\s*№?\s*\d{1,3}",
     re.IGNORECASE,
@@ -325,11 +330,12 @@ def period_like_header(text: str | None) -> bool:
 
     ``9М 2025``, ``FY2025/26``, ``Estimate 2025``, ``2025/26``, ``Год 1``. A
     header that parses (``2025``, ``2025E``) is a period, not period-like.
+    A year sitting in other text (``2025 график``, ``Model2024``) is not enough.
     """
     raw = normalize_header(text)
     if not raw or len(raw) > 40 or classify_header(raw) is not None:
         return False
-    if unparsed_period_shape(raw) or _YEAR_INSIDE.search(raw):
+    if unparsed_period_shape(raw) or _UNPARSED_YEAR_SHAPE.search(raw):
         return True
     return _MODEL_PERIOD.fullmatch(raw) is not None
 

@@ -31,6 +31,7 @@ def apply_total_columns(
     by_row: dict[int, list[dict]],
     date1904: bool,
     band_rows: list[int] | None = None,
+    body_end: int | None = None,
 ) -> list[AxisPeriod]:
     """Append a confirmed total column sitting beside this period run."""
     if len(periods) < 2:
@@ -52,9 +53,11 @@ def apply_total_columns(
         # (a lifetime total beside the ruler), not a period column.
         if not hinted and col < lo:
             continue
-        if not hinted and not _has_sum_formula(col, by_row, header_row):
+        if not hinted and not _has_sum_formula(col, by_row, header_row, body_end):
             continue
-        if not _confirms(col, taken, by_row, header_row, date1904, hinted=hinted):
+        if not _confirms(
+            col, taken, by_row, header_row, date1904, hinted=hinted, body_end=body_end
+        ):
             continue
         added.append(
             AxisPeriod(
@@ -89,11 +92,18 @@ def _band_hint(
     return joined, hinted or is_total_word(joined)
 
 
-def _has_sum_formula(col: int, by_row: dict[int, list[dict]], header_row: int) -> bool:
-    for row_n, cells in by_row.items():
+def _has_sum_formula(
+    col: int,
+    by_row: dict[int, list[dict]],
+    header_row: int,
+    body_end: int | None,
+) -> bool:
+    for row_n in sorted(by_row):
         if row_n <= header_row:
             continue
-        cell = _cell_at(cells, col)
+        if body_end is not None and row_n >= body_end:
+            break
+        cell = _row_cells(by_row[row_n]).get(col)
         if cell and _SUM.match(str(cell.get("formula_raw") or "")):
             return True
     return False
@@ -107,6 +117,7 @@ def _confirms(
     date1904: bool,
     *,
     hinted: bool,
+    body_end: int | None = None,
 ) -> bool:
     formula_hits = 0
     formula_rows = 0
@@ -115,8 +126,10 @@ def _confirms(
     for row_n in sorted(by_row):
         if row_n <= header_row:
             continue
-        cells = by_row[row_n]
-        cell = _cell_at(cells, col)
+        if body_end is not None and row_n >= body_end:
+            break
+        cells = _row_cells(by_row[row_n])
+        cell = cells.get(col)
         if cell is None:
             continue
         formula = str(cell.get("formula_raw") or "")
@@ -124,7 +137,7 @@ def _confirms(
             formula_rows += 1
             if _formula_sums(formula, period_cols, row_n):
                 formula_hits += 1
-            continue
+                continue
         expected = _period_sum(cells, period_cols, date1904)
         actual = _number(_text(cell, date1904))
         if expected is None or actual is None:
@@ -150,11 +163,18 @@ def _formula_sums(formula: str, period_cols: set[int], row: int) -> bool:
     return set(range(start, end + 1)) == period_cols
 
 
-def _period_sum(cells: list[dict], cols: set[int], date1904: bool) -> float | None:
+def _row_cells(cells: list[dict]) -> dict[int, dict]:
+    mapped: dict[int, dict] = {}
+    for cell in cells:
+        mapped.setdefault(int(cell["col"]), cell)
+    return mapped
+
+
+def _period_sum(cells: dict[int, dict], cols: set[int], date1904: bool) -> float | None:
     total = 0.0
     seen = 0
     for col in cols:
-        cell = _cell_at(cells, col)
+        cell = cells.get(col)
         number = _number(_text(cell, date1904) if cell else None)
         if number is None:
             continue

@@ -640,6 +640,16 @@ def test_parsed_period_or_plain_caption_is_not_period_like(text: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "text",
+    ["2025 график", "Model2024", "Итого2024", "год2024"],
+)
+def test_bare_year_inside_other_text_is_not_period_like(text: str) -> None:
+    from finance_context.layout.periods import period_like_header
+
+    assert not period_like_header(text)
+
+
+@pytest.mark.parametrize(
     ("text", "period_key", "marker"),
     [
         ("2031 ожид.", "2031", "ожид"),

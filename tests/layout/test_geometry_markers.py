@@ -112,6 +112,39 @@ def test_merged_banner_stops_at_the_merge() -> None:
     assert _keys(cells) == ["2024@факт", "2024@факт", "2024", "2024@план"]
 
 
+def test_banner_anchor_left_of_the_axis_is_not_a_marker() -> None:
+    from finance_context.layout.markers import _fill_banner
+
+    assigned = _fill_banner(
+        [_cell("A1", "Показатели"), _cell("D1", "План")],
+        [2, 3, 4, 5],
+        False,
+    )
+    assert 2 not in assigned
+    assert 3 not in assigned
+    assert assigned[4] == "План"
+    assert assigned[5] == "План"
+    cells = _sheet(
+        ["2024", "2024", "2024", "2024"],
+        banner=[(1, "Показатели", None), (4, "План", None)],
+    )
+    assert _keys(cells) == ["2024", "2024", "2024", "2024"]
+
+
+def test_merged_banner_that_reaches_the_axis_keeps_its_span() -> None:
+    from finance_context.layout.markers import _fill_banner
+
+    assigned = _fill_banner(
+        [_cell("A1", "Факт", merge_end_col=3), _cell("E1", "План")],
+        [2, 3, 4, 5],
+        False,
+    )
+    assert assigned[2] == "Факт"
+    assert assigned[3] == "Факт"
+    assert 4 not in assigned
+    assert assigned[5] == "План"
+
+
 def test_unmerged_banner_fills_until_the_next_text() -> None:
     cells = _sheet(
         ["2024", "2024", "2024", "2024"],
@@ -279,6 +312,109 @@ def test_hinted_total_accepts_one_matching_row() -> None:
         _cell("D2", "30"),
     ]
     assert _keys(cells) == ["2023", "2024", "total"]
+
+
+def test_hinted_total_accepts_a_sum_that_is_not_a_sum_formula() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Итого"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "30", formula="=B2+C2"),
+        _cell("A3", "Cost"),
+        _cell("B3", "1"),
+        _cell("C3", "2"),
+        _cell("D3", "3", formula="=SUBTOTAL(9,B3:C3)"),
+    ]
+    assert _keys(cells) == ["2023", "2024", "total"]
+
+
+def test_hinted_total_accepts_a_sheet_qualified_sum_by_its_cached_value() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Sum"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "30", formula="=SUM('P&L'!B2:C2)"),
+        _cell("A3", "Cost"),
+        _cell("B3", "4"),
+        _cell("C3", "5"),
+        _cell("D3", "9", formula="=SUM('P&L'!B3:C3)"),
+    ]
+    assert _keys(cells) == ["2023", "2024", "total"]
+
+
+def test_hinted_addition_that_does_not_equal_the_periods_is_not_a_total() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Итого"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "99", formula="=B2+C2"),
+    ]
+    assert _keys(cells) == ["2023", "2024"]
+
+
+def test_a_later_table_cannot_confirm_a_total_on_the_axis_above() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Note"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "1"),
+        _cell("A10", "Item"),
+        _cell("B10", "2025"),
+        _cell("C10", "2026"),
+        _cell("D10", "Check"),
+        _cell("A11", "Revenue"),
+        _cell("B11", "4"),
+        _cell("C11", "5"),
+        _cell("D11", "9", formula="=SUM(B11:C11)"),
+        _cell("A12", "Cost"),
+        _cell("B12", "6"),
+        _cell("C12", "7"),
+        _cell("D12", "13", formula="=SUM(B12:C12)"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    keys = [[period.period_key for period in axis.periods] for axis in sheet.axes]
+    assert keys == [["2023", "2024"], ["2025", "2026", "total"]]
+
+
+def test_a_total_in_this_table_stays_when_another_table_follows() -> None:
+    cells = [
+        _cell("A1", "Item"),
+        _cell("B1", "2023"),
+        _cell("C1", "2024"),
+        _cell("D1", "Итого"),
+        _cell("A2", "Revenue"),
+        _cell("B2", "10"),
+        _cell("C2", "20"),
+        _cell("D2", "30", formula="=B2+C2"),
+        _cell("A10", "Item"),
+        _cell("B10", "2025"),
+        _cell("C10", "2026"),
+        _cell("D10", "Note"),
+        _cell("A11", "Revenue"),
+        _cell("B11", "4"),
+        _cell("C11", "5"),
+        _cell("D11", "1"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    keys = [[period.period_key for period in axis.periods] for axis in sheet.axes]
+    assert keys[0] == ["2023", "2024", "total"]
+    assert "total" not in keys[1]
 
 
 def test_unresolved_tail_and_banner_leave_plain_keys_and_warn() -> None:
