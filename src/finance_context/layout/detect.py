@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from finance_context.formulas.models import as_edge
 from finance_context.layout.axes import _axis_candidates, _table_groups
 from finance_context.layout.cells import _is_number, _text
 from finance_context.layout.models import (
@@ -40,6 +41,7 @@ def detect_layout(
     hidden = hidden_sheets or set()
     columns = hidden_columns or {}
     below = summary_below or {}
+    edges = None if edges is None else [as_edge(edge) for edge in edges]
     by_sheet: dict[str, list[dict]] = {}
     for cell in cells:
         by_sheet.setdefault(cell["sheet"], []).append(cell)

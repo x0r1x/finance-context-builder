@@ -5,10 +5,23 @@ import json
 from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, parse_addr
-from finance_context.formulas.csr import build_csr, expand_cell_edges
+from finance_context.formulas.csr import (
+    SheetUsage,
+    expand_cell_edges,
+    expanded_edge_count,
+    present_cell_count,
+)
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
-from finance_context.formulas.models import CompileResult, Edge, ParsedFormula
+from finance_context.formulas.models import (
+    CompileResult,
+    Edge,
+    IrCell,
+    ParsedFormula,
+    cell_parquet_row,
+)
 from finance_context.formulas.names import resolve_defined_name_edges
+from finance_context.memory import check_budget, usage_for_book
+from finance_context.settings import Settings
 from finance_context.store.fs import read_parquet, write_json, write_parquet
 
 COMPILE_FILES = ("cells.parquet", "edges.parquet", "cell_edges.parquet")
@@ -67,15 +80,23 @@ def canonical_node_id(sheet: str, addr: str) -> str:
     return f"{sheet}!{format_addr(col, row)}"
 
 
-def compile_workbook(dest_dir: Path) -> CompileResult:
+def compile_workbook(
+    dest_dir: Path,
+    *,
+    memory_budget: int | None = None,
+    usage: object | None = None,
+    settings: object | None = None,
+) -> CompileResult:
     meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
     raw_rows = read_parquet(dest_dir / "raw" / "cells.parquet")
-    ir_rows: list[tuple[object, ...]] = []
+    cells: list[IrCell] = []
     edges: list[Edge] = []
     extra_nodes: list[str] = []
-    parsed_rows = _parse_rows(engine, raw_rows)
-    for row, parsed in zip(raw_rows, parsed_rows, strict=True):
+    formula_count = 0
+    for row, (parsed, release) in zip(raw_rows, _iter_parsed(engine, raw_rows), strict=True):
+        if row.get("formula_raw"):
+            formula_count += 1
         extra_nodes.append(canonical_node_id(str(row["sheet"]), str(row["addr"])))
         template = None
         unparsed = False
@@ -86,20 +107,23 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
             if parsed.ast is not None:
                 ast_json = json.dumps(parsed.ast, ensure_ascii=False)
             edges.extend(parsed.edges)
-        ir_rows.append(
-            (
-                row["sheet"],
-                row["row"],
-                row["col"],
-                row["addr"],
-                row.get("formula_raw"),
-                template,
-                unparsed,
-                row.get("cached_value"),
-                row.get("hidden"),
-                row.get("number_format"),
-                row.get("comment"),
-                ast_json,
+        release()
+        sheet = row["sheet"]
+        addr = row["addr"]
+        cells.append(
+            IrCell(
+                sheet=sheet if isinstance(sheet, str) else str(sheet),
+                row=int(row["row"]),
+                col=int(row["col"]),
+                addr=addr if isinstance(addr, str) else str(addr),
+                formula_raw=row.get("formula_raw"),
+                formula_template=template,
+                unparsed=unparsed,
+                cached_value=row.get("cached_value"),
+                hidden=row.get("hidden"),
+                number_format=row.get("number_format"),
+                comment=row.get("comment"),
+                ast_json=ast_json,
             )
         )
     resolve_defined_name_edges(edges, meta.get("defined_names"))
@@ -109,10 +133,21 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         for item in (meta.get("sheets") or [])
     }
     presence = _presence_index(dest_dir)
-    cell_edges = expand_cell_edges(
-        edges, known, known_sheets=sheets, presence=presence
+    if usage is None:
+        usage = usage_for_book(dest_dir)
+    chosen = settings if isinstance(settings, Settings) else Settings()
+    present = present_cell_count(usage) if isinstance(usage, SheetUsage) else 0
+    check_budget(
+        formulas=formula_count,
+        expanded_cells=expanded_edge_count(edges, usage=usage),
+        present_cells=present,
+        budget=memory_budget,
+        source="compile",
+        settings=chosen,
     )
-    csr = build_csr(edges, extra_nodes=extra_nodes, expanded=cell_edges)
+    cell_edges = expand_cell_edges(
+        edges, known, known_sheets=sheets, presence=presence, usage=usage
+    )
     edge_rows = [
         (e.source, e.kind, e.target, e.unresolved, e.truncated, e.named) for e in edges
     ]
@@ -139,79 +174,115 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
         )
         for edge in cell_edges
     ]
-    write_parquet(dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, ir_rows)
+    write_parquet(
+        dest_dir / "ir" / "cells.parquet",
+        IR_CELL_COLUMNS,
+        [cell_parquet_row(cell) for cell in cells],
+    )
     write_parquet(dest_dir / "ir" / "edges.parquet", IR_EDGE_COLUMNS, edge_rows)
     write_parquet(dest_dir / "ir" / "cell_edges.parquet", IR_CELL_EDGE_COLUMNS, cell_edge_rows)
     write_json(
         dest_dir / "ir" / "compile.json",
         {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
     )
-    return CompileResult(
-        csr=csr,
-        cells=_as_dicts(IR_CELL_COLUMNS, ir_rows),
-        edges=_as_dicts(IR_EDGE_COLUMNS, edge_rows),
-        cell_edges=_as_dicts(IR_CELL_EDGE_COLUMNS, cell_edge_rows),
-    )
+    result = CompileResult(cells=cells, edges=edges, cell_edges=cell_edges)
+    del edge_rows, cell_edge_rows
+    return result
 
 
-def _parse_rows(engine: FormulaEngine, raw_rows: list[dict]) -> list[ParsedFormula | None]:
-    """Parse each shared-formula master once and shift that AST onto the group."""
-    parsed: list[ParsedFormula | None] = [None] * len(raw_rows)
+def _iter_parsed(engine: FormulaEngine, raw_rows: list[dict]):
+    """Parse each shared master once, and drop its AST after the last member.
+
+    A zero offset reuses the master AST object. That object stays until every
+    member of the group has been serialized. Each formula's own edge list is
+    cleared as soon as the caller has copied it.
+    """
     groups: dict[tuple[str, int], list[int]] = {}
     masters: dict[tuple[str, int], int] = {}
     for index, row in enumerate(raw_rows):
-        si = row.get("shared_si")
-        if si is None or not row.get("formula_raw"):
+        key = _shared_key(row)
+        if key is None:
             continue
-        key = (str(row["sheet"]), int(si))
         groups.setdefault(key, []).append(index)
         if row.get("shared_master") and key not in masters:
             masters[key] = index
-    claimed: set[int] = set()
-    for key, indexes in groups.items():
-        master_i = masters.get(key)
-        if master_i is None:
-            continue
-        master = raw_rows[master_i]
-        master_parsed = engine.parse(
+    cache: dict[tuple[str, int], ParsedFormula] = {}
+    remaining = {key: len(indexes) for key, indexes in groups.items() if key in masters}
+
+    def master_of(key: tuple[str, int]) -> ParsedFormula:
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        master = raw_rows[masters[key]]
+        parsed = engine.parse(
             str(master["formula_raw"]),
             sheet=str(master["sheet"]),
             addr=str(master["addr"]),
         )
-        parsed[master_i] = master_parsed
-        claimed.add(master_i)
-        for index in indexes:
-            if index == master_i:
-                continue
-            row = raw_rows[index]
-            parsed[index] = shift_parsed(
-                master_parsed,
-                sheet=str(row["sheet"]),
-                from_col=int(master["col"]),
-                from_row=int(master["row"]),
-                to_col=int(row["col"]),
-                to_row=int(row["row"]),
-                sep=engine.sep,
-                decimal=engine.decimal,
-            )
-            claimed.add(index)
+        cache[key] = parsed
+        return parsed
+
     for index, row in enumerate(raw_rows):
-        if index in claimed:
+        key = _shared_key(row)
+        if key is not None and key in masters:
+            master_parsed = master_of(key)
+            master_row = raw_rows[masters[key]]
+            if index == masters[key]:
+                parsed = master_parsed
+            else:
+                parsed = shift_parsed(
+                    master_parsed,
+                    sheet=str(row["sheet"]),
+                    from_col=int(master_row["col"]),
+                    from_row=int(master_row["row"]),
+                    to_col=int(row["col"]),
+                    to_row=int(row["row"]),
+                    sep=engine.sep,
+                    decimal=engine.decimal,
+                )
+            remaining[key] -= 1
+            yield parsed, _release_parsed(parsed, master_parsed, key, cache, remaining[key] == 0)
             continue
         formula = row.get("formula_raw")
         if not formula:
+            yield None, _release_nothing
             continue
-        parsed[index] = engine.parse(
-            str(formula), sheet=str(row["sheet"]), addr=str(row["addr"])
-        )
-    return parsed
+        parsed = engine.parse(str(formula), sheet=str(row["sheet"]), addr=str(row["addr"]))
+        yield parsed, _release_parsed(parsed, parsed, None, cache, True)
 
 
-def _as_dicts(
-    columns: tuple[tuple[str, str], ...], rows: list[tuple[object, ...]]
-) -> list[dict[str, object]]:
-    names = [name for name, _dtype in columns]
-    return [dict(zip(names, row, strict=True)) for row in rows]
+def _shared_key(row: dict) -> tuple[str, int] | None:
+    si = row.get("shared_si")
+    if si is None or not row.get("formula_raw"):
+        return None
+    return str(row["sheet"]), int(si)
+
+
+def _release_nothing() -> None:
+    return None
+
+
+def _release_parsed(
+    parsed: ParsedFormula,
+    master: ParsedFormula,
+    key: tuple[str, int] | None,
+    cache: dict[tuple[str, int], ParsedFormula],
+    last: bool,
+):
+    shared = parsed.ast is master.ast
+
+    def release() -> None:
+        parsed.edges.clear()
+        if not shared or last:
+            parsed.ast = None
+        if last:
+            master.ast = None
+            if master is not parsed:
+                master.edges.clear()
+            if key is not None:
+                cache.pop(key, None)
+
+    return release
 
 
 def compile_schema_id() -> str:

@@ -41,6 +41,7 @@ class JobBody(BaseModel):
     stage: str | None = None
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
+    detail: str | None = None
     context_json_url: str | None = None
     context_md_url: str | None = None
     graph_json_url: str | None = None

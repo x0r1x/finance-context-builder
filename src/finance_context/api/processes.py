@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import multiprocessing
 import threading
+import time
 from multiprocessing.connection import wait as wait_for_exit
 from pathlib import Path
 
 from finance_context.adapters.memory_bus import MemoryJobBus
 from finance_context.app.pipeline import mark_job_failed, run_job_process
+from finance_context.memory import over_rss_detail, process_rss_bytes
+from finance_context.observability import log_event
 from finance_context.store.paths import LOCAL_SESSION, session_job_dir
+
+_LOGGER = logging.getLogger("finance_context.processes")
 
 _TERMINAL = {"succeeded", "degraded", "needs_input", "failed"}
 
@@ -47,12 +53,20 @@ class JobProcesses:
         timeout_sec: float,
         max_concurrent_jobs: int = 2,
         session_id: str = LOCAL_SESSION,
+        memory_budget_bytes: int | None = None,
+        unusable_detail: str | None = None,
+        watch_interval_sec: float = 0.2,
     ) -> None:
         self._data_dir = str(data_dir)
         self._session_id = session_id or LOCAL_SESSION
         self._bus = bus
         self._timeout = timeout_sec
         self._max = max_concurrent_jobs if max_concurrent_jobs > 0 else 2
+        self._budget = (
+            memory_budget_bytes if memory_budget_bytes and memory_budget_bytes > 0 else None
+        )
+        self._unusable_detail = unusable_detail
+        self._watch_interval = watch_interval_sec
         self._procs: dict[str, multiprocessing.Process] = {}
         self._generations: dict[str, int] = {}
         self._closed: set[tuple[str, int]] = set()
@@ -80,6 +94,18 @@ class JobProcesses:
     def launch(self, job_id: str) -> bool:
         """Start the child. False when this call would pass the process cap."""
         generation = self._bus.current_generation(job_id)
+        if self._unusable_detail:
+            dest = session_job_dir(Path(self._data_dir), job_id, self._session_id)
+            mark_job_failed(
+                dest,
+                job_id,
+                "workbook_too_large",
+                generation,
+                detail=self._unusable_detail,
+            )
+            self._bus.abandon(job_id, generation, "workbook_too_large")
+            self.release_reservation(job_id)
+            return True
         with self._lock:
             previous = self._procs.get(job_id)
             reserved = job_id in self._reserved
@@ -148,22 +174,28 @@ class JobProcesses:
 
     def _watch(self, proc: multiprocessing.Process, job_id: str, generation: int) -> None:
         try:
-            timeout = self._timeout
-            if timeout is None or timeout <= 0:
-                proc.join()
-                timed_out = False
-            else:
-                # Timeout comes from the sentinel, not is_alive(). A request thread can
-                # reap the child first; waitpid then raises ECHILD and poll() still
-                # reports the process as alive.
-                timed_out = not wait_for_exit([proc.sentinel], timeout)
-                if not timed_out:
-                    proc.join()
+            timed_out, over_budget, rss_seen = self._wait_for_child(proc)
             if timed_out:
                 reap_process(proc)
             if self._is_closed(job_id, generation) or not self._bus.owns(job_id, generation):
                 return
             dest = session_job_dir(Path(self._data_dir), job_id, self._session_id)
+            if over_budget:
+                detail = over_rss_detail(rss_seen, int(self._budget or 0))
+                mark_job_failed(
+                    dest, job_id, "workbook_too_large", generation, detail=detail
+                )
+                log_event(
+                    _LOGGER,
+                    logging.WARNING,
+                    "job_failed",
+                    f"workbook_too_large: {detail}",
+                    error_code="workbook_too_large",
+                    reason=detail,
+                    budget_bytes=self._budget,
+                )
+                self._bus.abandon(job_id, generation, "workbook_too_large")
+                return
             if timed_out:
                 mark_job_failed(dest, job_id, "TimeoutError", generation)
                 self._bus.expire(job_id, generation)
@@ -171,6 +203,35 @@ class JobProcesses:
             self._finish_from_disk(dest, job_id, generation)
         finally:
             self._drop_process(job_id, generation)
+
+    def _wait_for_child(self, proc: multiprocessing.Process) -> tuple[bool, bool, int]:
+        """Block until the child exits, times out, or crosses the RSS budget.
+
+        Timeout comes from the sentinel, not is_alive(). A request thread can
+        reap the child first; waitpid then raises ECHILD and poll() still
+        reports the process as alive.
+        """
+        deadline = None
+        if self._timeout is not None and self._timeout > 0:
+            deadline = time.monotonic() + self._timeout
+        while True:
+            if deadline is None:
+                slice_s = self._watch_interval
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return True, False, 0
+                slice_s = min(self._watch_interval, remaining)
+            if wait_for_exit([proc.sentinel], slice_s):
+                proc.join()
+                return False, False, 0
+            if self._budget is None or not proc.is_alive():
+                continue
+            rss = process_rss_bytes(proc.pid)
+            if rss is not None and rss > self._budget:
+                proc.kill()
+                proc.join(5)
+                return False, True, rss
 
     def _drop_process(self, job_id: str, generation: int) -> None:
         with self._lock:

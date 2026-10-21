@@ -5,6 +5,8 @@ from collections import Counter
 from pathlib import Path
 
 from finance_context.excel.a1 import index_to_col
+from finance_context.formulas.csr import CellEdge, as_cell_edge
+from finance_context.formulas.models import Edge, as_edge
 from finance_context.formulas.stage import IR_CELL_EDGE_COLUMNS
 from finance_context.graph.cycles import classify_cycles
 from finance_context.graph.formula_class import classify_formula
@@ -41,8 +43,8 @@ def build_formula_graph(
     job_id: str,
     layout: Layout,
     cells: list[dict] | None = None,
-    edges: list[dict] | None = None,
-    cell_edges: list[dict] | None = None,
+    edges: list | None = None,
+    cell_edges: list | None = None,
     book_dir: Path | None = None,
 ) -> GraphPointer:
     book = book_dir or dest_dir
@@ -54,6 +56,8 @@ def build_formula_graph(
     if cell_edges is None:
         cell_edges_path = book / "ir" / "cell_edges.parquet"
         cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
+    edges = [as_edge(edge) for edge in edges]
+    cell_edges = [as_cell_edge(edge) for edge in cell_edges]
 
     row_meta = _row_meta(layout)
     period_by_cell, _period_index = _period_maps(layout)
@@ -71,26 +75,26 @@ def build_formula_graph(
         IR_CELL_EDGE_COLUMNS,
         [
             (
-                e["source"],
-                e["target"],
-                e.get("kind"),
-                bool(e.get("unresolved")),
-                bool(e.get("truncated")),
-                bool(e.get("dangling")),
-                e.get("col_offset"),
-                e.get("period_lag"),
-                e.get("dangling_reason"),
-                e.get("status"),
-                e.get("reason"),
-                e.get("evidence"),
-                e.get("range_ref"),
-                _opt_bool(e.get("abs_col")),
-                _opt_bool(e.get("abs_row")),
-                _opt_bool(e.get("abs_col_end")),
-                _opt_bool(e.get("abs_row_end")),
-                bool(e.get("named")),
+                edge.source,
+                edge.target,
+                edge.kind,
+                bool(edge.unresolved),
+                bool(edge.truncated),
+                bool(edge.dangling),
+                edge.col_offset,
+                edge.period_lag,
+                edge.dangling_reason,
+                edge.status,
+                edge.reason,
+                edge.evidence,
+                edge.range_ref,
+                _opt_bool(edge.abs_col),
+                _opt_bool(edge.abs_row),
+                _opt_bool(edge.abs_col_end),
+                _opt_bool(edge.abs_row_end),
+                bool(edge.named),
             )
-            for e in enriched
+            for edge in enriched
         ],
     )
 
@@ -271,13 +275,13 @@ def _index_rows(
     return rows
 
 
-def _empty_range_nodes(cell_edges: list[dict], existing: set[str]) -> list[str]:
+def _empty_range_nodes(cell_edges: list[CellEdge], existing: set[str]) -> list[str]:
     found: list[str] = []
     seen: set[str] = set(existing)
     for edge in cell_edges:
-        if str(edge.get("status") or "") != "empty":
+        if str(edge.status or "") != "empty":
             continue
-        target = str(edge.get("target") or "")
+        target = str(edge.target or "")
         if not target or target in seen:
             continue
         seen.add(target)
@@ -312,11 +316,11 @@ def _opt_bool(value: object) -> bool | None:
     return bool(value)
 
 
-def _lags_by_source(cell_edges: list[dict]) -> dict[str, list[str]]:
+def _lags_by_source(cell_edges: list[CellEdge]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = {}
     for edge in cell_edges:
-        source = str(edge.get("source") or "")
-        lag = edge.get("period_lag")
+        source = str(edge.source or "")
+        lag = edge.period_lag
         if not source or lag is None:
             continue
         bucket = grouped.setdefault(source, [])
@@ -328,10 +332,10 @@ def _lags_by_source(cell_edges: list[dict]) -> dict[str, list[str]]:
 
 def _formula_links(
     cells: list[dict],
-    formula_edges: list[dict],
+    formula_edges: list[Edge],
     row_meta: dict[tuple[str, int], str],
     period_by_cell: dict[tuple[str, int], str],
-    cell_edges: list[dict] | None = None,
+    cell_edges: list[CellEdge] | None = None,
 ) -> list[FormulaLink]:
     formula_by_node: dict[str, str] = {}
     identity: dict[str, tuple[str | None, str | None]] = {}
@@ -346,11 +350,11 @@ def _formula_links(
         identity[node] = (meta, period)
     grouped: dict[str, list[str]] = {}
     for edge in formula_edges:
-        source = str(edge.get("source") or "")
+        source = str(edge.source or "")
         if not source:
             continue
         refs = grouped.setdefault(source, [])
-        target = edge.get("target")
+        target = edge.target
         if target and str(target) not in refs:
             refs.append(str(target))
     for node in formula_by_node:
@@ -373,9 +377,9 @@ def _formula_links(
     return links
 
 
-def _enrich_edge(edge: dict, period_of: dict[str, str | None]) -> dict:
-    source = str(edge.get("source") or "")
-    target = str(edge.get("target") or "")
+def _enrich_edge(edge: CellEdge, period_of: dict[str, str | None]) -> CellEdge:
+    source = str(edge.source or "")
+    target = str(edge.target or "")
     src = parse_node_id(source)
     tgt = parse_node_id(target)
     col_offset = None
@@ -387,28 +391,25 @@ def _enrich_edge(edge: dict, period_of: dict[str, str | None]) -> dict:
         lag = "unaligned"
     else:
         lag = calendar_lag(src_p, tgt_p)
-    out = dict(edge)
-    out["col_offset"] = col_offset
-    out["period_lag"] = lag
-    return out
+    return edge._replace(col_offset=col_offset, period_lag=lag)
 
 
 def _summary(
     job_id: str,
     node_count: int,
-    formula_edges: list[dict],
-    cell_edges: list[dict],
+    formula_edges: list[Edge],
+    cell_edges: list[CellEdge],
     cycles,
     iterate: bool = False,
     hints: list[CircularityHint] | None = None,
 ) -> GraphDocument:
-    kinds = Counter(str(e.get("kind") or "ref") for e in cell_edges)
+    kinds = Counter(str(edge.kind or "ref") for edge in cell_edges)
 
     def bucket(pred) -> IdCount:
         ids: list[str] = []
         for edge in formula_edges:
-            if pred(edge) and edge.get("source"):
-                src = str(edge["source"])
+            if pred(edge) and edge.source:
+                src = str(edge.source)
                 if src not in ids:
                     ids.append(src)
         return IdCount(count=len(ids), ids=ids[:ID_CAP])
@@ -417,18 +418,18 @@ def _summary(
     classes: Counter[str] = Counter()
     seen_class: set[tuple[str, str]] = set()
     for edge in cell_edges:
-        reason = str(edge.get("dangling_reason") or "")
-        target = str(edge.get("target") or "")
+        reason = str(edge.dangling_reason or "")
+        target = str(edge.target or "")
         if reason and target and (target, reason) not in seen_class:
             seen_class.add((target, reason))
             classes[reason] += 1
-        if edge.get("dangling") and target:
+        if edge.dangling and target:
             if target not in dangling_ids:
                 dangling_ids.append(target)
     truncated_ids: list[str] = []
     for edge in cell_edges:
-        if edge.get("truncated") and edge.get("source"):
-            src = str(edge["source"])
+        if edge.truncated and edge.source:
+            src = str(edge.source)
             if src not in truncated_ids:
                 truncated_ids.append(src)
     return GraphDocument(
@@ -439,10 +440,10 @@ def _summary(
         kinds=dict(kinds),
         contract=GraphContract(),
         unresolved=bucket(
-            lambda e: e.get("unresolved") and e.get("kind") not in {"dynamic", "external"}
+            lambda edge: edge.unresolved and edge.kind not in {"dynamic", "external"}
         ),
-        dynamic=bucket(lambda e: e.get("kind") == "dynamic"),
-        external=bucket(lambda e: e.get("kind") == "external"),
+        dynamic=bucket(lambda edge: edge.kind == "dynamic"),
+        external=bucket(lambda edge: edge.kind == "external"),
         truncated=IdCount(count=len(truncated_ids), ids=truncated_ids[:ID_CAP]),
         dangling=IdCount(count=len(dangling_ids), ids=dangling_ids[:ID_CAP]),
         dangling_classes=dict(classes),

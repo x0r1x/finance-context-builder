@@ -6,26 +6,31 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse.csgraph import connected_components
 
+from finance_context.formulas.csr import CellEdge, as_cell_edge
 from finance_context.graph.models import CycleRecord
 from finance_context.graph.refs import parse_node_id
 
 
-def classify_cycles(edges: list[dict]) -> list[CycleRecord]:
+def classify_cycles(edges: list) -> list[CycleRecord]:
     usable = [
         edge
-        for edge in edges
-        if edge.get("source")
-        and edge.get("target")
-        and not edge.get("unresolved")
-        and not edge.get("dangling")
-        and edge.get("kind") in {"ref", "cross_sheet", "range"}
+        for edge in (as_cell_edge(item) for item in edges)
+        if edge.source
+        and edge.target
+        and not edge.unresolved
+        and not edge.dangling
+        and edge.kind in {"ref", "cross_sheet", "range"}
     ]
-    nodes = sorted({str(e["source"]) for e in usable} | {str(e["target"]) for e in usable})
+    nodes = sorted({str(edge.source) for edge in usable} | {str(edge.target) for edge in usable})
     if not nodes:
         return []
     index = {name: i for i, name in enumerate(nodes)}
-    rows = np.fromiter((index[str(e["source"])] for e in usable), dtype=np.int32, count=len(usable))
-    cols = np.fromiter((index[str(e["target"])] for e in usable), dtype=np.int32, count=len(usable))
+    rows = np.fromiter(
+        (index[str(edge.source)] for edge in usable), dtype=np.int32, count=len(usable)
+    )
+    cols = np.fromiter(
+        (index[str(edge.target)] for edge in usable), dtype=np.int32, count=len(usable)
+    )
     data = np.ones(len(usable), dtype=np.uint8)
     matrix = sparse.csr_matrix((data, (rows, cols)), shape=(len(nodes), len(nodes)), dtype=np.uint8)
     _n_comp, labels = connected_components(matrix, directed=True, connection="strong")
@@ -40,13 +45,13 @@ def classify_cycles(edges: list[dict]) -> list[CycleRecord]:
         else:
             bucket.append(name)
     sizes = np.bincount(labels)
-    intra_by: dict[int, list[dict]] = defaultdict(list)
+    intra_by: dict[int, list[CellEdge]] = defaultdict(list)
     same = labels[rows] == labels[cols]
     for pos in np.flatnonzero(same):
         slot = int(pos)
         label = int(labels[rows[slot]])
         edge = usable[slot]
-        if sizes[label] < 2 and edge.get("source") != edge.get("target"):
+        if sizes[label] < 2 and edge.source != edge.target:
             continue
         intra_by[label].append(edge)
 
@@ -55,7 +60,7 @@ def classify_cycles(edges: list[dict]) -> list[CycleRecord]:
     for label in order:
         group = members[label]
         intra = intra_by.get(label, [])
-        self_loop = any(edge.get("source") == edge.get("target") for edge in intra)
+        self_loop = any(edge.source == edge.target for edge in intra)
         if len(group) < 2 and not self_loop:
             continue
         cls = _classify(intra)
@@ -68,7 +73,7 @@ def classify_cycles(edges: list[dict]) -> list[CycleRecord]:
     return cycles
 
 
-def _classify(intra: list[dict]) -> str:
+def _classify(intra: list[CellEdge]) -> str:
     if not intra:
         return "unexpected"
     if all(_is_period_chain(edge) for edge in intra):
@@ -76,9 +81,9 @@ def _classify(intra: list[dict]) -> str:
     return "unexpected"
 
 
-def _is_period_chain(edge: dict) -> bool:
+def _is_period_chain(edge: CellEdge) -> bool:
     """A non-zero period distance. Variants of one key and ``unaligned`` are not a shift."""
-    lag = edge.get("period_lag")
+    lag = edge.period_lag
     if lag in {"same", "0", "unaligned"}:
         return False
     if lag not in (None, ""):
@@ -86,9 +91,9 @@ def _is_period_chain(edge: dict) -> bool:
             return int(lag) != 0
         except (TypeError, ValueError):
             return False
-    offset = edge.get("col_offset")
+    offset = edge.col_offset
     if offset in (None, 0):
         return False
-    src = parse_node_id(str(edge.get("source") or ""))
-    tgt = parse_node_id(str(edge.get("target") or ""))
+    src = parse_node_id(str(edge.source or ""))
+    tgt = parse_node_id(str(edge.target or ""))
     return src is not None and tgt is not None and src[0] == tgt[0] and src[2] == tgt[2]

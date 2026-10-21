@@ -40,6 +40,8 @@ ENV HOME=/app
 ENV LANG=C.UTF-8
 ENV DATA_DIR=/app/data
 ENV PYTHONUNBUFFERED=1
+# mimalloc reserves address space the RSS watchdog cannot see. Use the system pool.
+ENV ARROW_DEFAULT_MEMORY_POOL=system
 
 EXPOSE 8080
 

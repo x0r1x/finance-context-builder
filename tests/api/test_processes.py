@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import multiprocessing
 import time
 from pathlib import Path
@@ -119,6 +120,78 @@ def test_watch_marks_a_real_timeout_failed(tmp_path: Path) -> None:
         if proc.is_alive():
             proc.kill()
         proc.join(5)
+
+
+def _sleep_until_killed() -> None:
+    time.sleep(30)
+
+
+def _allocate_and_sleep() -> None:
+    blob = bytearray(64 * 1024 * 1024)
+    for index in range(0, len(blob), 4096):
+        blob[index] = 1
+    time.sleep(30)
+
+
+def test_watch_kills_when_reported_rss_exceeds_the_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "finance_context.api.processes.process_rss_bytes",
+        lambda _pid: 10**12,
+    )
+    proc = multiprocessing.get_context("spawn").Process(target=_sleep_until_killed)
+    proc.start()
+    try:
+        bus, job_id, generation, dest = _running_meta(tmp_path)
+        JobProcesses(
+            data_dir=tmp_path,
+            bus=bus,
+            timeout_sec=10,
+            memory_budget_bytes=1024,
+        )._watch(proc, job_id, generation)
+        stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+        assert stored["status"] == "failed"
+        assert stored["error"] == "workbook_too_large"
+        assert "resident" in stored["detail"]
+        record = bus.get(job_id)
+        assert record is not None
+        assert record.error == "workbook_too_large"
+        assert not proc.is_alive()
+    finally:
+        if proc.is_alive():
+            proc.kill()
+            proc.join(5)
+
+
+def test_watch_kills_a_child_whose_real_rss_exceeds_the_budget(tmp_path: Path) -> None:
+    proc = multiprocessing.get_context("spawn").Process(target=_allocate_and_sleep)
+    proc.start()
+    try:
+        bus, job_id, generation, dest = _running_meta(tmp_path)
+        JobProcesses(
+            data_dir=tmp_path,
+            bus=bus,
+            timeout_sec=15,
+            memory_budget_bytes=32 * 1024 * 1024,
+        )._watch(proc, job_id, generation)
+        stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+        assert stored["error"] == "workbook_too_large"
+        assert not proc.is_alive()
+    finally:
+        if proc.is_alive():
+            proc.kill()
+            proc.join(5)
+
+
+def test_watch_interval_is_stored_without_a_fallback(tmp_path: Path) -> None:
+    bus = MemoryJobBus()
+    kept = JobProcesses(data_dir=tmp_path, bus=bus, timeout_sec=1, watch_interval_sec=0.05)
+    assert kept._watch_interval == 0.05
+    untouched = JobProcesses(
+        data_dir=tmp_path, bus=bus, timeout_sec=1, watch_interval_sec=float("nan")
+    )
+    assert math.isnan(untouched._watch_interval)
 
 
 def test_mark_job_failed_keeps_a_terminal_snapshot(tmp_path: Path) -> None:

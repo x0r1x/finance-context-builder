@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import bisect
 import re
-from typing import NamedTuple
-
-import numpy as np
-from scipy import sparse
+from collections.abc import Iterable, Mapping, Sequence
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
+from typing import Any, NamedTuple
 
 from finance_context.excel.a1 import col_to_index, format_addr, index_to_col
-from finance_context.formulas.models import CsrGraph, Edge
+from finance_context.formulas.models import Edge
+from finance_context.settings import DEFAULT_RANGE_EXPAND_CAP
 
-RANGE_EXPAND_CAP = 2000
+_RANGE_CAP: ContextVar[int | None] = ContextVar("finance_range_expand_cap", default=None)
 _EXCEL_MAX_ROW = 1_048_576
 _EXCEL_MAX_COL = 16_384
 
@@ -30,12 +32,8 @@ def split_sheet_ref(target: str) -> tuple[str, str]:
     return sheet, body
 
 
-def expand_range(target: str, cap: int = RANGE_EXPAND_CAP) -> tuple[list[str], bool]:
-    sheet, body = split_sheet_ref(target)
-    cell = _CELL.fullmatch(body)
-    if cell:
-        return [f"{sheet}!{format_addr(col_to_index(cell.group(1)), int(cell.group(2)))}"], False
-
+def _rectangle(body: str) -> tuple[int, int, int, int] | None:
+    """Inclusive column/row bounds of a range body, or None when it is not a range."""
     cells_range = re.fullmatch(
         r"\$?([A-Za-z]+)\$?(\d+):\$?([A-Za-z]+)\$?(\d+)", body, re.I
     )
@@ -48,7 +46,7 @@ def expand_range(target: str, cap: int = RANGE_EXPAND_CAP) -> tuple[list[str], b
             c1, c2 = c2, c1
         if r1 > r2:
             r1, r2 = r2, r1
-        return _take(sheet, c1, c2, r1, r2, cap)
+        return c1, c2, r1, r2
 
     cols = _COLS.fullmatch(body)
     if cols:
@@ -56,16 +54,220 @@ def expand_range(target: str, cap: int = RANGE_EXPAND_CAP) -> tuple[list[str], b
         c2 = col_to_index(cols.group(2))
         if c1 > c2:
             c1, c2 = c2, c1
-        return _take(sheet, c1, c2, 1, _EXCEL_MAX_ROW, cap)
+        return c1, c2, 1, _EXCEL_MAX_ROW
 
     rows = _ROWS.fullmatch(body)
     if rows:
         r1, r2 = int(rows.group(1)), int(rows.group(2))
         if r1 > r2:
             r1, r2 = r2, r1
-        return _take(sheet, 1, _EXCEL_MAX_COL, r1, r2, cap)
+        return 1, _EXCEL_MAX_COL, r1, r2
+    return None
 
-    return [target], False
+
+@dataclass(frozen=True, slots=True)
+class SheetUsage:
+    """Cells that exist on each sheet, as sorted row lists per column and the reverse.
+
+    Sheet names compare case-insensitively. ``canonical`` maps the folded name to
+    the spelling stored on the cell, which is the id ``known_nodes`` uses.
+    """
+
+    rows_by_col: dict[str, dict[int, tuple[int, ...]]]
+    cols_by_row: dict[str, dict[int, tuple[int, ...]]]
+    canonical: dict[str, str]
+
+    def sheet_name(self, sheet: str) -> str:
+        return self.canonical.get(sheet.casefold(), sheet)
+
+
+def bind_range_expand_cap(cap: int) -> Token[int | None]:
+    """Use this job's ``RANGE_EXPAND_CAP`` until the token is reset."""
+    return _RANGE_CAP.set(cap)
+
+
+def reset_range_expand_cap(token: Token[int | None]) -> None:
+    _RANGE_CAP.reset(token)
+
+
+def active_range_cap() -> int:
+    bound = _RANGE_CAP.get()
+    return DEFAULT_RANGE_EXPAND_CAP if bound is None else bound
+
+
+def present_cell_count(usage: SheetUsage) -> int:
+    """Present cells already indexed on ``usage``. No parquet read."""
+    return sum(len(rows) for columns in usage.rows_by_col.values() for rows in columns.values())
+
+
+def sheet_usage(nodes: Iterable[str]) -> SheetUsage:
+    """Index present cells. Whole-column expansion intersects this instead of empty rows."""
+    by_col: dict[str, dict[int, set[int]]] = {}
+    by_row: dict[str, dict[int, set[int]]] = {}
+    canonical: dict[str, str] = {}
+    for node in nodes:
+        parsed = _node_coord(node)
+        if parsed is None:
+            continue
+        sheet, col, row = parsed
+        canonical.setdefault(sheet.casefold(), sheet)
+        by_col.setdefault(sheet, {}).setdefault(col, set()).add(row)
+        by_row.setdefault(sheet, {}).setdefault(row, set()).add(col)
+    return SheetUsage(
+        rows_by_col={
+            sheet: {col: tuple(sorted(rows)) for col, rows in cols.items()}
+            for sheet, cols in by_col.items()
+        },
+        cols_by_row={
+            sheet: {row: tuple(sorted(cols)) for row, cols in rows.items()}
+            for sheet, rows in by_row.items()
+        },
+        canonical=canonical,
+    )
+
+
+def _node_coord(node: str) -> tuple[str, int, int] | None:
+    try:
+        sheet, body = split_sheet_ref(node)
+    except ValueError:
+        return None
+    cell = _CELL.fullmatch(body)
+    if cell is None:
+        return None
+    return sheet, col_to_index(cell.group(1)), int(cell.group(2))
+
+
+def _area(c1: int, c2: int, r1: int, r2: int) -> int:
+    return (c2 - c1 + 1) * (r2 - r1 + 1)
+
+
+def _whole_axis(c1: int, c2: int, r1: int, r2: int) -> bool:
+    """A whole column or whole row. A bounded rectangle keeps the safety cap."""
+    whole_column = r1 == 1 and r2 == _EXCEL_MAX_ROW
+    whole_row = c1 == 1 and c2 == _EXCEL_MAX_COL
+    return whole_column or whole_row
+
+
+def _slice_sorted(values: Sequence[int], lo: int, hi: int) -> Sequence[int]:
+    if not values:
+        return ()
+    start = bisect.bisect_left(values, lo)
+    end = bisect.bisect_right(values, hi)
+    return values[start:end]
+
+
+def _count_span(values: Sequence[int], lo: int, hi: int) -> int:
+    if not values:
+        return 0
+    return bisect.bisect_right(values, hi) - bisect.bisect_left(values, lo)
+
+
+def _present_count(
+    sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
+) -> int:
+    """How many present cells sit in the rectangle. No pair list is built."""
+    sheet = usage.sheet_name(sheet)
+    width = c2 - c1 + 1
+    height = r2 - r1 + 1
+    if width <= height:
+        columns = usage.rows_by_col.get(sheet, {})
+        return sum(_count_span(columns.get(col, ()), r1, r2) for col in range(c1, c2 + 1))
+    rows = usage.cols_by_row.get(sheet, {})
+    return sum(
+        _count_span(cols, c1, c2) for row, cols in rows.items() if r1 <= row <= r2
+    )
+
+
+def _present_pairs(
+    sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
+) -> list[tuple[int, int]]:
+    """Present cells inside the rectangle, row then column."""
+    sheet = usage.sheet_name(sheet)
+    found: list[tuple[int, int]] = []
+    width = c2 - c1 + 1
+    height = r2 - r1 + 1
+    if width <= height:
+        columns = usage.rows_by_col.get(sheet, {})
+        for col in range(c1, c2 + 1):
+            for row in _slice_sorted(columns.get(col, ()), r1, r2):
+                found.append((row, col))
+    else:
+        rows = usage.cols_by_row.get(sheet, {})
+        chosen = sorted(row for row in rows if r1 <= row <= r2)
+        for row in chosen:
+            for col in _slice_sorted(rows[row], c1, c2):
+                found.append((row, col))
+    found.sort()
+    return found
+
+
+def expansion_count(
+    target: str, cap: int | None = None, usage: SheetUsage | None = None
+) -> int:
+    """How many cells expand_range would emit. A whole column is not materialised."""
+    cap = active_range_cap() if cap is None else cap
+    try:
+        sheet, body = split_sheet_ref(target)
+    except ValueError:
+        return 1
+    if _CELL.fullmatch(body):
+        return 1
+    rect = _rectangle(body)
+    if rect is None:
+        return 1
+    c1, c2, r1, r2 = rect
+    area = _area(c1, c2, r1, r2)
+    if area <= 0:
+        return 0
+    if usage is not None and _whole_axis(c1, c2, r1, r2):
+        return _present_count(sheet, c1, c2, r1, r2, usage)
+    return area if area <= cap else cap
+
+
+def expanded_edge_count(edges: list[Edge], usage: SheetUsage | None = None) -> int:
+    """Cell targets expand_cell_edges would walk, before de-duplication."""
+    total = 0
+    for edge in edges:
+        if not edge.target:
+            continue
+        if edge.kind == "range" and not edge.unresolved and "!" in edge.target:
+            try:
+                total += expansion_count(edge.target, usage=usage)
+            except ValueError:
+                total += 1
+            continue
+        total += 1
+    return total
+
+
+def expand_range(
+    target: str, cap: int | None = None, usage: SheetUsage | None = None
+) -> tuple[list[str], bool]:
+    """Expand a range.
+
+    With `usage`, a whole column or whole row keeps the present cells and is not
+    truncated. A bounded rectangle over the cap still stops at `cap` and reports
+    truncated, including the holes inside that prefix. Without `usage`, the cap
+    is the same safety bound. Sheet names resolve to the workbook spelling.
+    """
+    cap = active_range_cap() if cap is None else cap
+    sheet, body = split_sheet_ref(target)
+    if usage is not None:
+        sheet = usage.sheet_name(sheet)
+    cell = _CELL.fullmatch(body)
+    if cell:
+        return [f"{sheet}!{format_addr(col_to_index(cell.group(1)), int(cell.group(2)))}"], False
+    rect = _rectangle(body)
+    if rect is None:
+        return [target], False
+    c1, c2, r1, r2 = rect
+    if usage is not None and _whole_axis(c1, c2, r1, r2):
+        cells = [
+            f"{sheet}!{index_to_col(col)}{row}"
+            for row, col in _present_pairs(sheet, c1, c2, r1, r2, usage)
+        ]
+        return cells, False
+    return _take(sheet, c1, c2, r1, r2, cap)
 
 
 def _take(
@@ -100,6 +302,47 @@ class CellEdge(NamedTuple):
     abs_col_end: bool | None = None
     abs_row_end: bool | None = None
     named: bool = False
+    col_offset: int | None = None
+    period_lag: str | None = None
+
+
+def as_cell_edge(value: CellEdge | Mapping[str, Any]) -> CellEdge:
+    """One cell edge. A dict is copied once; a CellEdge is the same object."""
+    if isinstance(value, CellEdge):
+        return value
+    offset = value.get("col_offset")
+    return CellEdge(
+        str(value.get("source") or ""),
+        str(value.get("target") or ""),
+        str(value.get("kind") or ""),
+        bool(value.get("unresolved")),
+        bool(value.get("truncated")),
+        bool(value.get("dangling")),
+        _opt_text(value.get("dangling_reason")),
+        _opt_text(value.get("status")),
+        _opt_text(value.get("reason")),
+        _opt_text(value.get("evidence")),
+        _opt_text(value.get("range_ref")),
+        _opt_bool(value.get("abs_col")),
+        _opt_bool(value.get("abs_row")),
+        _opt_bool(value.get("abs_col_end")),
+        _opt_bool(value.get("abs_row_end")),
+        bool(value.get("named")),
+        None if offset is None else int(offset),
+        _opt_text(value.get("period_lag")),
+    )
+
+
+def _opt_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _opt_text(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 class MemberStatus(NamedTuple):
@@ -116,6 +359,7 @@ def expand_cell_edges(
     *,
     known_sheets: set[str] | None = None,
     presence: dict[str, str] | None = None,
+    usage: SheetUsage | None = None,
 ) -> list[CellEdge]:
     """Expand formula edges to cell-to-cell rows with blank vs unresolved status."""
     known = known_nodes or set()
@@ -124,7 +368,7 @@ def expand_cell_edges(
     rows: list[CellEdge] = []
     seen: set[tuple[str, str, str]] = set()
     for edge in edges:
-        for target, unresolved, truncated in _expanded_targets(edge):
+        for target, unresolved, truncated in _expanded_targets(edge, usage):
             classified = classify_member(
                 target,
                 kind=edge.kind,
@@ -219,57 +463,29 @@ def _blank(klass: str, evidence: str) -> MemberStatus:
     return MemberStatus(klass, False, "empty", "actual_blank_cell", evidence)
 
 
-def _expanded_targets(edge: Edge) -> list[tuple[str, bool, bool]]:
+def _expanded_targets(
+    edge: Edge, usage: SheetUsage | None = None
+) -> list[tuple[str, bool, bool]]:
     if not edge.target:
         return []
     if edge.kind == "range" and not edge.unresolved and "!" in edge.target:
         try:
-            cells, trunc = expand_range(edge.target)
+            cells, trunc = expand_range(edge.target, usage=usage)
         except ValueError:
             return [(edge.target, True, False)]
         if trunc:
             edge.truncated = True
         return [(cell, False, trunc) for cell in cells]
     if edge.kind in {"ref", "cross_sheet"}:
-        return [(edge.target, edge.unresolved, edge.truncated)]
+        return [(_canonical_target(edge.target, usage), edge.unresolved, edge.truncated)]
     return [(edge.target, True, edge.truncated)]
 
 
-def build_csr(
-    edges: list[Edge],
-    extra_nodes: list[str] | None = None,
-    *,
-    expanded: list[CellEdge] | None = None,
-) -> CsrGraph:
-    nodes: set[str] = set(extra_nodes or [])
-    pairs: list[tuple[str, str]] = []
-    truncated_sources: set[str] = set()
-    if expanded is None:
-        expanded = expand_cell_edges(edges, set(nodes))
-    for edge in expanded:
-        source, target, kind = edge.source, edge.target, edge.kind
-        unresolved, truncated = edge.unresolved, edge.truncated
-        nodes.add(source)
-        nodes.add(target)
-        if truncated:
-            truncated_sources.add(source)
-        if unresolved or kind in {"dynamic", "external"}:
-            continue
-        if kind in {"ref", "cross_sheet", "range"}:
-            pairs.append((source, target))
-
-    ordered = sorted(nodes)
-    index = {name: i for i, name in enumerate(ordered)}
-    n = len(ordered)
-    if not pairs or n == 0:
-        matrix = sparse.csr_matrix((n, n), dtype=np.uint8)
-        return CsrGraph(
-            nodes=ordered, node_index=index, matrix=matrix, truncated_sources=truncated_sources
-        )
-    rows = np.fromiter((index[src] for src, _ in pairs), dtype=np.int32, count=len(pairs))
-    cols = np.fromiter((index[dst] for _, dst in pairs), dtype=np.int32, count=len(pairs))
-    data = np.ones(len(pairs), dtype=np.uint8)
-    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.uint8)
-    return CsrGraph(
-        nodes=ordered, node_index=index, matrix=matrix, truncated_sources=truncated_sources
-    )
+def _canonical_target(target: str, usage: SheetUsage | None) -> str:
+    if usage is None:
+        return target
+    try:
+        sheet, body = split_sheet_ref(target)
+    except ValueError:
+        return target
+    return f"{usage.sheet_name(sheet)}!{body}"

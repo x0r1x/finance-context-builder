@@ -14,6 +14,7 @@ from finance_context.app.pipeline import Pipeline, mark_job_failed
 from finance_context.app.publisher import publisher_matches, stale_from_meta
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import LEGACY_SOURCE, SOURCE, source_name
+from finance_context.memory import MEMORY_ERROR_DETAIL
 from finance_context.observability import configure_logging
 from finance_context.settings import DEFAULT_DATA_DIR, Settings
 from finance_context.store.fs import atomic_write_bytes, write_json
@@ -111,8 +112,12 @@ def build(
             shared_dir=shared,
         )
     except ContextError as exc:
-        mark_job_failed(dest, job_id, exc.code)
+        mark_job_failed(dest, job_id, exc.code, detail=exc.detail or None)
         typer.echo(f"failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except MemoryError:
+        mark_job_failed(dest, job_id, "workbook_too_large", detail=MEMORY_ERROR_DETAIL)
+        typer.echo(f"failed: workbook_too_large: {MEMORY_ERROR_DETAIL}", err=True)
         raise typer.Exit(code=1) from None
     except Exception as exc:
         mark_job_failed(dest, job_id, type(exc).__name__)

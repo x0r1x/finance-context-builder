@@ -64,7 +64,7 @@ Submit a workbook. `POST` returns **202** and the API starts a process for that 
 | --- | --- |
 | `queued` / `running` | Still working |
 | `succeeded` | Documents are ready. |
-| `failed` | Pipeline error with its code in `error` (`zip_rejected`, `encrypted_workbook`, `unsupported_media_type`, `conversion_failed`), the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`), or the API restarted while the job was still `queued` or `running` (`error` is `process_lost`). Submit the workbook again. |
+| `failed` | Pipeline error with its code in `error` (`zip_rejected`, `encrypted_workbook`, `unsupported_media_type`, `conversion_failed`, `workbook_too_large`), the book's process was stopped after the server `JOB_TIMEOUT_SEC` (`error` is `TimeoutError`), or the API restarted while the job was still `queued` or `running` (`error` is `process_lost`). Submit the workbook again. |
 
 Older snapshots may still say `needs_input` or `degraded`. Those jobs are finished, and the same four documents are served.
 
@@ -105,6 +105,7 @@ HTTP `error` codes:
 | `unsupported_media_type` | 400 |
 | `empty_file` | 400 |
 | `file_too_large` | 413 |
+| `workbook_too_large` | job `error` only |
 | `encrypted_workbook` | 422 |
 | `zip_rejected` | 422 |
 | `conversion_failed` | job `error` only |
@@ -113,9 +114,9 @@ HTTP `error` codes:
 | `report_not_ready` | 409 |
 | `too_many_jobs` | 429 |
 
-`report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book.
+`report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book. `workbook_too_large` is a finished job: the workbook's formula and range estimate, or its resident memory, is over the per-job budget. `error` is the code and `detail` is the short reason. There is no traceback.
 
-Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (server default 3600), `SOFFICE_BIN` (default `soffice` / `libreoffice` on `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, and check rows stay in the block with their `kind`.
+Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_MEMORY_BUDGET_BYTES` (RSS cap for one job; when unset, the cgroup limit minus `JOB_MEMORY_API_RESERVE_FRACTION` — default 0.25 — split across `MAX_CONCURRENT_JOBS`; a configured cap under `JOB_MEMORY_FLOOR_BYTES`, default 128 MiB, refuses the job and is not raised; a derived share under that floor is kept; with no cgroup limit the cap is `JOB_MEMORY_DEFAULT_BUDGET_BYTES`, default 1536 MiB), `JOB_ESTIMATE_BASE_BYTES` (138412032), `JOB_ESTIMATE_BYTES_PER_FORMULA` (3840), `JOB_ESTIMATE_BYTES_PER_EXPANDED_CELL` (960), `JOB_ESTIMATE_BYTES_PER_PRESENT_CELL` (960), `JOB_MEMORY_FLOOR_BYTES` (134217728), `JOB_MEMORY_API_RESERVE_FRACTION` (0.25), `JOB_MEMORY_DEFAULT_BUDGET_BYTES` (1610612736), `JOB_MEMORY_WATCH_INTERVAL_SEC` (0.2), `RANGE_EXPAND_CAP` (2000), `JOB_OOM_SCORE_ADJ` (1000), `JOB_MEMORY_PREFLIGHT_REFUSAL` (true; when false the estimate does not refuse and the resident-set watchdog still does), `JOB_TIMEOUT_SEC` (server default 3600), `SOFFICE_BIN` (default `soffice` / `libreoffice` on `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, and check rows stay in the block with their `kind`. The parent watches each child's resident memory and kills it when it passes the budget. The child sets `oom_score_adj` to `JOB_OOM_SCORE_ADJ` (default 1000) when the kernel allows it. Each `stage_done` line carries `duration_ms`, `rss_in_mb`, `rss_out_mb`, `rss_peak_mb`, and the stage's counts. `LOG_LEVEL=DEBUG` adds `memory_budget` (estimate against the budget) and `memory_refused` when a book is turned away.
 
 ## Data
 
@@ -130,7 +131,13 @@ cp .env.example .env   # optional
 docker compose up --build
 ```
 
-Leave Compose running. The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`.
+Leave Compose running. The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`. The service sets `mem_limit: 4g`. At the default of two job slots that limit derives a 1536 MiB RSS cap per job. This repo has no Kubernetes manifest. A pod needs the same ceiling, and `JOB_MEMORY_BUDGET_BYTES` when that ceiling is not 4 GiB:
+
+```yaml
+resources:
+  limits:
+    memory: 4Gi
+```
 
 The image runs as `app` (uid 1000) with `HOME=/app` and includes `libreoffice-calc-nogui`. A `.xls` upload converts inside the container. Conversion writes a temporary profile under the book directory, not into the image home. `XLS_CONVERT_TIMEOUT_SEC` (default 300) stays below `JOB_TIMEOUT_SEC` (default 3600) so a hung conversion fails the job before the server stops the process. `.env` can still set `SOFFICE_BIN` and `XLS_CONVERT_TIMEOUT_SEC`; Compose does not override them. `scripts/docker-xls-smoke.sh` checks that path against a real `.xls`. It needs Docker and is not part of `uv run pytest`.
 

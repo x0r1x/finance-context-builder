@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8080/readyz
 | --- | --- |
 | `queued` / `running` | Ещё считается |
 | `succeeded` | Документы готовы. |
-| `failed` | Ошибка пайплайна с кодом в `error` (`zip_rejected`, `encrypted_workbook`, `unsupported_media_type`, `conversion_failed`), процесс книги остановлен по серверному `JOB_TIMEOUT_SEC` (`error` — `TimeoutError`), или API перезапустился, пока книга была в `queued` или `running` (`error` — `process_lost`). Отправьте книгу снова. |
+| `failed` | Ошибка пайплайна с кодом в `error` (`zip_rejected`, `encrypted_workbook`, `unsupported_media_type`, `conversion_failed`, `workbook_too_large`), процесс книги остановлен по серверному `JOB_TIMEOUT_SEC` (`error` — `TimeoutError`), или API перезапустился, пока книга была в `queued` или `running` (`error` — `process_lost`). Отправьте книгу снова. |
 
 Старые снимки могут ещё говорить `needs_input` или `degraded`. Такая джоба уже закончена, те же четыре документа отдаются.
 
@@ -102,6 +102,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 | `unsupported_media_type` | 400 |
 | `empty_file` | 400 |
 | `file_too_large` | 413 |
+| `workbook_too_large` | только `error` джобы |
 | `encrypted_workbook` | 422 |
 | `zip_rejected` | 422 |
 | `conversion_failed` | только `error` джобы |
@@ -110,9 +111,9 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 | `report_not_ready` | 409 |
 | `too_many_jobs` | 429 |
 
-`report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key` или `q` — это `selector_required`, а не вся книга.
+`report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key` или `q` — это `selector_required`, а не вся книга. `workbook_too_large` — завершённая джоба: оценка по формулам и диапазонам или резидентная память выше бюджета одной джобы. `error` — код, `detail` — короткая причина. Трейсбэка нет.
 
-Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `SOFFICE_BIN` (по умолчанию `soffice` / `libreoffice` из `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper и check остаются в блоке со своим `kind`.
+Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_MEMORY_BUDGET_BYTES` (лимит RSS одной джобы; если не задан — лимит cgroup за вычетом `JOB_MEMORY_API_RESERVE_FRACTION`, по умолчанию 0.25, делится на `MAX_CONCURRENT_JOBS`; заданный лимит ниже `JOB_MEMORY_FLOOR_BYTES`, по умолчанию 128 МиБ, отклоняет джобу и не поднимается; выведенная доля ниже этого порога сохраняется; без лимита cgroup берётся `JOB_MEMORY_DEFAULT_BUDGET_BYTES`, по умолчанию 1536 МиБ), `JOB_ESTIMATE_BASE_BYTES` (138412032), `JOB_ESTIMATE_BYTES_PER_FORMULA` (3840), `JOB_ESTIMATE_BYTES_PER_EXPANDED_CELL` (960), `JOB_ESTIMATE_BYTES_PER_PRESENT_CELL` (960), `JOB_MEMORY_FLOOR_BYTES` (134217728), `JOB_MEMORY_API_RESERVE_FRACTION` (0.25), `JOB_MEMORY_DEFAULT_BUDGET_BYTES` (1610612736), `JOB_MEMORY_WATCH_INTERVAL_SEC` (0.2), `RANGE_EXPAND_CAP` (2000), `JOB_OOM_SCORE_ADJ` (1000), `JOB_MEMORY_PREFLIGHT_REFUSAL` (true; при false оценка не отклоняет джобу, сторож RSS по-прежнему отклоняет), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `SOFFICE_BIN` (по умолчанию `soffice` / `libreoffice` из `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper и check остаются в блоке со своим `kind`. Родитель следит за RSS ребёнка и убивает его при превышении бюджета. Ребёнок ставит `oom_score_adj` в `JOB_OOM_SCORE_ADJ` (по умолчанию 1000), если ядро позволяет. Каждая строка `stage_done` несёт `duration_ms`, `rss_in_mb`, `rss_out_mb`, `rss_peak_mb` и счётчики стадии. `LOG_LEVEL=DEBUG` добавляет `memory_budget` (оценка против бюджета) и `memory_refused`, если книга отклонена.
 
 ## Данные
 
@@ -127,7 +128,13 @@ cp .env.example .env   # необязательно
 docker compose up --build
 ```
 
-Оставьте Compose запущенным. API опубликован только на `127.0.0.1:8080`. Общий кэш книг и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`.
+Оставьте Compose запущенным. API опубликован только на `127.0.0.1:8080`. Общий кэш книг и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`. У сервиса `mem_limit: 4g`. При двух слотах джоб из этого лимита получается потолок RSS 1536 МиБ на джобу. Манифеста Kubernetes в репозитории нет. Поду нужен тот же потолок, а `JOB_MEMORY_BUDGET_BYTES` — если потолок не 4 ГиБ:
+
+```yaml
+resources:
+  limits:
+    memory: 4Gi
+```
 
 Образ работает от пользователя `app` (uid 1000) с `HOME=/app` и содержит `libreoffice-calc-nogui`. Загрузка `.xls` конвертируется внутри контейнера. Конвертация пишет временный профиль в каталог книги, а не в домашний каталог образа. `XLS_CONVERT_TIMEOUT_SEC` (по умолчанию 300) меньше `JOB_TIMEOUT_SEC` (по умолчанию 3600), поэтому зависшая конвертация роняет джобу раньше, чем сервер остановит процесс. `.env` по-прежнему может задать `SOFFICE_BIN` и `XLS_CONVERT_TIMEOUT_SEC`; Compose их не перезаписывает. `scripts/docker-xls-smoke.sh` проверяет этот путь на настоящем `.xls`. Скрипту нужен Docker, и он не входит в `uv run pytest`.
 

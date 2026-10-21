@@ -121,6 +121,13 @@ def read_parquet(path: Path) -> list[dict[str, Any]]:
     return pq.read_table(path).to_pylist()
 
 
+def read_parquet_columns(path: Path, columns: Sequence[str]) -> list[tuple[Any, ...]]:
+    """Read named columns only. The rest of the row stays on disk."""
+    table = pq.read_table(path, columns=list(columns))
+    arrays = [table.column(name).to_pylist() for name in columns]
+    return list(zip(*arrays, strict=True))
+
+
 def write_cells_parquet(path: Path, rows: list[dict[str, Any]]) -> None:
     typed = [
         ("sheet", "VARCHAR"),
