@@ -208,7 +208,7 @@ def parse_ooxml(
     sst = _load_sst(zf, wb_rels)
     formats, indents = _load_styles(zf, wb_rels)
     externals = _load_externals(zf, wb_rels, wb_root)
-    names, iterate = _load_names_and_iterate(wb_root)
+    names, iterate = _load_names_and_iterate(wb_root, _sheet_names(wb_root))
     date1904 = False
     workbook_pr = find_child(wb_root, "workbookPr")
     if workbook_pr is not None:
@@ -334,7 +334,17 @@ def _load_externals(
     return targets
 
 
-def _load_names_and_iterate(wb_root: etree._Element) -> tuple[list[DefinedName], bool]:
+def _sheet_names(wb_root: etree._Element) -> list[str]:
+    """Workbook sheet order. ``localSheetId`` is an index into this list."""
+    sheets_el = find_child(wb_root, "sheets")
+    if sheets_el is None:
+        return []
+    return [(node.get("name") or "Sheet") for node in children(sheets_el, "sheet")]
+
+
+def _load_names_and_iterate(
+    wb_root: etree._Element, sheet_names: list[str]
+) -> tuple[list[DefinedName], bool]:
     names: list[DefinedName] = []
     defined = find_child(wb_root, "definedNames")
     if defined is not None:
@@ -347,6 +357,7 @@ def _load_names_and_iterate(wb_root: etree._Element) -> tuple[list[DefinedName],
                     name=name,
                     formula=(node.text or "").strip(),
                     hidden=as_bool(node.get("hidden")),
+                    sheet=_local_sheet(node.get("localSheetId"), sheet_names),
                 )
             )
     iterate = False
@@ -354,6 +365,15 @@ def _load_names_and_iterate(wb_root: etree._Element) -> tuple[list[DefinedName],
     if calc is not None:
         iterate = as_bool(calc.get("iterate")) or as_bool(calc.get("iterateEnabled"))
     return names, iterate
+
+
+def _local_sheet(local_sheet_id: str | None, sheet_names: list[str]) -> str | None:
+    if local_sheet_id is None or not str(local_sheet_id).isdigit():
+        return None
+    index = int(local_sheet_id)
+    if index >= len(sheet_names):
+        return None
+    return sheet_names[index]
 
 
 def _parse_sheet(
@@ -438,7 +458,22 @@ def _parse_sheet(
         )
     sheet.info.hidden_rows = hidden_rows
     sheet.info.hidden_cols = sorted(hidden_cols)
+    sheet.info.merges = _merge_refs(root)
     return cells, presence
+
+
+def _merge_refs(root: etree._Element) -> list[str]:
+    """Horizontal merge spans. The anchor cell keeps the text; layout reads the span."""
+    node = find_child(root, "mergeCells")
+    if node is None:
+        return []
+    found: list[str] = []
+    for child in children(node, "mergeCell"):
+        ref = child.get("ref") or ""
+        if ":" not in ref:
+            continue
+        found.append(ref.replace("$", ""))
+    return found
 
 
 def _summary_below(root: etree._Element) -> bool:

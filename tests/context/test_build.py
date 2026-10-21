@@ -394,6 +394,53 @@ def test_sheet_qualified_ref_error_is_the_same_exception_as_bare() -> None:
     assert qualified_doc.workbook.unparsed_formulas == 0
 
 
+def test_unknown_header_warnings_do_not_crowd_out_formula_warnings() -> None:
+    blocks = []
+    for index in range(50):
+        blocks.append(
+            Block(
+                block_id=f"S!r{index + 1}",
+                label_col=1,
+                kind="params",
+                axis=Axis(
+                    id=f"S!r{index + 1}",
+                    row=index + 1,
+                    headers=[
+                        AxisHeader(
+                            col=2,
+                            text=f"Caption {index}",
+                            role="unknown",
+                            period_key=f"caption-{index}",
+                        )
+                    ],
+                ),
+                rows=[LayoutRow(row=index + 2, label="Amount")],
+            )
+        )
+    doc = build_context(
+        job_id="cap",
+        workbook_meta={"sheets": [{"name": "S"}]},
+        cells=[
+            {
+                "sheet": "S",
+                "row": 1,
+                "col": 1,
+                "addr": "A1",
+                "cached_value": None,
+                "formula_raw": "=1+1",
+                "unparsed": True,
+            }
+        ],
+        layout=Layout(sheets=[SheetLayout(name="S", blocks=blocks)]),
+        graph=GraphPointer(dangling=3),
+    )
+    assert len(doc.warnings) == 50
+    assert "Unparsed formula at S!A1" in doc.warnings
+    assert "1 formula cell(s) missing cached values (e.g. S!A1)" in doc.warnings
+    assert "Graph: 3 unresolved formula targets (see graph.json)" in doc.warnings
+    assert any("Unrecognized column headers" in warning for warning in doc.warnings)
+
+
 def test_hidden_warnings_do_not_crowd_out_formula_warnings() -> None:
     sheets = [{"name": f"S{index}", "hidden": True} for index in range(60)]
     cells = [

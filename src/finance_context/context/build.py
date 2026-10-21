@@ -18,8 +18,13 @@ from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.layout.adjacency import row_adjacency
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
-from finance_context.layout.params import is_scenario_selector_label
-from finance_context.layout.periods import display_cell_text
+from finance_context.layout.params import selector_rows
+from finance_context.layout.periods import (
+    classify_header,
+    display_cell_text,
+    is_calendar_hit,
+    period_like_header,
+)
 from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
 from finance_context.layout.units import is_block_unit_caption
@@ -39,6 +44,17 @@ from finance_context.models.context import (
 from finance_context.vocab import ValueStatus
 
 
+def _without_name_scope(items: list) -> list:
+    """Drop the sheet a name is local to. Context keeps the name and its formula."""
+    published = []
+    for item in items:
+        if isinstance(item, dict):
+            published.append({key: value for key, value in item.items() if key != "sheet"})
+        else:
+            published.append(item)
+    return published
+
+
 def build_context(
     *,
     job_id: str,
@@ -55,13 +71,22 @@ def build_context(
 ) -> ContextDocument:
     relations = list(relations or [])
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+    by_sheet_row: dict[str, dict[int, list[dict]]] = {}
+    for cell in cells:
+        by_sheet_row.setdefault(cell["sheet"], {}).setdefault(int(cell["row"]), []).append(cell)
+    date1904 = bool(workbook_meta.get("date1904"))
+    defined_names = list(workbook_meta.get("defined_names") or [])
+    switches = {
+        name: selector_rows(rows, date1904, defined_names=defined_names, sheet=name)
+        for name, rows in by_sheet_row.items()
+    }
     axes, timeline_warnings = build_axes(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
     hidden_warnings = _hidden_warnings(workbook_meta, cells)
-    warnings: list[str] = [*_unknown_header_warnings(layout)]
+    warnings: list[str] = []
     formula_count = 0
     missing_cached = 0
     unparsed = 0
@@ -150,7 +175,7 @@ def build_context(
                 series: list[RowSeries] = []
                 for axis_id, headers in views:
                     row_headers = headers
-                    if is_scenario_selector_label(layout_row.label):
+                    if layout_row.row in switches.get(sheet.name, ()):
                         row_headers = [header for header in headers if header.role == "value"]
                     fingerprint, exceptions, summary = _row_formula_and_numbers(
                         sheet_name=sheet.name,
@@ -237,6 +262,7 @@ def build_context(
             f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
         )
     warnings.extend(hidden_warnings)
+    warnings.extend(_unknown_header_warnings(layout))
 
     sheets = [
         s["name"] if isinstance(s, dict) else getattr(s, "name", str(s))
@@ -251,7 +277,7 @@ def build_context(
         externals=list(workbook_meta.get("externals") or []),
         locale_hint=workbook_meta.get("locale_hint"),
         date1904=bool(workbook_meta.get("date1904")),
-        defined_names=list(workbook_meta.get("defined_names") or []),
+        defined_names=_without_name_scope(defined_names),
         iterate=bool(workbook_meta.get("iterate")),
         formula_count=formula_count,
         missing_cached_values=missing_cached,
@@ -307,7 +333,7 @@ def _block_views(
         headers = [
             header
             for header in (block.axis.headers if block.axis is not None else [])
-            if header.role in {"value", "scenario", "unknown"}
+            if header.role in {"value", "unknown"}
         ]
         return [(block.block_id, headers)]
     views: list[tuple[str, list[AxisHeader]]] = []
@@ -518,21 +544,44 @@ def _header_unit(sheet, block, by_addr: dict, date1904: bool) -> str | None:
 
 
 def _unknown_header_warnings(layout: Layout) -> list[str]:
+    """Params columns the lexicon did not name. Their values stay, the role is ``unknown``.
+
+    Two or more period headers mean a timeline whose axis did not form: some did
+    not parse (``9М 2025``), or a miss between parsed ones broke the run.
+    """
     warnings: list[str] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            if block.axis is None:
+            if block.kind != "params" or block.axis is None:
                 continue
-            names = [
-                header.text
+            unknown = [
+                header
                 for header in block.axis.headers
                 if header.role == "unknown" and header.text
             ]
-            if not names:
+            periodish = [header for header in unknown if _period_header(header.text)]
+            if len(periodish) >= 2:
+                warnings.append(_no_axis_warning(sheet.name, block.axis.row, periodish))
+                unknown = [header for header in unknown if header not in periodish]
+            if not unknown:
                 continue
-            quoted = ", ".join(f"«{name}»" for name in names)
+            quoted = ", ".join(f"«{header.text}»" for header in unknown)
             warnings.append(f"Unrecognized column headers in {block.block_id}: {quoted}")
     return warnings
+
+
+def _period_header(text: str) -> bool:
+    return period_like_header(text) or is_calendar_hit(classify_header(text))
+
+
+def _no_axis_warning(sheet: str, row: int, headers: list[AxisHeader]) -> str:
+    cols = sorted(header.col for header in headers)
+    span = f"{sheet}!{format_addr(cols[0], row)}:{format_addr(cols[-1], row)}"
+    quoted = ", ".join(f"«{header.text}»" for header in headers)
+    return (
+        f"No time axis on {sheet}: headers {span} look like periods but do not form"
+        f" an axis ({quoted}); columns kept as unknown"
+    )
 
 
 def _hidden_warnings(workbook_meta: dict, cells: list[dict]) -> list[str]:
@@ -619,7 +668,7 @@ def _period_dict(header: AxisHeader) -> dict[str, object]:
         "text": header.text,
         "period_key": header.period_key,
     }
-    # Params columns keep value/unit/note/scenario. Period columns have no role.
+    # Params columns keep value/unit/note. Period columns have no role.
     if header.role:
         item["role"] = header.role
     if header.hidden:

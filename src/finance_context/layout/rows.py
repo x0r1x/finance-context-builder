@@ -11,7 +11,6 @@ from finance_context.layout.periods import (
     LAYER_BOUNDS,
     LAYER_DATE,
     LAYER_HALF,
-    LAYER_MARKER,
     LAYER_MONTH,
     LAYER_QUARTER,
     LAYER_YEAR,
@@ -19,7 +18,6 @@ from finance_context.layout.periods import (
     classify_header,
     is_calendar_hit,
     is_end_period_label,
-    is_marker_text,
     is_month_label,
     is_quarter_label,
     is_start_period_label,
@@ -88,8 +86,6 @@ def _row_layers(row_cells: list[dict], date1904: bool) -> set[str]:
         for cell in row_cells
     ]
     atoms = [atom for atom in atoms if atom is not None and atom.kind != "noise"]
-    if any(atom.kind == "marker" for atom in atoms) or is_marker_text(label):
-        layers.add(LAYER_MARKER)
     if sum(1 for atom in atoms if atom.kind == "full" and atom.day) >= 1:
         layers.add(LAYER_DATE)
     if _year_layer(row_cells, date1904):
@@ -120,6 +116,31 @@ def _is_starter_row(row_cells: list[dict], date1904: bool) -> bool:
     if not bare_only:
         return True
     return _bare_years_are_header(row_cells, date1904)
+
+
+def _is_banner_gap(row_cells: list[dict], period_cols: set[int], date1904: bool) -> bool:
+    """A text banner in the period columns, with no date and no values.
+
+    ``Факт`` / ``План`` above a date ruler used to be a marker layer inside the
+    header band. It is not a period row. Label-only titles above it still belong
+    to the table, so the walk through section titles steps over this gap.
+    """
+    if not period_cols or _row_layers(row_cells, date1904) or _is_data_row(row_cells, date1904):
+        return False
+    saw = False
+    for cell in row_cells:
+        if cell.get("formula_raw"):
+            return False
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        if _is_number(text):
+            return False
+        if int(cell["col"]) in period_cols:
+            if _is_column_header_text(text):
+                return False
+            saw = True
+    return saw
 
 
 def _is_data_row(row_cells: list[dict], date1904: bool) -> bool:
@@ -153,7 +174,7 @@ def _is_counter_row(row_cells: list[dict], date1904: bool) -> bool:
         text = _text(cell, date1904)
         if not text:
             continue
-        if classify_header(text) is not None or is_marker_text(text):
+        if classify_header(text) is not None:
             continue
         if not _is_int_text(text):
             if _is_number(text):
@@ -233,15 +254,42 @@ def _year_banner_by_column(row_cells: list[dict], date1904: bool) -> dict[int, s
     return found
 
 
+def _word_residual(text: str | None) -> bool:
+    """A content word beside one date, as opposed to a one-letter suffix.
+
+    ``2024E`` is still a year header. ``Forecast 2024`` in a label cell is not
+    a header layer by itself.
+    """
+    hit = classify_header(text)
+    if hit is None or not hit.variant:
+        return False
+    return len(hit.variant.strip()) > 1
+
+
 def _year_layer(row_cells: list[dict], date1904: bool) -> bool:
-    """Text year headers count. Bare numbers count only as a real year run."""
+    """Text year headers count. Bare numbers count only as a real year run.
+
+    One word glued to a year (``Forecast 2024``) does not make the row a year
+    layer: that caption sits in a label cell beside numeric data. A run of two
+    such cells is a header. A suffix letter (``2024E``) still counts as one cell.
+    """
+    letters = 0
+    words = 0
     for cell in row_cells:
         text = _text(cell, date1904)
         hit = classify_header(text)
         if hit is None or not _YEAR_KEY.fullmatch(hit.period_key):
             continue
-        if not _is_bare_year_text(text):
-            return True
+        if _is_bare_year_text(text):
+            continue
+        if _word_residual(text):
+            words += 1
+        else:
+            letters += 1
+    if letters:
+        return True
+    if words >= 2:
+        return True
     return _bare_years_are_header(row_cells, date1904)
 
 
@@ -613,9 +661,14 @@ def _left_of_axis_label(
 def _is_column_header_text(text: str) -> bool:
     """A period in the label column ("2024", "I кв. 2025") is not a row name.
 
-    "План", "Факт", "Budget" or "Base case" there is: the position says it is a row label.
+    "План", "Факт", "Budget" or "Base case" there is a row label. So is a
+    content word beside one date (``Revenue 2024``): the position says the cell
+    names the row. A one-letter suffix (``2024E``) stays a period header.
     """
-    return is_calendar_hit(classify_header(text))
+    hit = classify_header(text)
+    if not is_calendar_hit(hit):
+        return False
+    return not _word_residual(text)
 
 
 def _row_kind(

@@ -59,6 +59,9 @@ def write_zip(path: Path, members: dict[str, str | bytes]) -> Path:
     return path
 
 
+DefinedNameSpec = tuple[str, str] | tuple[str, str, int]
+
+
 def build_xlsx(
     path: Path,
     *,
@@ -67,7 +70,7 @@ def build_xlsx(
     has_vba: bool = False,
     externals: list[str] | None = None,
     iterate: bool = False,
-    defined_names: list[tuple[str, str]] | None = None,
+    defined_names: list[DefinedNameSpec] | None = None,
     num_formats: dict[int, str] | None = None,
     cell_xfs: list[int] | None = None,
     xf_indents: list[int] | None = None,
@@ -265,21 +268,25 @@ def _content_types(overrides: list[str]) -> str:
     )
 
 
+def _defined_name_xml(item: DefinedNameSpec) -> str:
+    name, formula = item[0], item[1]
+    local = item[2] if len(item) > 2 else None
+    scope = f' localSheetId="{int(local)}"' if local is not None else ""
+    return f'<definedName name="{escape(name)}"{scope}>{escape(formula)}</definedName>'
+
+
 def _workbook_xml(
     sheet_els: list[str],
     extra_els: list[str],
     *,
     iterate: bool,
-    defined_names: list[tuple[str, str]],
+    defined_names: list[DefinedNameSpec],
     date1904: bool = False,
 ) -> str:
     calc = '<calcPr iterate="1"/>' if iterate else ""
     names = ""
     if defined_names:
-        body = "".join(
-            f'<definedName name="{escape(n)}">{escape(f)}</definedName>'
-            for n, f in defined_names
-        )
+        body = "".join(_defined_name_xml(item) for item in defined_names)
         names = f"<definedNames>{body}</definedNames>"
     pr = '<workbookPr date1904="1"/>' if date1904 else ""
     return (

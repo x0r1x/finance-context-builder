@@ -542,8 +542,9 @@ def test_graph_selects_active_value_column() -> None:
     ]
     layout = detect_layout(cells, edges=edges)
     block = layout.sheets[0].blocks[0]
-    value_cols = {header.col for header in block.axis.headers if header.role == "value"}
-    assert value_cols == {4}
+    headers = {header.col: (header.role, header.text) for header in block.axis.headers}
+    assert headers[3] == ("value", "Base")
+    assert headers[4] == ("value", "Values")
 
 
 def test_unit_caption_does_not_replace_the_debt_section() -> None:
@@ -644,6 +645,68 @@ def test_plan_fact_and_scenario_labels_stay_rows_under_a_year_axis() -> None:
         cells += [_c("ПФ", f"{col}{r}", str(r + i)) for i, col in enumerate("BCD")]
     rows = detect_layout(cells).sheets[0].blocks[0].rows
     assert [row.label for row in rows] == labels
+
+
+def test_a_banner_higher_up_does_not_pull_the_previous_title_down() -> None:
+    cells = [
+        _c("P&L", "A1", "Upper"),
+        _c("P&L", "B2", "2020"),
+        _c("P&L", "C2", "2021"),
+        _c("P&L", "A3", "Sales"),
+        _c("P&L", "B3", "1"),
+        _c("P&L", "C3", "2"),
+        _c("P&L", "B4", "Remark"),
+        _c("P&L", "A5", "Between"),
+        _c("P&L", "B7", "Факт"),
+        _c("P&L", "C7", "План"),
+        _c("P&L", "B8", "2024"),
+        _c("P&L", "C8", "2025"),
+        _c("P&L", "A9", "Costs"),
+        _c("P&L", "B9", "3"),
+        _c("P&L", "C9", "4"),
+    ]
+    blocks = detect_layout(cells).sheets[0].blocks
+    labels = [[row.label for row in block.rows] for block in blocks]
+    upper = next(rows for rows in labels if "Sales" in rows)
+    assert upper[:2] == ["Upper", "Sales"]
+    lower = next(rows for rows in labels if "Costs" in rows)
+    assert "Upper" not in lower
+    assert "Between" in lower
+
+
+def test_section_title_above_a_fact_banner_stays_on_the_axis() -> None:
+    """A fact/plan banner is not a header layer, and titles above it stay put."""
+    cells = [
+        _c("P&L", "A1", "Operating"),
+        _c("P&L", "B2", "Факт"),
+        _c("P&L", "C2", "План"),
+        _c("P&L", "B3", "2024"),
+        _c("P&L", "C3", "2025"),
+        _c("P&L", "A4", "Sales"),
+        _c("P&L", "B4", "10"),
+        _c("P&L", "C4", "12"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.header_row for axis in sheet.axes] == [3]
+    assert [period.period_key for period in sheet.axes[0].periods] == ["2024", "2025"]
+    labels = [row.label for block in sheet.blocks for row in block.rows]
+    assert labels[0] == "Operating"
+    assert "Sales" in labels
+    assert "Факт" not in labels
+
+
+def test_word_plus_year_in_the_label_column_stays_a_row_name() -> None:
+    cells = [_c("ПФ", "A2", "Показатель")]
+    years = ["2023", "2024", "2025"]
+    cells += [_c("ПФ", f"{col}2", y) for col, y in zip("BCD", years, strict=True)]
+    cells += [_c("ПФ", "A3", "Выручка")]
+    cells += [_c("ПФ", f"{col}3", v) for col, v in zip("BCD", ["1", "2", "3"], strict=True)]
+    cells += [_c("ПФ", "A4", "Revenue 2024")]
+    cells += [_c("ПФ", f"{col}4", v) for col, v in zip("BCD", ["4", "5", "6"], strict=True)]
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.header_row for axis in sheet.axes] == [2]
+    assert [period.period_key for period in sheet.axes[0].periods] == years
+    assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "Revenue 2024"]
 
 
 def test_year_in_the_label_column_is_still_not_a_row_name() -> None:

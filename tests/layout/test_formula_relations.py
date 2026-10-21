@@ -157,3 +157,12 @@ def test_previous_column_on_the_same_sheet_stays_a_roll_forward() -> None:
     assert [rel.kind for rel in relations] == ["roll_forward"]
     assert relations[0].source_row_key == "CF|8|CF!r1"
     assert relations[0].target_row_key == "CF|14|CF!r1"
+
+
+def test_params_total_under_an_unknown_header_is_an_aggregate() -> None:
+    layout = _layout()
+    block = layout.sheets[0].blocks[0]
+    block.kind = "params"
+    block.axis.headers = [AxisHeader(col=4, text="Amount", role="unknown", period_key="unknown")]
+    relations = formula_relations(layout, [_cell("=SUM(D2:D4)")])
+    assert [relation.kind for relation in relations] == ["aggregate"]

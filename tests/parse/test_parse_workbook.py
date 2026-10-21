@@ -306,9 +306,35 @@ def test_defined_names_iterate_and_locale_hint(tmp_path: Path, dest: Path) -> No
     )
     meta = parse_workbook(source, dest)
     assert meta.iterate is True
-    assert any(n.name == "Rate" and n.formula == "Inputs!$D$5" for n in meta.defined_names)
+    rate = next(item for item in meta.defined_names if item.name == "Rate")
+    assert rate.formula == "Inputs!$D$5"
+    assert rate.sheet is None
+    dumped = meta.model_dump(mode="json")
+    rate = next(item for item in dumped["defined_names"] if item["name"] == "Rate")
+    assert "sheet" not in rate
     # OOXML stores formulas in en-US; `;` in an array constant is a row break.
     assert meta.locale_hint == "en"
+
+
+def test_sheet_scoped_defined_name_keeps_its_sheet(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "local-name.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(name="Inputs", cells=[CellSpec(addr="D3", value="1")]),
+            SheetSpec(name="Other", cells=[CellSpec(addr="A1", value="0")]),
+        ],
+        defined_names=[("Pick", "$D$3", 0), ("Rate", "Inputs!$D$5")],
+    )
+    meta = parse_workbook(source, dest)
+    pick = next(item for item in meta.defined_names if item.name == "Pick")
+    rate = next(item for item in meta.defined_names if item.name == "Rate")
+    assert pick.formula == "$D$3"
+    assert pick.sheet == "Inputs"
+    assert rate.sheet is None
+    dumped = meta.model_dump(mode="json")
+    stored = next(item for item in dumped["defined_names"] if item["name"] == "Pick")
+    assert stored["sheet"] == "Inputs"
 
 
 def test_date1904_flag_does_not_decode_cached_value(tmp_path: Path, dest: Path) -> None:

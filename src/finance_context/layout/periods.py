@@ -4,12 +4,13 @@ import re
 import unicodedata
 from dataclasses import dataclass, replace
 from datetime import date
+from functools import lru_cache
 
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.layout.lexicon import (
     accepts,
+    blocked_surface,
     data_token,
-    is_scenario_caption,
     matches_entry,
     month_numbers,
     pattern,
@@ -20,8 +21,8 @@ from finance_context.layout.models import ColumnKind, PeriodHit
 
 # One suffix class for a year and for a quarter, half, month or date of that year.
 # E/F/P, Cyrillic Е/П/Ф, Cyrillic Р (the lookalike of P), and A/a/А are variant
-# markers. They do not become an actual/plan label. П is the Russian plan
-# letter, not a P-lookalike, and stays a marker.
+# markers. They stay letters. The parser does not read them as fact or plan.
+# П is the Cyrillic letter, not a P-lookalike.
 _MARKER_SUFFIX = r"[EFAPеЕфФпПaAАаРр]"
 _H_MARK = r"[HН]"
 _YEAR_FLOAT = re.compile(r"^((?:19|20)\d{2})(?:\.0+)?$")
@@ -63,10 +64,6 @@ _DATE_KEY = re.compile(r"^((?:19|20)\d{2})-(\d{2})-(\d{2})$")
 _BOUND: str | None = None
 _YEAR: re.Pattern[str]
 _CYRILLIC_HALF: re.Pattern[str]
-_ACTUAL: re.Pattern[str]
-_PLAN: re.Pattern[str]
-_TAG: re.Pattern[str]
-_TAG_FIRST: re.Pattern[str]
 _QUARTER_WORD_FORMS: tuple[re.Pattern[str], ...]
 _QUARTER_CODE_FORMS: tuple[re.Pattern[str], ...]
 _HALF_WORD_FORMS: tuple[re.Pattern[str], ...]
@@ -75,7 +72,7 @@ _HALF_CODE_FORMS: tuple[re.Pattern[str], ...]
 
 def _bind() -> None:
     """Compile lexicon words into the period patterns. An overlay rebuilds them."""
-    global _BOUND, _YEAR, _CYRILLIC_HALF, _ACTUAL, _PLAN, _TAG, _TAG_FIRST
+    global _BOUND, _YEAR, _CYRILLIC_HALF
     global _QUARTER_WORD_FORMS, _QUARTER_CODE_FORMS, _HALF_WORD_FORMS, _HALF_CODE_FORMS
     token = data_token()
     if _BOUND == token:
@@ -87,9 +84,6 @@ def _bind() -> None:
         rf"(?:(?:\s*[-/]\s*|\s*'?\s*)(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
         rf"{year_word}(?P<sfx>{_MARKER_SUFFIX})?)?"
     )
-    actual = pattern("period_markers", "actual")
-    plan = pattern("period_markers", "plan")
-    marker_word = rf"(?:{actual}|{plan})"
     _YEAR = re.compile(
         rf"^(?:FY\s*)?((?:19|20)\d{{2}}){year_word}({_MARKER_SUFFIX})?$",
         re.IGNORECASE,
@@ -99,10 +93,6 @@ def _bind() -> None:
         rf"{year_word}(?P<sfx>{_MARKER_SUFFIX})?$",
         re.IGNORECASE,
     )
-    _ACTUAL = re.compile(rf"^({actual})\.?$", re.IGNORECASE)
-    _PLAN = re.compile(rf"^({plan})\.?$", re.IGNORECASE)
-    _TAG = re.compile(rf"^(.*?)\s+\(?({marker_word})\)?$", re.IGNORECASE)
-    _TAG_FIRST = re.compile(rf"^({marker_word})\.?\s+(.+)$", re.IGNORECASE)
 
     def compile_forms(bodies: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
         return tuple(re.compile(rf"^{body}{part_year}$", re.IGNORECASE) for body in bodies)
@@ -135,7 +125,6 @@ LAYER_YEAR = "year"
 LAYER_QUARTER = "quarter"
 LAYER_MONTH = "month"
 LAYER_HALF = "half"
-LAYER_MARKER = "marker"
 LAYER_BOUNDS = "bounds"
 
 
@@ -157,13 +146,14 @@ def marker_token(variant: str | None) -> str:
     """Casefolded variant marker used in ``<period_key>@<marker>``.
 
     ``variant`` is the marker as recognized after ``normalize_header`` (NFKC,
-    ё→е, collapsed whitespace, lookalike folding on a period token). ``casefold``
-    is the only further step: ``Факт`` and ``факт`` share ``факт``, and a suffix
-    ``E`` becomes ``e``. The lexicon stem is not applied.
+    collapsed whitespace, lookalike folding on a period token). ``casefold``
+    and ``ё``→``е`` are the further steps: ``Факт`` and ``факт`` share ``факт``,
+    ``Расчёт`` and ``Расчет`` share ``расчет``, and a suffix ``E`` becomes ``e``.
+    The lexicon stem is not applied.
     """
     if not variant:
         return ""
-    return variant.casefold()
+    return variant.casefold().replace("ё", "е")
 
 
 # Lookalikes folded only inside a token that already contains a digit.
@@ -230,29 +220,30 @@ def _fold_period_token(token: str) -> str:
     return token
 
 
+# Distinct normalized headers kept per lexicon token. A sheet asks for the same
+# header from bands, rows and atoms, often thousands of times.
+_CLASSIFY_CACHE = 1 << 16
+
+
 def classify_header(text: str | None) -> PeriodHit | None:
     _bind()
     raw = normalize_header(text)
     if not raw:
         return None
-    if _listed(raw, "structural", "total"):
-        return PeriodHit(kind="total", period_key="total", explicit_role=True)
+    return _classify(_BOUND, raw)
+
+
+@lru_cache(maxsize=_CLASSIFY_CACHE)
+def _classify(token: str | None, raw: str) -> PeriodHit | None:
+    """``classify_header`` of a normalized header. ``token`` keys the lexicon."""
+    del token
     if _listed(raw, "structural", "stub"):
         return PeriodHit(kind="stub", period_key="stub", explicit_role=True)
-    if is_scenario_caption(raw):
-        return PeriodHit(kind="scenario", period_key=raw.casefold(), explicit_role=True)
-    marker = _marker_word(raw)
-    if marker is not None:
-        structural_key, surface = marker
-        return PeriodHit(
-            kind="period",
-            period_key=structural_key,
-            variant=surface,
-            explicit_role=True,
-        )
-    tagged = _tagged_hit(raw)
-    if tagged is not None:
-        return tagged
+    return _one_calendar(raw)
+
+
+def _match_calendar_text(raw: str) -> PeriodHit | None:
+    """A string that is exactly one calendar date. A suffix letter stays on it."""
     iso_d = _ISO_YMD.fullmatch(raw)
     if iso_d:
         hit = _ymd_hit(
@@ -309,6 +300,8 @@ def unparsed_period_shape(text: str | None) -> bool:
     raw = normalize_header(text)
     if not raw or len(raw) > 40 or classify_header(raw) is not None:
         return False
+    if many_dates(raw):
+        return True
     if re.fullmatch(r"(?:0?\d|1\d)[./](?:19|20)\d{2}", raw):
         return True
     if re.search(r"(?i)(?:^|\s)[QHН]\s*[0-9]|[0-9]\s*[QHН](?:\s|$)", raw):
@@ -318,6 +311,156 @@ def unparsed_period_shape(text: str | None) -> bool:
         raw,
     )
     return bool(grain and re.search(r"(?:19|20)\d{2}", raw))
+
+
+# A fiscal year, a year span, or an N-month header. A bare year in other text is not one.
+_UNPARSED_YEAR_SHAPE = re.compile(
+    r"(?i)(?:fy\s*(?:19|20)?\d{2}(?:\s*/\s*\d{2,4})?"
+    r"|(?:19|20)\d{2}\s*/\s*\d{2,4}"
+    r"|\d{1,2}\s*[mм]\s*(?:19|20)\d{2})"
+)
+_MODEL_PERIOD = re.compile(
+    r"(?:год|year|yr|период|period|квартал|quarter|месяц|month)\s*№?\s*\d{1,3}",
+    re.IGNORECASE,
+)
+
+
+def period_like_header(text: str | None) -> bool:
+    """A column header with a year or a model-period number that is not a period.
+
+    ``9М 2025``, ``FY2025/26``, ``Estimate 2025``, ``2025/26``, ``Год 1``. A
+    header that parses (``2025``, ``2025E``) is a period, not period-like.
+    A year sitting in other text (``2025 график``, ``Model2024``) is not enough.
+    """
+    raw = normalize_header(text)
+    if not raw or len(raw) > 40 or classify_header(raw) is not None:
+        return False
+    if unparsed_period_shape(raw) or _UNPARSED_YEAR_SHAPE.search(raw):
+        return True
+    return _MODEL_PERIOD.fullmatch(raw) is not None
+
+
+def _one_calendar(raw: str) -> PeriodHit | None:
+    """One date, plus any short residual around it. Two dates are a comparison."""
+    direct = _match_calendar_text(raw)
+    if direct is not None and is_calendar_key(direct.period_key):
+        return direct
+    tokens = _scan_tokens(raw)
+    spans: list[tuple[int, int, PeriodHit]] = []
+    index = 0
+    while index < len(tokens):
+        found: tuple[int, int, PeriodHit] | None = None
+        for end in range(len(tokens), index, -1):
+            hit = _match_calendar_text(" ".join(tokens[index:end]))
+            if hit is not None and is_calendar_key(hit.period_key):
+                found = (index, end, hit)
+                break
+        if found is None:
+            index += 1
+            continue
+        spans.append(found)
+        index = found[1]
+    if len(spans) != 1:
+        return None
+    start, end, hit = spans[0]
+    residual = _clean_residual(" ".join(tokens[:start] + tokens[end:]))
+    return _with_residual(hit, residual)
+
+
+def _scan_tokens(raw: str) -> list[str]:
+    text = re.sub(r"[()\[\]«»]", " ", raw)
+    return [token for token in text.split() if token]
+
+
+def _clean_residual(text: str) -> str:
+    parts: list[str] = []
+    for token in text.split():
+        token = token.strip(".,;:[]«»\"'")
+        if token:
+            parts.append(token)
+    return " ".join(parts)
+
+
+def _residual_ok(text: str) -> bool:
+    """A short leftover. A digit is a duration or a comparison, not a marker."""
+    if not text or len(text) > 24 or len(text.split()) > 3:
+        return False
+    if re.search(r"\d", text):
+        return False
+    return not _residual_collides(text)
+
+
+def _residual_collides(text: str) -> bool:
+    """Calendar-word collisions and broken period codes are not tails.
+
+    ``график``, ``полка`` and ``V кв`` stay out. ``факт`` does not: it is not a
+    calendar word.
+    """
+    for token in re.findall(r"[^\W\d_]+", text):
+        if blocked_surface(token):
+            return True
+        folded = token.casefold()
+        if folded in {"q", "h"}:
+            return True
+        if any(
+            accepts("period_words", kind, surface=token) for kind in ("year", "quarter", "half")
+        ):
+            return True
+        for root in _period_roots():
+            if len(root) >= 3 and folded.startswith(root) and len(folded) > len(root):
+                return True
+    return False
+
+
+def _period_roots() -> tuple[str, ...]:
+    found: list[str] = []
+    for kind in ("year", "quarter", "half"):
+        for entry in words("period_words", kind):
+            root = entry.casefold().strip(".")
+            if root:
+                found.append(root)
+    return tuple(found)
+
+
+def _with_residual(hit: PeriodHit, residual: str) -> PeriodHit | None:
+    parts = [part for part in (hit.variant, residual) if part]
+    text = _clean_residual(" ".join(parts))
+    if residual and not _residual_ok(text):
+        return None
+    return PeriodHit(
+        kind=hit.kind,
+        period_key=hit.period_key,
+        variant=text or None,
+        explicit_role=bool(text),
+    )
+
+
+def many_dates(text: str | None) -> bool:
+    """A comparison header: more than one date, so it is not a period key."""
+    raw = normalize_header(text)
+    if not raw:
+        return False
+    direct = _match_calendar_text(raw)
+    if direct is not None and is_calendar_key(direct.period_key):
+        return False
+    tokens = _scan_tokens(raw)
+    count = 0
+    index = 0
+    while index < len(tokens):
+        found = 0
+        for end in range(len(tokens), index, -1):
+            hit = _match_calendar_text(" ".join(tokens[index:end]))
+            if hit is not None and is_calendar_key(hit.period_key):
+                found = end
+                break
+        if not found:
+            index += 1
+            continue
+        count += 1
+        index = found
+    if count > 1:
+        return True
+    return len(re.findall(r"(?:19|20)\d{2}", raw)) > 1
 
 
 def classify_atom(
@@ -333,13 +476,6 @@ def classify_atom(
         return HeaderAtom(kind="noise")
     hit = classify_header(raw)
     if hit is not None:
-        if hit.period_key in {"actual", "plan"}:
-            return HeaderAtom(
-                kind="marker",
-                column_kind="period",
-                variant=hit.variant,
-                explicit_role=True,
-            )
         parsed = parse_period_key(hit.period_key)
         half = _HALF_KEY.fullmatch(hit.period_key)
         return HeaderAtom(
@@ -357,17 +493,9 @@ def classify_atom(
     token = _part_token(raw)
     if token is not None:
         return token
-    tagged = _marker_tag(raw)
-    if tagged is not None:
-        token = _part_token(tagged[0].strip())
-        if token is not None:
-            # "План I кв.", "H2 (факт)" under a year row: the part keeps its marker.
-            return replace(
-                token,
-                column_kind="period",
-                variant=tagged[1],
-                explicit_role=True,
-            )
+    tailed = _part_with_residual(raw)
+    if tailed is not None:
+        return tailed
     if allow_quarter_num and _is_int_token(raw):
         num = int(raw)
         if 1 <= num <= 4:
@@ -395,7 +523,6 @@ def compose_period(
             atom
             for atom in calendar
             if atom.period_key in {"total", "stub"}
-            or (atom.column_kind == "scenario" and atom.period_key)
         ),
         None,
     )
@@ -687,35 +814,6 @@ def _label_has(text: str | None, *path: str) -> bool:
     return bool(raw and searcher(*path).search(raw))
 
 
-def is_marker_text(text: str | None) -> bool:
-    atom = classify_atom(text)
-    return atom is not None and atom.kind == "marker"
-
-
-def _marker_tag(raw: str) -> tuple[str, str] | None:
-    """Period text and marker word of "2024 факт", "2025 (план)" or "Факт 2025"."""
-    _bind()
-    match = _TAG.fullmatch(raw)
-    if match is not None and _marker_word(match.group(2)):
-        return match.group(1), match.group(2)
-    match = _TAG_FIRST.fullmatch(raw)
-    if match is not None and _marker_word(match.group(1)):
-        return match.group(2), match.group(1)
-    return None
-
-
-def _marker_word(raw: str) -> tuple[str, str] | None:
-    """A bare variant marker: structural key (``actual``/``plan``) and its surface."""
-    _bind()
-    match = _ACTUAL.fullmatch(raw)
-    if match and accepts("period_markers", "actual", surface=match.group(1)):
-        return "actual", match.group(1)
-    match = _PLAN.fullmatch(raw)
-    if match and accepts("period_markers", "plan", surface=match.group(1)):
-        return "plan", match.group(1)
-    return None
-
-
 def _listed(raw: str, *path: str) -> bool:
     return any(matches_entry(raw, entry) for entry in words(*path))
 
@@ -729,21 +827,6 @@ def _year_words_ok(raw: str) -> bool:
         if not accepts("period_words", "year", surface=token):
             return False
     return True
-
-
-def _tagged_hit(raw: str) -> PeriodHit | None:
-    tagged = _marker_tag(raw)
-    if tagged is None:
-        return None
-    base = classify_header(tagged[0].strip())
-    if base is None or base.kind not in {"period", "stub"}:
-        return None
-    return PeriodHit(
-        kind=base.kind,
-        period_key=base.period_key,
-        variant=tagged[1],
-        explicit_role=True,
-    )
 
 
 def _part_token(raw: str) -> HeaderAtom | None:
@@ -851,16 +934,39 @@ def _marked(period_key: str, mark: tuple[ColumnKind, str | None, bool]) -> Perio
 def _compose_mark(atoms: list[HeaderAtom]) -> tuple[ColumnKind, str | None, bool]:
     for atom in atoms:
         if atom.explicit_role and atom.variant and atom.column_kind in {"period", "stub", None}:
-            if atom.kind == "full" and atom.period_key in {"actual", "plan"}:
-                continue
             return atom.column_kind or "period", atom.variant, True
     for atom in atoms:
-        if atom.kind == "marker" and atom.variant:
-            return "period", atom.variant, True
-    for atom in atoms:
-        if atom.column_kind in {"total", "stub", "scenario"}:
+        if atom.column_kind in {"total", "stub"}:
             return atom.column_kind, atom.variant, True
     return "period", None, False
+
+
+def _part_with_residual(raw: str) -> HeaderAtom | None:
+    """``План I кв.`` keeps the quarter and the leftover text. The year comes later."""
+    tokens = _scan_tokens(raw)
+    if len(tokens) < 2:
+        return None
+    best: tuple[int, HeaderAtom] | None = None
+    for start in range(len(tokens)):
+        for end in range(len(tokens), start, -1):
+            token = _part_token(" ".join(tokens[start:end]))
+            if token is None:
+                continue
+            residual = _clean_residual(" ".join(tokens[:start] + tokens[end:]))
+            if not _residual_ok(residual):
+                continue
+            if best is None or end - start > best[0]:
+                best = (
+                    end - start,
+                    replace(
+                        token,
+                        column_kind="period",
+                        variant=residual,
+                        explicit_role=True,
+                    ),
+                )
+            break
+    return None if best is None else best[1]
 
 
 def _key_as_date(key: str) -> date | None:

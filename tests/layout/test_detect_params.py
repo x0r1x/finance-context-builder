@@ -6,6 +6,28 @@ from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 
 
+def _expected_slug(text: str) -> str:
+    """Casefolded header slug. Unicode letters stay; nothing is transliterated."""
+    parts: list[str] = []
+    token: list[str] = []
+    for char in text.casefold():
+        if char.isalpha() or "0" <= char <= "9":
+            token.append(char)
+        elif token:
+            parts.append("".join(token))
+            token = []
+    if token:
+        parts.append("".join(token))
+    return "-".join(parts)
+
+
+def _value_key(text: str, _col: int) -> str:
+    slug = _expected_slug(text)
+    if not slug or not any(char.isalpha() for char in slug):
+        return "value"
+    return slug
+
+
 def _c(
     sheet: str,
     addr: str,
@@ -50,7 +72,7 @@ def test_params_block_from_scenario_matrix() -> None:
         _c("Input Assumptions", "G8", "36.5"),
         _c("Input Assumptions", "B9", "Tax Rate"),
         _c("Input Assumptions", "C9", "%"),
-        _c("Input Assumptions", "D9", "0.3"),
+        _c("Input Assumptions", "D9", "0.3", formula="=INDEX(F9:G9,$D$3)"),
         _c("Input Assumptions", "F9", "0.3"),
         _c("Input Assumptions", "G9", "0.3"),
         _c("Input Assumptions", "B10", "Toll Rate"),
@@ -88,7 +110,7 @@ def test_params_block_from_scenario_matrix() -> None:
     assert all(cell.role != "scenario" for cell in selector.cells)
     by_col = {header.col: header for header in block.axis.headers}
     assert by_col[6].text == "Base Case"
-    assert by_col[6].role == "scenario"
+    assert by_col[6].role == "value"
     assert by_col[7].text == "Scenario 2"
     assert block.label_col == 2
     unit_cols = {cell.role for cell in labels["Tax Rate"].cells}
@@ -106,6 +128,224 @@ def test_params_block_from_scenario_matrix() -> None:
     assert unit_kind_from_text("veh/year") == "count"
     assert unit_kind_from_text("MWh p.a.") == "count"
     assert unit_kind_from_text("Index") == "ratio"
+
+
+def test_index_switch_is_a_selector_without_the_label() -> None:
+    """A constant INDEX argument used on other rows is the selector."""
+    cells = [
+        _c("Input", "B2", "Base"),
+        _c("Input", "C2", "Upside"),
+        _c("Input", "A3", "Выбор"),
+        _c("Input", "D3", "1"),
+        _c("Input", "B3", "1"),
+        _c("Input", "C3", "2"),
+        _c("Input", "A4", "Price"),
+        _c("Input", "D4", "10", formula="=INDEX(B4:C4,$D$3)"),
+        _c("Input", "B4", "10"),
+        _c("Input", "C4", "12"),
+        _c("Input", "A5", "Share"),
+        _c("Input", "D5", "0.2", formula="=INDEX(B5:C5,$D$3)"),
+        _c("Input", "B5", "0.2"),
+        _c("Input", "C5", "0.3"),
+        _c("Input", "A6", "Rate"),
+        _c("Input", "D6", "0.1", formula="=INDEX(B6:C6,$D$3)"),
+        _c("Input", "B6", "0.1"),
+        _c("Input", "C6", "0.2"),
+    ]
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows["Выбор"].kind == "flag"
+
+
+def _named_switch_cells(formula: str) -> list[dict]:
+    cells = [
+        _c("PF Model", "B2", "Base"),
+        _c("PF Model", "C2", "Upside"),
+        _c("PF Model", "A3", "Выбор"),
+        _c("PF Model", "D3", "1"),
+        _c("PF Model", "B3", "1"),
+        _c("PF Model", "C3", "2"),
+    ]
+    for row, amount, case in ((4, "10", "12"), (5, "0.2", "0.3"), (6, "0.1", "0.2")):
+        cells += [
+            _c("PF Model", f"A{row}", f"Row {row}"),
+            _c("PF Model", f"D{row}", amount, formula=formula.format(row=row)),
+            _c("PF Model", f"B{row}", amount),
+            _c("PF Model", f"C{row}", case),
+        ]
+    return cells
+
+
+def test_named_switch_is_a_selector_without_the_label() -> None:
+    """A defined name for one cell is the same switch as the cell itself."""
+    cells = _named_switch_cells("=IF(ISBLANK(OFFSET(B{row},0,Pick)),C{row},OFFSET(B{row},0,Pick))")
+    names = [{"name": "Pick", "formula": "'PF Model'!$D$3"}]
+    rows = {
+        row.label: row
+        for row in detect_layout(cells, defined_names=names).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "flag"
+
+
+def test_named_index_and_choose_are_switches() -> None:
+    from finance_context.layout.params import selector_rows
+
+    names = [{"name": "Pick", "formula": "'PF Model'!$D$3"}]
+    for formula in ("=INDEX(B{row}:C{row},Pick)", "=CHOOSE(Pick,B{row},C{row})"):
+        by_row: dict[int, list[dict]] = {}
+        for cell in _named_switch_cells(formula):
+            by_row.setdefault(cell["row"], []).append(cell)
+        assert selector_rows(by_row, False, defined_names=names, sheet="PF Model") == {3}
+
+
+def test_name_pointing_at_a_range_is_not_a_switch() -> None:
+    cells = _named_switch_cells("=INDEX(B{row}:C{row},Pick)")
+    names = [{"name": "Pick", "formula": "'PF Model'!$B$4:$C$4"}]
+    rows = {
+        row.label: row
+        for row in detect_layout(cells, defined_names=names).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "fact"
+
+
+def test_sheet_scoped_name_is_a_switch_only_on_its_sheet() -> None:
+    cells = _named_switch_cells("=INDEX(B{row}:C{row},Pick)")
+    local = [{"name": "Pick", "formula": "$D$3", "sheet": "PF Model"}]
+    rows = {
+        row.label: row
+        for row in detect_layout(cells, defined_names=local).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "flag"
+    other = [{"name": "Pick", "formula": "$D$3", "sheet": "Other"}]
+    rows = {
+        row.label: row
+        for row in detect_layout(cells, defined_names=other).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "fact"
+    # On this sheet the local name hides a workbook name that points elsewhere.
+    hidden_cells = [
+        *cells,
+        _c("PF Model", "A7", "Other"),
+        _c("PF Model", "E7", "2"),
+    ]
+    hidden = [
+        {"name": "Pick", "formula": "'PF Model'!$E$7"},
+        {"name": "Pick", "formula": "$D$3", "sheet": "PF Model"},
+    ]
+    rows = {
+        row.label: row
+        for row in detect_layout(hidden_cells, defined_names=hidden).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "flag"
+    assert rows["Other"].kind == "fact"
+
+
+def test_named_switch_above_a_timeline_joins_that_block() -> None:
+    cells = [
+        _c("PF Model", "B1", "Live index"),
+        _c("PF Model", "B2", "1"),
+        _c("PF Model", "A5", "Item"),
+        _c("PF Model", "C5", "2023"),
+        _c("PF Model", "D5", "2024"),
+        _c("PF Model", "E5", "2025"),
+        _c("PF Model", "A6", "Revenue"),
+        _c("PF Model", "C6", "10", formula="=OFFSET(C6,0,Pick)"),
+        _c("PF Model", "D6", "11"),
+        _c("PF Model", "E6", "12"),
+        _c("PF Model", "A7", "Cost"),
+        _c("PF Model", "C7", "4", formula="=OFFSET(C7,0,Pick)"),
+        _c("PF Model", "D7", "5"),
+        _c("PF Model", "E7", "6"),
+        _c("PF Model", "A8", "Tax"),
+        _c("PF Model", "C8", "1"),
+        _c("PF Model", "D8", "1"),
+        _c("PF Model", "E8", "1"),
+    ]
+    names = [{"name": "Pick", "formula": "'PF Model'!$B$2"}]
+    sheet = detect_layout(cells, defined_names=names).sheets[0]
+    switch = next(block for block in sheet.blocks if any(row.row == 2 for row in block.rows))
+    assert switch.kind == "params"
+    assert switch.rows[0].kind == "flag"
+    assert switch.rows[0].label == "Live index"
+    assert switch.rows[0].cells[0].role == "value"
+    timeline = next(block for block in sheet.blocks if block.kind == "timeline")
+    assert all(row.row != 2 for row in timeline.rows)
+    plain = detect_layout(cells).sheets[0]
+    assert all(row.row != 2 for block in plain.blocks for row in block.rows)
+
+
+def test_same_row_named_offset_and_plain_if_are_not_switches() -> None:
+    from finance_context.layout.params import selector_rows
+
+    names = [{"name": "Pick", "formula": "'PF Model'!$D$3"}]
+    same_row = [
+        _c("PF Model", "A3", "Выбор"),
+        _c("PF Model", "D3", "1"),
+        _c("PF Model", "E3", "1", formula="=OFFSET(B3,0,Pick)"),
+        _c("PF Model", "D4", "10", formula="=OFFSET(B4,0,Pick)"),
+    ]
+    by_row: dict[int, list[dict]] = {}
+    for cell in same_row:
+        by_row.setdefault(cell["row"], []).append(cell)
+    assert selector_rows(by_row, False, defined_names=names, sheet="PF Model") == set()
+    plain_if = _named_switch_cells("=IF(Pick=1,B{row},C{row})")
+    by_row = {}
+    for cell in plain_if:
+        by_row.setdefault(cell["row"], []).append(cell)
+    assert selector_rows(by_row, False, defined_names=names, sheet="PF Model") == set()
+
+
+def test_selector_label_without_a_switch_is_a_fact_row() -> None:
+    cells = [
+        _c("Input", "B2", "Base"),
+        _c("Input", "C2", "Upside"),
+        _c("Input", "A3", "Scenario Chosen"),
+        _c("Input", "D3", "1"),
+        _c("Input", "B3", "1"),
+        _c("Input", "C3", "2"),
+        _c("Input", "A4", "Price"),
+        _c("Input", "D4", "10"),
+        _c("Input", "B4", "10"),
+        _c("Input", "C4", "12"),
+        _c("Input", "A5", "Share"),
+        _c("Input", "D5", "0.2"),
+        _c("Input", "B5", "0.2"),
+        _c("Input", "C5", "0.3"),
+        _c("Input", "A6", "Rate"),
+        _c("Input", "D6", "0.1"),
+        _c("Input", "B6", "0.1"),
+        _c("Input", "C6", "0.2"),
+    ]
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows["Scenario Chosen"].kind == "fact"
+
+
+def test_selector_label_breaks_a_tie_between_two_switches() -> None:
+    cells = [
+        _c("Input", "B1", "Base"),
+        _c("Input", "C1", "Upside"),
+        _c("Input", "A2", "Scenario Chosen"),
+        _c("Input", "D2", "1"),
+        _c("Input", "A3", "Other"),
+        _c("Input", "E3", "2"),
+        _c("Input", "A4", "Price"),
+        _c("Input", "B4", "10"),
+        _c("Input", "C4", "12"),
+        _c("Input", "D4", "10", formula="=INDEX(B4:C4,$D$2)"),
+        _c("Input", "E4", "1", formula="=OFFSET(B4,0,$E$3)"),
+        _c("Input", "A5", "Share"),
+        _c("Input", "B5", "0.2"),
+        _c("Input", "C5", "0.3"),
+        _c("Input", "D5", "0.2", formula="=INDEX(B5:C5,$D$2)"),
+        _c("Input", "E5", "2", formula="=OFFSET(B5,0,$E$3)"),
+        _c("Input", "A6", "Rate"),
+        _c("Input", "B6", "0.1"),
+        _c("Input", "C6", "0.2"),
+        _c("Input", "D6", "0.1", formula="=INDEX(B6:C6,$D$2)"),
+        _c("Input", "E6", "3", formula="=OFFSET(B6,0,$E$3)"),
+    ]
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows["Scenario Chosen"].kind == "flag"
+    assert rows["Other"].kind == "fact"
 
 
 def test_params_block_from_parameter_table() -> None:
@@ -150,7 +390,7 @@ def test_params_block_from_parameter_table() -> None:
     roles = {cell.role for cell in tax.cells}
     assert "unit" in roles
     assert "value" in roles
-    assert "scenario" in roles
+    assert "scenario" not in roles
 
 
 def test_russian_param_headers_name_value_unit_and_note_columns() -> None:
@@ -334,18 +574,138 @@ def test_unknown_short_param_header_is_not_a_scenario_column() -> None:
         ["Parameter", "Base case", "Upside", "Downside"],
     ],
 )
-def test_scenario_words_mark_scenario_columns(heads: list[str]) -> None:
+def test_case_names_are_value_columns_with_their_own_keys(heads: list[str]) -> None:
     cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
     for r, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
         cells.append(_c("Cases", f"A{r}", label))
         for col, amount in zip("BCD", ["10", "11", "12"], strict=True):
             cells.append(_c("Cases", f"{col}{r}", amount))
     headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
-    assert [header.role for header in headers] == ["scenario", "scenario", "scenario"]
+    assert [header.role for header in headers] == ["value", "value", "value"]
     assert [header.text for header in headers] == heads[1:]
+    assert [header.period_key for header in headers] == [
+        _value_key(text, col) for text, col in zip(heads[1:], (2, 3, 4), strict=True)
+    ]
 
 
-def test_numeric_siblings_of_a_scenario_column_stay_scenarios() -> None:
+def test_cyrillic_headers_in_one_block_get_distinct_keys() -> None:
+    heads = ["Параметр", "Базовый", "Стресс", "Ёлка", "Елка"]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCDE", heads, strict=True)]
+    for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells.append(_c("Cases", f"A{row}", label))
+        for col, amount in zip("BCDE", ["10", "11", "12", "13"], strict=True):
+            cells.append(_c("Cases", f"{col}{row}", amount))
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [header.role for header in headers] == ["value", "value", "value", "value"]
+    assert [header.text for header in headers] == heads[1:]
+    assert [header.period_key for header in headers] == ["базовый", "стресс", "елка", "value-e"]
+
+
+def test_cyrillic_headers_keep_letters_and_digits_in_the_key() -> None:
+    heads = [
+        "Параметр",
+        "альфа бета гамма 11112222",
+        "дельта эпсилон зета 33334444",
+    ]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABC", heads, strict=True)]
+    for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells += [
+            _c("Cases", f"A{row}", label),
+            _c("Cases", f"B{row}", "10"),
+            _c("Cases", f"C{row}", "11"),
+        ]
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [header.role for header in headers] == ["value", "value"]
+    assert [header.text for header in headers] == heads[1:]
+    assert [header.period_key for header in headers] == [
+        "альфа-бета-гамма-11112222",
+        "дельта-эпсилон-зета-33334444",
+    ]
+
+
+def test_digit_only_headers_do_not_become_the_key() -> None:
+    """A header with no letter is not a name, so the digits are not the key."""
+    from finance_context.layout.params import _header_slug
+
+    assert _header_slug("11112222") == ""
+    assert _header_slug("33334444") == ""
+    assert _header_slug("---") == ""
+    heads = ["Параметр", "11112222", "33334444"]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABC", heads, strict=True)]
+    for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells += [
+            _c("Cases", f"A{row}", label),
+            _c("Cases", f"B{row}", "10"),
+            _c("Cases", f"C{row}", "11"),
+        ]
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [header.role for header in headers] == ["value", "value"]
+    assert [header.period_key for header in headers] == ["value", "value-c"]
+    assert "11112222" not in {header.period_key for header in headers}
+    assert "33334444" not in {header.period_key for header in headers}
+
+
+def test_case_run_name_comes_from_the_row_label() -> None:
+    """The 1..n cells are values. The header is the row label plus the place."""
+    years = ["2020", "2021", "2022", "2023", "2024", "2025"]
+    cells = [_c("Model", "A1", "Item")]
+    cells += [_c("Model", f"{col}1", year) for col, year in zip("BCDEFG", years, strict=True)]
+    cells += [
+        _c("Model", "A2", "Case Number"),
+        _c("Model", "B2", "1"),
+        _c("Model", "C2", "2"),
+        _c("Model", "D2", "3"),
+        _c("Model", "A3", "Price"),
+        _c("Model", "B3", "10"),
+        _c("Model", "C3", "11"),
+        _c("Model", "D3", "12"),
+    ]
+    blocks = detect_layout(cells).sheets[0].blocks
+    case = next(block for block in blocks if block.kind == "params")
+    assert [(header.text, header.role, header.period_key) for header in case.axis.headers] == [
+        ("Case 1", "value", "case-1"),
+        ("Case 2", "value", "case-2"),
+        ("Case 3", "value", "case-3"),
+    ]
+
+
+def test_case_run_with_a_cyrillic_label_does_not_use_the_cell_digit() -> None:
+    years = ["2020", "2021", "2022", "2023", "2024", "2025"]
+    cells = [_c("Model", "A1", "Item")]
+    cells += [_c("Model", f"{col}1", year) for col, year in zip("BCDEFG", years, strict=True)]
+    cells += [
+        _c("Model", "A2", "Кейс №"),
+        _c("Model", "B2", "1"),
+        _c("Model", "C2", "2"),
+        _c("Model", "D2", "3"),
+        _c("Model", "A3", "Цена"),
+        _c("Model", "B3", "10"),
+        _c("Model", "C3", "11"),
+        _c("Model", "D3", "12"),
+    ]
+    blocks = detect_layout(cells).sheets[0].blocks
+    case = next(block for block in blocks if block.kind == "params")
+    headers = case.axis.headers
+    assert [header.text for header in headers] == ["Кейс 1", "Кейс 2", "Кейс 3"]
+    assert [header.period_key for header in headers] == ["кейс-1", "кейс-2", "кейс-3"]
+
+
+def test_a_value_caption_keeps_the_value_key_beside_case_columns() -> None:
+    heads = ["Параметр", "Значение", "Base", "Upside"]
+    cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
+    for row, label in enumerate(["Цена", "Доля", "Ставка"], start=2):
+        cells.append(_c("Cases", f"A{row}", label))
+        for col, amount in zip("BCD", ["10", "11", "12"], strict=True):
+            cells.append(_c("Cases", f"{col}{row}", amount))
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [(header.text, header.role, header.period_key) for header in headers] == [
+        ("Значение", "value", "value"),
+        ("Base", "value", "base"),
+        ("Upside", "value", "upside"),
+    ]
+
+
+def test_numeric_case_columns_are_values_and_a_short_caption_stays_unknown() -> None:
     heads = ["Параметр", "Base", "Bull", "Отрасль"]
     cells = [_c("Cases", f"{col}1", head) for col, head in zip("ABCD", heads, strict=True)]
     body = [
@@ -362,9 +722,12 @@ def test_numeric_siblings_of_a_scenario_column_stay_scenarios() -> None:
         ]
     block = detect_layout(cells).sheets[0].blocks[0]
     headers = {header.text: header.role for header in block.axis.headers}
-    assert headers["Base"] == "scenario"
-    assert headers["Bull"] == "scenario"
+    assert headers["Base"] == "value"
+    assert headers["Bull"] == "value"
     assert headers["Отрасль"] == "unknown"
+    keys = {header.text: header.period_key for header in block.axis.headers}
+    assert keys["Base"] == "base"
+    assert keys["Bull"] == "bull"
 
 
 @pytest.mark.parametrize("caption", ["№ п/п", "№", "#", "No."])
@@ -407,8 +770,8 @@ def test_note_head_word_keeps_a_short_qualifier() -> None:
     assert _header_role("Периодичность") is None
     assert _header_role("Значение, руб.") == "value"
     assert _header_role("Источник информации для всей модели и всех приложений") is None
-    assert _header_role("Значение базовое") is None
-    assert _header_role("Value upside") is None
+    assert _header_role("Значение базовое") == "value"
+    assert _header_role("Value upside") == "value"
 
 
 def test_qualified_note_columns_stay_notes_and_scenario_captions_stay_scenarios() -> None:
@@ -435,7 +798,7 @@ def test_qualified_note_columns_stay_notes_and_scenario_captions_stay_scenarios(
     }
     assert headers["Комментарии КП"] == "note"
     assert headers["Источник информации"] == "note"
-    assert headers["Значение базовое"] == "scenario"
+    assert headers["Значение базовое"] == "value"
     assert headers["Отрасль"] == "unknown"
 
 
@@ -469,7 +832,7 @@ def test_unit_and_note_columns_follow_the_values_under_an_unknown_header() -> No
         header.text: header.role
         for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
     }
-    assert headers["Base"] == "scenario"
-    assert headers["Bull"] == "scenario"
+    assert headers["Base"] == "value"
+    assert headers["Bull"] == "value"
     assert headers["Мера"] == "unit"
     assert headers["Пояснение"] == "note"

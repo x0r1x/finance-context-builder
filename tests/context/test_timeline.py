@@ -287,7 +287,7 @@ def test_year_banner_and_months_publish_axes_in_json_and_markdown() -> None:
     assert rendered.count("### `") >= 2
 
 
-def test_phased_year_axis_keeps_markers_and_drops_period_role() -> None:
+def test_unique_years_drop_suffix_letters_and_period_role() -> None:
     cells = [
         _c("PF", "A1", "Item"),
         _c("PF", "B1", "2023A"),
@@ -309,16 +309,14 @@ def test_phased_year_axis_keeps_markers_and_drops_period_role() -> None:
         _c("PF", "D4", "11"),
     ]
     layout = detect_layout(cells)
-    from finance_context.layout.periods import marker_token
-
     headers = {header.period_key: header for header in layout.sheets[0].axes[0].periods}
     assert headers["2024"].kind == "period"
     assert headers["2024"].explicit_role is False
     assert headers["2024"].variant is None
-    assert headers["2023"].kind == "period" and headers["2023"].explicit_role is True
-    assert marker_token(headers["2023"].variant) == "a"
-    assert headers["2025"].kind == "period" and headers["2025"].explicit_role is True
-    assert marker_token(headers["2025"].variant) == "e"
+    assert headers["2023"].kind == "period" and headers["2023"].explicit_role is False
+    assert headers["2023"].variant is None
+    assert headers["2025"].kind == "period" and headers["2025"].explicit_role is False
+    assert headers["2025"].variant is None
     axes, _warnings = build_axes(layout, cells)
     dumped = axes[0].periods[0].model_dump(mode="json")
     assert "role" not in dumped
@@ -355,6 +353,49 @@ def _ru_timeline(*rows: tuple[str, list[str]]) -> list[dict]:
     return cells
 
 
+def test_ambiguous_marker_note_survives_layout_json() -> None:
+    from tests.layout.test_geometry_markers import _cell
+
+    cells = [
+        _cell("A2", "Item"),
+        _cell("B1", "План"),
+        _cell("C1", "Факт"),
+        _cell("B2", "2024 факт"),
+        _cell("C2", "2024 план"),
+        _cell("A3", "Revenue"),
+        _cell("B3", "10"),
+        _cell("C3", "21"),
+    ]
+    layout = detect_layout(cells)
+    note = layout.sheets[0].axes[0].notes[0]
+    restored = type(layout).model_validate(layout.model_dump(mode="json"))
+    assert restored.sheets[0].axes[0].notes == [note]
+    _axes, warnings = build_axes(restored, cells)
+    assert note in warnings
+
+
+def test_unpublished_axis_note_is_not_a_context_warning() -> None:
+    from tests.layout.test_geometry_markers import _cell
+
+    cells = [
+        _cell("A2", "Item"),
+        _cell("B2", "2024"),
+        _cell("C2", "2025"),
+        _cell("A3", "Revenue"),
+        _cell("B3", "10"),
+        _cell("C3", "21"),
+    ]
+    layout = detect_layout(cells)
+    published = layout.sheets[0].axes[0]
+    published.notes = []
+    orphan = published.model_copy(deep=True)
+    orphan.id = "P&L!orphan"
+    orphan.notes = ["Ambiguous period marker on P&L!orphan: 2024"]
+    layout.sheets[0].axes.append(orphan)
+    _axes, warnings = build_axes(layout, cells)
+    assert all("orphan" not in warning for warning in warnings)
+
+
 def test_unparsed_period_header_warns_without_becoming_a_period() -> None:
     cells = _ru_timeline(("Выручка", ["1", "2", "3", "4"]))
     cells.append(_c("Модель", "F1", "Q5 2025"))
@@ -373,4 +414,3 @@ def test_formatted_number_is_not_an_unparsed_period() -> None:
     _axes, warnings = build_axes(detect_layout(cells), cells)
     assert not any("1.2072" in item or "U38" in item for item in warnings)
     assert any("Q5 2025" in item and item.startswith("Unparsed period header") for item in warnings)
-

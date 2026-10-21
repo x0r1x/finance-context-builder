@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 # Params-block column roles and non-period cells. Not a period classification.
 ColumnRole = Literal[
     "stub",
-    "scenario",
     "total",
     "relative",
     "label",
@@ -18,20 +17,23 @@ ColumnRole = Literal[
     "unknown",
 ]
 # Internal period-column classification. Not written to context.json.
-ColumnKind = Literal["period", "total", "stub", "scenario", "relative"]
+ColumnKind = Literal["period", "total", "stub", "relative"]
 RowKind = Literal["fact", "abstract", "index", "helper", "flag"]
 BlockKind = Literal["timeline", "params"]
 
 SERIES_KINDS = frozenset({"period", "stub", "relative"})
-STRUCTURAL_PERIOD_KEYS = frozenset({"actual", "plan", "total", "stub"})
+STRUCTURAL_PERIOD_KEYS = frozenset({"total", "stub"})
 
 
 def is_series_column(kind: str | None, period_key: str) -> bool:
-    """A timeline value column, not a total, stub, scenario, or bare marker."""
+    """A timeline value column, not a total or a stub."""
     return kind in SERIES_KINDS and period_key not in STRUCTURAL_PERIOD_KEYS
 
 
 class PeriodHit(BaseModel):
+    # Shared from the classification cache, so callers cannot change it.
+    model_config = ConfigDict(frozen=True)
+
     kind: ColumnKind
     period_key: str
     # Marker text after normalize_header (suffix letter or marker word).
@@ -42,7 +44,7 @@ class PeriodHit(BaseModel):
 class AxisHeader(BaseModel):
     col: int
     text: str
-    # Params columns only (value/unit/note/scenario/...). Period columns leave this empty.
+    # Params columns only (value/unit/note/...). Period columns leave this empty.
     role: str | None = None
     kind: ColumnKind | None = None
     variant: str | None = Field(default=None, exclude=True)
@@ -95,6 +97,16 @@ class TimeAxis(BaseModel):
     grain: str | None = None
     header_row: int
     periods: list[AxisPeriod]
+    # Ambiguous-marker warnings. Not a context-schema field. Empty notes are
+    # omitted; a reused layout.json still carries a note that was raised.
+    notes: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("notes"):
+            data.pop("notes", None)
+        return data
 
 
 class RowCell(BaseModel):

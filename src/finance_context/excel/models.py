@@ -13,12 +13,16 @@ class SheetInfo(BaseModel):
     hidden_cols: list[int] = Field(default_factory=list)
     # Excel's default: the group summary sits below the detail rows.
     summary_below: bool = True
+    # Horizontal merge spans, "B1:D1". Empty stays out of workbook.json.
+    merges: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
         if data.get("summary_below", True):
             data.pop("summary_below", None)
+        if not data.get("merges"):
+            data.pop("merges", None)
         return data
 
 
@@ -26,6 +30,16 @@ class DefinedName(BaseModel):
     name: str
     formula: str
     hidden: bool = False
+    # Sheet the name is local to. Workbook-scoped names omit it. Context does
+    # not publish this; layout uses it to resolve a named scenario switch.
+    sheet: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("sheet"):
+            data.pop("sheet", None)
+        return data
 
 
 class WorkbookMeta(BaseModel):

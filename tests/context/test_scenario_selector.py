@@ -41,7 +41,7 @@ def _scenario_matrix() -> list[dict]:
         _c("Input Assumptions", "G8", "36.5"),
         _c("Input Assumptions", "B9", "Tax Rate"),
         _c("Input Assumptions", "C9", "%"),
-        _c("Input Assumptions", "D9", "0.3"),
+        _c("Input Assumptions", "D9", "0.3", formula="=INDEX(F9:G9,$D$3)"),
         _c("Input Assumptions", "F9", "0.3"),
         _c("Input Assumptions", "G9", "0.3"),
         _c("Input Assumptions", "B10", "Toll Rate"),
@@ -71,8 +71,40 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
     assert selector.kind == "flag"
     assert selector.row == 3
     assert any(cell.addr == "D3" and str(cell.cached_value) == "1" for cell in selector.cells)
+    assert {cell.addr for cell in selector.cells} >= {"D3", "F3", "G3"}
     assert "1" in selector.values
+    from finance_context.context.observations import build_observations
+
+    row_keys = [row.row_key for block in doc.blocks for row in block.rows]
+    built = build_observations(doc, [], row_keys=row_keys, limit=1000)
+    selector_ids = {
+        item.period_id for item in built.observations if item.label == "Scenario Chosen"
+    }
+    assert {"value", "base-case", "scenario-2"} <= selector_ids
     rendered = render_markdown(doc)
     assert "## Parameters / Input Assumptions" in rendered
     assert "| Scenario Chosen |" in rendered
     assert "1" in rendered
+
+
+def test_context_does_not_publish_defined_name_scope() -> None:
+    cells = _scenario_matrix()
+    doc = build_context(
+        job_id="sel",
+        workbook_meta={
+            "sheets": [{"name": "Input Assumptions"}],
+            "defined_names": [
+                {
+                    "name": "Pick",
+                    "formula": "$D$3",
+                    "hidden": False,
+                    "sheet": "Input Assumptions",
+                }
+            ],
+        },
+        cells=cells,
+        layout=detect_layout(cells),
+    )
+    assert doc.workbook.defined_names == [
+        {"name": "Pick", "formula": "$D$3", "hidden": False}
+    ]
