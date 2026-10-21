@@ -66,7 +66,7 @@ class JobProcesses:
             memory_budget_bytes if memory_budget_bytes and memory_budget_bytes > 0 else None
         )
         self._unusable_detail = unusable_detail
-        self._watch_interval = watch_interval_sec if watch_interval_sec > 0 else 0.2
+        self._watch_interval = watch_interval_sec
         self._procs: dict[str, multiprocessing.Process] = {}
         self._generations: dict[str, int] = {}
         self._closed: set[tuple[str, int]] = set()

@@ -37,6 +37,7 @@ from finance_context.settings import (
     DEFAULT_RANGE_EXPAND_CAP,
     Settings,
 )
+from finance_context.store.fs import write_cells_parquet
 from finance_context.store.paths import session_job_dir, shared_book_dir
 
 
@@ -386,6 +387,53 @@ def test_preflight_follows_parsed_edges(tmp_path: Path, dest: Path) -> None:
     assert estimate.expanded_cells == 6
 
 
+def test_assess_raw_reads_formula_columns_only(tmp_path: Path, monkeypatch) -> None:
+    dest = tmp_path / "book"
+    (dest / "raw").mkdir(parents=True)
+
+    def cell(**overrides: object) -> dict[str, object]:
+        row: dict[str, object] = {
+            "sheet": "S",
+            "row": 1,
+            "col": 1,
+            "addr": "A1",
+            "formula_raw": None,
+            "cached_value": "payload",
+            "hidden": False,
+            "number_format": None,
+            "comment": None,
+            "shared_si": None,
+            "shared_master": False,
+            "style_indent": 0,
+            "outline_level": 0,
+            "col_outline_level": 0,
+        }
+        row.update(overrides)
+        return row
+
+    write_cells_parquet(
+        dest / "raw" / "cells.parquet",
+        [
+            cell(),
+            cell(formula_raw=""),
+            cell(sheet=None, addr=None, formula_raw="1+1", cached_value="x" * 4000),
+        ],
+    )
+    calls: list[tuple[str, tuple[str, ...]]] = []
+    real = memory.read_parquet_columns
+
+    def spy(path: Path, columns: tuple[str, ...]) -> list[tuple[object, ...]]:
+        calls.append((path.name, tuple(columns)))
+        return real(path, columns)
+
+    monkeypatch.setattr(memory, "read_parquet_columns", spy)
+    estimate = assess_raw(dest)
+    assert ("cells.parquet", ("sheet", "addr", "formula_raw")) in calls
+    assert estimate.cells == 3
+    assert estimate.formulas == 1
+    assert estimate.expanded_cells == 0
+
+
 def test_assess_raw_counts_formulas(tmp_path: Path, dest: Path) -> None:
     source = tmp_path / "model.xlsx"
     _book(source)
@@ -451,6 +499,54 @@ def test_bad_memory_settings_name_the_variable(monkeypatch) -> None:
     monkeypatch.setenv("JOB_MEMORY_WATCH_INTERVAL_SEC", "0")
     with pytest.raises(ValidationError, match="JOB_MEMORY_WATCH_INTERVAL_SEC"):
         Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["inf", "+inf", "-inf", "Infinity", "nan", "NaN", "true", "false", "0", "-0.1", "1e999"],
+)
+def test_watch_interval_rejects_non_finite_bool_and_non_positive(
+    monkeypatch, raw: str
+) -> None:
+    monkeypatch.setenv("JOB_MEMORY_WATCH_INTERVAL_SEC", raw)
+    with pytest.raises(
+        ValidationError,
+        match="JOB_MEMORY_WATCH_INTERVAL_SEC must be a positive number of seconds",
+    ):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("raw", [float("inf"), float("-inf"), float("nan"), True, False, 0, -1])
+def test_watch_interval_rejects_non_finite_values(raw: object) -> None:
+    with pytest.raises(
+        ValidationError,
+        match="JOB_MEMORY_WATCH_INTERVAL_SEC must be a positive number of seconds",
+    ):
+        Settings(_env_file=None, job_memory_watch_interval_sec=raw)  # type: ignore[arg-type]
+
+
+def test_watch_interval_accepts_a_finite_positive(monkeypatch) -> None:
+    monkeypatch.setenv("JOB_MEMORY_WATCH_INTERVAL_SEC", "0.5")
+    assert Settings(_env_file=None).job_memory_watch_interval_sec == 0.5
+
+
+@pytest.mark.parametrize("raw", ["inf", "nan", "true", "false", "0", "1", "1e999"])
+def test_reserve_fraction_rejects_non_finite_bool_and_endpoints(monkeypatch, raw: str) -> None:
+    monkeypatch.setenv("JOB_MEMORY_API_RESERVE_FRACTION", raw)
+    with pytest.raises(
+        ValidationError,
+        match="JOB_MEMORY_API_RESERVE_FRACTION must be greater than 0 and less than 1",
+    ):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("raw", [float("inf"), float("nan"), True, False, 0, 1])
+def test_reserve_fraction_rejects_non_finite_values(raw: object) -> None:
+    with pytest.raises(
+        ValidationError,
+        match="JOB_MEMORY_API_RESERVE_FRACTION must be greater than 0 and less than 1",
+    ):
+        Settings(_env_file=None, job_memory_api_reserve_fraction=raw)  # type: ignore[arg-type]
 
 
 def test_effective_memory_settings_are_logged_once(monkeypatch, caplog) -> None:

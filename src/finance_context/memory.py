@@ -13,7 +13,7 @@ from pathlib import Path
 from finance_context.errors import ContextError
 from finance_context.observability import log_event
 from finance_context.settings import Settings
-from finance_context.store.fs import read_parquet, read_parquet_columns
+from finance_context.store.fs import read_parquet_columns
 
 # Same logger as stage_done and the layout step timings, so one formatter and one stream.
 _LOGGER = logging.getLogger("finance_context.pipeline")
@@ -384,7 +384,7 @@ def assess_raw(
     path = dest_dir / "raw" / "cells.parquet"
     if not path.is_file():
         return WorkbookEstimate(0, 0, 0, 0, 0)
-    rows = read_parquet(path)
+    rows = read_parquet_columns(path, ("sheet", "addr", "formula_raw"))
     if usage is None:
         usage = usage_for_book(dest_dir)
     locale = None
@@ -394,14 +394,11 @@ def assess_raw(
     engine = FormulaEngine(locale_hint=locale if isinstance(locale, str) else None)
     formulas = 0
     expanded = 0
-    for row in rows:
-        formula = row.get("formula_raw")
+    for sheet, addr, formula in rows:
         if not formula:
             continue
         formulas += 1
-        sheet = str(row.get("sheet") or "")
-        addr = str(row.get("addr") or "A1")
-        parsed = engine.parse(str(formula), sheet=sheet, addr=addr)
+        parsed = engine.parse(str(formula), sheet=str(sheet or ""), addr=str(addr or "A1"))
         expanded += expanded_edge_count(parsed.edges, usage=usage)  # type: ignore[arg-type]
     present = present_cell_count(usage) if isinstance(usage, SheetUsage) else 0
     return WorkbookEstimate(

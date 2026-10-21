@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import multiprocessing
 import time
 from pathlib import Path
@@ -181,6 +182,16 @@ def test_watch_kills_a_child_whose_real_rss_exceeds_the_budget(tmp_path: Path) -
         if proc.is_alive():
             proc.kill()
             proc.join(5)
+
+
+def test_watch_interval_is_stored_without_a_fallback(tmp_path: Path) -> None:
+    bus = MemoryJobBus()
+    kept = JobProcesses(data_dir=tmp_path, bus=bus, timeout_sec=1, watch_interval_sec=0.05)
+    assert kept._watch_interval == 0.05
+    untouched = JobProcesses(
+        data_dir=tmp_path, bus=bus, timeout_sec=1, watch_interval_sec=float("nan")
+    )
+    assert math.isnan(untouched._watch_interval)
 
 
 def test_mark_job_failed_keeps_a_terminal_snapshot(tmp_path: Path) -> None:

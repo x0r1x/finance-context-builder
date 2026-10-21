@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from pydantic import ValidationInfo, field_validator
@@ -106,24 +107,30 @@ class Settings(BaseSettings):
     @classmethod
     def require_positive_seconds(cls, value: object, info: ValidationInfo) -> float:
         name = info.field_name.upper()
+        message = f"{name} must be a positive number of seconds"
+        if isinstance(value, bool):
+            raise ValueError(message)
         try:
             number = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"{name} must be a positive number of seconds") from exc
-        if number <= 0:
-            raise ValueError(f"{name} must be a positive number of seconds")
+            raise ValueError(message) from exc
+        if not math.isfinite(number) or number <= 0:
+            raise ValueError(message)
         return number
 
     @field_validator("job_memory_api_reserve_fraction", mode="before")
     @classmethod
     def require_open_unit_interval(cls, value: object, info: ValidationInfo) -> float:
         name = info.field_name.upper()
+        message = f"{name} must be greater than 0 and less than 1"
+        if isinstance(value, bool):
+            raise ValueError(message)
         try:
             number = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"{name} must be greater than 0 and less than 1") from exc
-        if not 0 < number < 1:
-            raise ValueError(f"{name} must be greater than 0 and less than 1")
+            raise ValueError(message) from exc
+        if not math.isfinite(number) or not 0 < number < 1:
+            raise ValueError(message)
         return number
 
     @field_validator("job_oom_score_adj", mode="before")
