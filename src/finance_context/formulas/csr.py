@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import bisect
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from finance_context.excel.a1 import col_to_index, format_addr, index_to_col
 from finance_context.formulas.models import Edge
@@ -242,6 +242,47 @@ class CellEdge(NamedTuple):
     abs_col_end: bool | None = None
     abs_row_end: bool | None = None
     named: bool = False
+    col_offset: int | None = None
+    period_lag: str | None = None
+
+
+def as_cell_edge(value: CellEdge | Mapping[str, Any]) -> CellEdge:
+    """One cell edge. A dict is copied once; a CellEdge is the same object."""
+    if isinstance(value, CellEdge):
+        return value
+    offset = value.get("col_offset")
+    return CellEdge(
+        str(value.get("source") or ""),
+        str(value.get("target") or ""),
+        str(value.get("kind") or ""),
+        bool(value.get("unresolved")),
+        bool(value.get("truncated")),
+        bool(value.get("dangling")),
+        _opt_text(value.get("dangling_reason")),
+        _opt_text(value.get("status")),
+        _opt_text(value.get("reason")),
+        _opt_text(value.get("evidence")),
+        _opt_text(value.get("range_ref")),
+        _opt_bool(value.get("abs_col")),
+        _opt_bool(value.get("abs_row")),
+        _opt_bool(value.get("abs_col_end")),
+        _opt_bool(value.get("abs_row_end")),
+        bool(value.get("named")),
+        None if offset is None else int(offset),
+        _opt_text(value.get("period_lag")),
+    )
+
+
+def _opt_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _opt_text(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 class MemberStatus(NamedTuple):

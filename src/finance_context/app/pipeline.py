@@ -13,6 +13,8 @@ from finance_context.context.build import build_context
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, ensure_xlsx, has_source
 from finance_context.excel.stage import parse_workbook
+from finance_context.formulas.csr import as_cell_edge
+from finance_context.formulas.models import as_edge
 from finance_context.formulas.stage import compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
 from finance_context.layout.models import Layout
@@ -405,13 +407,13 @@ def _wait_for_pause_release() -> None:
         time.sleep(0.05)
 
 
-def _read_ir(dest_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
+def _read_ir(dest_dir: Path) -> tuple[list[dict], list, list]:
     cells = read_parquet(dest_dir / "ir" / "cells.parquet")
     edges_path = dest_dir / "ir" / "edges.parquet"
     edges = read_parquet(edges_path) if edges_path.is_file() else []
     cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
     cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
-    return cells, edges, cell_edges
+    return cells, [as_edge(edge) for edge in edges], [as_cell_edge(edge) for edge in cell_edges]
 
 
 def _raise_if_cancelled(progress: object | None) -> None:

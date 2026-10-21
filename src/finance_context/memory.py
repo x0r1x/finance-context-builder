@@ -23,11 +23,11 @@ _HEADROOM_DENOMINATOR = 4
 # Above this, cgroup v1 is reporting "no limit" (page_counter max).
 _UNLIMITED_BYTES = 1 << 60
 
-# Profiled on the pre-light compiler: about 6 KiB of formula overhead plus
-# 5 KiB for each cell a reference expands into. АШАН (40k formulas, 169k cell
-# edges) lands near 1.1 GiB, which is the peak that was measured.
-BYTES_PER_FORMULA = 6 * 1024
-BYTES_PER_EXPANDED_CELL = 5 * 1024
+# Profiled after the light compile objects. About 4 KiB of formula overhead
+# plus 3 KiB for each expanded cell. A book of 40k formulas and 169k cell
+# edges peaks near 580 MB and estimates near 650 MB.
+BYTES_PER_FORMULA = 4 * 1024
+BYTES_PER_EXPANDED_CELL = 3 * 1024
 
 MEMORY_ERROR_DETAIL = "This workbook ran out of memory while it was being read."
 

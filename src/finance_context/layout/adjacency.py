@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from finance_context.excel.a1 import parse_addr
 from finance_context.formulas.csr import SheetUsage, expand_range
+from finance_context.formulas.models import Edge, as_edge
 
 
 def cell_ref_row(ref: str | None) -> tuple[str, int] | None:
@@ -25,13 +26,13 @@ def row_key_ref(sheet: str, row: int) -> str:
     return f"{sheet}!{row}"
 
 
-def _targets(edge: dict, usage: SheetUsage | None = None) -> list[str]:
-    target = str(edge.get("target") or "")
+def _targets(edge: Edge, usage: SheetUsage | None = None) -> list[str]:
+    target = str(edge.target or "")
     if not target:
         return []
     # Cell edges already name one target. Only a formula-level range still expands.
     body = target.rsplit("!", 1)[-1]
-    if edge.get("kind") == "range" and not edge.get("unresolved") and ":" in body:
+    if edge.kind == "range" and not edge.unresolved and ":" in body:
         try:
             cells, _trunc = expand_range(target, usage=usage)
         except ValueError:
@@ -41,17 +42,18 @@ def _targets(edge: dict, usage: SheetUsage | None = None) -> list[str]:
 
 
 def row_adjacency(
-    edges: list[dict],
+    edges: list,
     *,
     limit: int = 8,
     usage: SheetUsage | None = None,
 ) -> tuple[dict[tuple[str, int], list[str]], dict[tuple[str, int], list[str]]]:
     precedents: dict[tuple[str, int], list[str]] = defaultdict(list)
     dependents: dict[tuple[str, int], list[str]] = defaultdict(list)
-    for edge in edges:
-        if edge.get("named"):
+    for raw in edges:
+        edge = as_edge(raw)
+        if edge.named:
             continue
-        source = cell_ref_row(str(edge.get("source") or ""))
+        source = cell_ref_row(str(edge.source or ""))
         if source is None:
             continue
         for target_ref in _targets(edge, usage):

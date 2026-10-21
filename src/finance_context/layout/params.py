@@ -1129,8 +1129,8 @@ def _active_value_col(edges: list[dict], sheet: str) -> int | None:
     counts: Counter[int] = Counter()
     prefix = sheet.casefold()
     for edge in edges:
-        target = str(edge.get("target") or "")
-        source = str(edge.get("source") or "")
+        target = str(edge.target or "")
+        source = str(edge.source or "")
         parsed_t = _parse_sheet_addr(target)
         parsed_s = _parse_sheet_addr(source)
         if parsed_t is None or parsed_s is None:
