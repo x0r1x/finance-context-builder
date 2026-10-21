@@ -25,6 +25,7 @@ from finance_context.memory import (
     check_budget,
     prefer_oom_kill,
     rss_bytes,
+    usage_for_book,
 )
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
 from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
@@ -276,6 +277,7 @@ class Pipeline:
                 stage="done",
                 graph=graph,
                 edges=edges,
+                usage=usage_for_book(book),
             )
             build_profile["formulas"] = built.workbook.formula_count
             return built

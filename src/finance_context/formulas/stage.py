@@ -9,7 +9,7 @@ from finance_context.formulas.csr import build_csr, expand_cell_edges, expanded_
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
 from finance_context.formulas.models import CompileResult, Edge, ParsedFormula
 from finance_context.formulas.names import resolve_defined_name_edges
-from finance_context.memory import check_budget
+from finance_context.memory import check_budget, usage_for_book
 from finance_context.store.fs import read_parquet, write_json, write_parquet
 
 COMPILE_FILES = ("cells.parquet", "edges.parquet", "cell_edges.parquet")
@@ -107,20 +107,21 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
             )
         )
     resolve_defined_name_edges(edges, meta.get("defined_names"))
-    check_budget(
-        formulas=formula_count,
-        expanded_cells=expanded_edge_count(edges),
-        budget=memory_budget,
-        source="compile",
-    )
     known = set(extra_nodes)
     sheets = {
         str(item["name"] if isinstance(item, dict) else item.name)
         for item in (meta.get("sheets") or [])
     }
     presence = _presence_index(dest_dir)
+    usage = usage_for_book(dest_dir)
+    check_budget(
+        formulas=formula_count,
+        expanded_cells=expanded_edge_count(edges, usage=usage),
+        budget=memory_budget,
+        source="compile",
+    )
     cell_edges = expand_cell_edges(
-        edges, known, known_sheets=sheets, presence=presence
+        edges, known, known_sheets=sheets, presence=presence, usage=usage
     )
     csr = build_csr(edges, extra_nodes=extra_nodes, expanded=cell_edges)
     edge_rows = [

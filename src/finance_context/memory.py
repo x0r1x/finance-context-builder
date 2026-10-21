@@ -244,6 +244,35 @@ def formula_targets(formula: str, sheet: str) -> list[str]:
     return targets
 
 
+def _canonical_node(sheet: object, addr: object) -> str | None:
+    from finance_context.excel.a1 import format_addr, parse_addr
+
+    if not sheet or not addr:
+        return None
+    try:
+        col, row = parse_addr(str(addr))
+    except ValueError:
+        return None
+    return f"{sheet}!{format_addr(col, row)}"
+
+
+def usage_for_book(dest_dir: Path):
+    """Present cells for range clipping: parsed cells plus styled blanks."""
+    # Imported lazily: formulas/__init__ pulls compile, which imports this module.
+    from finance_context.formulas.csr import sheet_usage
+
+    nodes: list[str] = []
+    for name in ("cells.parquet", "cell_presence.parquet"):
+        path = dest_dir / "raw" / name
+        if not path.is_file():
+            continue
+        for row in read_parquet(path):
+            node = _canonical_node(row.get("sheet"), row.get("addr"))
+            if node is not None:
+                nodes.append(node)
+    return sheet_usage(nodes)
+
+
 def assess_raw(dest_dir: Path) -> WorkbookEstimate:
     """Cheap size check from the parsed cell table, before formulas are compiled."""
     # Imported lazily: formulas/__init__ pulls compile, which imports this module.
@@ -253,6 +282,7 @@ def assess_raw(dest_dir: Path) -> WorkbookEstimate:
     if not path.is_file():
         return WorkbookEstimate(0, 0, 0, 0)
     rows = read_parquet(path)
+    usage = usage_for_book(dest_dir)
     formulas = 0
     expanded = 0
     for row in rows:
@@ -262,7 +292,7 @@ def assess_raw(dest_dir: Path) -> WorkbookEstimate:
         formulas += 1
         sheet = str(row.get("sheet") or "")
         for target in formula_targets(str(formula), sheet):
-            expanded += expansion_count(target)
+            expanded += expansion_count(target, usage=usage)
     return WorkbookEstimate(
         cells=len(rows),
         formulas=formulas,

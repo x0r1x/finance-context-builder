@@ -16,6 +16,7 @@ from finance_context.context.series import (
 )
 from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import format_addr, index_to_col
+from finance_context.formulas.csr import SheetUsage
 from finance_context.layout.adjacency import row_adjacency
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
 from finance_context.layout.params import selector_rows
@@ -68,6 +69,7 @@ def build_context(
     stage: str = "done",
     graph: GraphPointer | None = None,
     edges: list[dict] | None = None,
+    usage: SheetUsage | None = None,
 ) -> ContextDocument:
     relations = list(relations or [])
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
@@ -84,7 +86,7 @@ def build_context(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
     axes_by_id = {axis.id: axis for axis in axes}
-    precedents, dependents = row_adjacency(edges or [], limit=0)
+    precedents, dependents = row_adjacency(edges or [], limit=0, usage=usage)
     hidden_warnings = _hidden_warnings(workbook_meta, cells)
     warnings: list[str] = []
     formula_count = 0

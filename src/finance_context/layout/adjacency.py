@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from finance_context.excel.a1 import parse_addr
-from finance_context.formulas.csr import expand_range
+from finance_context.formulas.csr import SheetUsage, expand_range
 
 
 def cell_ref_row(ref: str | None) -> tuple[str, int] | None:
@@ -25,7 +25,7 @@ def row_key_ref(sheet: str, row: int) -> str:
     return f"{sheet}!{row}"
 
 
-def _targets(edge: dict) -> list[str]:
+def _targets(edge: dict, usage: SheetUsage | None = None) -> list[str]:
     target = str(edge.get("target") or "")
     if not target:
         return []
@@ -33,7 +33,7 @@ def _targets(edge: dict) -> list[str]:
     body = target.rsplit("!", 1)[-1]
     if edge.get("kind") == "range" and not edge.get("unresolved") and ":" in body:
         try:
-            cells, _trunc = expand_range(target)
+            cells, _trunc = expand_range(target, usage=usage)
         except ValueError:
             return [target]
         return cells
@@ -44,6 +44,7 @@ def row_adjacency(
     edges: list[dict],
     *,
     limit: int = 8,
+    usage: SheetUsage | None = None,
 ) -> tuple[dict[tuple[str, int], list[str]], dict[tuple[str, int], list[str]]]:
     precedents: dict[tuple[str, int], list[str]] = defaultdict(list)
     dependents: dict[tuple[str, int], list[str]] = defaultdict(list)
@@ -53,7 +54,7 @@ def row_adjacency(
         source = cell_ref_row(str(edge.get("source") or ""))
         if source is None:
             continue
-        for target_ref in _targets(edge):
+        for target_ref in _targets(edge, usage):
             target = cell_ref_row(target_ref)
             if target is None or source == target:
                 continue
