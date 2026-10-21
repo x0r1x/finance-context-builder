@@ -29,16 +29,7 @@ class ParsedFormula(BaseModel):
 
 
 @dataclass
-class CsrGraph:
-    nodes: list[str]
-    node_index: dict[str, int]
-    matrix: Any
-    truncated_sources: set[str] = field(default_factory=set)
-
-
-@dataclass
 class CompileResult:
-    csr: CsrGraph
     cells: list[dict[str, Any]] = field(default_factory=list)
     edges: list[dict[str, Any]] = field(default_factory=list)
     cell_edges: list[dict[str, Any]] = field(default_factory=list)

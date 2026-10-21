@@ -197,6 +197,7 @@ class Pipeline:
             ir_cells = compiled.cells
             ir_edges = compiled.edges
             ir_cell_edges = compiled.cell_edges
+            compiled = None
         else:
             ir_cells, ir_edges, ir_cell_edges = _read_ir(book)
         set_stage("layout")
@@ -261,6 +262,7 @@ class Pipeline:
                     (payload.get("dangling_classes") or {}).get("empty_range_member") or 0
                 ),
             )
+        ir_cell_edges = None
         set_stage("build", status="running")
         build_profile = {"cells": len(cells), "edges": len(edges)}
 
@@ -283,6 +285,7 @@ class Pipeline:
             return built
 
         doc = _timed("build", build_and_count, build_profile)
+        cells = edges = ir_cells = ir_edges = relations = None
         _write_sorted_json(dest_dir / "context.json", doc.model_dump(mode="json"))
         set_stage("render", status="running")
         _timed("render", lambda: write_context_markdown(dest_dir, doc))

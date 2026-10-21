@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, parse_addr
-from finance_context.formulas.csr import build_csr, expand_cell_edges, expanded_edge_count
+from finance_context.formulas.csr import expand_cell_edges, expanded_edge_count
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
 from finance_context.formulas.models import CompileResult, Edge, ParsedFormula
 from finance_context.formulas.names import resolve_defined_name_edges
@@ -106,6 +106,7 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
                 ast_json,
             )
         )
+    del parsed_rows
     resolve_defined_name_edges(edges, meta.get("defined_names"))
     known = set(extra_nodes)
     sheets = {
@@ -123,7 +124,6 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
     cell_edges = expand_cell_edges(
         edges, known, known_sheets=sheets, presence=presence, usage=usage
     )
-    csr = build_csr(edges, extra_nodes=extra_nodes, expanded=cell_edges)
     edge_rows = [
         (e.source, e.kind, e.target, e.unresolved, e.truncated, e.named) for e in edges
     ]
@@ -150,6 +150,7 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
         )
         for edge in cell_edges
     ]
+    del edges, cell_edges
     write_parquet(dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, ir_rows)
     write_parquet(dest_dir / "ir" / "edges.parquet", IR_EDGE_COLUMNS, edge_rows)
     write_parquet(dest_dir / "ir" / "cell_edges.parquet", IR_CELL_EDGE_COLUMNS, cell_edge_rows)
@@ -157,12 +158,13 @@ def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> Com
         dest_dir / "ir" / "compile.json",
         {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
     )
-    return CompileResult(
-        csr=csr,
+    result = CompileResult(
         cells=_as_dicts(IR_CELL_COLUMNS, ir_rows),
         edges=_as_dicts(IR_EDGE_COLUMNS, edge_rows),
         cell_edges=_as_dicts(IR_CELL_EDGE_COLUMNS, cell_edge_rows),
     )
+    del ir_rows, edge_rows, cell_edge_rows
+    return result
 
 
 def _parse_rows(engine: FormulaEngine, raw_rows: list[dict]) -> list[ParsedFormula | None]:

@@ -6,11 +6,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
 
-import numpy as np
-from scipy import sparse
-
 from finance_context.excel.a1 import col_to_index, format_addr, index_to_col
-from finance_context.formulas.models import CsrGraph, Edge
+from finance_context.formulas.models import Edge
 
 RANGE_EXPAND_CAP = 2000
 _EXCEL_MAX_ROW = 1_048_576
@@ -381,43 +378,3 @@ def _expanded_targets(
     if edge.kind in {"ref", "cross_sheet"}:
         return [(edge.target, edge.unresolved, edge.truncated)]
     return [(edge.target, True, edge.truncated)]
-
-
-def build_csr(
-    edges: list[Edge],
-    extra_nodes: list[str] | None = None,
-    *,
-    expanded: list[CellEdge] | None = None,
-) -> CsrGraph:
-    nodes: set[str] = set(extra_nodes or [])
-    pairs: list[tuple[str, str]] = []
-    truncated_sources: set[str] = set()
-    if expanded is None:
-        expanded = expand_cell_edges(edges, set(nodes))
-    for edge in expanded:
-        source, target, kind = edge.source, edge.target, edge.kind
-        unresolved, truncated = edge.unresolved, edge.truncated
-        nodes.add(source)
-        nodes.add(target)
-        if truncated:
-            truncated_sources.add(source)
-        if unresolved or kind in {"dynamic", "external"}:
-            continue
-        if kind in {"ref", "cross_sheet", "range"}:
-            pairs.append((source, target))
-
-    ordered = sorted(nodes)
-    index = {name: i for i, name in enumerate(ordered)}
-    n = len(ordered)
-    if not pairs or n == 0:
-        matrix = sparse.csr_matrix((n, n), dtype=np.uint8)
-        return CsrGraph(
-            nodes=ordered, node_index=index, matrix=matrix, truncated_sources=truncated_sources
-        )
-    rows = np.fromiter((index[src] for src, _ in pairs), dtype=np.int32, count=len(pairs))
-    cols = np.fromiter((index[dst] for _, dst in pairs), dtype=np.int32, count=len(pairs))
-    data = np.ones(len(pairs), dtype=np.uint8)
-    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.uint8)
-    return CsrGraph(
-        nodes=ordered, node_index=index, matrix=matrix, truncated_sources=truncated_sources
-    )
