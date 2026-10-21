@@ -1054,3 +1054,124 @@ def test_formula_names_under_a_label_header_stay_the_stub() -> None:
     assert block.label_col == 1
     assert [row.label for row in block.rows] == labels
     assert [(header.col, header.role) for header in block.axis.headers] == [(2, "value")]
+
+
+def _params_rows(
+    headers: list[str],
+    body: list[tuple[str, ...]],
+    *,
+    formulas: dict[tuple[int, int], str] | None = None,
+) -> dict:
+    """A params sheet. ``formulas`` keys are (column, row) with row 2 for the first body row."""
+    cells = [_c("Допущения", f"{'ABCD'[col]}1", text) for col, text in enumerate(headers)]
+    for offset, values in enumerate(body):
+        row = offset + 2
+        for col, text in enumerate(values):
+            formula = None if formulas is None else formulas.get((col, row))
+            cells.append(_c("Допущения", f"{'ABCD'[col]}{row}", text, formula=formula))
+    block = detect_layout(cells).sheets[0].blocks[0]
+    found = {header.text: header for header in block.axis.headers}
+    return {"block": block, "headers": found}
+
+
+def test_phase_year_labels_stay_unknown_beside_amounts() -> None:
+    """``Year 1`` is a phase label. A substring ``year`` does not make the column a unit."""
+    built = _params_rows(
+        ["Параметр", "Phase", "Значение"],
+        [
+            ("Inflation", "Year 1", "12"),
+            ("Growth", "Year 2", "4"),
+            ("Rate", "Year 3", "2"),
+        ],
+    )
+    assert built["headers"]["Phase"].role == "unknown"
+    assert built["headers"]["Значение"].role == "value"
+    assert [(cell.col, cell.role) for cell in built["block"].rows[0].cells] == [
+        (2, "unknown"),
+        (3, "value"),
+    ]
+
+
+def test_share_percents_do_not_steal_the_unit_column() -> None:
+    """``10%`` is not a whole-cell unit. The ``руб.`` column to the right stays the unit."""
+    built = _params_rows(
+        ["Параметр", "Share", "Значение", "Мера"],
+        [
+            ("Цена", "10%", "12", "руб."),
+            ("Доля", "20%", "4", "руб."),
+            ("Ставка", "5%", "2", "руб."),
+        ],
+    )
+    assert built["headers"]["Share"].role == "unknown"
+    assert built["headers"]["Значение"].role == "value"
+    assert built["headers"]["Мера"].role == "unit"
+    assert [(cell.col, cell.role) for cell in built["block"].rows[0].cells] == [
+        (2, "unknown"),
+        (3, "value"),
+        (4, "unit"),
+    ]
+
+
+def test_percentile_and_non_usd_are_not_unit_columns() -> None:
+    """A unit word inside a short label is not a whole-cell unit."""
+    percentile = _params_rows(
+        ["Параметр", "Stat", "Значение"],
+        [("Цена", "percentile", "12"), ("Доля", "percentile", "4"), ("Ставка", "percentile", "2")],
+    )
+    basis = _params_rows(
+        ["Параметр", "Basis", "Значение"],
+        [("Цена", "non-USD", "12"), ("Доля", "non-USD", "4"), ("Ставка", "non-USD", "2")],
+    )
+    assert percentile["headers"]["Stat"].role == "unknown"
+    assert basis["headers"]["Basis"].role == "unknown"
+
+
+def test_year_labels_under_a_note_header_stay_note() -> None:
+    """A note header keeps ``Year 1`` when the cells are not whole-cell units."""
+    built = _params_rows(
+        ["Параметр", "Примечание", "Значение"],
+        [
+            ("Цена", "Year 1", "12"),
+            ("Доля", "Year 2", "4"),
+            ("Ставка", "Year 3", "2"),
+        ],
+    )
+    assert built["headers"]["Примечание"].role == "note"
+    assert [(cell.col, cell.role) for cell in built["block"].rows[0].cells] == [
+        (2, "note"),
+        (3, "value"),
+    ]
+
+
+def test_text_formulas_under_a_note_header_stay_note() -> None:
+    """A formula cached as text is not a second value series."""
+    built = _params_rows(
+        ["Параметр", "Примечание", "Значение"],
+        [
+            ("Цена", "ok", "12"),
+            ("Доля", "ok", "4"),
+            ("Ставка", "see note", "2"),
+        ],
+        formulas={(1, 2): "=B2", (1, 3): "=B3", (1, 4): "=B4"},
+    )
+    assert [
+        (header.text, header.role, header.period_key) for header in built["block"].axis.headers
+    ] == [
+        ("Примечание", "note", "note"),
+        ("Значение", "value", "value"),
+    ]
+
+
+def test_numeric_formula_cache_stays_value_under_a_note_header() -> None:
+    """A formula counts as a value when the cached text is numeric."""
+    built = _params_rows(
+        ["Параметр", "Примечание", "Значение"],
+        [
+            ("Цена", "12", "1"),
+            ("Доля", "4", "2"),
+            ("Ставка", "2", "3"),
+        ],
+        formulas={(1, 2): "=B2", (1, 3): "=B3", (1, 4): "=B4"},
+    )
+    assert built["headers"]["Примечание"].role == "value"
+    assert built["headers"]["Значение"].role == "value"

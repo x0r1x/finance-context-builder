@@ -710,7 +710,8 @@ def _column_roles(
             role = _header_role(text)
             if role:
                 header_votes[col][role] += 1
-            if _is_number(text) or cell.get("formula_raw"):
+            # A formula counts only when the cached text is numeric.
+            if _is_number(text):
                 numeric_counts[col] += 1
             elif len(text) <= 24:
                 text_counts[col] += 1
@@ -740,7 +741,7 @@ def _column_roles(
         # Formula text in a label column is the row name, not a value.
         if hinted.get(col) == "label":
             continue
-        # Formulas with no cached text. A header word does not hide them.
+        # Cached numbers the content pass did not take. Text formulas stay out.
         if _period_like_caption(by_row, col, date1904):
             roles[col] = "unknown"
         else:
@@ -834,17 +835,10 @@ def _content_column_kind(texts: list[str]) -> str | None:
 
 
 def _is_measure_token(text: str) -> bool:
-    """A short unit token. Ordinary repeated words are not measures."""
+    """A whole-cell unit token. A unit word inside a longer label is not a measure."""
     if _is_number(text) or _is_free_text(text):
         return False
-    if is_unit_text(text):
-        return True
-    stripped = text.strip()
-    if len(stripped) > 16:
-        return False
-    from finance_context.context.measure import parse_measure
-
-    return parse_measure(stripped).unit is not None
+    return is_unit_text(text)
 
 
 def _is_free_text(text: str) -> bool:
