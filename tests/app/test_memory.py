@@ -9,6 +9,7 @@ from pathlib import Path
 
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
+from finance_context import memory
 from finance_context.app.pipeline import _timed, run_job_process
 from finance_context.errors import ContextError
 from finance_context.excel import parse_workbook
@@ -16,12 +17,14 @@ from finance_context.formulas.csr import RANGE_EXPAND_CAP, expand_range, expansi
 from finance_context.memory import (
     BYTES_PER_EXPANDED_CELL,
     BYTES_PER_FORMULA,
+    JOB_MEMORY_FLOOR_BYTES,
     assess_raw,
     cgroup_memory_limit_bytes,
     check_budget,
     estimate_bytes,
     formula_targets,
     prefer_oom_kill,
+    raise_budget_floor,
     resolve_job_budget_bytes,
 )
 from finance_context.observability import JsonFormatter
@@ -70,6 +73,20 @@ def test_budget_override_is_the_per_job_cap() -> None:
 
 def test_unlimited_cgroup_has_no_budget() -> None:
     assert resolve_job_budget_bytes(slots=2, limit_bytes=None, read_cgroup=False) is None
+
+
+def test_budget_below_the_child_baseline_is_raised(caplog) -> None:
+    memory._budget_warnings.clear()
+    caplog.set_level(logging.WARNING, logger="finance_context.pipeline")
+    tiny = 64 * 1024 * 1024
+    assert raise_budget_floor(tiny) == JOB_MEMORY_FLOOR_BYTES
+    assert raise_budget_floor(tiny) == JOB_MEMORY_FLOOR_BYTES
+    assert raise_budget_floor(JOB_MEMORY_FLOOR_BYTES) == JOB_MEMORY_FLOOR_BYTES
+    assert raise_budget_floor(None) is None
+    warnings = [record for record in caplog.records if record.event == "memory_budget_floor"]
+    assert len(warnings) == 1
+    assert warnings[0].configured == tiny
+    assert warnings[0].budget_bytes == JOB_MEMORY_FLOOR_BYTES
 
 
 def test_settings_blank_budget_derives(monkeypatch) -> None:
@@ -191,7 +208,10 @@ def _book(path: Path) -> None:
 def test_run_job_process_refuses_over_budget_without_a_traceback(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", "1")
+    # The floor lifts a 1-byte cap, so the refusal has to sit above that floor.
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", str(JOB_MEMORY_FLOOR_BYTES))
+    monkeypatch.setattr(memory, "BYTES_PER_FORMULA", JOB_MEMORY_FLOOR_BYTES)
+    monkeypatch.setattr(memory, "BYTES_PER_EXPANDED_CELL", JOB_MEMORY_FLOOR_BYTES)
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("LOG_JSON", "true")
     job_id = "job"

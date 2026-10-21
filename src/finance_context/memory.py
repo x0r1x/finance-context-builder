@@ -29,6 +29,12 @@ _UNLIMITED_BYTES = 1 << 60
 BYTES_PER_FORMULA = 4 * 1024
 BYTES_PER_EXPANDED_CELL = 3 * 1024
 
+# A spawned child sits near 80 MiB after imports. A lower cap kills every book
+# during parse, before any workbook data is the cause.
+JOB_MEMORY_FLOOR_BYTES = 128 * 1024 * 1024
+
+_budget_warnings: set[str] = set()
+
 MEMORY_ERROR_DETAIL = "This workbook ran out of memory while it was being read."
 
 _PROC_CGROUP = Path("/proc/self/cgroup")
@@ -190,10 +196,32 @@ def resolve_job_budget_bytes(
 
 
 def budget_for_settings(settings: Settings) -> int | None:
-    return resolve_job_budget_bytes(
-        slots=settings.max_concurrent_jobs,
-        override=settings.job_memory_budget_bytes,
+    return raise_budget_floor(
+        resolve_job_budget_bytes(
+            slots=settings.max_concurrent_jobs,
+            override=settings.job_memory_budget_bytes,
+        )
     )
+
+
+def raise_budget_floor(budget: int | None) -> int | None:
+    """Lift a cap that sits under the child baseline. ``None`` stays unlimited."""
+    if budget is None or budget >= JOB_MEMORY_FLOOR_BYTES:
+        return budget
+    if "floor" not in _budget_warnings:
+        _budget_warnings.add("floor")
+        log_event(
+            _LOGGER,
+            logging.WARNING,
+            "memory_budget_floor",
+            (
+                "job memory budget is below the child baseline; "
+                f"using the {_mib(JOB_MEMORY_FLOOR_BYTES)} MiB floor"
+            ),
+            budget_bytes=JOB_MEMORY_FLOOR_BYTES,
+            configured=budget,
+        )
+    return JOB_MEMORY_FLOOR_BYTES
 
 
 def estimate_bytes(*, formulas: int, expanded_cells: int) -> int:
