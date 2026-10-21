@@ -638,3 +638,196 @@ def _cached_value(cell_el: etree._Element, sst: list[str]) -> str | None:
             return sst[idx]
         return raw
     return raw
+
+
+# --- PROTOTYPE (scratch only): streaming sheet parse into columns -----------------
+
+RAW_COLUMN_NAMES = (
+    "sheet", "row", "col", "addr", "formula_raw", "cached_value", "hidden",
+    "number_format", "comment", "shared_si", "shared_master", "style_indent",
+    "outline_level", "col_outline_level",
+)
+
+
+class _CappedReader:
+    """File-like wrapper that enforces MAX_PART_BYTES while streaming."""
+
+    def __init__(self, handle, limit: int) -> None:
+        self._handle = handle
+        self._left = limit
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = 1 << 16
+        data = self._handle.read(size)
+        self._left -= len(data)
+        if self._left < 0:
+            raise ContextError("zip_rejected", "part too large")
+        return data
+
+
+def parse_ooxml_columns(zf: zipfile.ZipFile):
+    """Same output as parse_ooxml, but cells/presence come back as column lists
+    and each sheet is parsed with iterparse (rows are cleared as they are read)."""
+    root_rels = parse_rels(zf, "_rels/.rels")
+    wb_part = next(
+        (rel.target for rel in root_rels.values() if rel.type.endswith("/officeDocument")),
+        "xl/workbook.xml",
+    )
+    wb_member = zip_member(zf, wb_part)
+    if wb_member is None:
+        raise ContextError("zip_rejected", "missing workbook")
+    wb_root = parse_xml(read_part(zf, wb_member))
+    wb_rels = parse_rels(zf, rels_path_for(wb_part))
+    sst = _load_sst(zf, wb_rels)
+    formats, indents = _load_styles(zf, wb_rels)
+    externals = _load_externals(zf, wb_rels, wb_root)
+    names, iterate = _load_names_and_iterate(wb_root, _sheet_names(wb_root))
+    date1904 = False
+    workbook_pr = find_child(wb_root, "workbookPr")
+    if workbook_pr is not None:
+        date1904 = as_bool(workbook_pr.get("date1904"))
+    nameset = {name.replace("\\", "/") for name in zf.namelist()}
+    has_vba = any(path.endswith("vbaProject.bin") for path in nameset)
+    sheets: list[_SheetParse] = []
+    has_xlm = False
+    sheets_el = find_child(wb_root, "sheets")
+    if sheets_el is not None:
+        for sheet_el in children(sheets_el, "sheet"):
+            name = sheet_el.get("name") or "Sheet"
+            sheet_id = int(sheet_el.get("sheetId") or "0")
+            hidden = (sheet_el.get("state") or "visible") != "visible"
+            rid = rel_id(sheet_el)
+            if rid is None or rid not in wb_rels:
+                continue
+            rel = wb_rels[rid]
+            macrosheet = "macrosheet" in rel.type.lower() or "macrosheets/" in rel.target
+            has_xlm = has_xlm or macrosheet
+            sheets.append(
+                _SheetParse(
+                    info=SheetInfo(name=name, sheet_id=sheet_id, hidden=hidden),
+                    part=rel.target,
+                    macrosheet=macrosheet,
+                )
+            )
+    has_xlm = has_xlm or any("/macrosheets/" in path for path in nameset)
+    cols: dict[str, list] = {name: [] for name in RAW_COLUMN_NAMES}
+    presence: tuple[list, list, list] = ([], [], [])
+    for sheet in sheets:
+        _parse_sheet_stream(zf, sheet, sst, formats, indents, cols, presence)
+    meta = WorkbookMeta(
+        sheets=[sheet.info for sheet in sheets],
+        has_vba=has_vba,
+        has_xlm=has_xlm,
+        externals=externals,
+        locale_hint="en",
+        iterate=iterate,
+        date1904=date1904,
+        defined_names=names,
+    )
+    return cols, meta, presence
+
+
+def _parse_sheet_stream(zf, sheet, sst, formats, indents, cols, presence) -> None:
+    from finance_context.excel.zip_guard import MAX_PART_BYTES
+
+    member = zip_member(zf, sheet.part)
+    if member is None:
+        raise ContextError("zip_rejected", f"missing sheet {sheet.part}")
+    comments = _load_comments(zf, sheet.part)
+    name = sheet.info.name
+    hidden_rows: list[int] = []
+    p_sheet, p_addr, p_kind = presence
+    start = len(cols["addr"])
+    masters: dict[int, tuple[int, int, str]] = {}
+    hidden_cols: set[int] | None = None
+    col_outline: list[tuple[int, int, int]] = []
+    root = None
+    c_sheet, c_row, c_col, c_addr = cols["sheet"], cols["row"], cols["col"], cols["addr"]
+    c_f, c_v, c_h = cols["formula_raw"], cols["cached_value"], cols["hidden"]
+    c_nf, c_cm, c_si = cols["number_format"], cols["comment"], cols["shared_si"]
+    c_sm, c_ind = cols["shared_master"], cols["style_indent"]
+    c_ol, c_col_ol = cols["outline_level"], cols["col_outline_level"]
+    with zf.open(member) as raw_handle:
+        handle = _CappedReader(raw_handle, MAX_PART_BYTES)
+        context = etree.iterparse(
+            handle,
+            events=("start", "end"),
+            resolve_entities=False,
+            no_network=True,
+            load_dtd=False,
+            huge_tree=False,
+        )
+        try:
+            for event, el in context:
+                if root is None and event == "start":
+                    root = el
+                    continue
+                if event != "end" or local_name(el.tag) != "row":
+                    continue
+                parent = el.getparent()
+                if parent is None or local_name(parent.tag) != "sheetData":
+                    continue
+                if hidden_cols is None:
+                    hidden_cols = _hidden_cols(root)
+                    col_outline = _col_outline_spans(root)
+                row_hidden = as_bool(el.get("hidden"))
+                row_outline = _int_attr(el.get("outlineLevel"))
+                if row_hidden:
+                    row_n = int(el.get("r") or "0")
+                    if row_n:
+                        hidden_rows.append(row_n)
+                for cell_el in children(el, "c"):
+                    built, cell_presence = _pending_from_cell(
+                        cell_el,
+                        sst=sst,
+                        formats=formats,
+                        indents=indents,
+                        comments=comments,
+                        hidden_cols=hidden_cols,
+                        row_hidden=row_hidden,
+                        row_outline=row_outline,
+                        col_outline=col_outline,
+                    )
+                    if cell_presence is not None:
+                        p_sheet.append(name)
+                        p_addr.append(cell_presence[0])
+                        p_kind.append(cell_presence[1])
+                    if built is None:
+                        continue
+                    c_sheet.append(name)
+                    c_row.append(built.row)
+                    c_col.append(built.col)
+                    c_addr.append(built.addr)
+                    c_f.append(built.formula)
+                    c_v.append(built.cached)
+                    c_h.append(built.hidden)
+                    c_nf.append(built.number_format)
+                    c_cm.append(built.comment)
+                    c_si.append(built.shared_si)
+                    c_sm.append(built.shared_si is not None and built.formula is not None)
+                    c_ind.append(built.style_indent)
+                    c_ol.append(built.outline_level)
+                    c_col_ol.append(built.col_outline_level)
+                    if built.shared_si is not None and built.formula:
+                        masters[built.shared_si] = (built.col, built.row, built.formula)
+                el.clear()
+                while el.getprevious() is not None:
+                    del parent[0]
+        except etree.XMLSyntaxError as exc:
+            raise ContextError("zip_rejected", "invalid xml") from exc
+    if root is None:
+        raise ContextError("zip_rejected", "invalid xml")
+    if hidden_cols is None:
+        hidden_cols = _hidden_cols(root)
+    for i in range(start, len(c_addr)):
+        si = c_si[i]
+        formula = c_f[i]
+        if si is not None and not formula and si in masters:
+            mcol, mrow, mformula = masters[si]
+            formula = shift_formula(mformula, mcol, mrow, c_col[i], c_row[i])
+        c_f[i] = formula or None
+    sheet.info.summary_below = _summary_below(root)
+    sheet.info.hidden_rows = hidden_rows
+    sheet.info.hidden_cols = sorted(hidden_cols)
+    sheet.info.merges = _merge_refs(root)

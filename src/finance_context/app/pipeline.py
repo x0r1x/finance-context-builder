@@ -228,6 +228,8 @@ class Pipeline:
             ir_edges = compiled.edges
             ir_cell_edges = compiled.cell_edges
             compiled = None
+            if os.environ.get("PROTO_DROP_CE"):
+                ir_cell_edges = None  # PROTOTYPE: graph re-reads ir/cell_edges.parquet
         else:
             ir_cells, ir_edges, ir_cell_edges = _read_ir(book)
         set_stage("layout")
@@ -255,7 +257,7 @@ class Pipeline:
             graph_profile = {
                 "cells": len(ir_cells),
                 "edges": len(ir_edges),
-                "cell_edges": len(ir_cell_edges),
+                "cell_edges": len(ir_cell_edges) if ir_cell_edges is not None else -1,
             }
             graph = _timed(
                 "graph",
@@ -546,6 +548,11 @@ def _write_meta(dest_dir: Path, **fields: object) -> None:
 
 
 def _write_sorted_json(path: Path, data: dict) -> None:
+    if os.environ.get("PROTO_JSON"):
+        from finance_context.store.fs import stream_json
+
+        stream_json(path, data, sort_keys=True)
+        return
     payload = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")

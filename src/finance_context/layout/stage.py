@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -134,6 +135,12 @@ def _overlay_parse_facts(dest_dir: Path, cells: list[dict]) -> list[dict]:
     Formula IR does not carry those columns. A missing raw file, or a parquet
     written before the columns existed, leaves the IR cells unchanged.
     """
+    if os.environ.get("PROTO_FACTS"):
+        return _timed_step(
+            "layout_cells_read",
+            "raw/cells.parquet read done",
+            lambda: _overlay_facts_columnar(dest_dir, cells),
+        )
     path = dest_dir / "raw" / "cells.parquet"
     if not cells or not path.is_file():
         return cells
@@ -157,6 +164,70 @@ def _overlay_parse_facts(dest_dir: Path, cells: list[dict]) -> list[dict]:
                 picked[key] = number
         if picked:
             facts[(raw.get("sheet"), int(raw.get("row") or 0), int(raw.get("col") or 0))] = picked
+    if not facts:
+        return cells
+    merged: list[dict] = []
+    for cell in cells:
+        extra = facts.get((cell.get("sheet"), int(cell.get("row") or 0), int(cell.get("col") or 0)))
+        if not extra:
+            merged.append(cell)
+            continue
+        updated = dict(cell)
+        updated.update(extra)
+        merged.append(updated)
+    return merged
+
+
+def _overlay_facts_columnar(dest_dir: Path, cells: list[dict]) -> list[dict]:
+    """PROTOTYPE PROTO_FACTS: scan fact columns in Arrow and skip an all-zero book.
+
+    The default path materialises every raw cell as a dict. Outline and indent
+    are usually zero, so that dict list is pure overhead for the layout peak.
+    """
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    path = dest_dir / "raw" / "cells.parquet"
+    if not cells or not path.is_file():
+        return cells
+    columns = ["sheet", "row", "col", *_PARSE_FACTS]
+    try:
+        schema = pq.read_schema(path)
+    except (OSError, ValueError):
+        return cells
+    if any(name not in schema.names for name in columns):
+        return cells
+    table = pq.read_table(path, columns=columns)
+    mask = None
+    for key in _PARSE_FACTS:
+        filled = pc.fill_null(table.column(key), 0)
+        positive = pc.greater(filled, 0)
+        mask = positive if mask is None else pc.or_kleene(mask, positive)
+    if int(pc.sum(pc.fill_null(mask, False)).as_py() or 0) == 0:
+        del table
+        return cells
+    picked = table.filter(mask)
+    del table
+    facts: dict[tuple[object, int, int], dict[str, int]] = {}
+    sheets = picked.column("sheet").to_pylist()
+    rows = picked.column("row").to_pylist()
+    cols = picked.column("col").to_pylist()
+    fact_cols = {key: picked.column(key).to_pylist() for key in _PARSE_FACTS}
+    del picked
+    for index, sheet in enumerate(sheets):
+        extra: dict[str, int] = {}
+        for key in _PARSE_FACTS:
+            value = fact_cols[key][index]
+            if not value:
+                continue
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                extra[key] = number
+        if extra:
+            facts[(sheet, int(rows[index] or 0), int(cols[index] or 0))] = extra
     if not facts:
         return cells
     merged: list[dict] = []

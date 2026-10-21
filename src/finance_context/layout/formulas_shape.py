@@ -95,6 +95,10 @@ def _pattern_for_row(
 
 def _ast_for(cell: dict, sheet: str) -> dict[str, Any] | None:
     raw_json = cell.get("ast_json")
+    if isinstance(raw_json, bytes):  # PROTOTYPE: zlib-compressed AST JSON
+        import zlib
+
+        raw_json = zlib.decompress(raw_json).decode("utf-8")
     if raw_json:
         try:
             data = json.loads(raw_json) if isinstance(raw_json, str) else raw_json

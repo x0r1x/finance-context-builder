@@ -88,8 +88,23 @@ def update_json(path: Path, mutate: Callable[[dict[str, Any]], dict[str, Any]]) 
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
+    if os.environ.get("PROTO_JSON"):
+        stream_json(path, data)
+        return
     payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     atomic_write_bytes(path, payload.encode("utf-8"))
+
+
+def stream_json(path: Path, data: Any, *, sort_keys: bool = False) -> None:
+    """PROTOTYPE: json.dump writes iterencode chunks; no whole-document str/bytes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=sort_keys)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    tmp.replace(path)
 
 
 _ARROW_TYPES = {
@@ -150,3 +165,148 @@ def write_cells_parquet(path: Path, rows: list[dict[str, Any]]) -> None:
         typed,
         [tuple(row[col] for col in _CELL_COLUMNS) for row in rows],
     )
+
+
+RAW_CELL_TYPES = (
+    ("sheet", "VARCHAR"),
+    ("row", "INTEGER"),
+    ("col", "INTEGER"),
+    ("addr", "VARCHAR"),
+    ("formula_raw", "VARCHAR"),
+    ("cached_value", "VARCHAR"),
+    ("hidden", "BOOLEAN"),
+    ("number_format", "VARCHAR"),
+    ("comment", "VARCHAR"),
+    ("shared_si", "INTEGER"),
+    ("shared_master", "BOOLEAN"),
+    ("style_indent", "INTEGER"),
+    ("outline_level", "INTEGER"),
+    ("col_outline_level", "INTEGER"),
+)
+
+
+def write_columns_parquet(path: Path, columns, data) -> None:
+    """PROTOTYPE: write column lists; each list is freed right after conversion."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    arrays = []
+    for name, dtype in columns:
+        arrays.append(pa.array(data[name], type=_ARROW_TYPES[dtype]))
+        data[name] = None
+    table = pa.Table.from_arrays(arrays, names=[name for name, _dtype in columns])
+    del arrays
+    pq.write_table(table, tmp)
+    del table
+    _fsync(tmp)
+    tmp.replace(path)
+
+
+def write_parquet_objects(path: Path, columns, objs, getters, batch: int | None = None) -> None:
+    """PROTOTYPE: column at a time straight from objects; no row tuples.
+    Rows go out in row groups of PROTO_PARQUET_BATCH rows so Arrow buffers stay bounded."""
+    if batch is None:
+        batch = int(os.environ.get("PROTO_PARQUET_BATCH", "0")) or (1 << 20)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    names = [name for name, _dtype in columns]
+    schema = pa.schema([(name, _ARROW_TYPES[dtype]) for name, dtype in columns])
+    n = len(objs)
+    with pq.ParquetWriter(tmp, schema) as writer:
+        for lo in range(0, max(n, 1), batch):
+            part = objs[lo : lo + batch]
+            arrays = [
+                pa.array([get(obj) for obj in part], type=_ARROW_TYPES[dtype])
+                for get, (_name, dtype) in zip(getters, columns, strict=True)
+            ]
+            writer.write_table(pa.Table.from_arrays(arrays, names=names))
+            del arrays, part
+    _fsync(tmp)
+    tmp.replace(path)
+
+
+class ObjectBatchWriter:
+    """PROTOTYPE: one ParquetWriter, one row group per batch, schema fixed up front."""
+
+    def __init__(self, path: Path, columns) -> None:
+        self.path = path
+        self.names = [name for name, _dtype in columns]
+        self.types = [_ARROW_TYPES[dtype] for _name, dtype in columns]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.tmp = path.with_name(path.name + ".tmp")
+        schema = pa.schema(list(zip(self.names, self.types, strict=True)))
+        self._writer = pq.ParquetWriter(self.tmp, schema)
+
+    def write_objects(self, objs, getters) -> None:
+        if not objs:
+            return
+        arrays = [
+            pa.array([get(obj) for obj in objs], type=typ)
+            for get, typ in zip(getters, self.types, strict=True)
+        ]
+        self._writer.write_table(pa.Table.from_arrays(arrays, names=self.names))
+        del arrays
+
+    def write_lists(self, columns_data) -> None:
+        arrays = [
+            pa.array(values, type=typ)
+            for values, typ in zip(columns_data, self.types, strict=True)
+        ]
+        self._writer.write_table(pa.Table.from_arrays(arrays, names=self.names))
+        del arrays
+
+    def close(self) -> None:
+        self._writer.close()
+        _fsync(self.tmp)
+        self.tmp.replace(self.path)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+class _RowView:
+    __slots__ = ("_cols", "_i")
+
+    def __init__(self, cols, i):
+        self._cols = cols
+        self._i = i
+
+    def get(self, key, default=None):
+        col = self._cols.get(key)
+        if col is None:
+            return default
+        return col[self._i]
+
+    def __getitem__(self, key):
+        return self._cols[key][self._i]
+
+
+class ColumnRows:
+    """PROTOTYPE: list-of-dicts look-alike over per-column Python lists.
+    Repeated strings (sheet, number_format) are deduplicated."""
+
+    def __init__(self, path: Path, dedup=("sheet", "number_format")) -> None:
+        table = pq.read_table(path)
+        self._cols = {}
+        for name in table.column_names:
+            values = table.column(name).to_pylist()
+            if name in dedup:
+                pool: dict = {}
+                values = [v if v is None else pool.setdefault(v, v) for v in values]
+            self._cols[name] = values
+        self._n = table.num_rows
+        del table
+
+    def __len__(self):
+        return self._n
+
+    def __getitem__(self, i):
+        return _RowView(self._cols, i)
+
+    def __iter__(self):
+        cols = self._cols
+        for i in range(self._n):
+            yield _RowView(cols, i)

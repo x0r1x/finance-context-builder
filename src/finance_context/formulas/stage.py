@@ -89,15 +89,35 @@ def compile_workbook(
 ) -> CompileResult:
     meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
-    raw_rows = read_parquet(dest_dir / "raw" / "cells.parquet")
+    import os as _os
+    proto = bool(_os.environ.get("PROTO_COMPILE"))
+    if proto:
+        from finance_context.store.fs import ColumnRows
+        raw_rows = ColumnRows(dest_dir / "raw" / "cells.parquet")
+    else:
+        raw_rows = read_parquet(dest_dir / "raw" / "cells.parquet")
     cells: list[IrCell] = []
     edges: list[Edge] = []
     extra_nodes: list[str] = []
     formula_count = 0
+    import zlib as _zlib
+
+    from finance_context.formulas import csr as _csr
+    pool = {} if _os.environ.get("PROTO_INTERN") else None
+    astz = bool(_os.environ.get("PROTO_ASTZ"))
+    _csr.ID_POOL = pool
     for row, (parsed, release) in zip(raw_rows, _iter_parsed(engine, raw_rows), strict=True):
         if row.get("formula_raw"):
             formula_count += 1
-        extra_nodes.append(canonical_node_id(str(row["sheet"]), str(row["addr"])))
+        node_id = canonical_node_id(str(row["sheet"]), str(row["addr"]))
+        if pool is not None:
+            node_id = pool.setdefault(node_id, node_id)
+            if parsed is not None:
+                for e in parsed.edges:
+                    e.source = pool.setdefault(e.source, e.source)
+                    if e.target:
+                        e.target = pool.setdefault(e.target, e.target)
+        extra_nodes.append(node_id)
         template = None
         unparsed = False
         ast_json = None
@@ -106,6 +126,8 @@ def compile_workbook(
             unparsed = parsed.unparsed
             if parsed.ast is not None:
                 ast_json = json.dumps(parsed.ast, ensure_ascii=False)
+                if astz:
+                    ast_json = _zlib.compress(ast_json.encode("utf-8"), 1)
             edges.extend(parsed.edges)
         release()
         sheet = row["sheet"]
@@ -145,9 +167,62 @@ def compile_workbook(
         source="compile",
         settings=chosen,
     )
-    cell_edges = expand_cell_edges(
-        edges, known, known_sheets=sheets, presence=presence, usage=usage
-    )
+    if proto:
+        del raw_rows
+    pack = bool(_os.environ.get("PROTO_PACK"))
+    if pack:
+        cell_edges = _stream_cell_edges(
+            dest_dir,
+            edges,
+            known,
+            sheets=sheets,
+            presence=presence,
+            usage=usage,
+        )
+    else:
+        cell_edges = expand_cell_edges(
+            edges, known, known_sheets=sheets, presence=presence, usage=usage
+        )
+    _csr.ID_POOL = None
+    del pool
+    if pack:
+        _write_cells_and_edges(dest_dir, cells, edges, proto=proto, ast_zlib=_zlib)
+        write_json(
+            dest_dir / "ir" / "compile.json",
+            {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
+        )
+        return CompileResult(cells=cells, edges=edges, cell_edges=cell_edges)
+    if proto:
+        del presence, known, extra_nodes
+        from operator import attrgetter
+
+        from finance_context.store.fs import write_parquet_objects
+        write_parquet_objects(
+            dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, cells,
+            [
+                (lambda c: None if c.ast_json is None else (
+                    _zlib.decompress(c.ast_json).decode("utf-8")
+                    if isinstance(c.ast_json, bytes) else c.ast_json))
+                if name == "ast_json" else attrgetter(name)
+                for name, _t in IR_CELL_COLUMNS
+            ],
+        )
+        write_parquet_objects(
+            dest_dir / "ir" / "edges.parquet", IR_EDGE_COLUMNS, edges,
+            [attrgetter(name) for name, _t in IR_EDGE_COLUMNS],
+        )
+        ce_get = [
+            (lambda e: None) if name in ("col_offset", "period_lag") else attrgetter(name)
+            for name, _t in IR_CELL_EDGE_COLUMNS
+        ]
+        write_parquet_objects(
+            dest_dir / "ir" / "cell_edges.parquet", IR_CELL_EDGE_COLUMNS, cell_edges, ce_get
+        )
+        write_json(
+            dest_dir / "ir" / "compile.json",
+            {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
+        )
+        return CompileResult(cells=cells, edges=edges, cell_edges=cell_edges)
     edge_rows = [
         (e.source, e.kind, e.target, e.unresolved, e.truncated, e.named) for e in edges
     ]
@@ -318,6 +393,91 @@ def _presence_index(dest_dir: Path) -> dict[str, str]:
     if not path.is_file():
         return {}
     out: dict[str, str] = {}
+    import os as _os
+    if _os.environ.get("PROTO_COMPILE"):
+        from finance_context.store.fs import ColumnRows
+        rows = ColumnRows(path, dedup=("sheet", "presence"))
+        for row in rows:
+            out[canonical_node_id(str(row["sheet"]), str(row["addr"]))] = str(row["presence"])
+        return out
     for row in read_parquet(path):
         out[canonical_node_id(str(row["sheet"]), str(row["addr"]))] = str(row["presence"])
     return out
+
+
+class _EdgeCount:
+    """Stand-in so len(cell_edges) works after the rows have been written and dropped."""
+
+    __slots__ = ("_n",)
+
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    def __len__(self) -> int:
+        return self._n
+
+
+def _stream_cell_edges(dest_dir, edges, known, *, sheets, presence, usage):
+    """PROTOTYPE PROTO_PACK: write cell edges in batches and keep only the count."""
+    import os
+
+    from finance_context.formulas.csr import expand_cell_edges_column_batches
+    from finance_context.store.fs import ObjectBatchWriter
+
+    batch = int(os.environ.get("PROTO_PARQUET_BATCH", "0") or 65536)
+    count = 0
+    path = dest_dir / "ir" / "cell_edges.parquet"
+    names = [name for name, _dtype in IR_CELL_EDGE_COLUMNS]
+
+    def consume(cols) -> None:
+        nonlocal count
+        writer.write_lists([cols[name] for name in names])
+        count += len(cols["source"])
+
+    with ObjectBatchWriter(path, IR_CELL_EDGE_COLUMNS) as writer:
+        expand_cell_edges_column_batches(
+            edges,
+            known,
+            known_sheets=sheets,
+            presence=presence,
+            usage=usage,
+            consume=consume,
+            batch_size=max(1, batch),
+        )
+    return _EdgeCount(count)
+
+
+def _write_cells_and_edges(dest_dir, cells, edges, *, proto: bool, ast_zlib) -> None:
+    if not proto:
+        edge_rows = [
+            (e.source, e.kind, e.target, e.unresolved, e.truncated, e.named) for e in edges
+        ]
+        write_parquet(
+            dest_dir / "ir" / "cells.parquet",
+            IR_CELL_COLUMNS,
+            [cell_parquet_row(cell) for cell in cells],
+        )
+        write_parquet(dest_dir / "ir" / "edges.parquet", IR_EDGE_COLUMNS, edge_rows)
+        return
+    from operator import attrgetter
+
+    from finance_context.store.fs import write_parquet_objects
+
+    def ast_text(cell):
+        raw = cell.ast_json
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            return ast_zlib.decompress(raw).decode("utf-8")
+        return raw
+
+    cell_get = [
+        ast_text if name == "ast_json" else attrgetter(name) for name, _t in IR_CELL_COLUMNS
+    ]
+    write_parquet_objects(dest_dir / "ir" / "cells.parquet", IR_CELL_COLUMNS, cells, cell_get)
+    write_parquet_objects(
+        dest_dir / "ir" / "edges.parquet",
+        IR_EDGE_COLUMNS,
+        edges,
+        [attrgetter(name) for name, _t in IR_EDGE_COLUMNS],
+    )
