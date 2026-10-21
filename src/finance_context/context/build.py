@@ -86,7 +86,7 @@ def build_context(
     axes_by_id = {axis.id: axis for axis in axes}
     precedents, dependents = row_adjacency(edges or [], limit=0)
     hidden_warnings = _hidden_warnings(workbook_meta, cells)
-    warnings: list[str] = [*_unknown_header_warnings(layout)]
+    warnings: list[str] = []
     formula_count = 0
     missing_cached = 0
     unparsed = 0
@@ -262,6 +262,7 @@ def build_context(
             f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
         )
     warnings.extend(hidden_warnings)
+    warnings.extend(_unknown_header_warnings(layout))
 
     sheets = [
         s["name"] if isinstance(s, dict) else getattr(s, "name", str(s))

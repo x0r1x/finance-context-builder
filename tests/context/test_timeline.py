@@ -353,6 +353,49 @@ def _ru_timeline(*rows: tuple[str, list[str]]) -> list[dict]:
     return cells
 
 
+def test_ambiguous_marker_note_survives_layout_json() -> None:
+    from tests.layout.test_geometry_markers import _cell
+
+    cells = [
+        _cell("A2", "Item"),
+        _cell("B1", "План"),
+        _cell("C1", "Факт"),
+        _cell("B2", "2024 факт"),
+        _cell("C2", "2024 план"),
+        _cell("A3", "Revenue"),
+        _cell("B3", "10"),
+        _cell("C3", "21"),
+    ]
+    layout = detect_layout(cells)
+    note = layout.sheets[0].axes[0].notes[0]
+    restored = type(layout).model_validate(layout.model_dump(mode="json"))
+    assert restored.sheets[0].axes[0].notes == [note]
+    _axes, warnings = build_axes(restored, cells)
+    assert note in warnings
+
+
+def test_unpublished_axis_note_is_not_a_context_warning() -> None:
+    from tests.layout.test_geometry_markers import _cell
+
+    cells = [
+        _cell("A2", "Item"),
+        _cell("B2", "2024"),
+        _cell("C2", "2025"),
+        _cell("A3", "Revenue"),
+        _cell("B3", "10"),
+        _cell("C3", "21"),
+    ]
+    layout = detect_layout(cells)
+    published = layout.sheets[0].axes[0]
+    published.notes = []
+    orphan = published.model_copy(deep=True)
+    orphan.id = "P&L!orphan"
+    orphan.notes = ["Ambiguous period marker on P&L!orphan: 2024"]
+    layout.sheets[0].axes.append(orphan)
+    _axes, warnings = build_axes(layout, cells)
+    assert all("orphan" not in warning for warning in warnings)
+
+
 def test_unparsed_period_header_warns_without_becoming_a_period() -> None:
     cells = _ru_timeline(("Выручка", ["1", "2", "3", "4"]))
     cells.append(_c("Модель", "F1", "Q5 2025"))

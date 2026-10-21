@@ -97,8 +97,16 @@ class TimeAxis(BaseModel):
     grain: str | None = None
     header_row: int
     periods: list[AxisPeriod]
-    # Ambiguous marker notes. Not part of layout.json or the context schema.
-    notes: list[str] = Field(default_factory=list, exclude=True)
+    # Ambiguous-marker warnings. Not a context-schema field. Empty notes are
+    # omitted; a reused layout.json still carries a note that was raised.
+    notes: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("notes"):
+            data.pop("notes", None)
+        return data
 
 
 class RowCell(BaseModel):
