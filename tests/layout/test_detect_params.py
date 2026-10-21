@@ -985,8 +985,8 @@ def test_unit_tokens_win_over_a_value_header() -> None:
     assert headers["Значение"] == "unit"
 
 
-def test_repeated_prose_is_unknown_without_a_header_word() -> None:
-    """Identical long text is not a note. A short non-word caption stays unknown."""
+def test_repeated_long_text_is_note_without_a_header_word() -> None:
+    """Identical long text is a note. A short caption does not turn it into unknown."""
     prose = "одно и то же пояснение повторяется в каждой строке"
     cells = [
         _c("Допущения", "A1", "Параметр"),
@@ -1007,11 +1007,11 @@ def test_repeated_prose_is_unknown_without_a_header_word() -> None:
         for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
     }
     assert headers["Значение"] == "value"
-    assert headers["Поле"] == "unknown"
+    assert headers["Поле"] == "note"
 
 
 def test_repeated_prose_keeps_the_note_header() -> None:
-    """Low distinctness is ambiguous, so the note header word still applies."""
+    """Repeated long text is a note. The note header agrees and does not decide."""
     prose = "одно и то же пояснение повторяется в каждой строке"
     cells = [
         _c("Допущения", "A1", "Параметр"),

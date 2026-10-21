@@ -814,8 +814,9 @@ def _column_bodies(
 def _content_column_kind(texts: list[str]) -> str | None:
     """Role of a column from its cells. ``None`` when the column is empty or sparse.
 
-    Numbers are ``value``. Short measure tokens are ``unit``. Free-form text with
-    high distinctness is ``note``. A header word is not an input here.
+    Numbers are ``value``. Short measure tokens are ``unit``. Free-form text of
+    at least 24 characters is ``note``, including when the same text repeats.
+    Short tokens never reach ``note``. A header word is not an input here.
     """
     if len(texts) < 2:
         return None
@@ -826,14 +827,8 @@ def _content_column_kind(texts: list[str]) -> str | None:
     units = sum(1 for text in texts if _is_measure_token(text))
     if units >= 2 and units / total >= _VALUE_SHARE:
         return "unit"
-    notes = [text for text in texts if _is_free_text(text)]
-    distinct = {text.casefold().replace("ё", "е") for text in notes}
-    if (
-        len(notes) >= 2
-        and len(notes) / total >= _VALUE_SHARE
-        and len(distinct) >= 2
-        and len(distinct) / len(notes) >= 0.5
-    ):
+    notes = sum(1 for text in texts if _is_free_text(text))
+    if notes >= 2 and notes / total >= _VALUE_SHARE:
         return "note"
     return None
 
