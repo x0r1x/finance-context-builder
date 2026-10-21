@@ -12,7 +12,13 @@ from finance_context.layout.models import (
 )
 from finance_context.layout.params import carve_params_regions, detect_params_block
 from finance_context.layout.resolve import project_axis
-from finance_context.layout.rows import _band_title, _data_rows, _is_empty_row, _label_span
+from finance_context.layout.rows import (
+    _band_title,
+    _data_rows,
+    _is_banner_gap,
+    _is_empty_row,
+    _label_span,
+)
 from finance_context.layout.timelines import _share_repeated_axes, link_workbook_timelines
 
 
@@ -167,10 +173,18 @@ def _label_rows_above(
     if not period_cols:
         return []
     found: list[int] = []
+    # A single text banner stacked on the header used to sit inside the band,
+    # so titles above that banner belong here. A banner with a title already
+    # between it and the header is the previous table's boundary.
+    can_skip_banner = True
     for row_n in range(header_row - 1, floor, -1):
         cells = by_row.get(row_n)
         if not cells or _is_empty_row(cells, date1904):
             continue
+        if can_skip_banner and _is_banner_gap(cells, period_cols, date1904):
+            can_skip_banner = False
+            continue
+        can_skip_banner = False
         if not _is_label_only_row(cells, period_cols, date1904):
             break
         found.append(row_n)

@@ -1,11 +1,15 @@
-"""RU/EN words the layout reads: param headers, period markers and units.
+"""RU/EN words the layout reads: param headers, period words and units.
+
+Fact and plan are not words here. A duplicate date is split by geometry in
+``markers.py``, and the suffix is the residual text.
+
 
 Words live in ``lexicon.json`` next to this module. A word matches whole. A longer
 word matches when its Snowball stem agrees with the entry, or when only a
 grammatical ending differs (``кварталу`` / ``квартал``). Words of at most three
 letters stay exact, so ``кв`` is not ``кВт`` and ``г`` is not ``график``.
 ``stem_block`` lists collisions the stemmer must not accept (``кВт``, ``график``,
-``History``, ``Histogram``, ``фактор``, ``планета``, ``Budgeting``).
+``группа``, ``based``, ``stressed``, ``quarterly``).
 A trailing ``*`` is still read as a root, not as "any ending". A word with a space
 is a phrase (``end of``).
 
@@ -88,7 +92,6 @@ class _LexiconModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     header_roles: dict[str, list[str]]
-    period_markers: dict[str, list[str]]
     period_words: dict[str, list[str]]
     structural: _Structural
     stem_block: dict[str, list[str]] = {}
@@ -124,7 +127,6 @@ def _validate(data: dict[str, Any], *, package: bool) -> None:
 class _OverlayModel(BaseModel):
     model_config = ConfigDict(extra="allow")
     header_roles: dict[str, list[str]] | None = None
-    period_markers: dict[str, list[str]] | None = None
     period_words: dict[str, list[str]] | None = None
     structural: dict[str, Any] | None = None
     stem_block: dict[str, list[str]] | None = None
@@ -170,6 +172,17 @@ def words(*path: str) -> tuple[str, ...]:
     for key in path:
         node = node[key]
     return tuple(node)
+
+
+def blocked_surface(surface: str) -> bool:
+    """True when ``surface`` is listed in ``stem_block`` for any root."""
+    folded = _fold(surface).strip(".")
+    table = _data().get("stem_block") or {}
+    for items in table.values():
+        for item in items:
+            if folded == _fold(str(item)).strip("."):
+                return True
+    return False
 
 
 def _root(entry: str) -> str:
@@ -385,4 +398,3 @@ def has_scenario_evidence(text: str) -> bool:
         if any(matches_entry(token, entry) for entry in words("structural", "scenario_evidence")):
             return True
     return False
-

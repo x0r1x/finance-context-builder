@@ -94,11 +94,8 @@ def test_single_unknown_value_column_is_kept_without_a_scenario_hint(tmp_path: P
     [
         ["Показатель", "9М 2024", "9М 2025", "9М 2026"],
         ["Показатель", "FY2024/25", "FY2025/26", "FY2026/27"],
-        ["Показатель", "Ожидаемое 2025", "Ожидаемое 2026", "Ожидаемое 2027"],
-        ["Item", "Estimate 2025", "Estimate 2026", "Estimate 2027"],
         ["Показатель", "2025/26", "2026/27", "2027/28"],
         ["Показатель", "Год 1", "Год 2", "Год 3"],
-        ["Показатель", "Факт 2024", "Ожидаемое 2025", "План 2026"],
     ],
 )
 def test_period_like_headers_without_an_axis_warn_with_their_address(
@@ -112,3 +109,29 @@ def test_period_like_headers_without_an_axis_warn_with_their_address(
     assert "Ввод!B1:D1" in warning
     assert all(f"«{text}»" in warning for text in header[1:])
     assert not any("scenario" in item for item in doc.warnings)
+
+
+@pytest.mark.parametrize(
+    ("header", "keys"),
+    [
+        (
+            ["Показатель", "Ожидаемое 2025", "Ожидаемое 2026", "Ожидаемое 2027"],
+            ["2025", "2026", "2027"],
+        ),
+        (
+            ["Item", "Estimate 2025", "Estimate 2026", "Estimate 2027"],
+            ["2025", "2026", "2027"],
+        ),
+        (
+            ["Показатель", "Факт 2024", "Ожидаемое 2025", "План 2026"],
+            ["2024", "2025", "2026"],
+        ),
+    ],
+)
+def test_one_date_plus_residual_is_a_plain_year_axis(
+    tmp_path: Path, header: list[str], keys: list[str]
+) -> None:
+    doc = _run(tmp_path, header)
+    assert doc.blocks[0].kind == "timeline"
+    assert [period.period_key for period in doc.axes[0].periods] == keys
+    assert not any("No time axis" in item for item in doc.warnings)

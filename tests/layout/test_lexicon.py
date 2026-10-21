@@ -43,8 +43,6 @@ def test_stem_or_ending_accepts_an_inflection(surface: str, entry: str) -> None:
 def test_stem_block_rejects_lookalike_words(surface: str) -> None:
     assert not accepts("period_words", "quarter", surface=surface)
     assert not accepts("period_words", "year", surface=surface)
-    assert not accepts("period_markers", "actual", surface=surface)
-    assert not accepts("period_markers", "plan", surface=surface)
 
 
 def test_package_lexicon_rejects_an_unknown_key(tmp_path, monkeypatch) -> None:
@@ -118,7 +116,7 @@ def test_overlay_reaches_a_cached_header(tmp_path, monkeypatch) -> None:
 
     assert classify_header("Прикидка") is None
     overlay = tmp_path / "overlay.json"
-    overlay.write_text('{"period_markers": {"plan": ["прикидка"]}}', encoding="utf-8")
+    overlay.write_text('{"structural": {"total": ["прикидка"]}}', encoding="utf-8")
     monkeypatch.setenv("FINANCE_CONTEXT_LEXICON", str(overlay))
     hit = classify_header("Прикидка")
-    assert hit is not None and (hit.kind, hit.period_key) == ("period", "plan")
+    assert hit is not None and (hit.kind, hit.period_key) == ("total", "total")

@@ -23,11 +23,11 @@ RowKind = Literal["fact", "abstract", "index", "helper", "flag"]
 BlockKind = Literal["timeline", "params"]
 
 SERIES_KINDS = frozenset({"period", "stub", "relative"})
-STRUCTURAL_PERIOD_KEYS = frozenset({"actual", "plan", "total", "stub"})
+STRUCTURAL_PERIOD_KEYS = frozenset({"total", "stub"})
 
 
 def is_series_column(kind: str | None, period_key: str) -> bool:
-    """A timeline value column, not a total, stub, scenario, or bare marker."""
+    """A timeline value column, not a total, stub, or scenario."""
     return kind in SERIES_KINDS and period_key not in STRUCTURAL_PERIOD_KEYS
 
 
@@ -98,6 +98,8 @@ class TimeAxis(BaseModel):
     grain: str | None = None
     header_row: int
     periods: list[AxisPeriod]
+    # Ambiguous marker notes. Not part of layout.json or the context schema.
+    notes: list[str] = Field(default_factory=list, exclude=True)
 
 
 class RowCell(BaseModel):

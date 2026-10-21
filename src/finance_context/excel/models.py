@@ -13,12 +13,16 @@ class SheetInfo(BaseModel):
     hidden_cols: list[int] = Field(default_factory=list)
     # Excel's default: the group summary sits below the detail rows.
     summary_below: bool = True
+    # Horizontal merge spans, "B1:D1". Empty stays out of workbook.json.
+    merges: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
         if data.get("summary_below", True):
             data.pop("summary_below", None)
+        if not data.get("merges"):
+            data.pop("merges", None)
         return data
 
 

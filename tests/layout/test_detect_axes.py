@@ -56,7 +56,7 @@ def test_two_axes_on_one_sheet_become_two_blocks() -> None:
     assert len(sheet.blocks) == 2
     kinds_0 = [h.kind for h in sheet.blocks[0].axis.headers]
     assert kinds_0 == ["period", "period"]
-    assert [marker_token(h.variant) for h in sheet.blocks[0].axis.headers] == ["", "e"]
+    assert [marker_token(h.variant) for h in sheet.blocks[0].axis.headers] == ["", ""]
     assert [h.period_key for h in sheet.blocks[0].axis.headers] == ["2023", "2024"]
     assert all(h.kind == "period" for h in sheet.blocks[1].axis.headers)
     assert sheet.blocks[0].axis.headers[0].col == 2
@@ -385,7 +385,7 @@ def test_forecast_banner_starts_second_block() -> None:
     assert [h.period_key for h in blocks[0].axis.headers] == ["2022Q3", "2022Q4"]
     assert [h.kind for h in blocks[0].axis.headers] == ["period", "period"]
     assert [h.period_key for h in blocks[1].axis.headers] == ["2026Q1", "2026Q2"]
-    assert [marker_token(h.variant) for h in blocks[1].axis.headers] == ["прогноз", "прогноз"]
+    assert [marker_token(h.variant) for h in blocks[1].axis.headers] == ["", ""]
 
 
 def test_fact_marker_overrides_forecast_banner() -> None:
@@ -415,8 +415,9 @@ def test_fact_marker_overrides_forecast_banner() -> None:
     assert len(layout.sheets[0].blocks) == 1
     headers = layout.sheets[0].blocks[0].axis.headers
     assert [h.period_key for h in headers] == ["2025Q4", "2026Q1", "2026Q2", "2026Q3"]
-    assert [marker_token(h.variant) for h in headers] == ["факт", "прогноз", "прогноз", "прогноз"]
-    assert [r.label for r in layout.sheets[0].blocks[0].rows] == ["Revenue"]
+    assert [marker_token(h.variant) for h in headers] == ["", "", "", ""]
+    rows = layout.sheets[0].blocks[0].rows
+    assert [(row.label, row.kind) for row in rows] == [("Прогноз", "abstract"), ("Revenue", "fact")]
 
 
 def test_year_forward_fill_under_forecast_banner() -> None:
@@ -437,7 +438,7 @@ def test_year_forward_fill_under_forecast_banner() -> None:
     layout = detect_layout(cells)
     headers = layout.sheets[0].blocks[0].axis.headers
     assert [h.period_key for h in headers] == ["2026Q1", "2026Q2", "2027Q3", "2027Q4"]
-    assert all(marker_token(h.variant) == "прогноз" for h in headers)
+    assert [marker_token(h.variant) for h in headers] == ["", "", "", ""]
 
 
 def test_start_end_period_pair_prefers_end() -> None:
@@ -834,7 +835,7 @@ def test_on_column_fact_and_forecast_banners_paint_until_the_next_banner() -> No
         "2017Q4",
         "2018Q1",
     ]
-    assert [marker_token(h.variant) for h in headers] == ["факт"] * 4 + ["прогноз"] * 2
+    assert [marker_token(h.variant) for h in headers] == [""] * 6
 
 
 def test_repeated_quarter_header_keeps_the_banner_roles() -> None:
@@ -848,9 +849,8 @@ def test_repeated_quarter_header_keeps_the_banner_roles() -> None:
     cells.append(_c("CF", "A9", "Долг"))
     blocks = detect_layout(cells).sheets[0].blocks
     assert len(blocks) == 2
-    expected = ["факт"] * 4 + ["прогноз"] * 2
-    assert [marker_token(h.variant) for h in blocks[0].axis.headers] == expected
-    assert [marker_token(h.variant) for h in blocks[1].axis.headers] == expected
+    assert [marker_token(h.variant) for h in blocks[0].axis.headers] == [""] * 6
+    assert [marker_token(h.variant) for h in blocks[1].axis.headers] == [""] * 6
 
 
 def test_stale_year_banner_does_not_override_the_quarter_year() -> None:
@@ -1137,6 +1137,36 @@ def test_hidden_year_row_groups_quarters_that_omit_the_year() -> None:
     ]
     assert [period.group_key for period in quarter.periods] == years
     assert [axis.header_row for axis in sheet.axes if axis.grain == "year"] == []
+
+
+def test_one_caption_year_beside_the_axis_does_not_extend_the_header() -> None:
+    """A label cell ``Forecast 2024`` next to a year ruler is not a year layer.
+
+    One such cell must not pull the numeric row into the header band or add a
+    period column.
+    """
+    cells = [
+        _c("P&L", "A1", "Item"),
+        _c("P&L", "B1", "Note"),
+        _c("P&L", "C1", "2023"),
+        _c("P&L", "D1", "2024"),
+        _c("P&L", "E1", "2025"),
+        _c("P&L", "A2", "Section"),
+        _c("P&L", "B2", "Forecast 2024"),
+        _c("P&L", "C2", "10"),
+        _c("P&L", "D2", "20"),
+        _c("P&L", "E2", "30"),
+        _c("P&L", "A3", "Revenue"),
+        _c("P&L", "C3", "1"),
+        _c("P&L", "D3", "2"),
+        _c("P&L", "E3", "3"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.header_row for axis in sheet.axes] == [1]
+    assert [period.period_key for period in sheet.axes[0].periods] == ["2023", "2024", "2025"]
+    labels = [row.label for block in sheet.blocks for row in block.rows]
+    assert "Revenue" in labels
+    assert "Section" in labels or "Forecast 2024" in labels
 
 
 def test_year_like_data_row_is_not_a_header() -> None:

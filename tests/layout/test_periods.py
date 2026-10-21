@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from finance_context.layout.periods import (
-    _marker_word,
     apply_grain,
     classify_atom,
     classify_header,
@@ -11,18 +10,6 @@ from finance_context.layout.periods import (
     infer_grain,
     marker_token,
 )
-
-# Casefolded suffix letter to the structural marker key.
-_SUFFIX_MARKER = {
-    "п": "plan",
-    "p": "plan",
-    "р": "plan",
-    "e": "plan",
-    "е": "plan",
-    "ф": "actual",
-    "a": "actual",
-    "а": "actual",
-}
 
 
 @pytest.mark.parametrize(
@@ -85,15 +72,11 @@ def test_header_period_key(text: str, period_key: str) -> None:
     assert hit.period_key == period_key
 
 
-def test_fact_plan_keywords() -> None:
-    fact = classify_header("факт")
-    plan = classify_header("план")
-    assert fact is not None and plan is not None
-    assert fact.kind == plan.kind == "period"
-    assert fact.period_key == "actual"
-    assert plan.period_key == "plan"
-    assert marker_token(fact.variant) == "факт"
-    assert marker_token(plan.variant) == "план"
+def test_bare_fact_and_plan_are_not_periods() -> None:
+    assert classify_header("факт") is None
+    assert classify_header("план") is None
+    assert classify_header("Факт") is None
+    assert classify_header("План") is None
 
 
 def test_scenario_and_total_and_stub() -> None:
@@ -201,23 +184,21 @@ def test_russian_and_short_period_headers(text: str, period_key: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "marker", "period_key"),
+    ("text", "residual", "period_key"),
     [
-        ("Факт 2025", "actual", "2025"),
-        ("План 2026", "plan", "2026"),
-        ("Прогноз 2027", "plan", "2027"),
-        ("Budget 2026", "plan", "2026"),
-        ("2025 (факт)", "actual", "2025"),
-        ("Факт I кв. 2025", "actual", "2025Q1"),
+        ("Факт 2025", "факт", "2025"),
+        ("План 2026", "план", "2026"),
+        ("Прогноз 2027", "прогноз", "2027"),
+        ("Budget 2026", "budget", "2026"),
+        ("2025 (факт)", "факт", "2025"),
+        ("Факт I кв. 2025", "факт", "2025Q1"),
     ],
 )
-def test_marker_word_before_or_around_the_period(text: str, marker: str, period_key: str) -> None:
+def test_residual_around_one_date_stays_text(text: str, residual: str, period_key: str) -> None:
     hit = classify_header(text)
     assert hit is not None
     assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
-    assert hit.variant
-    resolved = _marker_word(hit.variant)
-    assert resolved is not None and resolved[0] == marker
+    assert marker_token(hit.variant) == residual
 
 
 @pytest.mark.parametrize("text", ["13.2025", "V кв. 2025", "3 полугодие 2025", "1.2025"])
@@ -260,16 +241,16 @@ def test_half_year_grain_keeps_both_halves() -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "quarter", "half", "marker"),
+    ("text", "quarter", "half", "residual"),
     [
-        ("План I кв.", 1, None, "plan"),
-        ("Факт H2", None, 2, "actual"),
-        ("I кв. план", 1, None, "plan"),
-        ("H2 (факт)", None, 2, "actual"),
+        ("План I кв.", 1, None, "план"),
+        ("Факт H2", None, 2, "факт"),
+        ("I кв. план", 1, None, "план"),
+        ("H2 (факт)", None, 2, "факт"),
     ],
 )
-def test_marker_word_on_a_part_without_a_year(
-    text: str, quarter: int | None, half: int | None, marker: str
+def test_residual_on_a_part_without_a_year(
+    text: str, quarter: int | None, half: int | None, residual: str
 ) -> None:
     atom = classify_atom(text)
     assert atom is not None
@@ -279,9 +260,7 @@ def test_marker_word_on_a_part_without_a_year(
         "period",
         True,
     )
-    assert atom.variant
-    resolved = _marker_word(atom.variant)
-    assert resolved is not None and resolved[0] == marker
+    assert marker_token(atom.variant) == residual
 
 
 def test_year_row_over_marker_tagged_quarter_keeps_the_marker() -> None:
@@ -331,77 +310,67 @@ def test_words_starting_like_a_marker_are_not_markers(text: str) -> None:
 
 
 @pytest.mark.parametrize("text", ["Actuals", "Historical", "Факт", "фактический", "Плановый"])
-def test_marker_words_and_russian_inflections_are_markers(text: str) -> None:
-    atom = classify_atom(text)
-    assert atom is not None and atom.kind == "marker"
-
-
-@pytest.mark.parametrize(
-    ("text", "marker", "period_key"),
-    [
-        ("Бюджет 2026", "plan", "2026"),
-        ("2026 бюджет", "plan", "2026"),
-        ("Бюджетный 2026", "plan", "2026"),
-        ("Plan 2026", "plan", "2026"),
-        ("2026 Plan", "plan", "2026"),
-        ("Оценка 2025", "plan", "2025"),
-        ("2025 (оценка)", "plan", "2025"),
-        ("Ожидание 2025", "plan", "2025"),
-        ("Ожид. 2025", "plan", "2025"),
-    ],
-)
-def test_budget_plan_and_estimate_are_variant_markers(
-    text: str, marker: str, period_key: str
-) -> None:
-    hit = classify_header(text)
-    assert hit is not None
-    assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
-    assert hit.variant
-    resolved = _marker_word(hit.variant)
-    assert resolved is not None and resolved[0] == marker
-
-
-@pytest.mark.parametrize("text", ["Бюджет", "Plan", "Оценка", "Ожид."])
-def test_bare_budget_plan_and_estimate_are_markers(text: str) -> None:
-    hit = classify_header(text)
-    assert hit is not None
-    assert hit.kind == "period"
-    assert hit.period_key == "plan"
-    assert hit.variant
-    assert hit.explicit_role is True
-
-
-@pytest.mark.parametrize("text", ["Plant 2026", "Planning", "Plants", "Histogram"])
-def test_words_near_plan_are_not_plan_markers(text: str) -> None:
+def test_bare_marker_words_are_not_periods(text: str) -> None:
+    assert classify_atom(text) is None
     assert classify_header(text) is None
 
 
 @pytest.mark.parametrize(
-    ("text", "marker", "period_key"),
+    ("text", "residual", "period_key"),
     [
-        ("2025П", "plan", "2025"),
-        ("2025Ф", "actual", "2025"),
-        ("2025A", "actual", "2025"),
-        ("1 кв. 2025П", "plan", "2025Q1"),
-        ("1 кв. 2025Ф", "actual", "2025Q1"),
-        ("1 кв. 2025A", "actual", "2025Q1"),
-        ("Q2 2025П", "plan", "2025Q2"),
-        ("1 полугодие 2025П", "plan", "2025H1"),
-        ("1 полугодие 2025Ф", "actual", "2025H1"),
-        ("H1 2025A", "actual", "2025H1"),
-        ("01.2025П", "plan", "2025-01"),
-        ("01.2025A", "actual", "2025-01"),
-        ("янв.25П", "plan", "2025-01"),
-        ("янв.25A", "actual", "2025-01"),
+        ("Бюджет 2026", "бюджет", "2026"),
+        ("2026 бюджет", "бюджет", "2026"),
+        ("Бюджетный 2026", "бюджетный", "2026"),
+        ("Plan 2026", "plan", "2026"),
+        ("2026 Plan", "plan", "2026"),
+        ("Оценка 2025", "оценка", "2025"),
+        ("2025 (оценка)", "оценка", "2025"),
+        ("Ожидание 2025", "ожидание", "2025"),
+        ("Ожид. 2025", "ожид", "2025"),
+        ("Plant 2026", "plant", "2026"),
+        ("Estimate 2025", "estimate", "2025"),
+        ("Ожидаемое 2025", "ожидаемое", "2025"),
     ],
 )
-def test_year_suffix_letters_match_on_parts_and_months(
-    text: str, marker: str, period_key: str
-) -> None:
+def test_residual_text_is_not_classified(text: str, residual: str, period_key: str) -> None:
     hit = classify_header(text)
     assert hit is not None
     assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
-    assert _SUFFIX_MARKER[marker_token(hit.variant)] == marker
+    assert marker_token(hit.variant) == residual
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Бюджет", "Plan", "Оценка", "Ожид.", "Planning", "Plants", "Histogram"],
+)
+def test_bare_words_without_a_date_are_not_periods(text: str) -> None:
+    assert classify_header(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "letter", "period_key"),
+    [
+        ("2025П", "п", "2025"),
+        ("2025Ф", "ф", "2025"),
+        ("2025A", "a", "2025"),
+        ("1 кв. 2025П", "п", "2025Q1"),
+        ("1 кв. 2025Ф", "ф", "2025Q1"),
+        ("1 кв. 2025A", "a", "2025Q1"),
+        ("Q2 2025П", "п", "2025Q2"),
+        ("1 полугодие 2025П", "п", "2025H1"),
+        ("1 полугодие 2025Ф", "ф", "2025H1"),
+        ("H1 2025A", "a", "2025H1"),
+        ("01.2025П", "п", "2025-01"),
+        ("01.2025A", "a", "2025-01"),
+        ("янв.25П", "п", "2025-01"),
+        ("янв.25A", "а", "2025-01"),
+    ],
+)
+def test_year_suffix_letters_stay_letters(text: str, letter: str, period_key: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert (hit.period_key, hit.kind, hit.explicit_role) == (period_key, "period", True)
+    assert marker_token(hit.variant) == letter
 
 
 @pytest.mark.parametrize(
@@ -467,7 +436,6 @@ def test_half_word_then_number_composes_with_a_year_row() -> None:
         "1 п/год",
         "1 п/гВт",
         "2P25",
-        "Plant 2026",
     ],
 )
 def test_half_year_spellings_do_not_swallow_nearby_words(text: str) -> None:
@@ -476,39 +444,39 @@ def test_half_year_spellings_do_not_swallow_nearby_words(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "marker", "period_key"),
+    ("text", "letter", "period_key"),
     [
-        ("2025A", "actual", "2025"),
-        ("2025А", "actual", "2025"),
-        ("2025а", "actual", "2025"),
-        ("2025P", "plan", "2025"),
-        ("2025Р", "plan", "2025"),
-        ("2025р", "plan", "2025"),
-        ("2025E", "plan", "2025"),
-        ("2025Е", "plan", "2025"),
-        ("2025П", "plan", "2025"),
-        ("2025Ф", "actual", "2025"),
-        ("1 кв. 2025А", "actual", "2025Q1"),
-        ("1 кв. 2025Р", "plan", "2025Q1"),
+        ("2025A", "a", "2025"),
+        ("2025А", "a", "2025"),
+        ("2025а", "a", "2025"),
+        ("2025P", "p", "2025"),
+        ("2025Р", "p", "2025"),
+        ("2025р", "p", "2025"),
+        ("2025E", "e", "2025"),
+        ("2025Е", "e", "2025"),
+        ("2025П", "п", "2025"),
+        ("2025Ф", "ф", "2025"),
+        ("1 кв. 2025А", "a", "2025Q1"),
+        ("1 кв. 2025Р", "p", "2025Q1"),
         ("Н1 2025", None, "2025H1"),
         ("н2 2025", None, "2025H2"),
         ("1Н25", None, "2025H1"),
         ("2н2025", None, "2025H2"),
     ],
 )
-def test_cyrillic_lookalikes_in_period_codes_keep_suffix_markers(
-    text: str, marker: str | None, period_key: str
+def test_cyrillic_lookalikes_in_period_codes_keep_suffix_letters(
+    text: str, letter: str | None, period_key: str
 ) -> None:
     hit = classify_header(text)
     assert hit is not None
     assert hit.kind == "period"
     assert hit.period_key == period_key
-    if marker is None:
+    if letter is None:
         assert hit.variant is None
         assert hit.explicit_role is False
     else:
         assert hit.explicit_role is True
-        assert _SUFFIX_MARKER[marker_token(hit.variant)] == marker
+        assert marker_token(hit.variant) == letter
 
 
 def test_cyrillic_en_without_a_year_is_a_half_token() -> None:
@@ -523,11 +491,7 @@ def test_cyrillic_en_without_a_year_is_a_half_token() -> None:
     ["2025Н", "Начало", "Нет", "1Нет", "Факт", "План", "2025 график", "History"],
 )
 def test_lookalike_letters_do_not_rewrite_russian_words(text: str) -> None:
-    hit = classify_header(text)
-    if text in {"Факт", "План"}:
-        assert hit is not None and hit.period_key in {"actual", "plan"}
-    else:
-        assert hit is None
+    assert classify_header(text) is None
 
 
 @pytest.mark.parametrize(
@@ -659,7 +623,7 @@ def test_scenario_words_do_not_match_loose_phrases(text: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["9М 2025", "FY2025/26", "Ожидаемое 2025", "Estimate 2025", "2025/26", "Год 1", "Year 3"],
+    ["9М 2025", "FY2025/26", "2025/26", "Год 1", "Year 3"],
 )
 def test_unparsed_header_with_a_year_or_model_period_is_period_like(text: str) -> None:
     from finance_context.layout.periods import period_like_header
@@ -674,7 +638,6 @@ def test_parsed_period_or_plain_caption_is_not_period_like(text: str) -> None:
     from finance_context.layout.periods import period_like_header
 
     assert not period_like_header(text)
-
 
 
 @pytest.mark.parametrize(

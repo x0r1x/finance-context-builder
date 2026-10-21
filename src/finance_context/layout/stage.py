@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 from finance_context.layout.models import Layout
 from finance_context.store.fs import read_parquet, write_json
@@ -26,6 +27,7 @@ def layout_workbook(
     hidden_columns: dict[str, set[int]] = {}
     hidden_rows: dict[str, set[int]] | None = None
     summary_below: dict[str, bool] = {}
+    meta: dict | None = None
     meta_path = dest_dir / "raw" / "workbook.json"
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -45,6 +47,7 @@ def layout_workbook(
                 hidden_rows[name] = rows
             if "summary_below" in sheet:
                 summary_below[name] = bool(sheet.get("summary_below"))
+    cells = _overlay_merges(cells, meta)
     layout = detect_layout(
         cells,
         date1904=date1904,
@@ -56,6 +59,41 @@ def layout_workbook(
     )
     write_json(dest_dir / "layout.json", layout.model_dump(mode="json"))
     return layout
+
+
+def _overlay_merges(cells: list[dict], meta: dict | None) -> list[dict]:
+    """Copy merge spans onto anchor cells. The context schema does not store them."""
+    if not meta:
+        return cells
+    spans: dict[tuple[str, int, int], int] = {}
+    for sheet in meta.get("sheets") or []:
+        if not isinstance(sheet, dict):
+            continue
+        name = str(sheet.get("name") or "")
+        for ref in sheet.get("merges") or []:
+            if not isinstance(ref, str) or ":" not in ref:
+                continue
+            start, end = ref.split(":", 1)
+            try:
+                col, row = parse_addr(start)
+                end_col, _end_row = parse_addr(end)
+            except ValueError:
+                continue
+            if end_col > col:
+                spans[(name, row, col)] = end_col
+    if not spans:
+        return cells
+    updated: list[dict] = []
+    for cell in cells:
+        key = (str(cell.get("sheet")), int(cell.get("row") or 0), int(cell.get("col") or 0))
+        end_col = spans.get(key)
+        if end_col is None:
+            updated.append(cell)
+            continue
+        copied = dict(cell)
+        copied["merge_end_col"] = end_col
+        updated.append(copied)
+    return updated
 
 
 def _overlay_parse_facts(dest_dir: Path, cells: list[dict]) -> list[dict]:

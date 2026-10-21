@@ -7,13 +7,13 @@ from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import _cell_at, _is_int_text, _is_number, _text
+from finance_context.layout.markers import apply_axis_markers
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
 from finance_context.layout.periods import (
     _HALF_KEY,
     LAYER_BOUNDS,
     LAYER_DATE,
     LAYER_HALF,
-    LAYER_MARKER,
     LAYER_MONTH,
     LAYER_QUARTER,
     LAYER_YEAR,
@@ -24,7 +24,6 @@ from finance_context.layout.periods import (
     compose_period,
     infer_grain,
     is_end_period_label,
-    is_marker_text,
     is_month_label,
     is_quarter_label,
     is_start_period_label,
@@ -459,25 +458,8 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
         if not _is_starter_row(by_row[row_n], date1904):
             i += 1
             continue
-        prefix: list[int] = []
-        k = i - 1
-        prev_max = max(bands[-1]) if bands else -1
-        while k >= 0 and rows[k] > prev_max:
-            prev = rows[k]
-            prev_cells = by_row[prev]
-            if _is_empty_row(prev_cells, date1904):
-                k -= 1
-                continue
-            prev_layers = _row_layers(prev_cells, date1904)
-            if prev_layers <= {LAYER_MARKER} and LAYER_MARKER in prev_layers:
-                prefix.insert(0, prev)
-                k -= 1
-                continue
-            break
         layers = _row_layers(by_row[row_n], date1904)
-        for prow in prefix:
-            layers |= _row_layers(by_row[prow], date1904)
-        band = prefix + [row_n]
+        band = [row_n]
         j = i + 1
         while j < len(rows):
             nxt = rows[j]
@@ -492,19 +474,6 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
             new_layers = _row_layers(cells, date1904)
             if not new_layers:
                 break
-            if new_layers <= {LAYER_MARKER} and (layers & _CALENDAR_LAYERS):
-                marker_cols = [
-                    int(cell["col"])
-                    for cell in cells
-                    if is_marker_text(_text(cell, date1904))
-                ]
-                calendar_cols = _band_calendar_cols(band, by_row, date1904)
-                if marker_cols and all(col not in calendar_cols for col in marker_cols):
-                    break
-                layers |= new_layers
-                band.append(nxt)
-                j += 1
-                continue
             overlap = layers & new_layers & {LAYER_YEAR, LAYER_DATE}
             if (
                 overlap
@@ -599,7 +568,6 @@ def _axes_from_band(
     allow_m = any(
         is_month_label(_row_label(by_row[row_n], date1904)) for row_n in band_rows
     )
-    marker_runs = _marker_runs(band_rows, by_row, cols, date1904, prefer_end=prefer_end)
     labels = {row_n: _row_label(by_row[row_n], date1904) for row_n in band_rows}
     start_rows = [row_n for row_n in band_rows if is_start_period_label(labels[row_n])]
     end_rows = [row_n for row_n in band_rows if is_end_period_label(labels[row_n])]
@@ -638,7 +606,7 @@ def _axes_from_band(
         if hit.period_key[:4].isdigit():
             year_hint = hit.period_key[:4]
         text = _column_text(col, band_rows, by_row, date1904, prefer_end=prefer_end)
-        kind, variant, explicit_role = _column_mark(col, atoms, hit, marker_runs)
+        kind, variant, explicit_role = _column_mark(atoms, hit)
         composed.append(
             AxisHeader(
                 col=col,
@@ -670,29 +638,37 @@ def _axes_from_band(
         axis_id = f"{sheet}!r{header_row}"
         if multi:
             axis_id = f"{axis_id}c{headers[0].col}"
-        periods = disambiguate_period_keys(
-            [
-                AxisPeriod(
-                    col=header.col,
-                    text=header.text,
-                    kind=header.kind or "period",
-                    variant=header.variant,
-                    period_key=header.period_key,
-                    explicit_role=header.explicit_role,
-                    group_key=_banner_group(header.period_key, banner_years.get(header.col)),
-                    start_date=bounds.get(header.col, (None, None))[0],
-                    end_date=bounds.get(header.col, (None, None))[1],
-                    hidden=header.col in known_hidden,
-                )
-                for header in headers
-            ]
+        drafted = [
+            AxisPeriod(
+                col=header.col,
+                text=header.text,
+                kind=header.kind or "period",
+                variant=header.variant,
+                period_key=header.period_key,
+                explicit_role=header.explicit_role,
+                group_key=_banner_group(header.period_key, banner_years.get(header.col)),
+                start_date=bounds.get(header.col, (None, None))[0],
+                end_date=bounds.get(header.col, (None, None))[1],
+                hidden=header.col in known_hidden,
+            )
+            for header in headers
+        ]
+        marked, notes = apply_axis_markers(
+            drafted,
+            sheet=sheet,
+            header_row=header_row,
+            by_row=by_row,
+            date1904=date1904,
+            banner_row=min(band_rows) - 1,
         )
+        periods = disambiguate_period_keys(marked)
         axes.append(
             TimeAxis(
                 id=axis_id,
                 grain=grain,
                 header_row=header_row,
                 periods=periods,
+                notes=notes,
             )
         )
     return axes
@@ -883,88 +859,11 @@ def disambiguate_period_keys(periods: list[AxisPeriod]) -> list[AxisPeriod]:
     ]
 
 
-def _column_mark(
-    col: int, atoms: list[HeaderAtom], hit, variant_runs: dict[int, str]
-) -> tuple[str, str | None, bool]:
+def _column_mark(atoms: list[HeaderAtom], hit) -> tuple[str, str | None, bool]:
     for atom in atoms:
         if atom.explicit_role and atom.variant and atom.column_kind in {"period", "stub", None}:
-            if atom.kind == "full" and atom.period_key in {"actual", "plan"}:
-                continue
             return atom.column_kind or "period", atom.variant, True
-    for atom in atoms:
-        if atom.kind == "marker" and atom.variant:
-            return "period", atom.variant, True
-    if col in variant_runs:
-        return "period", variant_runs[col], True
     return hit.kind, hit.variant, bool(getattr(hit, "explicit_role", False))
-
-
-def _marker_runs(
-    band_rows: list[int],
-    by_row: dict[int, list[dict]],
-    cols: list[int],
-    date1904: bool,
-    *,
-    prefer_end: bool,
-) -> dict[int, str]:
-    calendar_cols = {
-        col
-        for col in cols
-        if any(
-            atom.kind in {"full", "quarter_token", "half_token", "month_num"}
-            or atom.year
-            or atom.quarter
-            or atom.half
-            or atom.month
-            for atom in _column_atoms(
-                col,
-                band_rows,
-                by_row,
-                date1904,
-                allow_q=True,
-                allow_m=True,
-                prefer_end=prefer_end,
-            )
-            if atom.kind != "marker"
-        )
-    }
-    assigned: dict[int, str] = {}
-    # Columns painted by a banner that sits off the calendar. An on-column marker
-    # under that banner overrides only its own column.
-    banner_cols: set[int] = set()
-    for row_n in band_rows:
-        markers: list[tuple[int, str]] = []
-        for cell in sorted(by_row[row_n], key=lambda c: int(c["col"])):
-            text = _text(cell, date1904)
-            if is_marker_text(text):
-                hit = classify_header(text)
-                if hit is not None and hit.variant and hit.period_key in {"actual", "plan"}:
-                    markers.append((int(cell["col"]), hit.variant))
-        if not markers:
-            continue
-        off = [(col, surface) for col, surface in markers if col not in calendar_cols]
-        on = [(col, surface) for col, surface in markers if col in calendar_cols]
-        for index, (mcol, surface) in enumerate(off):
-            right = off[index + 1][0] if index + 1 < len(off) else max(cols) + 1
-            for col in cols:
-                if col >= mcol and col < right:
-                    assigned[col] = surface
-                    banner_cols.add(col)
-        if len(off) == 1:
-            _mcol, surface = off[0]
-            for col in cols:
-                if col not in assigned:
-                    assigned[col] = surface
-                    banner_cols.add(col)
-        for index, (mcol, surface) in enumerate(on):
-            if mcol in banner_cols:
-                assigned[mcol] = surface
-                continue
-            right = on[index + 1][0] if index + 1 < len(on) else max(cols) + 1
-            for col in cols:
-                if col >= mcol and col < right and col not in banner_cols:
-                    assigned[col] = surface
-    return assigned
 
 
 def _band_prefers_end(

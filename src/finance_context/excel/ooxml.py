@@ -438,7 +438,22 @@ def _parse_sheet(
         )
     sheet.info.hidden_rows = hidden_rows
     sheet.info.hidden_cols = sorted(hidden_cols)
+    sheet.info.merges = _merge_refs(root)
     return cells, presence
+
+
+def _merge_refs(root: etree._Element) -> list[str]:
+    """Horizontal merge spans. The anchor cell keeps the text; layout reads the span."""
+    node = find_child(root, "mergeCells")
+    if node is None:
+        return []
+    found: list[str] = []
+    for child in children(node, "mergeCell"):
+        ref = child.get("ref") or ""
+        if ":" not in ref:
+            continue
+        found.append(ref.replace("$", ""))
+    return found
 
 
 def _summary_below(root: etree._Element) -> bool:

@@ -16,13 +16,13 @@
     {"text": "кВт", "period": null, "quarter": false},
     {"text": "квота 2025", "period": null},
     {"text": "график 2025", "period": null},
-    {"text": "Histogram 2024", "period": null},
+    {"text": "Histogram 2024", "period_key": "2024", "explicit_role": true},
     {"text": "History", "period": null},
     {"text": "фактор", "period": null},
     {"text": "планета", "period": null},
     {"text": "Q5 2025", "period": null, "unparsed": true},
     {"text": "1.2025", "period": null, "unparsed": true},
     {"text": "13.2024", "period": null, "unparsed": true},
-    {"text": "Revenue 2024", "period": null, "unparsed": false}
+    {"text": "Revenue 2024", "period_key": "2024", "explicit_role": true, "unparsed": false}
   ]
 }

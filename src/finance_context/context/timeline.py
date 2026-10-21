@@ -39,6 +39,9 @@ def build_axes(
             built.timeline_id = timeline_of.get(built.id, built.id)
             axes.append(built)
     warnings = _unparsed_period_warnings(cells, date1904)
+    for sheet in layout.sheets:
+        for axis in sheet.axes:
+            warnings.extend(axis.notes)
     return axes, warnings
 
 
