@@ -4,7 +4,7 @@ import re
 from collections import Counter, defaultdict
 
 from finance_context.excel.a1 import format_addr, in_grid, index_to_col, parse_addr
-from finance_context.layout.lexicon import header_role_map
+from finance_context.layout.format_words import header_role_map
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text, period_like_header
 from finance_context.layout.units import is_unit_text
@@ -39,7 +39,7 @@ def detect_params_block(
     label_col = _label_column(by_row, date1904, roles)
     value_cols = [col for col, role in roles.items() if role == "value"]
     if not value_cols:
-        # Numbers under headers the lexicon does not know stay as ``unknown``
+        # Numbers under a header that is not a role word stay ``unknown``
         # columns. Context warns about them; dropping the table would be silent.
         numeric = _numeric_columns(by_row, date1904)
         value_cols = [col for col, role in roles.items() if role == "unknown" and numeric[col]]
@@ -775,7 +775,7 @@ def _apply_value_column_roles(
 ) -> None:
     """A column of unit tokens or prose is ``unit`` or ``note`` even with a weak header.
 
-    The header lexicon is a boost. A strong value signal wins over it. Scenario,
+    The header word is a boost. A strong value signal wins over it. Scenario,
     index, label and numeric value columns stay as they are.
     """
     for col, texts in _column_bodies(by_row, date1904).items():
@@ -1156,7 +1156,7 @@ _HEADER_QUALIFIER_WORD_CHARS = 20
 
 
 def _header_role(text: str) -> str | None:
-    """Lexicon role of a header cell.
+    """Format-word role of a header cell.
 
     An exact normalized caption wins. Otherwise the first word may carry the role
     when at most two short qualifiers follow it (``Комментарии КП``,

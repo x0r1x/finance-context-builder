@@ -1,10 +1,10 @@
-"""Closed lists of format words. The parser does not stem and does not overlay.
+"""Closed lists of format words.
 
-Calendar words, month names, totals, stubs and units-as-headers live here.
+Calendar words, month names, totals, stubs and header-role hints live here.
 A word matches whole. A longer word matches only when the extra part is one
 grammatical ending from ``_INFLECTIONS`` or one closed paradigm. Words of at
 most three letters stay exact, so ``кв`` is not ``квота`` and ``г`` is not
-``график``. There is no stemmer and no user lexicon file.
+``график``.
 """
 
 from __future__ import annotations
@@ -52,8 +52,7 @@ _INFLECTIONS = frozenset(
     }
 )
 
-_HEADER_ROLES: dict[str, tuple[str, ...]] = {
-    "label": (
+LABEL_WORDS: tuple[str, ...] = (
         "parameter",
         "parameters",
         "item",
@@ -75,8 +74,8 @@ _HEADER_ROLES: dict[str, tuple[str, ...]] = {
         "предпосылки",
         "проверка",
         "исходные данные",
-    ),
-    "value": (
+)
+VALUE_WORDS: tuple[str, ...] = (
         "value",
         "values",
         "active",
@@ -87,8 +86,8 @@ _HEADER_ROLES: dict[str, tuple[str, ...]] = {
         "значение руб",
         "величина",
         "результат",
-    ),
-    "unit": (
+)
+UNIT_WORDS: tuple[str, ...] = (
         "unit",
         "units",
         "unit of measure",
@@ -102,8 +101,8 @@ _HEADER_ROLES: dict[str, tuple[str, ...]] = {
         "единица измерения",
         "единицы измерения",
         "размерность",
-    ),
-    "note": (
+)
+NOTE_WORDS: tuple[str, ...] = (
         "note",
         "notes",
         "comment",
@@ -121,17 +120,20 @@ _HEADER_ROLES: dict[str, tuple[str, ...]] = {
         "мероприятия",
         "вывод",
         "выводы",
-    ),
+)
+
+_HEADER_ROLES: dict[str, tuple[str, ...]] = {
+    "label": LABEL_WORDS,
+    "value": VALUE_WORDS,
+    "unit": UNIT_WORDS,
+    "note": NOTE_WORDS,
 }
 
-_PERIOD_WORDS: dict[str, tuple[str, ...]] = {
-    "quarter": ("кв", "квартал", "quarter"),
-    "half": ("полугодие", "half", "пол"),
-    "year": ("г", "гг", "год", "года", "году"),
-}
-
-_TOTAL_WORDS = ("итого", "всего", "total", "sum", "итог")
-_STUB_WORDS = ("stub", "частичный", "partial")
+QUARTER_WORDS = ("кв", "квартал", "quarter")
+HALF_WORDS = ("полугодие", "half", "пол")
+YEAR_WORDS = ("г", "гг", "год", "года", "году")
+TOTAL_WORDS = ("итого", "всего", "total", "sum", "итог")
+STUB_WORDS = ("stub", "частичный", "partial")
 
 # Citation forms. ``month_numbers`` adds the closed set of case endings.
 _MONTH_CITATIONS: dict[str, tuple[str, ...]] = {
@@ -149,15 +151,15 @@ _MONTH_CITATIONS: dict[str, tuple[str, ...]] = {
     "12": ("dec", "december", "дек", "декабрь"),
 }
 
-_QUARTER_LABEL = ("квартал", "квартальный", "quarter", "quarterly")
-_MONTH_LABEL = ("месяц", "month")
-_PERIOD_START = (
+QUARTER_LABEL_WORDS = ("квартал", "квартальный", "quarter", "quarterly")
+MONTH_LABEL_WORDS = ("месяц", "month")
+PERIOD_START_WORDS = (
     "начало периода",
     "начала периода",
     "start of period",
     "period start",
 )
-_PERIOD_END = (
+PERIOD_END_WORDS = (
     "конец периода",
     "конца периода",
     "end of period",
@@ -165,7 +167,7 @@ _PERIOD_END = (
 )
 
 # Surfaces that sit beside a date and are not period words. The residual
-# peel rejects them. This is a closed list, not a stemmer block.
+# peel rejects them.
 _NOT_PERIOD = frozenset(
     {
         "квт",
@@ -180,36 +182,11 @@ _NOT_PERIOD = frozenset(
     }
 )
 
-_LISTS: dict[tuple[str, ...], tuple[str, ...]] = {
-    ("header_roles", "label"): _HEADER_ROLES["label"],
-    ("header_roles", "value"): _HEADER_ROLES["value"],
-    ("header_roles", "unit"): _HEADER_ROLES["unit"],
-    ("header_roles", "note"): _HEADER_ROLES["note"],
-    ("period_words", "quarter"): _PERIOD_WORDS["quarter"],
-    ("period_words", "half"): _PERIOD_WORDS["half"],
-    ("period_words", "year"): _PERIOD_WORDS["year"],
-    ("structural", "total"): _TOTAL_WORDS,
-    ("structural", "stub"): _STUB_WORDS,
-    ("structural", "quarter_label"): _QUARTER_LABEL,
-    ("structural", "month_label"): _MONTH_LABEL,
-    ("structural", "period_start"): _PERIOD_START,
-    ("structural", "period_end"): _PERIOD_END,
-}
-
-
-def data_token() -> str:
-    """Stable token. Format words are code, so nothing outside the package restales them."""
-    return "format-words"
-
-
-def words(*path: str) -> tuple[str, ...]:
-    return _LISTS[path]
-
 
 def is_total_word(text: str | None) -> bool:
     """A total hint. Arithmetic, not this word, decides the column."""
     folded = _fold(text or "").strip(".")
-    return bool(folded) and any(matches_entry(folded, entry) for entry in _TOTAL_WORDS)
+    return bool(folded) and any(matches_entry(folded, entry) for entry in TOTAL_WORDS)
 
 
 def blocked_surface(surface: str) -> bool:
@@ -237,12 +214,13 @@ def matches_entry(surface: str, entry: str) -> bool:
     return _same_paradigm(token, root)
 
 
-def accepts(*path: str, surface: str) -> bool:
-    return any(matches_entry(surface, entry) for entry in words(*path))
+def accepts(entries: tuple[str, ...], surface: str) -> bool:
+    """True when ``surface`` matches one word in ``entries``."""
+    return any(matches_entry(surface, entry) for entry in entries)
 
 
 def _paradigm(root: str) -> tuple[str, frozenset[str]] | None:
-    """Stem and endings when ``root`` is a citation form, not a bare suffix."""
+    """Citation root and endings when ``root`` is a citation form, not a bare suffix."""
     for ending, forms in _PARADIGMS:
         if not root.endswith(ending) or len(root) - len(ending) < 4:
             continue
@@ -272,15 +250,11 @@ def _candidate(entry: str) -> str:
 
 
 @cache
-def _pattern(path: tuple[str, ...]) -> str:
-    items = sorted(words(*path), key=len, reverse=True)
+def pattern(entries: tuple[str, ...]) -> str:
+    """Candidate regex for ``entries``. Callers that embed it confirm the hit with ``accepts``."""
+    items = sorted(entries, key=len, reverse=True)
     alts = [_candidate(entry) for entry in items]
     return rf"(?:{'|'.join(alts)})(?![^\W\d_])"
-
-
-def pattern(*path: str) -> str:
-    """Candidate regex. Callers that embed it confirm the hit with ``accepts``."""
-    return _pattern(path)
 
 
 class _Hit:
@@ -295,31 +269,27 @@ class _Hit:
 
 
 class _Searcher:
-    def __init__(self, path: tuple[str, ...]) -> None:
-        self.path = path
+    def __init__(self, entries: tuple[str, ...]) -> None:
+        self.entries = entries
 
     def search(self, text: str) -> _Hit | None:
         folded = _fold(text)
-        for entry in words(*self.path):
+        for entry in self.entries:
             root = _fold(entry)
             if " " not in root:
                 continue
             if re.search(rf"(?<!\w){re.escape(root)}(?![^\W\d_])", folded):
                 return _Hit(root)
-        for match in re.finditer(rf"(?<!\w){_pattern(self.path)}", folded):
-            if accepts(*self.path, surface=match.group(0)):
+        for match in re.finditer(rf"(?<!\w){pattern(self.entries)}", folded):
+            if accepts(self.entries, match.group(0)):
                 return _Hit(match.group(0))
         return None
 
 
 @cache
-def _searcher(path: tuple[str, ...]) -> _Searcher:
-    return _Searcher(path)
-
-
-def searcher(*path: str) -> _Searcher:
+def searcher(entries: tuple[str, ...]) -> _Searcher:
     """Scan of one normalized label. Built once per word list."""
-    return _searcher(path)
+    return _Searcher(entries)
 
 
 def header_role_map() -> dict[str, str]:

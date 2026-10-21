@@ -544,7 +544,7 @@ def _header_unit(sheet, block, by_addr: dict, date1904: bool) -> str | None:
 
 
 def _unknown_header_warnings(layout: Layout) -> list[str]:
-    """Params columns the lexicon did not name. Their values stay, the role is ``unknown``.
+    """Params columns whose header is not a format word. Their values stay, the role is ``unknown``.
 
     Two or more period headers mean a timeline whose axis did not form: some did
     not parse (``9М 2025``), or a miss between parsed ones broke the run.
