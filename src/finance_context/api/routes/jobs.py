@@ -319,6 +319,8 @@ def _job_body(job_id: str, meta: dict) -> dict:
         "warnings": meta.get("warnings") or [],
         "error": meta.get("error"),
     }
+    if meta.get("detail"):
+        body["detail"] = meta.get("detail")
     if meta.get("status") not in {"queued", "running", None}:
         body["context_json_url"] = f"/v1/context-jobs/{job_id}/context.json"
         body["context_md_url"] = f"/v1/context-jobs/{job_id}/context.md"

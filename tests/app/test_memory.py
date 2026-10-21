@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+import io
+import json
+import logging
+import multiprocessing
+import os
+from pathlib import Path
+
+from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
+
+from finance_context.app.pipeline import _timed, run_job_process
+from finance_context.errors import ContextError
+from finance_context.excel import parse_workbook
+from finance_context.formulas.csr import RANGE_EXPAND_CAP, expand_range, expansion_count
+from finance_context.memory import (
+    BYTES_PER_EXPANDED_CELL,
+    BYTES_PER_FORMULA,
+    assess_raw,
+    cgroup_memory_limit_bytes,
+    check_budget,
+    estimate_bytes,
+    formula_targets,
+    prefer_oom_kill,
+    resolve_job_budget_bytes,
+)
+from finance_context.observability import JsonFormatter
+from finance_context.settings import Settings
+from finance_context.store.paths import session_job_dir, shared_book_dir
+
+
+def test_arrow_pool_defaults_to_system() -> None:
+    assert os.environ.get("ARROW_DEFAULT_MEMORY_POOL") == "system"
+
+
+def test_expansion_count_matches_expand_range_including_the_cap() -> None:
+    small = "Sheet1!A1:B2"
+    assert expansion_count(small) == len(expand_range(small)[0]) == 4
+    wide = "Sheet1!B1:B2500"
+    cells, truncated = expand_range(wide)
+    assert truncated is True
+    assert len(cells) == RANGE_EXPAND_CAP
+    assert expansion_count(wide) == RANGE_EXPAND_CAP
+    assert expansion_count("Data!$A:$A") == RANGE_EXPAND_CAP
+    assert expansion_count("Data!1:1") == RANGE_EXPAND_CAP
+
+
+def test_formula_targets_count_whole_columns_and_skip_strings() -> None:
+    formula = '=SUMIF(Data!$A:$A,$A2,Data!C:C)&"A1:A9"'
+    targets = formula_targets(formula, "Report")
+    assert targets == ["Data!$A:$A", "Report!$A2", "Data!C:C"]
+    assert sum(expansion_count(target) for target in targets) == RANGE_EXPAND_CAP * 2 + 1
+
+
+def test_budget_reserves_a_quarter_and_splits_the_rest() -> None:
+    limit = 4_000_000_000
+    budget = resolve_job_budget_bytes(slots=2, limit_bytes=limit, read_cgroup=False)
+    assert budget == (limit - limit // 4) // 2
+
+
+def test_budget_override_is_the_per_job_cap() -> None:
+    budget = resolve_job_budget_bytes(
+        slots=2,
+        override=1234,
+        limit_bytes=4_000_000_000,
+        read_cgroup=False,
+    )
+    assert budget == 1234
+
+
+def test_unlimited_cgroup_has_no_budget() -> None:
+    assert resolve_job_budget_bytes(slots=2, limit_bytes=None, read_cgroup=False) is None
+
+
+def test_settings_blank_budget_derives(monkeypatch) -> None:
+    monkeypatch.delenv("JOB_MEMORY_BUDGET_BYTES", raising=False)
+    settings = Settings(_env_file=None, job_memory_budget_bytes="")
+    assert settings.job_memory_budget_bytes is None
+
+
+def test_cgroup_v2_uses_the_tightest_memory_max(tmp_path: Path) -> None:
+    sysfs = tmp_path / "sys"
+    pod = sysfs / "kubepods" / "pod"
+    pod.mkdir(parents=True)
+    (sysfs / "memory.max").write_text("max\n", encoding="utf-8")
+    (sysfs / "kubepods" / "memory.max").write_text("9000\n", encoding="utf-8")
+    (pod / "memory.max").write_text("max\n", encoding="utf-8")
+    proc = tmp_path / "cgroup"
+    proc.write_text("0::/kubepods/pod\n", encoding="utf-8")
+    assert cgroup_memory_limit_bytes(proc, sysfs) == 9000
+
+
+def test_cgroup_v1_ignores_the_unlimited_sentinel(tmp_path: Path) -> None:
+    sysfs = tmp_path / "sys"
+    slot = sysfs / "memory" / "docker" / "abc"
+    slot.mkdir(parents=True)
+    (slot / "memory.limit_in_bytes").write_text(str(1 << 62), encoding="utf-8")
+    (sysfs / "memory" / "memory.limit_in_bytes").write_text("4000\n", encoding="utf-8")
+    proc = tmp_path / "cgroup"
+    proc.write_text("4:memory:/docker/abc\n", encoding="utf-8")
+    assert cgroup_memory_limit_bytes(proc, sysfs) == 4000
+
+
+def test_estimate_is_linear_in_formulas_and_expanded_cells() -> None:
+    assert estimate_bytes(formulas=2, expanded_cells=3) == (
+        2 * BYTES_PER_FORMULA + 3 * BYTES_PER_EXPANDED_CELL
+    )
+
+
+def test_stage_done_carries_rss_counts_and_budget() -> None:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    logger = logging.getLogger("finance_context.pipeline")
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        _timed(
+            "compile",
+            lambda: None,
+            {"cells": 4, "formulas": 2, "estimate_bytes": 10, "budget_bytes": 20},
+        )
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    payloads = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+    assert [row["event"] for row in payloads] == ["stage_done"]
+    row = payloads[0]
+    assert row["msg"] == "compile done"
+    assert row["logger"] == "finance_context.pipeline"
+    assert isinstance(row["duration_ms"], int)
+    assert row["rss_in_mb"] >= 0
+    assert row["rss_out_mb"] >= 0
+    assert row["rss_peak_mb"] >= 0
+    assert row["cells"] == 4
+    assert row["formulas"] == 2
+    assert row["estimate_bytes"] == 10
+    assert row["budget_bytes"] == 20
+
+
+def test_check_budget_refuses_with_a_human_message() -> None:
+    try:
+        check_budget(formulas=10, expanded_cells=10, budget=1, source="preflight")
+    except ContextError as exc:
+        assert exc.code == "workbook_too_large"
+        assert "too large" in exc.detail
+        assert "MiB" in exc.detail
+    else:
+        raise AssertionError("expected workbook_too_large")
+
+
+def test_prefer_oom_kill_writes_the_score(tmp_path: Path) -> None:
+    path = tmp_path / "oom_score_adj"
+    prefer_oom_kill(path)
+    assert path.read_text(encoding="utf-8") == "1000"
+
+
+def _print_oom_score() -> None:
+    prefer_oom_kill()
+    score = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8").strip()
+    if score != "1000":
+        raise SystemExit(score or "empty")
+
+
+def test_oom_score_adj_is_writable_unprivileged() -> None:
+    proc = multiprocessing.get_context("spawn").Process(target=_print_oom_score)
+    proc.start()
+    proc.join(10)
+    assert proc.exitcode == 0
+
+
+def _book(path: Path) -> None:
+    build_xlsx(
+        path,
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="Item"),
+                    CellSpec(addr="B1", value="2024"),
+                    CellSpec(addr="A2", value="Revenue"),
+                    CellSpec(addr="B2", value="10", formula="=B1"),
+                ],
+            )
+        ],
+        shared_strings=["Item", "2024", "Revenue"],
+    )
+
+
+def test_run_job_process_refuses_over_budget_without_a_traceback(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", "1")
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("LOG_JSON", "true")
+    job_id = "job"
+    shared = shared_book_dir(tmp_path, job_id)
+    shared.mkdir(parents=True)
+    _book(shared / "source.xlsx")
+    # run_job_process is in-process here, so put the agent's score back afterwards.
+    previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
+    try:
+        run_job_process(str(tmp_path), job_id)
+    finally:
+        Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["status"] == "failed"
+    assert meta["error"] == "workbook_too_large"
+    assert "too large" in meta["detail"]
+    assert "Traceback" not in text
+    assert "memory_budget" in text
+    assert "memory_refused" in text
+    assert "stage_profile" not in text
+
+
+def test_memory_error_in_the_child_is_workbook_too_large(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", str(8 * 1024**3))
+    monkeypatch.setenv("LOG_JSON", "true")
+
+    def boom(*_args, **_kwargs):
+        raise MemoryError
+
+    monkeypatch.setattr("finance_context.app.pipeline.compile_workbook", boom)
+    job_id = "job"
+    shared = shared_book_dir(tmp_path, job_id)
+    shared.mkdir(parents=True)
+    _book(shared / "source.xlsx")
+    previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
+    try:
+        run_job_process(str(tmp_path), job_id)
+    finally:
+        Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
+    text = capsys.readouterr().out + capsys.readouterr().err
+    meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["error"] == "workbook_too_large"
+    assert "ran out of memory" in meta["detail"]
+    assert "Traceback" not in text
+
+
+def test_assess_raw_counts_formulas(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "model.xlsx"
+    _book(source)
+    parse_workbook(source, dest)
+    estimate = assess_raw(dest)
+    assert estimate.formulas == 1
+    assert estimate.expanded_cells >= 1
+    assert estimate.estimate_bytes == estimate_bytes(
+        formulas=estimate.formulas, expanded_cells=estimate.expanded_cells
+    )

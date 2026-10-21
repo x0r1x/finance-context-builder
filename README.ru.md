@@ -102,6 +102,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 | `unsupported_media_type` | 400 |
 | `empty_file` | 400 |
 | `file_too_large` | 413 |
+| `workbook_too_large` | только `error` джобы |
 | `encrypted_workbook` | 422 |
 | `zip_rejected` | 422 |
 | `conversion_failed` | только `error` джобы |
@@ -110,9 +111,9 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 | `report_not_ready` | 409 |
 | `too_many_jobs` | 429 |
 
-`report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key` или `q` — это `selector_required`, а не вся книга.
+`report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key` или `q` — это `selector_required`, а не вся книга. `workbook_too_large` — завершённая джоба: оценка по формулам и диапазонам или резидентная память выше бюджета одной джобы. `error` — код, `detail` — короткая причина. Трейсбэка нет.
 
-Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `SOFFICE_BIN` (по умолчанию `soffice` / `libreoffice` из `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper и check остаются в блоке со своим `kind`.
+Окружение: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_MEMORY_BUDGET_BYTES` (лимит RSS одной джобы; если не задан — три четверти лимита памяти cgroup, поделённые на `MAX_CONCURRENT_JOBS`, оставшаяся четверть остаётся процессу API), `JOB_TIMEOUT_SEC` (серверный дефолт 3600), `SOFFICE_BIN` (по умолчанию `soffice` / `libreoffice` из `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. См. `.env.example`. Сверх `MAX_CONCURRENT_JOBS` `POST` отвечает 429 `too_many_jobs`. `GET /readyz` сообщает `queue: in_process` и `jobs` — число живых дочерних процессов. Если `DATA_DIR` нельзя создать или в него нельзя записать, ответ 503. Строки flag, helper и check остаются в блоке со своим `kind`. Родитель следит за RSS ребёнка и убивает его при превышении бюджета. Ребёнок ставит `oom_score_adj` в 1000, если ядро позволяет. Каждая строка `stage_done` несёт `duration_ms`, `rss_in_mb`, `rss_out_mb`, `rss_peak_mb` и счётчики стадии. `LOG_LEVEL=DEBUG` добавляет `memory_budget` (оценка против бюджета) и `memory_refused`, если книга отклонена.
 
 ## Данные
 

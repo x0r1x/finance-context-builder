@@ -5,10 +5,11 @@ import json
 from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, parse_addr
-from finance_context.formulas.csr import build_csr, expand_cell_edges
+from finance_context.formulas.csr import build_csr, expand_cell_edges, expanded_edge_count
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
 from finance_context.formulas.models import CompileResult, Edge, ParsedFormula
 from finance_context.formulas.names import resolve_defined_name_edges
+from finance_context.memory import check_budget
 from finance_context.store.fs import read_parquet, write_json, write_parquet
 
 COMPILE_FILES = ("cells.parquet", "edges.parquet", "cell_edges.parquet")
@@ -67,15 +68,18 @@ def canonical_node_id(sheet: str, addr: str) -> str:
     return f"{sheet}!{format_addr(col, row)}"
 
 
-def compile_workbook(dest_dir: Path) -> CompileResult:
+def compile_workbook(dest_dir: Path, *, memory_budget: int | None = None) -> CompileResult:
     meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
     raw_rows = read_parquet(dest_dir / "raw" / "cells.parquet")
     ir_rows: list[tuple[object, ...]] = []
     edges: list[Edge] = []
     extra_nodes: list[str] = []
+    formula_count = 0
     parsed_rows = _parse_rows(engine, raw_rows)
     for row, parsed in zip(raw_rows, parsed_rows, strict=True):
+        if row.get("formula_raw"):
+            formula_count += 1
         extra_nodes.append(canonical_node_id(str(row["sheet"]), str(row["addr"])))
         template = None
         unparsed = False
@@ -103,6 +107,12 @@ def compile_workbook(dest_dir: Path) -> CompileResult:
             )
         )
     resolve_defined_name_edges(edges, meta.get("defined_names"))
+    check_budget(
+        formulas=formula_count,
+        expanded_cells=expanded_edge_count(edges),
+        budget=memory_budget,
+        source="compile",
+    )
     known = set(extra_nodes)
     sheets = {
         str(item["name"] if isinstance(item, dict) else item.name)

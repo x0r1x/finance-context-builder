@@ -54,9 +54,9 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
 
     real_compile = formula_mod.compile_workbook
 
-    def wrapped(dest_dir: Path):
+    def wrapped(dest_dir: Path, **kwargs):
         compiles.append(1)
-        return real_compile(dest_dir)
+        return real_compile(dest_dir, **kwargs)
 
     monkeypatch.setattr(pipeline_mod, "compile_workbook", wrapped)
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))

@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     session_id: str = "local"
     max_upload_bytes: int = 50 * 1024 * 1024
     max_concurrent_jobs: int = _DEFAULT_MAX_CONCURRENT_JOBS
+    # Per-job RSS cap in bytes. Unset means "derive from the cgroup limit".
+    job_memory_budget_bytes: int | None = None
     job_timeout_sec: float = 3600
     soffice_bin: str | None = None
     xls_convert_timeout_sec: float = 300
@@ -38,4 +40,18 @@ class Settings(BaseSettings):
             return _DEFAULT_MAX_CONCURRENT_JOBS
         if number <= 0:
             return _DEFAULT_MAX_CONCURRENT_JOBS
+        return number
+
+    @field_validator("job_memory_budget_bytes", mode="before")
+    @classmethod
+    def optional_positive_budget(cls, value: object, info: ValidationInfo) -> object:
+        del info
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return None
+        if number <= 0:
+            return None
         return number

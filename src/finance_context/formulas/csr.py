@@ -30,12 +30,8 @@ def split_sheet_ref(target: str) -> tuple[str, str]:
     return sheet, body
 
 
-def expand_range(target: str, cap: int = RANGE_EXPAND_CAP) -> tuple[list[str], bool]:
-    sheet, body = split_sheet_ref(target)
-    cell = _CELL.fullmatch(body)
-    if cell:
-        return [f"{sheet}!{format_addr(col_to_index(cell.group(1)), int(cell.group(2)))}"], False
-
+def _rectangle(body: str) -> tuple[int, int, int, int] | None:
+    """Inclusive column/row bounds of a range body, or None when it is not a range."""
     cells_range = re.fullmatch(
         r"\$?([A-Za-z]+)\$?(\d+):\$?([A-Za-z]+)\$?(\d+)", body, re.I
     )
@@ -48,7 +44,7 @@ def expand_range(target: str, cap: int = RANGE_EXPAND_CAP) -> tuple[list[str], b
             c1, c2 = c2, c1
         if r1 > r2:
             r1, r2 = r2, r1
-        return _take(sheet, c1, c2, r1, r2, cap)
+        return c1, c2, r1, r2
 
     cols = _COLS.fullmatch(body)
     if cols:
@@ -56,16 +52,61 @@ def expand_range(target: str, cap: int = RANGE_EXPAND_CAP) -> tuple[list[str], b
         c2 = col_to_index(cols.group(2))
         if c1 > c2:
             c1, c2 = c2, c1
-        return _take(sheet, c1, c2, 1, _EXCEL_MAX_ROW, cap)
+        return c1, c2, 1, _EXCEL_MAX_ROW
 
     rows = _ROWS.fullmatch(body)
     if rows:
         r1, r2 = int(rows.group(1)), int(rows.group(2))
         if r1 > r2:
             r1, r2 = r2, r1
-        return _take(sheet, 1, _EXCEL_MAX_COL, r1, r2, cap)
+        return 1, _EXCEL_MAX_COL, r1, r2
+    return None
 
-    return [target], False
+
+def expansion_count(target: str, cap: int = RANGE_EXPAND_CAP) -> int:
+    """How many cells expand_range would emit. Arithmetic only, so a whole column stays cheap."""
+    try:
+        _sheet, body = split_sheet_ref(target)
+    except ValueError:
+        return 1
+    if _CELL.fullmatch(body):
+        return 1
+    rect = _rectangle(body)
+    if rect is None:
+        return 1
+    c1, c2, r1, r2 = rect
+    area = (c2 - c1 + 1) * (r2 - r1 + 1)
+    if area <= 0:
+        return 0
+    return area if area <= cap else cap
+
+
+def expanded_edge_count(edges: list[Edge]) -> int:
+    """Cell targets expand_cell_edges would walk, before de-duplication."""
+    total = 0
+    for edge in edges:
+        if not edge.target:
+            continue
+        if edge.kind == "range" and not edge.unresolved and "!" in edge.target:
+            try:
+                total += expansion_count(edge.target)
+            except ValueError:
+                total += 1
+            continue
+        total += 1
+    return total
+
+
+def expand_range(target: str, cap: int = RANGE_EXPAND_CAP) -> tuple[list[str], bool]:
+    sheet, body = split_sheet_ref(target)
+    cell = _CELL.fullmatch(body)
+    if cell:
+        return [f"{sheet}!{format_addr(col_to_index(cell.group(1)), int(cell.group(2)))}"], False
+    rect = _rectangle(body)
+    if rect is None:
+        return [target], False
+    c1, c2, r1, r2 = rect
+    return _take(sheet, c1, c2, r1, r2, cap)
 
 
 def _take(

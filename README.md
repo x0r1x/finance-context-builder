@@ -105,6 +105,7 @@ HTTP `error` codes:
 | `unsupported_media_type` | 400 |
 | `empty_file` | 400 |
 | `file_too_large` | 413 |
+| `workbook_too_large` | job `error` only |
 | `encrypted_workbook` | 422 |
 | `zip_rejected` | 422 |
 | `conversion_failed` | job `error` only |
@@ -113,9 +114,9 @@ HTTP `error` codes:
 | `report_not_ready` | 409 |
 | `too_many_jobs` | 429 |
 
-`report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book.
+`report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book. `workbook_too_large` is a finished job: the workbook's formula and range estimate, or its resident memory, is over the per-job budget. `error` is the code and `detail` is the short reason. There is no traceback.
 
-Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_TIMEOUT_SEC` (server default 3600), `SOFFICE_BIN` (default `soffice` / `libreoffice` on `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, and check rows stay in the block with their `kind`.
+Environment: `DATA_DIR`, `SESSION_ID`, `MAX_UPLOAD_BYTES`, `MAX_CONCURRENT_JOBS` (2), `JOB_MEMORY_BUDGET_BYTES` (RSS cap for one job; when unset, three quarters of the cgroup memory limit split across `MAX_CONCURRENT_JOBS`, and the remaining quarter stays with the API process), `JOB_TIMEOUT_SEC` (server default 3600), `SOFFICE_BIN` (default `soffice` / `libreoffice` on `PATH`), `XLS_CONVERT_TIMEOUT_SEC` (300), `LOG_LEVEL`, `LOG_JSON`. See `.env.example`. A `POST` above `MAX_CONCURRENT_JOBS` returns 429 `too_many_jobs`. `GET /readyz` reports `queue: in_process` and `jobs`, the number of live child processes. If `DATA_DIR` cannot be created or written, the response is 503. Flag, helper, and check rows stay in the block with their `kind`. The parent watches each child's resident memory and kills it when it passes the budget. The child sets `oom_score_adj` to 1000 when the kernel allows it. Each `stage_done` line carries `duration_ms`, `rss_in_mb`, `rss_out_mb`, `rss_peak_mb`, and the stage's counts. `LOG_LEVEL=DEBUG` adds `memory_budget` (estimate against the budget) and `memory_refused` when a book is turned away.
 
 ## Data
 

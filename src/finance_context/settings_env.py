@@ -14,6 +14,7 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("SESSION_ID", "session_id"),
     EnvSpec("MAX_UPLOAD_BYTES", "max_upload_bytes"),
     EnvSpec("MAX_CONCURRENT_JOBS", "max_concurrent_jobs"),
+    EnvSpec("JOB_MEMORY_BUDGET_BYTES", "job_memory_budget_bytes"),
     EnvSpec("JOB_TIMEOUT_SEC", "job_timeout_sec"),
     EnvSpec("SOFFICE_BIN", "soffice_bin"),
     EnvSpec("XLS_CONVERT_TIMEOUT_SEC", "xls_convert_timeout_sec"),
