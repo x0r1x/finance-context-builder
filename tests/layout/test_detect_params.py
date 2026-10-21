@@ -472,7 +472,7 @@ def test_param_header_spellings_keep_label_value_unit_and_note(
     assert [(header.role, header.text) for header in block.axis.headers] == roles
 
 
-def test_yo_in_a_value_header_matches_the_lexicon_spelling() -> None:
+def test_yo_in_a_value_header_matches_the_format_word() -> None:
     heads = ["Параметр", "Значениё", "Ед. изм.", "Примечание"]
     block = detect_layout(_param_table(heads)).sheets[0].blocks[0]
     assert [(header.role, header.col) for header in block.axis.headers][0] == ("value", 2)
@@ -836,3 +836,383 @@ def test_unit_and_note_columns_follow_the_values_under_an_unknown_header() -> No
     assert headers["Bull"] == "value"
     assert headers["Мера"] == "unit"
     assert headers["Пояснение"] == "note"
+
+
+def test_unit_column_without_a_header_word() -> None:
+    """Short repeated measure tokens are a unit column with no unit word in the header."""
+    cells = [_c("Допущения", "A1", "Параметр"), _c("Допущения", "B1", "Значение")]
+    for row, (label, value, unit) in enumerate(
+        [("Цена", "12", "руб."), ("Доля", "0.4", "руб."), ("Ставка", "0.2", "руб.")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", unit),
+        ]
+    row = detect_layout(cells).sheets[0].blocks[0].rows[0]
+    assert [(cell.col, cell.role) for cell in row.cells] == [(2, "value"), (3, "unit")]
+
+
+def test_note_column_without_a_header_word() -> None:
+    """Distinct free-form text is a note column with no note word in the header."""
+    notes = [
+        "допущение взято из бизнес-плана компании",
+        "смотри приложение к финансовой модели",
+        "пояснение для инвестиционного комитета",
+    ]
+    cells = [_c("Допущения", "A1", "Параметр"), _c("Допущения", "B1", "Значение")]
+    for row, (label, value, note) in enumerate(
+        zip(["Цена", "Доля", "Ставка"], ["12", "0.4", "0.2"], notes, strict=True),
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", note),
+        ]
+    row = detect_layout(cells).sheets[0].blocks[0].rows[0]
+    assert [(cell.col, cell.role) for cell in row.cells] == [(2, "value"), (3, "note")]
+
+
+def test_repeated_unit_tokens_win_over_a_note_header() -> None:
+    """A note header does not override a column of short repeated unit tokens."""
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+        _c("Допущения", "C1", "Примечание"),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "0.4"), ("Ставка", "0.2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", "руб."),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Примечание"] == "unit"
+
+
+def test_empty_column_uses_the_header_word() -> None:
+    """An empty column has no content signal, so the header word is the role."""
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+        _c("Допущения", "C1", "Примечание"),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "0.4"), ("Ставка", "0.2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Примечание"] == "note"
+
+
+@pytest.mark.parametrize("header", ["Ед. изм.", "Примечание"])
+def test_digits_only_column_stays_value_under_a_role_header(header: str) -> None:
+    """Digits decide value. A unit or note header does not relabel that column."""
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", header),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "4"), ("Ставка", "2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+        ]
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [(item.text, item.role) for item in headers] == [(header, "value")]
+
+
+def test_long_row_names_stay_the_label_column() -> None:
+    """Long distinct row names stay the stub. They are not a note column."""
+    labels = [
+        "цена реализации продукции компании",
+        "доля операционных расходов в выручке",
+        "ставка налога на прибыль организации",
+    ]
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+    ]
+    for row, (label, value) in enumerate(zip(labels, ["12", "0.4", "0.2"], strict=True), start=2):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.label_col == 1
+    assert [row.label for row in block.rows] == labels
+    assert [(header.col, header.role) for header in block.axis.headers] == [(2, "value")]
+
+
+def test_unit_tokens_win_over_a_value_header() -> None:
+    """A value header does not override a column of short repeated unit tokens."""
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Base"),
+        _c("Допущения", "C1", "Значение"),
+    ]
+    for row, (label, base) in enumerate(
+        [("Цена", "10"), ("Доля", "11"), ("Ставка", "12")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", base),
+            _c("Допущения", f"C{row}", "руб."),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Base"] == "value"
+    assert headers["Значение"] == "unit"
+
+
+def test_repeated_long_text_is_note_without_a_header_word() -> None:
+    """Identical long text is a note. A short caption does not turn it into unknown."""
+    prose = "одно и то же пояснение повторяется в каждой строке"
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+        _c("Допущения", "C1", "Поле"),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "0.4"), ("Ставка", "0.2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", prose),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Значение"] == "value"
+    assert headers["Поле"] == "note"
+
+
+def test_repeated_prose_keeps_the_note_header() -> None:
+    """Repeated long text is a note. The note header agrees and does not decide."""
+    prose = "одно и то же пояснение повторяется в каждой строке"
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+        _c("Допущения", "C1", "Примечание"),
+    ]
+    for row, (label, value) in enumerate(
+        [("Цена", "12"), ("Доля", "0.4"), ("Ставка", "0.2")],
+        start=2,
+    ):
+        cells += [
+            _c("Допущения", f"A{row}", label),
+            _c("Допущения", f"B{row}", value),
+            _c("Допущения", f"C{row}", prose),
+        ]
+    headers = {
+        header.text: header.role
+        for header in detect_layout(cells).sheets[0].blocks[0].axis.headers
+    }
+    assert headers["Примечание"] == "note"
+
+
+def test_formula_names_under_a_label_header_stay_the_stub() -> None:
+    """Formula text in the label column is the row name, not a value or a note."""
+    labels = [
+        "цена реализации продукции компании",
+        "доля операционных расходов в выручке",
+        "ставка налога на прибыль организации",
+    ]
+    cells = [
+        _c("Допущения", "A1", "Параметр"),
+        _c("Допущения", "B1", "Значение"),
+    ]
+    for row, (label, value) in enumerate(zip(labels, ["12", "0.4", "0.2"], strict=True), start=2):
+        cells += [
+            _c("Допущения", f"A{row}", label, formula=f"=A{row}"),
+            _c("Допущения", f"B{row}", value),
+        ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.label_col == 1
+    assert [row.label for row in block.rows] == labels
+    assert [(header.col, header.role) for header in block.axis.headers] == [(2, "value")]
+
+
+def _params_rows(
+    headers: list[str],
+    body: list[tuple[str, ...]],
+    *,
+    formulas: dict[tuple[int, int], str] | None = None,
+) -> dict:
+    """A params sheet. ``formulas`` keys are (column, row) with row 2 for the first body row."""
+    cells = [_c("Допущения", f"{'ABCD'[col]}1", text) for col, text in enumerate(headers)]
+    for offset, values in enumerate(body):
+        row = offset + 2
+        for col, text in enumerate(values):
+            formula = None if formulas is None else formulas.get((col, row))
+            cells.append(_c("Допущения", f"{'ABCD'[col]}{row}", text, formula=formula))
+    block = detect_layout(cells).sheets[0].blocks[0]
+    found = {header.text: header for header in block.axis.headers}
+    return {"block": block, "headers": found}
+
+
+def test_phase_year_labels_stay_unknown_beside_amounts() -> None:
+    """``Year 1`` is a phase label. A substring ``year`` does not make the column a unit."""
+    built = _params_rows(
+        ["Параметр", "Phase", "Значение"],
+        [
+            ("Inflation", "Year 1", "12"),
+            ("Growth", "Year 2", "4"),
+            ("Rate", "Year 3", "2"),
+        ],
+    )
+    assert built["headers"]["Phase"].role == "unknown"
+    assert built["headers"]["Значение"].role == "value"
+    assert [(cell.col, cell.role) for cell in built["block"].rows[0].cells] == [
+        (2, "unknown"),
+        (3, "value"),
+    ]
+
+
+def test_share_percents_do_not_steal_the_unit_column() -> None:
+    """``10%`` is not a whole-cell unit. The ``руб.`` column to the right stays the unit."""
+    built = _params_rows(
+        ["Параметр", "Share", "Значение", "Мера"],
+        [
+            ("Цена", "10%", "12", "руб."),
+            ("Доля", "20%", "4", "руб."),
+            ("Ставка", "5%", "2", "руб."),
+        ],
+    )
+    assert built["headers"]["Share"].role == "unknown"
+    assert built["headers"]["Значение"].role == "value"
+    assert built["headers"]["Мера"].role == "unit"
+    assert [(cell.col, cell.role) for cell in built["block"].rows[0].cells] == [
+        (2, "unknown"),
+        (3, "value"),
+        (4, "unit"),
+    ]
+
+
+def test_percentile_and_non_usd_are_not_unit_columns() -> None:
+    """A unit word inside a short label is not a whole-cell unit."""
+    percentile = _params_rows(
+        ["Параметр", "Stat", "Значение"],
+        [("Цена", "percentile", "12"), ("Доля", "percentile", "4"), ("Ставка", "percentile", "2")],
+    )
+    basis = _params_rows(
+        ["Параметр", "Basis", "Значение"],
+        [("Цена", "non-USD", "12"), ("Доля", "non-USD", "4"), ("Ставка", "non-USD", "2")],
+    )
+    assert percentile["headers"]["Stat"].role == "unknown"
+    assert basis["headers"]["Basis"].role == "unknown"
+
+
+def test_year_labels_under_a_note_header_stay_note() -> None:
+    """A note header keeps ``Year 1`` when the cells are not whole-cell units."""
+    built = _params_rows(
+        ["Параметр", "Примечание", "Значение"],
+        [
+            ("Цена", "Year 1", "12"),
+            ("Доля", "Year 2", "4"),
+            ("Ставка", "Year 3", "2"),
+        ],
+    )
+    assert built["headers"]["Примечание"].role == "note"
+    assert [(cell.col, cell.role) for cell in built["block"].rows[0].cells] == [
+        (2, "note"),
+        (3, "value"),
+    ]
+
+
+def test_text_formulas_under_a_note_header_stay_note() -> None:
+    """A formula cached as text is not a second value series."""
+    built = _params_rows(
+        ["Параметр", "Примечание", "Значение"],
+        [
+            ("Цена", "ok", "12"),
+            ("Доля", "ok", "4"),
+            ("Ставка", "see note", "2"),
+        ],
+        formulas={(1, 2): "=B2", (1, 3): "=B3", (1, 4): "=B4"},
+    )
+    assert [
+        (header.text, header.role, header.period_key) for header in built["block"].axis.headers
+    ] == [
+        ("Примечание", "note", "note"),
+        ("Значение", "value", "value"),
+    ]
+
+
+def test_numeric_formula_cache_stays_value_under_a_note_header() -> None:
+    """A formula counts as a value when the cached text is numeric."""
+    built = _params_rows(
+        ["Параметр", "Примечание", "Значение"],
+        [
+            ("Цена", "12", "1"),
+            ("Доля", "4", "2"),
+            ("Ставка", "2", "3"),
+        ],
+        formulas={(1, 2): "=B2", (1, 3): "=B3", (1, 4): "=B4"},
+    )
+    assert built["headers"]["Примечание"].role == "value"
+    assert built["headers"]["Значение"].role == "value"
+
+
+def test_mixed_numbers_under_a_note_header_stay_note() -> None:
+    """Three numbers among short text are not a value column when the header is a note."""
+    shorts = ("aa", "bb", "cc", "dd", "ee", "ff", "gg")
+    body = [
+        (f"row{i}", str(i + 1) if i < 3 else shorts[i - 3], "10") for i in range(10)
+    ]
+    built = _params_rows(["Параметр", "Примечание", "Значение"], body)
+    assert built["headers"]["Примечание"].role == "note"
+    assert built["headers"]["Значение"].role == "value"
+
+
+def test_mixed_numbers_under_a_unit_header_stay_unit() -> None:
+    """A unit header keeps a mixed column that is not mostly numbers."""
+    shorts = ("aa", "bb", "cc", "dd", "ee", "ff", "gg")
+    body = [
+        (f"row{i}", str(i + 1) if i < 3 else shorts[i - 3], "10") for i in range(10)
+    ]
+    built = _params_rows(["Параметр", "Ед. изм.", "Значение"], body)
+    assert built["headers"]["Ед. изм."].role == "unit"
+
+
+def test_sparse_numbers_under_a_note_header_stay_value() -> None:
+    """Three numbers and no other body text are a value column even under a note header."""
+    built = _params_rows(
+        ["Параметр", "Примечание", "Значение"],
+        [("Цена", "12", "1"), ("Доля", "4", "2"), ("Ставка", "2", "3")],
+    )
+    assert built["headers"]["Примечание"].role == "value"
+
+
+def test_mixed_numbers_without_a_header_word_stay_value() -> None:
+    """A mixed column with no header word stays a value series, as on main."""
+    shorts = ("aa", "bb", "cc", "dd", "ee", "ff", "gg")
+    body = [
+        (f"row{i}", str(i + 1) if i < 3 else shorts[i - 3], "10") for i in range(10)
+    ]
+    built = _params_rows(["Параметр", "Поле", "Значение"], body)
+    assert built["headers"]["Поле"].role == "value"
+    assert built["headers"]["Поле"].period_key == "поле"

@@ -123,12 +123,8 @@ def test_layout_code_edit_restales_the_layout_stage(tmp_path, monkeypatch) -> No
     (tmp_path / "layout").mkdir()
     rows = tmp_path / "layout" / "rows.py"
     rows.write_text("x = 1\n", encoding="utf-8")
-    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
     before = publisher._compute_stages()
-    (tmp_path / "layout" / "lexicon.json").write_text('{"total": ["x"]}\n', encoding="utf-8")
-    untouched = publisher._compute_stages()
-    assert before == untouched
     rows.write_text("x = 2\n", encoding="utf-8")
     after = publisher._compute_stages()
     assert before["layout"] != after["layout"]
@@ -144,7 +140,6 @@ def test_layout_stage_hashes_modules_it_imports(tmp_path, monkeypatch) -> None:
         "from finance_context.context.measure import unit_caption\n",
         encoding="utf-8",
     )
-    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
     measure = tmp_path / "context" / "measure.py"
     measure.write_text("x = 1\n", encoding="utf-8")
     series = tmp_path / "context" / "series.py"
@@ -171,7 +166,6 @@ def test_layout_stage_hashes_parent_package_inits(tmp_path, monkeypatch) -> None
         "from finance_context.context.measure import unit_caption\n",
         encoding="utf-8",
     )
-    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
     (tmp_path / "context" / "measure.py").write_text("x = 1\n", encoding="utf-8")
     package_init = tmp_path / "__init__.py"
     package_init.write_text("x = 1\n", encoding="utf-8")
@@ -227,7 +221,6 @@ def test_stray_package_json_does_not_restale_layout(tmp_path, monkeypatch) -> No
 
     (tmp_path / "layout").mkdir()
     (tmp_path / "layout" / "rows.py").write_text("x = 1\n", encoding="utf-8")
-    (tmp_path / "layout" / "lexicon.json").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(publisher, "_PACKAGE", tmp_path)
     before = publisher._compute_stages()
     (tmp_path / "layout" / "notes.json").write_text("{}\n", encoding="utf-8")

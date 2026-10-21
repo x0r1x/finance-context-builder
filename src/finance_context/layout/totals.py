@@ -12,7 +12,7 @@ import re
 
 from finance_context.excel.a1 import col_to_index
 from finance_context.layout.cells import _cell_at, _text
-from finance_context.layout.lexicon import is_total_word
+from finance_context.layout.format_words import is_total_word
 from finance_context.layout.models import AxisPeriod
 
 _SUM = re.compile(

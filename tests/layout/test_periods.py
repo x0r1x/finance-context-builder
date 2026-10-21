@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from finance_context.layout.lexicon import is_total_word
+from finance_context.layout.format_words import is_total_word
 from finance_context.layout.periods import (
     apply_grain,
     classify_atom,

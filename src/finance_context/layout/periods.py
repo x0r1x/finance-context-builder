@@ -7,15 +7,21 @@ from datetime import date
 from functools import lru_cache
 
 from finance_context.excel.dates import is_date_format, serial_to_date
-from finance_context.layout.lexicon import (
+from finance_context.layout.format_words import (
+    HALF_WORDS,
+    MONTH_LABEL_WORDS,
+    PERIOD_END_WORDS,
+    PERIOD_START_WORDS,
+    QUARTER_LABEL_WORDS,
+    QUARTER_WORDS,
+    STUB_WORDS,
+    YEAR_WORDS,
     accepts,
     blocked_surface,
-    data_token,
     matches_entry,
     month_numbers,
     pattern,
     searcher,
-    words,
 )
 from finance_context.layout.models import ColumnKind, PeriodHit
 
@@ -60,64 +66,48 @@ _HALF_KEY = re.compile(r"^((?:19|20)\d{2})H([12])$")
 _MONTH_KEY = re.compile(r"^((?:19|20)\d{2})-(\d{2})$")
 _YEAR_KEY = re.compile(r"^((?:19|20)\d{2})$")
 _DATE_KEY = re.compile(r"^((?:19|20)\d{2})-(\d{2})-(\d{2})$")
-# Rebuilt when the lexicon token changes, including a user overlay.
-_BOUND: str | None = None
-_YEAR: re.Pattern[str]
-_CYRILLIC_HALF: re.Pattern[str]
-_QUARTER_WORD_FORMS: tuple[re.Pattern[str], ...]
-_QUARTER_CODE_FORMS: tuple[re.Pattern[str], ...]
-_HALF_WORD_FORMS: tuple[re.Pattern[str], ...]
-_HALF_CODE_FORMS: tuple[re.Pattern[str], ...]
+_YEAR_WORD = rf"(?:\s*{pattern(YEAR_WORDS)}\.?)?"
+_QUARTER_WORD = rf"{pattern(QUARTER_WORDS)}\.?"
+_HALF_WORD = rf"{pattern(HALF_WORDS)}\.?"
+_PART_YEAR = (
+    rf"(?:(?:\s*[-/]\s*|\s*'?\s*)(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
+    rf"{_YEAR_WORD}(?P<sfx>{_MARKER_SUFFIX})?)?"
+)
+_YEAR = re.compile(
+    rf"^(?:FY\s*)?((?:19|20)\d{{2}}){_YEAR_WORD}({_MARKER_SUFFIX})?$",
+    re.IGNORECASE,
+)
+_CYRILLIC_HALF = re.compile(
+    rf"^(?P<num>[12])\s*[Пп]\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
+    rf"{_YEAR_WORD}(?P<sfx>{_MARKER_SUFFIX})?$",
+    re.IGNORECASE,
+)
 
 
-def _bind() -> None:
-    """Compile lexicon words into the period patterns. An overlay rebuilds them."""
-    global _BOUND, _YEAR, _CYRILLIC_HALF
-    global _QUARTER_WORD_FORMS, _QUARTER_CODE_FORMS, _HALF_WORD_FORMS, _HALF_CODE_FORMS
-    token = data_token()
-    if _BOUND == token:
-        return
-    year_word = rf"(?:\s*{pattern('period_words', 'year')}\.?)?"
-    quarter_word = rf"{pattern('period_words', 'quarter')}\.?"
-    half_word = rf"{pattern('period_words', 'half')}\.?"
-    part_year = (
-        rf"(?:(?:\s*[-/]\s*|\s*'?\s*)(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
-        rf"{year_word}(?P<sfx>{_MARKER_SUFFIX})?)?"
-    )
-    _YEAR = re.compile(
-        rf"^(?:FY\s*)?((?:19|20)\d{{2}}){year_word}({_MARKER_SUFFIX})?$",
-        re.IGNORECASE,
-    )
-    _CYRILLIC_HALF = re.compile(
-        rf"^(?P<num>[12])\s*[Пп]\s*(?P<year>(?:19|20)\d{{2}}|\d{{2}})"
-        rf"{year_word}(?P<sfx>{_MARKER_SUFFIX})?$",
-        re.IGNORECASE,
-    )
+def _compile_forms(bodies: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    return tuple(re.compile(rf"^{body}{_PART_YEAR}$", re.IGNORECASE) for body in bodies)
 
-    def compile_forms(bodies: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
-        return tuple(re.compile(rf"^{body}{part_year}$", re.IGNORECASE) for body in bodies)
 
-    _QUARTER_WORD_FORMS = compile_forms(
-        (
-            rf"(?P<num>[1-4]|IV|I{{1,3}}){_ORDINAL}\s*{quarter_word}",
-            rf"{quarter_word}\s*(?P<num>[1-4]|IV|I{{1,3}})",
-        )
+_QUARTER_WORD_FORMS = _compile_forms(
+    (
+        rf"(?P<num>[1-4]|IV|I{{1,3}}){_ORDINAL}\s*{_QUARTER_WORD}",
+        rf"{_QUARTER_WORD}\s*(?P<num>[1-4]|IV|I{{1,3}})",
     )
-    _QUARTER_CODE_FORMS = compile_forms((r"Q(?P<num>[1-4])", r"(?P<num>[1-4])\s*Q"))
-    _HALF_WORD_FORMS = compile_forms(
-        (
-            rf"(?P<num>[12]|I{{1,2}}){_ORDINAL}\s*{half_word}",
-            rf"{half_word}\s*(?P<num>[12]|I{{1,2}})",
-        )
+)
+_QUARTER_CODE_FORMS = _compile_forms((r"Q(?P<num>[1-4])", r"(?P<num>[1-4])\s*Q"))
+_HALF_WORD_FORMS = _compile_forms(
+    (
+        rf"(?P<num>[12]|I{{1,2}}){_ORDINAL}\s*{_HALF_WORD}",
+        rf"{_HALF_WORD}\s*(?P<num>[12]|I{{1,2}})",
     )
-    _HALF_CODE_FORMS = compile_forms(
-        (
-            r"(?P<num>[12])\s*п\s*/\s*г\.?",
-            rf"{_H_MARK}(?P<num>[12])",
-            rf"(?P<num>[12])\s*{_H_MARK}",
-        )
+)
+_HALF_CODE_FORMS = _compile_forms(
+    (
+        r"(?P<num>[12])\s*п\s*/\s*г\.?",
+        rf"{_H_MARK}(?P<num>[12])",
+        rf"(?P<num>[12])\s*{_H_MARK}",
     )
-    _BOUND = token
+)
 
 
 LAYER_DATE = "date"
@@ -149,7 +139,6 @@ def marker_token(variant: str | None) -> str:
     collapsed whitespace, lookalike folding on a period token). ``casefold``
     and ``ё``→``е`` are the further steps: ``Факт`` and ``факт`` share ``факт``,
     ``Расчёт`` and ``Расчет`` share ``расчет``, and a suffix ``E`` becomes ``e``.
-    The lexicon stem is not applied.
     """
     if not variant:
         return ""
@@ -220,24 +209,22 @@ def _fold_period_token(token: str) -> str:
     return token
 
 
-# Distinct normalized headers kept per lexicon token. A sheet asks for the same
-# header from bands, rows and atoms, often thousands of times.
+# Distinct normalized headers. A sheet asks for the same header from bands,
+# rows and atoms, often thousands of times.
 _CLASSIFY_CACHE = 1 << 16
 
 
 def classify_header(text: str | None) -> PeriodHit | None:
-    _bind()
     raw = normalize_header(text)
     if not raw:
         return None
-    return _classify(_BOUND, raw)
+    return _classify(raw)
 
 
 @lru_cache(maxsize=_CLASSIFY_CACHE)
-def _classify(token: str | None, raw: str) -> PeriodHit | None:
-    """``classify_header`` of a normalized header. ``token`` keys the lexicon."""
-    del token
-    if _listed(raw, "structural", "stub"):
+def _classify(raw: str) -> PeriodHit | None:
+    """``classify_header`` of one normalized header."""
+    if any(matches_entry(raw, entry) for entry in STUB_WORDS):
         return PeriodHit(kind="stub", period_key="stub", explicit_role=True)
     return _one_calendar(raw)
 
@@ -402,9 +389,7 @@ def _residual_collides(text: str) -> bool:
         folded = token.casefold()
         if folded in {"q", "h"}:
             return True
-        if any(
-            accepts("period_words", kind, surface=token) for kind in ("year", "quarter", "half")
-        ):
+        if any(accepts(entries, token) for entries in (YEAR_WORDS, QUARTER_WORDS, HALF_WORDS)):
             return True
         for root in _period_roots():
             if len(root) >= 3 and folded.startswith(root) and len(folded) > len(root):
@@ -414,8 +399,8 @@ def _residual_collides(text: str) -> bool:
 
 def _period_roots() -> tuple[str, ...]:
     found: list[str] = []
-    for kind in ("year", "quarter", "half"):
-        for entry in words("period_words", kind):
+    for entries in (YEAR_WORDS, QUARTER_WORDS, HALF_WORDS):
+        for entry in entries:
             root = entry.casefold().strip(".")
             if root:
                 found.append(root)
@@ -794,28 +779,24 @@ def display_cell_text(
 
 
 def is_quarter_label(text: str | None) -> bool:
-    return _label_has(text, "structural", "quarter_label")
+    return _label_has(text, QUARTER_LABEL_WORDS)
 
 
 def is_month_label(text: str | None) -> bool:
-    return _label_has(text, "structural", "month_label")
+    return _label_has(text, MONTH_LABEL_WORDS)
 
 
 def is_start_period_label(text: str | None) -> bool:
-    return _label_has(text, "structural", "period_start")
+    return _label_has(text, PERIOD_START_WORDS)
 
 
 def is_end_period_label(text: str | None) -> bool:
-    return _label_has(text, "structural", "period_end")
+    return _label_has(text, PERIOD_END_WORDS)
 
 
-def _label_has(text: str | None, *path: str) -> bool:
+def _label_has(text: str | None, entries: tuple[str, ...]) -> bool:
     raw = normalize_header(text)
-    return bool(raw and searcher(*path).search(raw))
-
-
-def _listed(raw: str, *path: str) -> bool:
-    return any(matches_entry(raw, entry) for entry in words(*path))
+    return bool(raw and searcher(entries).search(raw))
 
 
 def _year_words_ok(raw: str) -> bool:
@@ -824,7 +805,7 @@ def _year_words_ok(raw: str) -> bool:
             continue
         if len(token) == 1 and re.fullmatch(_MARKER_SUFFIX, token, re.IGNORECASE):
             continue
-        if not accepts("period_words", "year", surface=token):
+        if not accepts(YEAR_WORDS, token):
             return False
     return True
 
@@ -841,7 +822,6 @@ def _part_token(raw: str) -> HeaderAtom | None:
 
 def _part_of_year(raw: str) -> tuple[str, int, str | None, str | None] | None:
     """Quarter ("Q") or half ("H") header: grain, its number, the year if any, a marker suffix."""
-    _bind()
     cyr = _CYRILLIC_HALF.fullmatch(raw)
     if cyr is not None:
         return "H", int(cyr.group("num")), cyr.group("year"), cyr.group("sfx")
@@ -861,15 +841,15 @@ def _word_or_code_part(raw: str) -> tuple[str, int, str | None, str | None] | No
     groups = (
         ("Q", _QUARTER_CODE_FORMS, 4, None),
         ("H", _HALF_CODE_FORMS, 2, None),
-        ("Q", _QUARTER_WORD_FORMS, 4, ("period_words", "quarter")),
-        ("H", _HALF_WORD_FORMS, 2, ("period_words", "half")),
+        ("Q", _QUARTER_WORD_FORMS, 4, QUARTER_WORDS),
+        ("H", _HALF_WORD_FORMS, 2, HALF_WORDS),
     )
-    for grain, forms, top, path in groups:
+    for grain, forms, top, entries in groups:
         for form in forms:
             match = form.fullmatch(raw)
             if match is None:
                 continue
-            if path is not None and not _confirmed(raw, *path):
+            if entries is not None and not _confirmed(raw, entries):
                 continue
             token = match.group("num").upper()
             num = _ROMAN[token] if token in _ROMAN else int(token)
@@ -878,8 +858,8 @@ def _word_or_code_part(raw: str) -> tuple[str, int, str | None, str | None] | No
     return None
 
 
-def _confirmed(raw: str, *path: str) -> bool:
-    return any(accepts(*path, surface=token) for token in re.findall(r"[^\W\d_]+", raw))
+def _confirmed(raw: str, entries: tuple[str, ...]) -> bool:
+    return any(accepts(entries, token) for token in re.findall(r"[^\W\d_]+", raw))
 
 
 def _month_hit(raw: str) -> PeriodHit | None:
