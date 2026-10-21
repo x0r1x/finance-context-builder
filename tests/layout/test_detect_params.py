@@ -156,6 +156,144 @@ def test_index_switch_is_a_selector_without_the_label() -> None:
     assert rows["Выбор"].kind == "flag"
 
 
+def _named_switch_cells(formula: str) -> list[dict]:
+    cells = [
+        _c("PF Model", "B2", "Base"),
+        _c("PF Model", "C2", "Upside"),
+        _c("PF Model", "A3", "Выбор"),
+        _c("PF Model", "D3", "1"),
+        _c("PF Model", "B3", "1"),
+        _c("PF Model", "C3", "2"),
+    ]
+    for row, amount, case in ((4, "10", "12"), (5, "0.2", "0.3"), (6, "0.1", "0.2")):
+        cells += [
+            _c("PF Model", f"A{row}", f"Row {row}"),
+            _c("PF Model", f"D{row}", amount, formula=formula.format(row=row)),
+            _c("PF Model", f"B{row}", amount),
+            _c("PF Model", f"C{row}", case),
+        ]
+    return cells
+
+
+def test_named_switch_is_a_selector_without_the_label() -> None:
+    """A defined name for one cell is the same switch as the cell itself."""
+    cells = _named_switch_cells("=IF(ISBLANK(OFFSET(B{row},0,Pick)),C{row},OFFSET(B{row},0,Pick))")
+    names = [{"name": "Pick", "formula": "'PF Model'!$D$3"}]
+    rows = {
+        row.label: row
+        for row in detect_layout(cells, defined_names=names).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "flag"
+
+
+def test_named_index_and_choose_are_switches() -> None:
+    from finance_context.layout.params import selector_rows
+
+    names = [{"name": "Pick", "formula": "'PF Model'!$D$3"}]
+    for formula in ("=INDEX(B{row}:C{row},Pick)", "=CHOOSE(Pick,B{row},C{row})"):
+        by_row: dict[int, list[dict]] = {}
+        for cell in _named_switch_cells(formula):
+            by_row.setdefault(cell["row"], []).append(cell)
+        assert selector_rows(by_row, False, defined_names=names, sheet="PF Model") == {3}
+
+
+def test_name_pointing_at_a_range_is_not_a_switch() -> None:
+    cells = _named_switch_cells("=INDEX(B{row}:C{row},Pick)")
+    names = [{"name": "Pick", "formula": "'PF Model'!$B$4:$C$4"}]
+    rows = {
+        row.label: row
+        for row in detect_layout(cells, defined_names=names).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "fact"
+
+
+def test_sheet_scoped_name_is_a_switch_only_on_its_sheet() -> None:
+    cells = _named_switch_cells("=INDEX(B{row}:C{row},Pick)")
+    local = [{"name": "Pick", "formula": "$D$3", "sheet": "PF Model"}]
+    rows = {
+        row.label: row
+        for row in detect_layout(cells, defined_names=local).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "flag"
+    other = [{"name": "Pick", "formula": "$D$3", "sheet": "Other"}]
+    rows = {
+        row.label: row
+        for row in detect_layout(cells, defined_names=other).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "fact"
+    # On this sheet the local name hides a workbook name that points elsewhere.
+    hidden_cells = [
+        *cells,
+        _c("PF Model", "A7", "Other"),
+        _c("PF Model", "E7", "2"),
+    ]
+    hidden = [
+        {"name": "Pick", "formula": "'PF Model'!$E$7"},
+        {"name": "Pick", "formula": "$D$3", "sheet": "PF Model"},
+    ]
+    rows = {
+        row.label: row
+        for row in detect_layout(hidden_cells, defined_names=hidden).sheets[0].blocks[0].rows
+    }
+    assert rows["Выбор"].kind == "flag"
+    assert rows["Other"].kind == "fact"
+
+
+def test_named_switch_above_a_timeline_joins_that_block() -> None:
+    cells = [
+        _c("PF Model", "B1", "Live index"),
+        _c("PF Model", "B2", "1"),
+        _c("PF Model", "A5", "Item"),
+        _c("PF Model", "C5", "2023"),
+        _c("PF Model", "D5", "2024"),
+        _c("PF Model", "E5", "2025"),
+        _c("PF Model", "A6", "Revenue"),
+        _c("PF Model", "C6", "10", formula="=OFFSET(C6,0,Pick)"),
+        _c("PF Model", "D6", "11"),
+        _c("PF Model", "E6", "12"),
+        _c("PF Model", "A7", "Cost"),
+        _c("PF Model", "C7", "4", formula="=OFFSET(C7,0,Pick)"),
+        _c("PF Model", "D7", "5"),
+        _c("PF Model", "E7", "6"),
+        _c("PF Model", "A8", "Tax"),
+        _c("PF Model", "C8", "1"),
+        _c("PF Model", "D8", "1"),
+        _c("PF Model", "E8", "1"),
+    ]
+    names = [{"name": "Pick", "formula": "'PF Model'!$B$2"}]
+    sheet = detect_layout(cells, defined_names=names).sheets[0]
+    switch = next(block for block in sheet.blocks if any(row.row == 2 for row in block.rows))
+    assert switch.kind == "params"
+    assert switch.rows[0].kind == "flag"
+    assert switch.rows[0].label == "Live index"
+    assert switch.rows[0].cells[0].role == "value"
+    timeline = next(block for block in sheet.blocks if block.kind == "timeline")
+    assert all(row.row != 2 for row in timeline.rows)
+    plain = detect_layout(cells).sheets[0]
+    assert all(row.row != 2 for block in plain.blocks for row in block.rows)
+
+
+def test_same_row_named_offset_and_plain_if_are_not_switches() -> None:
+    from finance_context.layout.params import selector_rows
+
+    names = [{"name": "Pick", "formula": "'PF Model'!$D$3"}]
+    same_row = [
+        _c("PF Model", "A3", "Выбор"),
+        _c("PF Model", "D3", "1"),
+        _c("PF Model", "E3", "1", formula="=OFFSET(B3,0,Pick)"),
+        _c("PF Model", "D4", "10", formula="=OFFSET(B4,0,Pick)"),
+    ]
+    by_row: dict[int, list[dict]] = {}
+    for cell in same_row:
+        by_row.setdefault(cell["row"], []).append(cell)
+    assert selector_rows(by_row, False, defined_names=names, sheet="PF Model") == set()
+    plain_if = _named_switch_cells("=IF(Pick=1,B{row},C{row})")
+    by_row = {}
+    for cell in plain_if:
+        by_row.setdefault(cell["row"], []).append(cell)
+    assert selector_rows(by_row, False, defined_names=names, sheet="PF Model") == set()
+
+
 def test_selector_label_without_a_switch_is_a_fact_row() -> None:
     cells = [
         _c("Input", "B2", "Base"),

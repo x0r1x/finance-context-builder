@@ -44,6 +44,17 @@ from finance_context.models.context import (
 from finance_context.vocab import ValueStatus
 
 
+def _without_name_scope(items: list) -> list:
+    """Drop the sheet a name is local to. Context keeps the name and its formula."""
+    published = []
+    for item in items:
+        if isinstance(item, dict):
+            published.append({key: value for key, value in item.items() if key != "sheet"})
+        else:
+            published.append(item)
+    return published
+
+
 def build_context(
     *,
     job_id: str,
@@ -64,8 +75,10 @@ def build_context(
     for cell in cells:
         by_sheet_row.setdefault(cell["sheet"], {}).setdefault(int(cell["row"]), []).append(cell)
     date1904 = bool(workbook_meta.get("date1904"))
+    defined_names = list(workbook_meta.get("defined_names") or [])
     switches = {
-        name: selector_rows(rows, date1904) for name, rows in by_sheet_row.items()
+        name: selector_rows(rows, date1904, defined_names=defined_names, sheet=name)
+        for name, rows in by_sheet_row.items()
     }
     axes, timeline_warnings = build_axes(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
@@ -263,7 +276,7 @@ def build_context(
         externals=list(workbook_meta.get("externals") or []),
         locale_hint=workbook_meta.get("locale_hint"),
         date1904=bool(workbook_meta.get("date1904")),
-        defined_names=list(workbook_meta.get("defined_names") or []),
+        defined_names=_without_name_scope(defined_names),
         iterate=bool(workbook_meta.get("iterate")),
         formula_count=formula_count,
         missing_cached_values=missing_cached,

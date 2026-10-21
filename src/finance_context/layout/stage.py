@@ -48,6 +48,7 @@ def layout_workbook(
             if "summary_below" in sheet:
                 summary_below[name] = bool(sheet.get("summary_below"))
     cells = _overlay_merges(cells, meta)
+    defined_names = None if meta is None else meta.get("defined_names")
     layout = detect_layout(
         cells,
         date1904=date1904,
@@ -56,6 +57,7 @@ def layout_workbook(
         hidden_columns=hidden_columns,
         hidden_rows=hidden_rows,
         summary_below=summary_below,
+        defined_names=defined_names,
     )
     write_json(dest_dir / "layout.json", layout.model_dump(mode="json"))
     return layout

@@ -85,3 +85,26 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
     assert "## Parameters / Input Assumptions" in rendered
     assert "| Scenario Chosen |" in rendered
     assert "1" in rendered
+
+
+def test_context_does_not_publish_defined_name_scope() -> None:
+    cells = _scenario_matrix()
+    doc = build_context(
+        job_id="sel",
+        workbook_meta={
+            "sheets": [{"name": "Input Assumptions"}],
+            "defined_names": [
+                {
+                    "name": "Pick",
+                    "formula": "$D$3",
+                    "hidden": False,
+                    "sheet": "Input Assumptions",
+                }
+            ],
+        },
+        cells=cells,
+        layout=detect_layout(cells),
+    )
+    assert doc.workbook.defined_names == [
+        {"name": "Pick", "formula": "$D$3", "hidden": False}
+    ]

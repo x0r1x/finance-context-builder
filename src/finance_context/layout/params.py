@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 
-from finance_context.excel.a1 import index_to_col, parse_addr
+from finance_context.excel.a1 import format_addr, in_grid, index_to_col, parse_addr
 from finance_context.layout.lexicon import header_role_map
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text, period_like_header
@@ -31,6 +31,7 @@ def detect_params_block(
     by_row: dict[int, list[dict]],
     date1904: bool,
     edges: list[dict] | None = None,
+    defined_names: list | None = None,
 ) -> Block | None:
     if _looks_like_grid(by_row, date1904):
         return _grid_title_block(sheet, by_row, date1904)
@@ -44,7 +45,7 @@ def detect_params_block(
         value_cols = [col for col, role in roles.items() if role == "unknown" and numeric[col]]
     if label_col is None or not value_cols:
         return None
-    switches = selector_rows(by_row, date1904)
+    switches = selector_rows(by_row, date1904, defined_names=defined_names, sheet=sheet)
     header_rows, header_row = _header_rows(by_row, date1904, roles, label_col, switches)
     check_table = _is_check_table(by_row, header_rows, date1904)
     data_rows = _params_data_rows(
@@ -355,16 +356,32 @@ _INDEX_CALL = re.compile(r"\bINDEX\s*\(([^()]*)\)", re.IGNORECASE)
 _CHOOSE_CALL = re.compile(r"\bCHOOSE\s*\(([^()]*)\)", re.IGNORECASE)
 _OFFSET_CALL = re.compile(r"\bOFFSET\s*\(([^()]*)\)", re.IGNORECASE)
 _SWITCH_CELL = re.compile(r"^\$?[A-Z]{1,3}\$?\d+$", re.IGNORECASE)
+# A defined name: a letter or underscore, then letters, digits, ``.`` and ``_``.
+_NAME_ARG = re.compile(r"^(?:\\|[^\W\d])[\w.\\]*$")
+# One cell, optionally on a sheet. A range, an external book, or an error is not this.
+_DEFINED_CELL = re.compile(
+    r"^(?:(?:'(?P<quoted>(?:[^']|'')*)'|(?P<bare>[^'!]+))!)?(?P<cell>\$?[A-Z]{1,3}\$?\d+)$",
+    re.IGNORECASE,
+)
 
 
-def selector_rows(by_row: dict[int, list[dict]], date1904: bool) -> set[int]:
+def selector_rows(
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    defined_names: list | None = None,
+    sheet: str | None = None,
+) -> set[int]:
     """Rows whose constant cell other rows use to pick a column.
 
     The cell is an argument of ``INDEX``, ``CHOOSE``, or ``OFFSET``, it is not
-    itself a formula, and at least two other rows reference it. A same-row
-    ``OFFSET``, or an ``IF`` that merely mentions a driver, is not a switch.
-    When more than one row qualifies, a selector label keeps its row.
+    itself a formula, and at least two other rows reference it. A defined name
+    that points at one cell on this sheet counts as that cell. A workbook name
+    and a sheet-local name of the same spelling: the local name wins on its
+    sheet. A same-row ``OFFSET``, or an ``IF`` that merely mentions a driver,
+    is not a switch. When more than one row qualifies, a selector label keeps
+    its row.
     """
+    names = _names_on_sheet(defined_names, sheet) if sheet else {}
     by_addr: dict[str, tuple[int, dict]] = {}
     for row_n, cells in by_row.items():
         for cell in cells:
@@ -377,7 +394,7 @@ def selector_rows(by_row: dict[int, list[dict]], date1904: bool) -> set[int]:
             formula = str(cell.get("formula_raw") or "")
             if not formula:
                 continue
-            for addr in _switch_args(formula):
+            for addr in _switch_args(formula, names):
                 referenced[addr].add(row_n)
     candidates: set[int] = set()
     for addr, rows in referenced.items():
@@ -400,15 +417,197 @@ def selector_rows(by_row: dict[int, list[dict]], date1904: bool) -> set[int]:
     return labeled or candidates
 
 
-def _switch_args(formula: str) -> set[str]:
+def _switch_args(formula: str, names: dict[str, str]) -> set[str]:
     found: set[str] = set()
     for pattern, skip in ((_INDEX_CALL, 1), (_CHOOSE_CALL, 0), (_OFFSET_CALL, 1)):
         for match in pattern.finditer(formula):
             parts = [part.strip() for part in match.group(1).split(",")]
             for part in parts[skip:]:
-                if _SWITCH_CELL.match(part):
-                    found.add(part.replace("$", "").upper())
+                addr = _plain_addr(part)
+                if addr:
+                    found.add(addr)
+                    continue
+                if _NAME_ARG.match(part):
+                    named = names.get(part.casefold())
+                    if named:
+                        found.add(named)
     return found
+
+
+def _names_on_sheet(defined_names: list | None, sheet: str) -> dict[str, str]:
+    """Casefolded name to one cell on ``sheet``. A local name hides a workbook name."""
+    workbook: dict[str, str] = {}
+    local: dict[str, str] = {}
+    for item in defined_names or []:
+        fields = _defined_fields(item)
+        if fields is None:
+            continue
+        name, formula, scope = fields
+        if scope is not None and scope.casefold() != sheet.casefold():
+            continue
+        addr = _cell_on_sheet(formula, sheet, local=scope is not None)
+        if addr is None:
+            continue
+        bucket = local if scope is not None else workbook
+        bucket[name.casefold()] = addr
+    workbook.update(local)
+    return workbook
+
+
+def _defined_fields(item: object) -> tuple[str, str, str | None] | None:
+    if isinstance(item, dict):
+        name = item.get("name")
+        formula = item.get("formula")
+        scope = item.get("sheet")
+    else:
+        name = getattr(item, "name", None)
+        formula = getattr(item, "formula", None)
+        scope = getattr(item, "sheet", None)
+    if not name or formula is None:
+        return None
+    return str(name), str(formula), str(scope) if scope else None
+
+
+def _cell_on_sheet(formula: str, sheet: str, *, local: bool) -> str | None:
+    """A defined-name formula that is one cell on ``sheet``.
+
+    A range, an external workbook, or another sheet's cell is not a switch.
+    An unqualified cell belongs only to a name that is local to this sheet.
+    """
+    text = formula.strip()
+    if text.startswith("="):
+        text = text[1:].strip()
+    if any(ch in text for ch in ":[#"):
+        return None
+    match = _DEFINED_CELL.match(text)
+    if match is None:
+        return None
+    target = (match.group("quoted") or match.group("bare") or "").replace("''", "'")
+    if target:
+        if target.casefold() != sheet.casefold():
+            return None
+    elif not local:
+        return None
+    return _plain_addr(match.group("cell"))
+
+
+def _plain_addr(token: str) -> str | None:
+    if not _SWITCH_CELL.match(token):
+        return None
+    try:
+        col, row = parse_addr(token.replace("$", ""))
+    except ValueError:
+        return None
+    if not in_grid(col, row):
+        return None
+    return format_addr(col, row)
+
+
+def attach_orphan_switches(
+    sheet: str,
+    blocks: list[Block],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    defined_names: list | None,
+) -> None:
+    """Publish a switch that no table owns as its own one-row params block.
+
+    The constant is still the control other rows pass to ``INDEX``, ``CHOOSE``,
+    or ``OFFSET``. The row is a flag. Its name is the caption above that cell.
+    """
+    if not blocks:
+        return
+    switches = selector_rows(by_row, date1904, defined_names=defined_names, sheet=sheet)
+    placed = {row.row for block in blocks for row in block.rows}
+    for row_n in sorted(switches - placed):
+        item = _orphan_switch_row(by_row, row_n, date1904, defined_names, sheet)
+        if item is None or not item.cells:
+            continue
+        col = item.cells[0].col
+        blocks.insert(
+            _block_insert(blocks, row_n),
+            Block(
+                block_id=f"{sheet}!r{row_n}",
+                label_col=item.label_col if item.label_col is not None else col,
+                axis=Axis(
+                    id=f"{sheet}!r{row_n}",
+                    row=row_n,
+                    headers=[
+                        AxisHeader(col=col, text=item.label, role="value", period_key="value")
+                    ],
+                ),
+                rows=[item],
+                kind="params",
+            ),
+        )
+
+
+def _block_insert(blocks: list[Block], row_n: int) -> int:
+    index = 0
+    while index < len(blocks):
+        rows = blocks[index].rows
+        if rows and min(row.row for row in rows) > row_n:
+            break
+        index += 1
+    return index
+
+
+def _orphan_switch_row(
+    by_row: dict[int, list[dict]],
+    row_n: int,
+    date1904: bool,
+    defined_names: list | None,
+    sheet: str,
+) -> LayoutRow | None:
+    names = _names_on_sheet(defined_names, sheet)
+    referenced: set[str] = set()
+    for row_cells in by_row.values():
+        for cell in row_cells:
+            formula = str(cell.get("formula_raw") or "")
+            if formula:
+                referenced |= _switch_args(formula, names)
+    targets = [
+        cell
+        for cell in by_row.get(row_n, [])
+        if (addr := _plain_addr(str(cell.get("addr") or "")))
+        and addr in referenced
+        and not cell.get("formula_raw")
+    ]
+    if not targets:
+        return None
+    target = min(targets, key=lambda cell: int(cell["col"]))
+    label, label_col = _switch_caption(by_row, row_n, int(target["col"]), date1904)
+    if not label:
+        return None
+    return LayoutRow(
+        row=row_n,
+        label=label,
+        kind="flag",
+        label_col=label_col,
+        cells=[RowCell(col=int(target["col"]), role="value")],
+    )
+
+
+def _switch_caption(
+    by_row: dict[int, list[dict]], row_n: int, col: int, date1904: bool
+) -> tuple[str | None, int]:
+    """Caption above the constant. A formula result on the switch row is not a name."""
+    for above in range(row_n - 1, 0, -1):
+        cell = _cell_at(by_row.get(above, []), col)
+        if cell is None or cell.get("formula_raw"):
+            continue
+        text = _text(cell, date1904)
+        if text and not _is_number(text):
+            return text.strip(), col
+        if text:
+            break
+    for cell in sorted(by_row.get(row_n, []), key=lambda item: int(item["col"])):
+        if cell.get("formula_raw"):
+            continue
+        text = _text(cell, date1904)
+        if text and not _is_number(text):
+            return text.strip(), int(cell["col"])
+    return None, col
 
 
 def _run_column_name(label: str, place: int) -> str:

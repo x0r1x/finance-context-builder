@@ -10,7 +10,11 @@ from finance_context.layout.models import (
     SheetLayout,
     TimeAxis,
 )
-from finance_context.layout.params import carve_params_regions, detect_params_block
+from finance_context.layout.params import (
+    attach_orphan_switches,
+    carve_params_regions,
+    detect_params_block,
+)
 from finance_context.layout.resolve import project_axis
 from finance_context.layout.rows import (
     _band_title,
@@ -31,6 +35,7 @@ def detect_layout(
     hidden_columns: dict[str, set[int]] | None = None,
     hidden_rows: dict[str, set[int]] | None = None,
     summary_below: dict[str, bool] | None = None,
+    defined_names: list | None = None,
 ) -> Layout:
     hidden = hidden_sheets or set()
     columns = hidden_columns or {}
@@ -49,6 +54,7 @@ def detect_layout(
             hidden_cols=set(columns.get(name, ())),
             hidden_row_ids=row_ids,
             summary_below=below.get(name, True),
+            defined_names=defined_names,
         )
         sheets.append(SheetLayout(name=name, blocks=blocks, axes=axes, hidden=name in hidden))
     layout = Layout(sheets=sheets)
@@ -64,6 +70,7 @@ def _blocks_for_sheet(
     hidden_cols: set[int] | None = None,
     hidden_row_ids: set[int] | None = None,
     summary_below: bool = True,
+    defined_names: list | None = None,
 ) -> tuple[list[Block], list[TimeAxis]]:
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
@@ -139,9 +146,10 @@ def _blocks_for_sheet(
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
     if not blocks:
-        extra = detect_params_block(sheet, by_row, date1904, edges)
+        extra = detect_params_block(sheet, by_row, date1904, edges, defined_names)
         if extra is not None:
             blocks.append(extra)
+    attach_orphan_switches(sheet, blocks, by_row, date1904, defined_names)
     return blocks, axes
 
 

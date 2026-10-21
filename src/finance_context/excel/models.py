@@ -30,6 +30,16 @@ class DefinedName(BaseModel):
     name: str
     formula: str
     hidden: bool = False
+    # Sheet the name is local to. Workbook-scoped names omit it. Context does
+    # not publish this; layout uses it to resolve a named scenario switch.
+    sheet: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("sheet"):
+            data.pop("sheet", None)
+        return data
 
 
 class WorkbookMeta(BaseModel):
