@@ -15,7 +15,7 @@ from finance_context.api.errors import ApiError
 from finance_context.api.routes.jobs import _accept_upload, _queue_lost, _read_job
 from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline
-from finance_context.jobqueue.spawn import HORSE_FILE
+from finance_context.jobqueue.spawn import HORSE_FILE, HORSE_LOCK
 from finance_context.settings import Settings
 from finance_context.store.fs import write_json
 from finance_context.store.paths import session_job_dir
@@ -218,8 +218,14 @@ def test_live_horse_is_not_replaced_before_the_child_takes_the_lock(
     queue = _Queue("started")
     ctx = _ctx(tmp_path, queue)
     dest = _meta(ctx)
-    _horse(dest, os.getpid())
-    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    # A dead pid must not matter. The API and the worker do not share PIDs.
+    _horse(dest, _dead_pid())
+    held = _hold(dest / HORSE_LOCK)
+    try:
+        body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    finally:
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
     assert body["status"] == "running"
     assert queue.deleted == 0
     assert queue.enqueued == 0

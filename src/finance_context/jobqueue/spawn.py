@@ -9,6 +9,7 @@ import os
 import signal
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from multiprocessing.connection import wait as wait_for_exit
 from pathlib import Path
@@ -25,6 +26,7 @@ _ARENA_LOCK = threading.Lock()
 
 RUN_LOCK = ".run.lock"
 HORSE_FILE = ".horse.json"
+HORSE_LOCK = ".horse.lock"
 
 
 @dataclass(frozen=True)
@@ -73,22 +75,67 @@ def run_child(
         handle.close()
 
 
-def write_horse_owner(dest: Path, generation: int) -> None:
-    """Record the horse pid before the child exists.
+@contextmanager
+def hold_horse_lock(dest: Path):
+    """Hold ``.horse.lock`` until ``execute_job`` returns.
 
-    A ``started`` job with a free run lock is abandoned only when this pid is
-    dead. Startup can take longer than ``JOB_PARENT_WATCH_INTERVAL_SEC``; the
-    pid, not a timer, is the liveness check.
+    The API and the worker do not share a PID namespace. The lock is on the
+    data volume both of them mount. A killed horse drops it with the process.
     """
+    dest.mkdir(parents=True, exist_ok=True)
+    handle = (dest / HORSE_LOCK).open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def release_horse_record(dest: Path) -> None:
+    """Remove the generation record before a voluntary retry return.
+
+    The caller still holds ``.horse.lock``. A kill before this unlink leaves
+    the record, so a free lock means the horse died. A clean admission retry
+    removes the record so the gap before RQ leaves ``started`` is not lost.
+    """
+    try:
+        (dest / HORSE_FILE).unlink()
+    except FileNotFoundError:
+        return
+
+
+def write_horse_owner(dest: Path, generation: int) -> None:
+    """Record this generation while ``.horse.lock`` is already held."""
     dest.mkdir(parents=True, exist_ok=True)
     write_json(dest / HORSE_FILE, {"pid": os.getpid(), "generation": generation})
 
 
-def horse_owner_alive(dest: Path, generation: int) -> bool | None:
-    """True when the recorded horse is alive, False when it has exited.
+def horse_lock_held(dest: Path) -> bool:
+    """True when a horse holds ``.horse.lock``. A missing file is free."""
+    path = dest / HORSE_LOCK
+    if not path.is_file():
+        return False
+    try:
+        handle = path.open("rb")
+    except OSError:
+        return False
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return False
+    finally:
+        handle.close()
 
-    None when this generation has no record yet. The caller must not treat
-    that as a dead worker: the horse may still be starting.
+
+def horse_owner_alive(dest: Path, generation: int) -> bool | None:
+    """True when this generation's horse holds ``.horse.lock``.
+
+    False when the record exists and the lock is free: the horse exited.
+    None when this generation has no record yet. That is not a dead worker.
     """
     path = dest / HORSE_FILE
     if not path.is_file():
@@ -99,16 +146,7 @@ def horse_owner_alive(dest: Path, generation: int) -> bool | None:
         return None
     if not isinstance(loaded, dict) or loaded.get("generation") != generation:
         return None
-    pid = loaded.get("pid")
-    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
-        return None
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return horse_lock_held(dest)
 
 
 def run_lock_busy(dest: Path) -> bool:

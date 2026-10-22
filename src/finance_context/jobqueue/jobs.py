@@ -15,7 +15,9 @@ from finance_context.app.pipeline import mark_job_failed
 from finance_context.jobqueue.parents import HORSE_ENV, arm_horse_death
 from finance_context.jobqueue.spawn import (
     ChildResult,
+    hold_horse_lock,
     read_meta,
+    release_horse_record,
     run_child,
     spawn_child,
     watch_child,
@@ -78,55 +80,58 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
         rq_job_id=None if current is None else current.id,
     )
     dest = session_job_dir(Path(data_dir), job_id, session_id)
-    # Before admission and spawn. A kill during those steps is visible, and a
-    # live pid keeps a slow child start from looking abandoned.
-    write_horse_owner(dest, generation)
-    budget = budget_for_settings(settings)
-    if _admission_waiting(settings, budget):
-        interval = max(1, int(settings.job_admission_retry_sec))
-        seen = 0
-        if current is not None and current.number_of_retries:
-            seen = int(current.number_of_retries)
-        log_event(
-            _LOGGER,
-            logging.INFO,
-            "job_requeued",
-            "job requeued: cgroup has no room",
-            job_id=job_id,
-            session_id=session_id,
-            queue=settings.queue_name,
-            generation=generation,
-            retry_in_sec=interval,
-            reason="admission",
-            budget_bytes=budget,
+    # The API lives in another container, so a PID check cannot see this horse.
+    # The lock is on the shared volume and is held through every return,
+    # including an admission retry. A kill drops it; the kernel releases flocks.
+    with hold_horse_lock(dest):
+        write_horse_owner(dest, generation)
+        budget = budget_for_settings(settings)
+        if _admission_waiting(settings, budget):
+            release_horse_record(dest)
+            interval = max(1, int(settings.job_admission_retry_sec))
+            seen = 0
+            if current is not None and current.number_of_retries:
+                seen = int(current.number_of_retries)
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "job_requeued",
+                "job requeued: cgroup has no room",
+                job_id=job_id,
+                session_id=session_id,
+                queue=settings.queue_name,
+                generation=generation,
+                retry_in_sec=interval,
+                reason="admission",
+                budget_bytes=budget,
+            )
+            # max grows with each deferral. Admission has no product cap.
+            # interval > 0 schedules this same job (rq#2499: enqueue_in drops unique).
+            return Retry(max=seen + 1, interval=interval)
+        detail = unusable_cap_detail(settings)
+        if detail:
+            mark_job_failed(dest, job_id, "workbook_too_large", generation, detail=detail)
+            return None
+        proc = spawn_child(
+            run_child,
+            (data_dir, job_id, generation, session_id, os.getpid()),
+            malloc_arena_max=settings.job_malloc_arena_max,
+            name=f"finance-job-{job_id[:8]}",
         )
-        # max grows with each deferral. Admission has no product cap.
-        # interval > 0 schedules this same job (rq#2499: enqueue_in drops unique).
-        return Retry(max=seen + 1, interval=interval)
-    detail = unusable_cap_detail(settings)
-    if detail:
-        mark_job_failed(dest, job_id, "workbook_too_large", generation, detail=detail)
-        return None
-    proc = spawn_child(
-        run_child,
-        (data_dir, job_id, generation, session_id, os.getpid()),
-        malloc_arena_max=settings.job_malloc_arena_max,
-        name=f"finance-job-{job_id[:8]}",
-    )
-    result = watch_child(
-        proc,
-        timeout_sec=settings.job_timeout_sec,
-        budget_bytes=budget,
-        watch_interval_sec=settings.job_memory_watch_interval_sec,
-        terminate_grace_sec=settings.job_terminate_grace_sec,
-        kill_grace_sec=settings.job_kill_grace_sec,
-    )
-    # TODO(pr2): when the spawn child reports the shared book lock is held
-    # (PR2 busy signal), return Retry(
-    #     max=settings.shared_cache_busy_max_retries,
-    #     interval=int(settings.shared_cache_busy_retry_sec),
-    # ) so the worker slot is released. Do not use enqueue_in/enqueue_at (rq#2499).
-    return _finish(result, dest, job_id, generation, budget, current)
+        result = watch_child(
+            proc,
+            timeout_sec=settings.job_timeout_sec,
+            budget_bytes=budget,
+            watch_interval_sec=settings.job_memory_watch_interval_sec,
+            terminate_grace_sec=settings.job_terminate_grace_sec,
+            kill_grace_sec=settings.job_kill_grace_sec,
+        )
+        # TODO(pr2): when the spawn child reports the shared book lock is held
+        # (PR2 busy signal), return Retry(
+        #     max=settings.shared_cache_busy_max_retries,
+        #     interval=int(settings.shared_cache_busy_retry_sec),
+        # ) so the worker slot is released. Do not use enqueue_in/enqueue_at (rq#2499).
+        return _finish(result, dest, job_id, generation, budget, current)
 
 
 def on_horse_killed(job: Job, retpid: int, ret_val: int, rusage: object) -> None:

@@ -269,8 +269,10 @@ def _abandoned_started(
 
     ``started`` plus a free run lock is not enough. The child takes the lock
     only after spawn, and that import can outlast
-    ``JOB_PARENT_WATCH_INTERVAL_SEC``. The horse records its pid first. A live
-    pid is still starting or finishing. No record yet is not a dead worker.
+    ``JOB_PARENT_WATCH_INTERVAL_SEC``. The horse holds ``.horse.lock`` on the
+    shared volume for the whole call. A held lock is still starting or
+    finishing. No record yet is not a dead worker. PIDs are not compared:
+    the API and the worker do not share a PID namespace.
     A second status read drops a horse that just returned and left ``started``.
     Redis down on that read is not abandoned.
     """
@@ -510,8 +512,9 @@ def _lost_now(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
         return False
     if status in LOST_STATUSES:
         return True
-    # A started job is lost only when its recorded horse has exited. A live
-    # horse may still be importing the child, with the run lock not taken yet.
+    # A started job is lost only when its horse lock is free. A held lock
+    # means the horse is still importing the child. The check is a flock on
+    # the shared volume, not a PID in this container.
     return _started_without_child(status, dest, meta) and horse_owner_alive(
         dest, _disk_generation(meta)
     ) is False
