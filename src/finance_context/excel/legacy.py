@@ -6,7 +6,6 @@ and every later stage reads that file.
 
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 from typing import Protocol
@@ -15,6 +14,7 @@ from finance_context.errors import ContextError
 from finance_context.excel.ole2 import is_ole2, is_ole2_file, ole2_kind
 from finance_context.excel.xls_cache import overlay_xls_cache
 from finance_context.excel.zip_guard import open_xlsx_zip
+from finance_context.store.fs import atomic_replace
 
 SOURCE = "source.xlsx"
 LEGACY_SOURCE = "source.xls"
@@ -65,7 +65,7 @@ def ensure_xlsx(book: Path, converter: XlsConverter) -> Path:
             return target
     elif target.is_file():
         # Older builds stored `.xls` bytes under the `.xlsx` name.
-        os.replace(target, legacy)
+        atomic_replace(target, legacy)
     if not legacy.is_file():
         raise ContextError("empty_file", f"{SOURCE} missing")
     check_legacy_workbook(legacy, converter)
@@ -74,5 +74,5 @@ def ensure_xlsx(book: Path, converter: XlsConverter) -> Path:
         open_xlsx_zip(converted).close()
         # LibreOffice recalculates. Put Excel's cached values back before parse.
         overlay_xls_cache(legacy, converted)
-        os.replace(converted, target)
+        atomic_replace(converted, target)
     return target

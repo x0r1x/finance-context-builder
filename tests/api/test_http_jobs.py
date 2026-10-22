@@ -89,6 +89,15 @@ def test_repeated_upload_reuses_parse_and_compile(client: TestClient, tmp_path: 
     assert created.status_code == 202
     job_id = created.json()["job_id"]
     assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
+    # Terminal meta is visible before the child writes stages.json. Wait until
+    # that process has exited so the stale stamp is not overwritten.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if not client.app.state.ctx.processes.is_alive(job_id):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("job process did not exit")
 
     job_dir = _job_dir(tmp_path, job_id)
     book_dir = _book_dir(tmp_path, job_id)
@@ -99,6 +108,11 @@ def test_repeated_upload_reuses_parse_and_compile(client: TestClient, tmp_path: 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["publisher"] = "stale"
     meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    stages_path = book_dir / "stages.json"
+    stages = json.loads(stages_path.read_text(encoding="utf-8"))
+    stages["publisher"] = "stale"
+    stages_path.write_text(json.dumps(stages), encoding="utf-8")
+    assert json.loads(stages_path.read_text(encoding="utf-8"))["publisher"] == "stale"
     ir_bytes = {
         name: (book_dir / "ir" / name).read_bytes()
         for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet")

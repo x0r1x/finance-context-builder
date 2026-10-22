@@ -26,6 +26,7 @@ from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.jobs import list_session_jobs
 from finance_context.app.pipeline import mark_job_failed
 from finance_context.app.publisher import publisher_changed, publisher_matches, stale_from_meta
+from finance_context.app.shared_cache import record_rebuild_stage
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, check_legacy_workbook, source_name
 from finance_context.excel.ole2 import is_ole2
@@ -171,16 +172,11 @@ async def post_job(
         try:
             stored = _load_meta(dest)
             disk_generation = _disk_generation(stored)
-            clear_downstream_artifacts(
-                dest, stale_from=stale_from_meta(stored), shared=shared
-            )
-            log_event(
-                _LOGGER,
-                logging.INFO,
-                "snapshot_invalidated",
-                "stale artifacts invalidated",
-                job_id=job_id,
-            )
+            stale = stale_from_meta(stored)
+            # Session publications only. The shared book stays until the child
+            # holds shared/.lock.
+            clear_downstream_artifacts(dest, stale_from=stale)
+            record_rebuild_stage(dest, stale)
             started = ctx.bus.enqueue(job_id, minimum_generation=disk_generation)
             launched = ctx.processes.launch(job_id) if started else False
         except Exception:

@@ -10,7 +10,6 @@ name does not line up is logged and skipped where the cells do not overlap.
 from __future__ import annotations
 
 import logging
-import os
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -32,6 +31,7 @@ from finance_context.excel.ooxml import (
     zip_member,
 )
 from finance_context.excel.zip_guard import open_xlsx_zip
+from finance_context.store.fs import atomic_replace
 
 _LOGGER = logging.getLogger("finance_context.excel")
 _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
@@ -355,7 +355,7 @@ def _rewrite(path: Path, replacements: dict[str, bytes]) -> None:
                 clone.compress_type = info.compress_type
                 clone.external_attr = info.external_attr
                 target.writestr(clone, data)
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     finally:
         if temporary.exists():
             temporary.unlink()

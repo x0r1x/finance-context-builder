@@ -38,6 +38,10 @@ DEFAULT_MALLOC_ARENA_MAX = 2
 # One directory segment. Length is SESSION_ID_MAX_LENGTH, not part of the pattern.
 DEFAULT_SESSION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 DEFAULT_SESSION_ID_MAX_LENGTH = 64
+# Wait between attempts while another session holds the shared book lock.
+DEFAULT_SHARED_CACHE_BUSY_RETRY_SEC = 30
+# Extra attempts after the first busy result. 0 fails on the first busy result.
+DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES = 120
 
 
 class Settings(BaseSettings):
@@ -103,6 +107,11 @@ class Settings(BaseSettings):
     job_malloc_arena_max: int | None = DEFAULT_MALLOC_ARENA_MAX
     # malloc_trim after each pipeline stage. A no-op where libc has no such function.
     job_malloc_trim: bool = True
+    # Seconds between attempts while another session holds shared/books/{job_id}/.lock.
+    # PR3 maps SharedCacheBusy.retry_after_sec to an RQ Retry interval.
+    shared_cache_busy_retry_sec: float = DEFAULT_SHARED_CACHE_BUSY_RETRY_SEC
+    # How many extra attempts follow the first busy result. 0 fails immediately.
+    shared_cache_busy_max_retries: int = DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -158,7 +167,11 @@ class Settings(BaseSettings):
     def require_non_negative_int(cls, value: object, info: ValidationInfo) -> int:
         return _require_int(value, info, minimum=0)
 
-    @field_validator("job_memory_watch_interval_sec", mode="before")
+    @field_validator(
+        "job_memory_watch_interval_sec",
+        "shared_cache_busy_retry_sec",
+        mode="before",
+    )
     @classmethod
     def require_positive_seconds(cls, value: object, info: ValidationInfo) -> float:
         name = info.field_name.upper()
@@ -210,6 +223,11 @@ class Settings(BaseSettings):
     @classmethod
     def require_bool(cls, value: object, info: ValidationInfo) -> bool:
         return _require_bool(value, info)
+
+    @field_validator("shared_cache_busy_max_retries", mode="before")
+    @classmethod
+    def require_busy_retries(cls, value: object, info: ValidationInfo) -> int:
+        return _require_whole_int(value, info, minimum=0)
 
     @field_validator("parquet_row_group_rows", mode="before")
     @classmethod

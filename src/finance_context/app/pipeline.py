@@ -9,6 +9,12 @@ from pathlib import Path
 
 from finance_context.adapters.soffice import SofficeConverter
 from finance_context.app.publisher import publisher_stamp, stamped_stages
+from finance_context.app.shared_cache import (
+    SharedCacheBusy,
+    invalidate_for_run,
+    shared_book_lock,
+    write_shared_stamp,
+)
 from finance_context.context.build import build_context
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, ensure_xlsx, has_source
@@ -67,12 +73,31 @@ class Pipeline:
     ) -> ContextDocument:
         token_job = job_id_var.set(job_id)
         book = shared_dir or dest_dir
+        shared = book != dest_dir
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             book.mkdir(parents=True, exist_ok=True)
-            if book == dest_dir:
-                with file_lock(dest_dir / ".lock"):
-                    return self._run(
+            with shared_book_lock(
+                book,
+                job_id=job_id,
+                retry_after_sec=self.settings.shared_cache_busy_retry_sec,
+                max_retries=self.settings.shared_cache_busy_max_retries,
+            ):
+                if shared:
+                    with file_lock(dest_dir / ".lock"):
+                        invalidate_for_run(dest_dir, book, shared=True, job_id=job_id)
+                        document = self._run(
+                            dest_dir,
+                            job_id=job_id,
+                            source_filename=source_filename,
+                            content_sha256=content_sha256,
+                            progress=progress,
+                            generation=generation,
+                            shared_dir=book,
+                        )
+                else:
+                    invalidate_for_run(dest_dir, book, shared=False, job_id=job_id)
+                    document = self._run(
                         dest_dir,
                         job_id=job_id,
                         source_filename=source_filename,
@@ -81,17 +106,9 @@ class Pipeline:
                         generation=generation,
                         shared_dir=None,
                     )
-            with file_lock(book / ".lock"):
-                with file_lock(dest_dir / ".lock"):
-                    return self._run(
-                        dest_dir,
-                        job_id=job_id,
-                        source_filename=source_filename,
-                        content_sha256=content_sha256,
-                        progress=progress,
-                        generation=generation,
-                        shared_dir=book,
-                    )
+                if shared:
+                    write_shared_stamp(book)
+                return document
         finally:
             job_id_var.reset(token_job)
 
@@ -245,6 +262,7 @@ class Pipeline:
                 settings=self.settings,
             )
         else:
+            _pause_layout_reuse()
             layout = Layout.model_validate_json((book / "layout.json").read_text(encoding="utf-8"))
         cells = ir_cells
         edges = ir_edges
@@ -364,7 +382,13 @@ def run_job_process(
     dest = session_job_dir(settings.data_dir, job_id, settings.session_id)
     shared = shared_book_dir(settings.data_dir, job_id)
     try:
-        Pipeline(settings).run(dest, job_id=job_id, generation=generation, shared_dir=shared)
+        execute_job(
+            Pipeline(settings),
+            dest,
+            job_id=job_id,
+            generation=generation,
+            shared_dir=shared,
+        )
     except ContextError as exc:
         # A known refusal (encrypted book, over budget, bad zip): the code, no traceback.
         mark_job_failed(dest, job_id, exc.code, generation, detail=exc.detail or None)
@@ -389,6 +413,60 @@ def run_job_process(
     except Exception as exc:
         mark_job_failed(dest, job_id, type(exc).__name__, generation)
         raise
+
+
+def execute_job(
+    pipeline: Pipeline,
+    dest_dir: Path,
+    *,
+    job_id: str,
+    source_filename: str | None = None,
+    content_sha256: str | None = None,
+    progress: object | None = None,
+    generation: int = 0,
+    shared_dir: Path | None = None,
+) -> ContextDocument:
+    """Run one job, waiting out :class:`SharedCacheBusy` inside this process.
+
+    This wait is the stand-in until PR3. The RQ worker must not call it.
+    Catch ``SharedCacheBusy`` from :meth:`Pipeline.run` and raise
+    ``rq.Retry(interval=exc.retry_after_sec)`` instead of sleeping. After
+    ``exc.max_retries`` requeues, fail the job with ``shared_cache_busy``.
+
+    Here the first busy result is followed by at most ``max_retries`` more
+    attempts, sleeping ``retry_after_sec`` between them. ``max_retries`` of 0
+    fails on the first busy result. Each wait logs ``shared_cache_busy_requeue``.
+    """
+    attempts = 0
+    while True:
+        try:
+            return pipeline.run(
+                dest_dir,
+                job_id=job_id,
+                source_filename=source_filename,
+                content_sha256=content_sha256,
+                progress=progress,
+                generation=generation,
+                shared_dir=shared_dir,
+            )
+        except SharedCacheBusy as exc:
+            attempts += 1
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "shared_cache_busy_requeue",
+                "shared cache busy",
+                job_id=exc.job_id,
+                attempt=attempts,
+                retry_after_sec=exc.retry_after_sec,
+                max_retries=exc.max_retries,
+            )
+            if attempts > exc.max_retries:
+                raise ContextError(
+                    "shared_cache_busy",
+                    "shared book cache stayed busy",
+                ) from exc
+            time.sleep(exc.retry_after_sec)
 
 
 def mark_job_failed(
@@ -423,6 +501,13 @@ def mark_job_failed(
         return failed
 
     update_json(dest / "meta.json", mutate)
+
+
+def _pause_layout_reuse() -> None:
+    """Test seam: hold the layout-already-exists read until the pause file is gone."""
+    if os.environ.get("FINANCE_CONTEXT_PAUSE_STAGE", "").strip() != "layout_reuse":
+        return
+    _wait_for_pause_release()
 
 
 def _install_stage_pause() -> None:
