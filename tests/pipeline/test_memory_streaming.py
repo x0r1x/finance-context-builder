@@ -122,6 +122,11 @@ def test_row_group_of_one_keeps_values(tmp_path: Path) -> None:
     assert pq.ParquetFile(edges).num_row_groups > 1
     assert _same_table(wide / "ir" / "cell_edges.parquet", edges)
     assert (wide / "ir" / "cell_edges.parquet").read_bytes() != edges.read_bytes()
+    materialized = _run(
+        tmp_path, "materialized", parquet_row_group_rows=1, graph_stream=False
+    )
+    for name in ("ir/graph_edges.parquet", "ir/graph_index.parquet"):
+        assert _same_table(split / name, materialized / name), name
 
 
 def test_memory_switches_reject_non_bools_and_non_finite(monkeypatch: pytest.MonkeyPatch) -> None:
