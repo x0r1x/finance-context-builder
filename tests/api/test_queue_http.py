@@ -35,9 +35,7 @@ def _other(tmp_path: Path) -> Path:
     )
 
 
-def test_same_session_duplicate_post_is_deduped(
-    tmp_path: Path, monkeypatch, caplog
-) -> None:
+def test_same_session_duplicate_post_is_deduped(tmp_path: Path, monkeypatch, caplog) -> None:
     pause = _hold_stage(tmp_path, monkeypatch, "parse")
     source = _xlsx(tmp_path / "model.xlsx")
     try:
@@ -92,7 +90,7 @@ def test_redis_down_post_is_503_with_retry_after(tmp_path: Path) -> None:
     assert response.headers["retry-after"] == "30"
 
 
-def test_readyz_stays_ready_when_redis_is_down(tmp_path: Path) -> None:
+def test_readyz_unavailable_when_redis_is_down(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",
         redis_url="redis://127.0.0.1:1/15",
@@ -101,8 +99,12 @@ def test_readyz_stays_ready_when_redis_is_down(tmp_path: Path) -> None:
     )
     with TestClient(create_app(settings)) as client:
         response = client.get("/readyz")
-    assert response.status_code == 200
+        health = client.get("/healthz")
+    assert response.status_code == 503
     body = response.json()
-    assert body["status"] == "ready"
+    assert body["status"] == "unavailable"
     assert body["jobs"] == 0
     assert body["queue"] == "finance-context"
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}
+    assert list((tmp_path / "data").glob(".ready-*")) == []

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 
 from finance_context.api.errors import ApiError
+from finance_context.api.etag import json_bytes
 from finance_context.api.http import _MARKDOWN, _check_job_id, _ctx, _errors
+from finance_context.api.state import AppContext
+from finance_context.api.threads import run_blocking
 from finance_context.graph.models import TraceDocument
 from finance_context.graph.trace import trace_graph
 from finance_context.models.observation import ObservationPrecedent
+from finance_context.render.graph import render_trace_markdown
 
 router = APIRouter()
 
@@ -25,6 +28,7 @@ _Direction = Annotated[
 ]
 _Depth = Annotated[int, Query(description="How many hops to walk.")]
 
+
 @router.get(
     "/v1/context-jobs/{job_id}/graph/trace",
     response_model=TraceDocument,
@@ -37,24 +41,11 @@ async def get_graph_trace(
     origin: _From,
     direction: _Direction = "precedents",
     depth: _Depth = 8,
-) -> JSONResponse:
+) -> Response:
     _check_job_id(job_id)
-    dest = _ctx(request).store.dest_dir(job_id)
-    if not dest.exists():
-        raise ApiError(404, "not_found")
-    if not (dest / "graph.json").is_file():
-        raise ApiError(409, "report_not_ready")
-    from finance_context.graph.trace import trace_graph
-
-    doc = await asyncio.to_thread(
-        trace_graph,
-        dest,
-        origin=origin,
-        direction=direction,
-        depth=depth,
-        book_dir=_ctx(request).store.shared_dir(job_id),
-    )
-    return JSONResponse(doc.model_dump(mode="json"))
+    ctx = _ctx(request)
+    body = await run_blocking(ctx, _trace_json, ctx, job_id, origin, direction, depth)
+    return Response(content=body, media_type="application/json")
 
 
 @router.get(
@@ -71,24 +62,47 @@ async def get_graph_trace_md(
     depth: _Depth = 8,
 ) -> PlainTextResponse:
     _check_job_id(job_id)
-    dest = _ctx(request).store.dest_dir(job_id)
+    ctx = _ctx(request)
+    body = await run_blocking(ctx, _trace_markdown, ctx, job_id, origin, direction, depth)
+    return PlainTextResponse(body, media_type="text/markdown")
+
+
+def _trace_json(
+    ctx: AppContext,
+    job_id: str,
+    origin: str,
+    direction: str,
+    depth: int,
+) -> bytes:
+    doc = _trace(ctx, job_id, origin, direction, depth)
+    return json_bytes(doc.model_dump(mode="json"))
+
+
+def _trace_markdown(
+    ctx: AppContext,
+    job_id: str,
+    origin: str,
+    direction: str,
+    depth: int,
+) -> str:
+    doc = _trace(ctx, job_id, origin, direction, depth)
+    return render_trace_markdown(doc)
+
+
+def _trace(ctx: AppContext, job_id: str, origin: str, direction: str, depth: int):
+    dest = ctx.store.dest_dir(job_id)
     if not dest.exists():
         raise ApiError(404, "not_found")
     if not (dest / "graph.json").is_file():
         raise ApiError(409, "report_not_ready")
-    from finance_context.graph.trace import trace_graph
-    from finance_context.render.graph import render_trace_markdown
-
-    doc = await asyncio.to_thread(
-        trace_graph,
+    return trace_graph(
         dest,
         origin=origin,
         direction=direction,
         depth=depth,
-        book_dir=_ctx(request).store.shared_dir(job_id),
+        book_dir=ctx.store.shared_dir(job_id),
     )
-    body = await asyncio.to_thread(render_trace_markdown, doc)
-    return PlainTextResponse(body, media_type="text/markdown")
+
 
 def _precedents(dest: Path, book: Path):
     def lookup(origin: str, depth: int) -> list[ObservationPrecedent]:

@@ -4,8 +4,9 @@ import math
 import re
 from pathlib import Path
 from typing import Self
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
-from pydantic import ValidationInfo, field_validator, model_validator
+from pydantic import SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_DATA_DIR = Path("data")
@@ -45,6 +46,10 @@ DEFAULT_SHARED_CACHE_BUSY_RETRY_SEC = 30
 # in-process sleep stops before JOB_TIMEOUT_SEC so the child can record
 # shared_cache_busy before the parent watchdog.
 DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES = 120
+# AnyIO's default CapacityLimiter. Blocking API work uses this many threads.
+DEFAULT_API_THREAD_LIMIT = 40
+# How long one /readyz disk and Redis probe is reused.
+DEFAULT_READYZ_CACHE_TTL_SEC = 10.0
 
 
 class Settings(BaseSettings):
@@ -109,7 +114,12 @@ class Settings(BaseSettings):
     # malloc_trim after each pipeline stage. A no-op where libc has no such function.
     job_malloc_trim: bool = True
     # RQ. The API and the worker both take the address from here. No in-process fallback.
+    # No userinfo: AUTH is sent only when a username or password is configured.
     redis_url: str = "redis://redis:6379/0"
+    # Empty means the default user. A non-empty value overrides URL userinfo.
+    redis_username: str = ""
+    # Empty or unset means no password. A non-empty value overrides URL userinfo.
+    redis_password: SecretStr | None = None
     redis_connect_timeout_sec: float = 2
     queue_name: str = "finance-context"
     # Queued plus started jobs for one SESSION_ID. Above this, POST is 429.
@@ -137,6 +147,12 @@ class Settings(BaseSettings):
     # The horse stops the spawn child with SIGTERM, then SIGKILL.
     job_terminate_grace_sec: float = 5
     job_kill_grace_sec: float = 5
+    # Threads for blocking API work: file I/O, hashing, JSON, and the RQ client.
+    api_thread_limit: int = DEFAULT_API_THREAD_LIMIT
+    # /readyz reuses one writability check and Redis ping for this long.
+    # The usual probe uses an unnamed inode. Without O_TMPFILE the probe
+    # creates a short-lived .ready- file and unlinks it. /healthz does no I/O.
+    readyz_cache_ttl_sec: float = DEFAULT_READYZ_CACHE_TTL_SEC
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -201,6 +217,7 @@ class Settings(BaseSettings):
         "job_parent_watch_interval_sec",
         "job_terminate_grace_sec",
         "job_kill_grace_sec",
+        "readyz_cache_ttl_sec",
         mode="before",
     )
     @classmethod
@@ -272,6 +289,28 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_URL must start with redis://, rediss://, or unix://")
         return token
 
+    @field_validator("redis_username", mode="before")
+    @classmethod
+    def empty_redis_username(cls, value: object, info: ValidationInfo) -> str:
+        del info
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError("REDIS_USERNAME must be a string")
+        return value.strip()
+
+    @field_validator("redis_password", mode="before")
+    @classmethod
+    def empty_redis_password(cls, value: object, info: ValidationInfo) -> object:
+        del info
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            return None if value.get_secret_value() == "" else value
+        if isinstance(value, str):
+            return None if value == "" else value
+        raise ValueError("REDIS_PASSWORD must be a string")
+
     @field_validator("queue_name", mode="before")
     @classmethod
     def require_queue_name(cls, value: object, info: ValidationInfo) -> str:
@@ -283,7 +322,7 @@ class Settings(BaseSettings):
             raise ValueError("QUEUE_NAME must be a single token")
         return token
 
-    @field_validator("job_queue_max_per_session", mode="before")
+    @field_validator("job_queue_max_per_session", "api_thread_limit", mode="before")
     @classmethod
     def require_session_cap(cls, value: object, info: ValidationInfo) -> int:
         return _require_whole_int(value, info, minimum=1)
@@ -327,6 +366,44 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def redis_username_needs_password(self) -> Self:
+        # Raises when a username, from the env or the URL, has no password.
+        self.redis_from_url_args()
+        return self
+
+    def redis_from_url_args(self) -> tuple[str, dict[str, str]]:
+        """URL and credential kwargs for ``Redis.from_url``.
+
+        When ``REDIS_USERNAME`` and ``REDIS_PASSWORD`` are both empty, the URL
+        is returned unchanged and the dict is empty. A credential-less URL
+        then sends no AUTH. A non-empty env value overrides that one field of
+        the URL userinfo; the other field still comes from the URL. redis-py
+        lets the URL win over kwargs, so an override strips userinfo first.
+        """
+        user, password, override = self._resolved_redis_auth()
+        if user is not None and password is None:
+            raise ValueError("REDIS_USERNAME requires REDIS_PASSWORD")
+        if not override:
+            return self.redis_url, {}
+        kwargs: dict[str, str] = {}
+        if user is not None:
+            kwargs["username"] = user
+        if password is not None:
+            kwargs["password"] = password
+        return _strip_redis_credentials(self.redis_url), kwargs
+
+    def _resolved_redis_auth(self) -> tuple[str | None, str | None, bool]:
+        env_user = self.redis_username or None
+        env_password = None
+        if self.redis_password is not None:
+            raw = self.redis_password.get_secret_value()
+            env_password = raw if raw else None
+        url_user, url_password = _url_redis_credentials(self.redis_url)
+        user = env_user if env_user is not None else url_user
+        password = env_password if env_password is not None else url_password
+        return user, password, env_user is not None or env_password is not None
+
     def queue_job_timeout_sec(self) -> int:
         """RQ's spare limit. The horse's own JOB_TIMEOUT_SEC stays the real stop."""
         total = (
@@ -336,6 +413,56 @@ class Settings(BaseSettings):
             + self.queue_job_timeout_margin_sec
         )
         return max(1, math.ceil(total))
+
+
+def write_redis_env(env: dict[str, str], settings: Settings) -> None:
+    """Copy Redis settings into a child environment. Empty credentials are removed."""
+    env["REDIS_URL"] = settings.redis_url
+    if settings.redis_username:
+        env["REDIS_USERNAME"] = settings.redis_username
+    else:
+        env.pop("REDIS_USERNAME", None)
+    secret = ""
+    if settings.redis_password is not None:
+        secret = settings.redis_password.get_secret_value()
+    if secret:
+        env["REDIS_PASSWORD"] = secret
+    else:
+        env.pop("REDIS_PASSWORD", None)
+
+
+def _url_redis_credentials(url: str) -> tuple[str | None, str | None]:
+    parts = urlsplit(url)
+    username = unquote(parts.username) if parts.username else None
+    password = unquote(parts.password) if parts.password else None
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key == "username" and not username:
+            username = value or None
+        elif key == "password" and not password:
+            password = value or None
+    return username or None, password or None
+
+
+def _strip_redis_credentials(url: str) -> str:
+    """Drop userinfo and credential query keys. Host, db, and other query stay."""
+    parts = urlsplit(url)
+    if parts.scheme == "unix":
+        netloc = ""
+    else:
+        host = parts.hostname or ""
+        if host and ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        netloc = host
+        if parts.port is not None:
+            netloc = f"{host}:{parts.port}"
+    query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if key not in {"username", "password"}
+        ]
+    )
+    return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
 
 
 def _require_bool(value: object, info: ValidationInfo) -> bool:

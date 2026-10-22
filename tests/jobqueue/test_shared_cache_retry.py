@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-from redis import Redis
 from rq import Queue, Retry, SimpleWorker
 from rq.job import Job, JobStatus
 from rq.serializers import JSONSerializer
@@ -17,7 +16,7 @@ from finance_context.api.state import AppContext
 from finance_context.app.pipeline import SHARED_CACHE_BUSY_EXIT, Pipeline, run_queued_job
 from finance_context.app.shared_cache import SharedCacheBusy
 from finance_context.jobqueue.jobs import execute_job
-from finance_context.jobqueue.queue import RQJobQueue
+from finance_context.jobqueue.queue import RQJobQueue, redis_client
 from finance_context.jobqueue.spawn import HORSE_FILE, ChildResult, spawn_child, watch_child
 from finance_context.settings import Settings
 from finance_context.store.paths import session_job_dir
@@ -150,8 +149,8 @@ def test_requeue_does_not_create_a_second_job(
     monkeypatch.setenv("SHARED_CACHE_BUSY_MAX_RETRIES", "5")
     monkeypatch.setenv("REDIS_URL", redis_settings.redis_url)
     dest = _prepare(tmp_path)
-    client = Redis.from_url(
-        redis_settings.redis_url,
+    client = redis_client(
+        redis_settings,
         socket_connect_timeout=2,
         socket_timeout=2,
     )

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import FastAPI, Request
 
 from finance_context.adapters.disk_store import DiskStore
@@ -18,6 +20,7 @@ from finance_context.store.filesystem import ensure_data_dir_local
 from finance_context.store.paths import session_jobs_root
 
 _HTTP_LOGGER = logging.getLogger("finance_context.api.http")
+_API_LOGGER = logging.getLogger("finance_context.api")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -33,7 +36,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     pipeline = Pipeline(settings)
     queue = RQJobQueue.from_settings(settings, connect_timeout=True)
 
-    app = FastAPI(title="finance-context-builder")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # One limiter object for every request. Request tasks do not inherit
+        # the lifespan contextvar, so routes pass this object into run_sync.
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        limiter.total_tokens = settings.api_thread_limit
+        app.state.ctx.thread_limiter = limiter
+        log_event(
+            _API_LOGGER,
+            logging.INFO,
+            "api_config",
+            "effective API thread settings",
+            thread_limit=settings.api_thread_limit,
+            readyz_ttl_sec=settings.readyz_cache_ttl_sec,
+        )
+        yield
+
+    app = FastAPI(title="finance-context-builder", lifespan=lifespan)
     app.state.ctx = AppContext(
         settings=settings,
         store=store,

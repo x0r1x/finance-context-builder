@@ -57,6 +57,8 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("JOB_MALLOC_ARENA_MAX", "job_malloc_arena_max"),
     EnvSpec("JOB_MALLOC_TRIM", "job_malloc_trim"),
     EnvSpec("REDIS_URL", "redis_url"),
+    EnvSpec("REDIS_USERNAME", "redis_username"),
+    EnvSpec("REDIS_PASSWORD", "redis_password"),
     EnvSpec("REDIS_CONNECT_TIMEOUT_SEC", "redis_connect_timeout_sec"),
     EnvSpec("QUEUE_NAME", "queue_name"),
     EnvSpec("JOB_QUEUE_MAX_PER_SESSION", "job_queue_max_per_session"),
@@ -73,4 +75,6 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("JOB_RETRY_AFTER_SEC", "job_retry_after_sec"),
     EnvSpec("JOB_TERMINATE_GRACE_SEC", "job_terminate_grace_sec"),
     EnvSpec("JOB_KILL_GRACE_SEC", "job_kill_grace_sec"),
+    EnvSpec("API_THREAD_LIMIT", "api_thread_limit"),
+    EnvSpec("READYZ_CACHE_TTL_SEC", "readyz_cache_ttl_sec"),
 )
