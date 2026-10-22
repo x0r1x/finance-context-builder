@@ -45,6 +45,10 @@ DEFAULT_SHARED_CACHE_BUSY_RETRY_SEC = 30
 # in-process sleep stops before JOB_TIMEOUT_SEC so the child can record
 # shared_cache_busy before the parent watchdog.
 DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES = 120
+# AnyIO's default CapacityLimiter. Blocking API work uses this many threads.
+DEFAULT_API_THREAD_LIMIT = 40
+# How long one /readyz disk and Redis probe is reused.
+DEFAULT_READYZ_CACHE_TTL_SEC = 10.0
 
 
 class Settings(BaseSettings):
@@ -137,6 +141,11 @@ class Settings(BaseSettings):
     # The horse stops the spawn child with SIGTERM, then SIGKILL.
     job_terminate_grace_sec: float = 5
     job_kill_grace_sec: float = 5
+    # Threads for blocking API work: file I/O, hashing, JSON, and the RQ client.
+    api_thread_limit: int = DEFAULT_API_THREAD_LIMIT
+    # /readyz reuses one writability check and Redis ping for this long.
+    # The probe does not create a file. /healthz does no I/O.
+    readyz_cache_ttl_sec: float = DEFAULT_READYZ_CACHE_TTL_SEC
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -201,6 +210,7 @@ class Settings(BaseSettings):
         "job_parent_watch_interval_sec",
         "job_terminate_grace_sec",
         "job_kill_grace_sec",
+        "readyz_cache_ttl_sec",
         mode="before",
     )
     @classmethod
@@ -283,7 +293,7 @@ class Settings(BaseSettings):
             raise ValueError("QUEUE_NAME must be a single token")
         return token
 
-    @field_validator("job_queue_max_per_session", mode="before")
+    @field_validator("job_queue_max_per_session", "api_thread_limit", mode="before")
     @classmethod
     def require_session_cap(cls, value: object, info: ValidationInfo) -> int:
         return _require_whole_int(value, info, minimum=1)

@@ -32,6 +32,8 @@ def test_queue_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.job_retry_after_sec == 30
     assert settings.job_terminate_grace_sec == 5
     assert settings.job_kill_grace_sec == 5
+    assert settings.api_thread_limit == 40
+    assert settings.readyz_cache_ttl_sec == 10
     # 3600 + 5 + 5 + 120
     assert settings.queue_job_timeout_sec() == 3730
 
@@ -64,3 +66,7 @@ def test_blank_queue_numbers_are_rejected() -> None:
         Settings(_env_file=None, queue_job_ttl_sec=-1)
     with pytest.raises(ValidationError, match="JOB_RETRY_ON_LOST"):
         Settings(_env_file=None, job_retry_on_lost=-1)
+    with pytest.raises(ValidationError, match="API_THREAD_LIMIT"):
+        Settings(_env_file=None, api_thread_limit=0)
+    with pytest.raises(ValidationError, match="READYZ_CACHE_TTL_SEC"):
+        Settings(_env_file=None, readyz_cache_ttl_sec=0)

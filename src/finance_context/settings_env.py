@@ -73,4 +73,6 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("JOB_RETRY_AFTER_SEC", "job_retry_after_sec"),
     EnvSpec("JOB_TERMINATE_GRACE_SEC", "job_terminate_grace_sec"),
     EnvSpec("JOB_KILL_GRACE_SEC", "job_kill_grace_sec"),
+    EnvSpec("API_THREAD_LIMIT", "api_thread_limit"),
+    EnvSpec("READYZ_CACHE_TTL_SEC", "readyz_cache_ttl_sec"),
 )

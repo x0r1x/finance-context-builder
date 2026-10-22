@@ -72,7 +72,7 @@ Observations require at least one selector: repeatable `row_key` or `q`. `q` is 
 
 `limit` defaults to 24 and stops at 48. Past the limit the observation list is cut and `truncated=true`. `precedent_depth` defaults to 0 and stops at 3. Depth 0 does not call trace: the precedent list is empty and `precedents_total` is 0. Depth 1–3 calls the current `trace_graph` and embeds the whole walk at that depth. `precedents_total` is the length of that list. A wider walk on this route is a higher `precedent_depth`. Above 3 the response is 422. Beyond that depth, read `graph/trace`. Each item carries `depth` and the `label` of the context row with the same `row_key`. With no `row_key`, `label` is null. A number outside the range is 422.
 
-The `ETag` of catalog, summary, and observations is strong: schema, `content_sha256`, and the file stat. Summary and observations also include the `graph.json` stat. The same URL repeated with `If-None-Match` returns 304 and an empty body. `HEAD` of the same path returns that `ETag` and an empty body. 400 and 409 do not send an `ETag`. The cell address and the formula class are response fields. They are still not written into `context.json`.
+The `ETag` of catalog, summary, and observations is strong: schema, `content_sha256`, and the file stat. Summary and observations also include the `graph.json` stat. The same URL repeated with `If-None-Match` returns 304 and an empty body. `HEAD` of the same path returns that `ETag` and an empty body. It uses the file stat and does not parse the artifact or build the projection. 400 and 409 do not send an `ETag`. The cell address and the formula class are response fields. They are still not written into `context.json`.
 
 ## Slice field → current artifact
 

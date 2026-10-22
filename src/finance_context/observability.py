@@ -99,6 +99,8 @@ _ALLOWED_EXTRA = frozenset(
         "ttl_sec",
         "result_ttl_sec",
         "failure_ttl_sec",
+        "thread_limit",
+        "readyz_ttl_sec",
     }
 )
 
