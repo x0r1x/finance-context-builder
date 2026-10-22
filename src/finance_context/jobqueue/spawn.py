@@ -1,0 +1,206 @@
+"""Spawn one pipeline child and watch its RSS, timeout, and cgroup OOM."""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import multiprocessing
+import os
+import threading
+import time
+from dataclasses import dataclass
+from multiprocessing.connection import wait as wait_for_exit
+from pathlib import Path
+
+from finance_context.app.pipeline import run_job_process
+from finance_context.jobqueue.parents import arm_child_death
+from finance_context.memory import cgroup_oom_kill_count, process_rss_bytes
+from finance_context.settings import Settings
+from finance_context.store.paths import session_job_dir
+
+# os.environ is process-global. Two horses must not start children at once.
+_ARENA_LOCK = threading.Lock()
+
+RUN_LOCK = ".run.lock"
+
+
+@dataclass(frozen=True)
+class ChildResult:
+    timed_out: bool = False
+    over_budget: bool = False
+    rss_bytes: int = 0
+    kernel_oom: bool = False
+
+
+def hold_for_probe(seconds: float) -> None:
+    """Stay alive so a test can read this process's environ. Not a pipeline."""
+    time.sleep(seconds)
+
+
+def run_child(data_dir: str, job_id: str, generation: int, session_id: str) -> None:
+    """Hold the run lock, watch the horse, and run one book.
+
+    The lock file is never unlinked. GET treats a free lock plus a missing
+    RQ job as ``queue_lost``. ``os._exit`` from the parent watch skips this
+    ``finally``; the kernel drops the flock.
+    """
+    dest = session_job_dir(Path(data_dir), job_id, session_id)
+    dest.mkdir(parents=True, exist_ok=True)
+    handle = (dest / RUN_LOCK).open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        arm_child_death(Settings().job_parent_watch_interval_sec)
+        run_job_process(data_dir, job_id, generation, session_id)
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def run_lock_busy(dest: Path) -> bool:
+    """True when the spawn child holds ``.run.lock``.
+
+    Does not create the file. A missing lock is free.
+    """
+    path = dest / RUN_LOCK
+    if not path.is_file():
+        return False
+    try:
+        handle = path.open("rb")
+    except OSError:
+        return False
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return False
+    finally:
+        handle.close()
+
+
+def spawn_child(
+    target: object,
+    args: tuple[object, ...],
+    *,
+    malloc_arena_max: int | None,
+    name: str,
+) -> multiprocessing.Process:
+    """Start a spawn-context child with ``MALLOC_ARENA_MAX`` set for the exec.
+
+    glibc reads the variable at exec. It is set on this process only for the
+    ``start()`` call, then restored. The class lock keeps two overlapping
+    starts from publishing each other's value.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    proc = ctx.Process(target=target, args=args, name=name)
+    with _ARENA_LOCK:
+        previous = os.environ.get("MALLOC_ARENA_MAX")
+        if malloc_arena_max:
+            os.environ["MALLOC_ARENA_MAX"] = str(malloc_arena_max)
+        try:
+            proc.start()
+        finally:
+            if previous is None:
+                os.environ.pop("MALLOC_ARENA_MAX", None)
+            else:
+                os.environ["MALLOC_ARENA_MAX"] = previous
+    return proc
+
+
+def stop_child(
+    proc: multiprocessing.Process | None,
+    *,
+    terminate_grace_sec: float,
+    kill_grace_sec: float,
+) -> None:
+    """SIGTERM, then SIGKILL if the child is still alive after the first pause."""
+    if proc is None:
+        return
+    if not proc.is_alive():
+        proc.join(terminate_grace_sec)
+        return
+    proc.terminate()
+    proc.join(terminate_grace_sec)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(kill_grace_sec)
+
+
+def watch_child(
+    proc: multiprocessing.Process,
+    *,
+    timeout_sec: float,
+    budget_bytes: int | None,
+    watch_interval_sec: float,
+    terminate_grace_sec: float,
+    kill_grace_sec: float,
+) -> ChildResult:
+    """Block until the child exits, times out, crosses the RSS cap, or is OOM-killed.
+
+    Timeout comes from the sentinel, not ``is_alive()``. A waiter can reap the
+    child first; ``waitpid`` then raises ``ECHILD`` and ``poll()`` still reports
+    the process as alive.
+    """
+    oom_before = cgroup_oom_kill_count()
+    deadline = None
+    if timeout_sec > 0:
+        deadline = time.monotonic() + timeout_sec
+    while True:
+        if deadline is None:
+            slice_s = watch_interval_sec
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stop_child(
+                    proc,
+                    terminate_grace_sec=terminate_grace_sec,
+                    kill_grace_sec=kill_grace_sec,
+                )
+                return _with_oom(
+                    ChildResult(timed_out=True),
+                    oom_before,
+                )
+            slice_s = min(watch_interval_sec, remaining)
+        if wait_for_exit([proc.sentinel], slice_s):
+            proc.join()
+            return _with_oom(ChildResult(), oom_before)
+        # The oom_kill counter is the whole cgroup. Another slot dying must
+        # not abandon a child that is still running.
+        if not proc.is_alive():
+            proc.join()
+            return _with_oom(ChildResult(), oom_before)
+        if budget_bytes is None:
+            continue
+        rss = process_rss_bytes(proc.pid)
+        if rss is not None and rss > budget_bytes:
+            proc.kill()
+            proc.join(kill_grace_sec)
+            # Our SIGKILL is not a cgroup oom_kill. A counter that moved anyway
+            # means the kernel got there too; that result wins.
+            if _oom_increased(oom_before):
+                return ChildResult(kernel_oom=True, rss_bytes=rss)
+            return ChildResult(over_budget=True, rss_bytes=rss)
+
+
+def _with_oom(result: ChildResult, oom_before: int | None) -> ChildResult:
+    if result.over_budget or not _oom_increased(oom_before):
+        return result
+    return ChildResult(kernel_oom=True, rss_bytes=result.rss_bytes)
+
+
+def _oom_increased(before: int | None) -> bool:
+    if before is None:
+        return False
+    after = cgroup_oom_kill_count()
+    return after is not None and after > before
+
+
+def read_meta(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}

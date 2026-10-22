@@ -9,16 +9,23 @@ services:
     # `.env` already passes SOFFICE_BIN and XLS_CONVERT_TIMEOUT_SEC through.
     # The image has `soffice` on PATH. Keep the conversion timeout below
     # JOB_TIMEOUT_SEC (defaults 300 and 3600) so a hung soffice fails the job
-    # before the server stops the process.
+    # before the worker stops the child.
     environment:
       DATA_DIR: /app/data
-    # 4 GiB container. Two job slots derive a 1536 MiB RSS cap
-    # (three quarters of this limit, split across MAX_CONCURRENT_JOBS).
-    mem_limit: 4g
+      # The `redis` hostname is the service on the external finance-stack network.
+      REDIS_URL: redis://redis:6379/0
+    # The API only accepts work. The 4 GiB budget lives on the worker.
+    mem_limit: 512m
     volumes:
       - ./data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - finance-stack
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
     healthcheck:
       test:
         [
@@ -31,3 +38,61 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  worker:
+    build: .
+    command: ["finance-context", "worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /app/data
+      REDIS_URL: redis://redis:6379/0
+    # 4 GiB worker. Two job slots derive a 1536 MiB RSS cap
+    # (three quarters of this limit, split across MAX_CONCURRENT_JOBS).
+    mem_limit: 4g
+    # JOB_TIMEOUT_SEC 3600 + JOB_TERMINATE_GRACE_SEC 5 + JOB_KILL_GRACE_SEC 5
+    # + QUEUE_JOB_TIMEOUT_MARGIN_SEC 120.
+    stop_grace_period: 3730s
+    volumes:
+      - ./data:/app/data
+    networks:
+      - finance-stack
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "finance-context", "worker", "--check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Optional, for a machine that does not already have finance-stack's redis:
+  #   docker network create finance-stack
+  #   docker compose --profile dev up --build
+  redis:
+    image: redis:7
+    profiles: ["dev"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    networks:
+      - finance-stack
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  finance-stack:
+    external: true

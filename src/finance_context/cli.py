@@ -14,6 +14,7 @@ from finance_context.app.pipeline import Pipeline, mark_job_failed
 from finance_context.app.publisher import publisher_matches, stale_from_meta
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import LEGACY_SOURCE, SOURCE, source_name
+from finance_context.jobqueue.pool import serve_workers, worker_check
 from finance_context.memory import MEMORY_ERROR_DETAIL
 from finance_context.observability import configure_logging
 from finance_context.settings import DEFAULT_DATA_DIR, Settings
@@ -150,3 +151,20 @@ def serve(
         factory=True,
         workers=1,
     )
+
+
+@app.command()
+def worker(
+    data_dir: Annotated[Path | None, typer.Option("--data-dir")] = None,
+    check: Annotated[bool, typer.Option("--check")] = False,
+) -> None:
+    """Run the shared job queue, or check Redis and DATA_DIR and exit."""
+    import os
+
+    if data_dir is not None:
+        os.environ["DATA_DIR"] = str(data_dir)
+    settings = Settings()
+    configure_logging(level=settings.log_level, json_output=settings.log_json)
+    if check:
+        raise typer.Exit(code=worker_check(settings))
+    serve_workers(settings)

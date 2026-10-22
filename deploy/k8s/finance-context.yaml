@@ -1,0 +1,200 @@
+# One node, one RWO data volume, one Redis, one worker pool.
+# Run one API Deployment per SESSION_ID (change metadata.name, the label,
+# and SESSION_ID). They share this PVC. Do not put DATA_DIR on NFS or RWX.
+# Label the node first: finance-context/storage=local
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: finance-context
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+  namespace: finance-context
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: finance-context
+spec:
+  clusterIP: None
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: finance-context
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: finance-context/storage
+                    operator: In
+                    values:
+                      - local
+      containers:
+        - name: redis
+          image: redis:7
+          args:
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            - --maxmemory-policy
+            - noeviction
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-local
+  namespace: finance-context
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: finance-context-api
+      session: local
+  template:
+    metadata:
+      labels:
+        app: finance-context-api
+        session: local
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: finance-context/storage
+                    operator: In
+                    values:
+                      - local
+      containers:
+        - name: api
+          image: finance-context-builder:local
+          args: ["finance-context", "serve", "--host", "0.0.0.0", "--port", "8080"]
+          env:
+            - name: DATA_DIR
+              value: /app/data
+            - name: REDIS_URL
+              value: redis://redis-0.redis:6379/0
+            - name: SESSION_ID
+              value: local
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 30
+          resources:
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: finance-context
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: finance-context-worker
+  template:
+    metadata:
+      labels:
+        app: finance-context-worker
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: finance-context/storage
+                    operator: In
+                    values:
+                      - local
+      containers:
+        - name: worker
+          image: finance-context-builder:local
+          args: ["finance-context", "worker"]
+          env:
+            - name: DATA_DIR
+              value: /app/data
+            - name: REDIS_URL
+              value: redis://redis-0.redis:6379/0
+          livenessProbe:
+            exec:
+              command: ["finance-context", "worker", "--check"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            limits:
+              memory: 4Gi
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data
