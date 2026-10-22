@@ -81,17 +81,37 @@ def _acl_text(raw: object) -> str:
     return str(raw)
 
 
+def _acl_tokens(line: str) -> list[str]:
+    """Split an ACL LIST line. A parenthesized selector stays one rule."""
+    tokens: list[str] = []
+    selector: list[str] = []
+    for token in shlex.split(line):
+        if selector:
+            selector.append(token)
+            if token.endswith(")"):
+                tokens.append(" ".join(selector))
+                selector = []
+            continue
+        if token.startswith("(") and not token.endswith(")"):
+            selector = [token]
+            continue
+        tokens.append(token)
+    if selector:
+        raise RuntimeError("unterminated ACL selector")
+    return tokens
+
+
 def _acl_line(client: Redis, username: str) -> str | None:
     for raw in client.acl_list():
         line = _acl_text(raw)
-        tokens = shlex.split(line)
+        tokens = _acl_tokens(line)
         if len(tokens) >= 2 and tokens[0] == "user" and tokens[1] == username:
             return line
     return None
 
 
 def _apply_acl_line(client: Redis, line: str) -> None:
-    tokens = shlex.split(line)
+    tokens = _acl_tokens(line)
     if len(tokens) < 2 or tokens[0] != "user":
         raise RuntimeError("unexpected ACL LIST entry")
     client.execute_command("ACL", "SETUSER", tokens[1], "reset", *tokens[2:])
@@ -144,6 +164,39 @@ def _command_has_auth(command: str) -> bool:
 
 def _saw_ping(commands: list[str]) -> bool:
     return any("PING" in command.split() for command in commands)
+
+
+def test_unterminated_selector_is_rejected_before_setuser() -> None:
+    class _NoCommand:
+        def execute_command(self, *args: object) -> None:
+            raise AssertionError(args)
+
+    with pytest.raises(RuntimeError, match="unterminated ACL selector"):
+        _apply_acl_line(_NoCommand(), "user app on (+set ~app1*")  # type: ignore[arg-type]
+
+
+def test_selector_acl_line_roundtrips(admin: Redis) -> None:
+    name = "selector-user"
+    try:
+        admin.execute_command(
+            "ACL",
+            "SETUSER",
+            name,
+            "reset",
+            "on",
+            "nopass",
+            "+get",
+            "~*",
+            "(+set",
+            "~app1*)",
+        )
+        line = _acl_line(admin, name)
+        assert line is not None
+        admin.acl_setuser(name, enabled=False, reset=True)
+        _apply_acl_line(admin, line)
+        assert _acl_line(admin, name) == line
+    finally:
+        admin.acl_deluser(name)
 
 
 def test_restore_replays_saved_acl_lines(admin: Redis) -> None:
