@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import time
 from pathlib import Path
 
@@ -14,7 +15,9 @@ from finance_context.api.errors import ApiError
 from finance_context.api.routes.jobs import _accept_upload, _queue_lost, _read_job
 from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline
+from finance_context.jobqueue.spawn import HORSE_FILE
 from finance_context.settings import Settings
+from finance_context.store.fs import write_json
 from finance_context.store.paths import session_job_dir
 
 _JOB = "ab" * 32
@@ -70,6 +73,25 @@ def _meta(ctx: AppContext, **fields: object) -> Path:
     body.update(fields)
     (dest / "meta.json").write_text(json.dumps(body), encoding="utf-8")
     return dest
+
+
+def _no_sleep(_seconds: float) -> None:
+    raise AssertionError("liveness slept")
+
+
+def _dead_pid() -> int:
+    for candidate in range(2_147_000_001, 2_147_000_040):
+        try:
+            os.kill(candidate, 0)
+        except ProcessLookupError:
+            return candidate
+        except PermissionError:
+            continue
+    raise AssertionError("no unused pid")
+
+
+def _horse(dest: Path, pid: int, generation: int = 1) -> None:
+    write_json(dest / HORSE_FILE, {"pid": pid, "generation": generation})
 
 
 def _hold(path: Path):
@@ -128,10 +150,15 @@ def test_publisher_change_stops_before_the_pipeline_lock_and_does_not_replace(
     assert queue.enqueued == 0
 
 
-def test_started_without_a_run_lock_is_enqueued_again(tmp_path: Path) -> None:
+def test_started_without_a_run_lock_is_enqueued_again(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "finance_context.api.routes.jobs.time.sleep",
+        _no_sleep,
+    )
     queue = _Queue("started")
     ctx = _ctx(tmp_path, queue)
-    _meta(ctx)
+    dest = _meta(ctx)
+    _horse(dest, _dead_pid())
     body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
     assert body["status"] == "queued"
     assert body["stage"] == "queued"
@@ -176,14 +203,43 @@ def test_get_marks_a_started_job_with_a_free_run_lock_lost(tmp_path: Path) -> No
     queue = _Queue("started")
     ctx = _ctx(tmp_path, queue)
     dest = _meta(ctx)
+    _horse(dest, _dead_pid())
     meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
     assert _queue_lost(ctx, _JOB, dest, meta) is True
+
+
+def test_live_horse_is_not_replaced_before_the_child_takes_the_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "finance_context.api.routes.jobs.time.sleep",
+        _no_sleep,
+    )
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(ctx)
+    _horse(dest, os.getpid())
+    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    assert body["status"] == "running"
+    assert queue.deleted == 0
+    assert queue.enqueued == 0
+
+
+def test_started_without_a_horse_record_is_not_replaced(tmp_path: Path) -> None:
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    _meta(ctx)
+    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    assert body["status"] == "running"
+    assert queue.deleted == 0
+    assert queue.enqueued == 0
 
 
 def test_get_keeps_a_job_that_finishes_during_the_recheck(tmp_path: Path) -> None:
     queue = _Queue("started")
     ctx = _ctx(tmp_path, queue)
     dest = _meta(ctx)
+    _horse(dest, _dead_pid())
     meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
     original = queue.status
 

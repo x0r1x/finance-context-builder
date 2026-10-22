@@ -37,7 +37,7 @@ from finance_context.jobqueue.queue import (
     QueueUnavailable,
     rq_job_id,
 )
-from finance_context.jobqueue.spawn import run_lock_busy
+from finance_context.jobqueue.spawn import horse_owner_alive, run_lock_busy
 from finance_context.models.context import JobStatus
 from finance_context.observability import log_event
 from finance_context.store.fs import atomic_write_bytes, file_lock, write_json
@@ -265,20 +265,27 @@ def _abandoned_started(
     stored: dict | None,
     status: str | None,
 ) -> bool:
-    """True when ``started`` survives one recheck with nobody holding the run lock.
+    """True when the horse that owns this generation has exited.
 
-    A normal exit releases the lock before the horse writes terminal meta and
-    RQ leaves ``started``. The pause is ``JOB_PARENT_WATCH_INTERVAL_SEC``.
-    Redis down on the recheck is not abandoned.
+    ``started`` plus a free run lock is not enough. The child takes the lock
+    only after spawn, and that import can outlast
+    ``JOB_PARENT_WATCH_INTERVAL_SEC``. The horse records its pid first. A live
+    pid is still starting or finishing. No record yet is not a dead worker.
+    A second status read drops a horse that just returned and left ``started``.
+    Redis down on that read is not abandoned.
     """
     if not _started_without_child(status, dest, stored):
         return False
-    time.sleep(ctx.settings.job_parent_watch_interval_sec)
+    if horse_owner_alive(dest, _disk_generation(stored)) is not False:
+        return False
     try:
         again = ctx.queue.status(rq_id)
     except QueueUnavailable:
         return False
-    return _started_without_child(again, dest, _load_meta(dest))
+    reloaded = _load_meta(dest)
+    if not _started_without_child(again, dest, reloaded):
+        return False
+    return horse_owner_alive(dest, _disk_generation(reloaded)) is False
 
 
 def _dedup(ctx: AppContext, job_id: str, dest: Path) -> dict[str, object]:
@@ -458,8 +465,8 @@ def _read_job(ctx: AppContext, job_id: str) -> dict | None:
     meta = _load_meta(dest)
     if meta is None:
         return None
-    # The lost probe may sleep. It stays outside dest/.lock so a running
-    # pipeline, which holds that lock, is not stalled by the recheck.
+    # The lost probe stays outside dest/.lock. The pipeline child holds that
+    # lock for the whole run, and the write below must not wait on it.
     if not _queue_lost(ctx, job_id, dest, meta):
         return meta
     # POST writes queued meta and enqueues under this same lock. Marking
@@ -503,7 +510,11 @@ def _lost_now(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
         return False
     if status in LOST_STATUSES:
         return True
-    return _started_without_child(status, dest, meta)
+    # A started job is lost only when its recorded horse has exited. A live
+    # horse may still be importing the child, with the run lock not taken yet.
+    return _started_without_child(status, dest, meta) and horse_owner_alive(
+        dest, _disk_generation(meta)
+    ) is False
 
 # Short sentences this process writes itself. Converter stderr and workbook
 # paths stay in the log and in meta.json, not in the job response.

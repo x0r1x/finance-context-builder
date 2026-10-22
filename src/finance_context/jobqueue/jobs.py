@@ -19,6 +19,7 @@ from finance_context.jobqueue.spawn import (
     run_child,
     spawn_child,
     watch_child,
+    write_horse_owner,
 )
 from finance_context.memory import (
     admission_blocked,
@@ -76,6 +77,10 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
         generation=generation,
         rq_job_id=None if current is None else current.id,
     )
+    dest = session_job_dir(Path(data_dir), job_id, session_id)
+    # Before admission and spawn. A kill during those steps is visible, and a
+    # live pid keeps a slow child start from looking abandoned.
+    write_horse_owner(dest, generation)
     budget = budget_for_settings(settings)
     if _admission_waiting(settings, budget):
         interval = max(1, int(settings.job_admission_retry_sec))
@@ -98,7 +103,6 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
         # max grows with each deferral. Admission has no product cap.
         # interval > 0 schedules this same job (rq#2499: enqueue_in drops unique).
         return Retry(max=seen + 1, interval=interval)
-    dest = session_job_dir(Path(data_dir), job_id, session_id)
     detail = unusable_cap_detail(settings)
     if detail:
         mark_job_failed(dest, job_id, "workbook_too_large", generation, detail=detail)

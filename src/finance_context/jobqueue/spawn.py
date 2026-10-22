@@ -17,12 +17,14 @@ from finance_context.app.pipeline import run_job_process
 from finance_context.jobqueue.parents import arm_child_death
 from finance_context.memory import cgroup_oom_kill_count, process_rss_bytes
 from finance_context.settings import Settings
+from finance_context.store.fs import write_json
 from finance_context.store.paths import session_job_dir
 
 # os.environ is process-global. Two horses must not start children at once.
 _ARENA_LOCK = threading.Lock()
 
 RUN_LOCK = ".run.lock"
+HORSE_FILE = ".horse.json"
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,44 @@ def run_child(
     finally:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
+
+
+def write_horse_owner(dest: Path, generation: int) -> None:
+    """Record the horse pid before the child exists.
+
+    A ``started`` job with a free run lock is abandoned only when this pid is
+    dead. Startup can take longer than ``JOB_PARENT_WATCH_INTERVAL_SEC``; the
+    pid, not a timer, is the liveness check.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    write_json(dest / HORSE_FILE, {"pid": os.getpid(), "generation": generation})
+
+
+def horse_owner_alive(dest: Path, generation: int) -> bool | None:
+    """True when the recorded horse is alive, False when it has exited.
+
+    None when this generation has no record yet. The caller must not treat
+    that as a dead worker: the horse may still be starting.
+    """
+    path = dest / HORSE_FILE
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(loaded, dict) or loaded.get("generation") != generation:
+        return None
+    pid = loaded.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def run_lock_busy(dest: Path) -> bool:
