@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import logging
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -15,7 +17,7 @@ from fastapi.testclient import TestClient
 from tests.helpers.slice_book import REVENUE, write_slice_job
 
 from finance_context.api.app import create_app
-from finance_context.api.routes.jobs import _load_meta
+from finance_context.api.routes.jobs import _data_dir_writable, _load_meta
 from finance_context.models.context import ContextDocument
 from finance_context.observability import JsonFormatter
 from finance_context.settings import Settings
@@ -169,6 +171,42 @@ def test_readyz_caches_the_probe_and_creates_no_file(tmp_path: Path) -> None:
     assert calls["n"] == 1
     assert after == before
     assert list(data.glob(".ready-*")) == []
+
+
+def _hide_otmpfile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``O_TMPFILE`` look unsupported without replacing every other ``open``."""
+    real_open = os.open
+
+    def _open(path, flags, mode=0o777, *args, **kwargs):
+        tmpfile = getattr(os, "O_TMPFILE", 0)
+        if tmpfile and (flags & tmpfile) == tmpfile:
+            raise OSError(errno.EOPNOTSUPP, "otmpfile")
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", _open)
+
+
+def test_named_fallback_write_failure_reports_unwritable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+
+    def _full(_fd: int, _payload: bytes) -> int:
+        raise OSError(errno.ENOSPC, "full")
+
+    _hide_otmpfile(monkeypatch)
+    monkeypatch.setattr(os, "write", _full)
+    assert _data_dir_writable(data) is False
+    assert list(data.iterdir()) == []
+
+
+def test_named_fallback_unlinks_the_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    _hide_otmpfile(monkeypatch)
+    assert _data_dir_writable(data) is True
+    assert list(data.iterdir()) == []
 
 
 def test_readyz_refreshes_after_the_ttl(tmp_path: Path) -> None:

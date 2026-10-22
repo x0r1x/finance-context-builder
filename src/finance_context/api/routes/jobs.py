@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, mkstemp
 from typing import Annotated
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
@@ -128,8 +128,10 @@ def _list_jobs(
 
 
 def _probe_ready(ctx: AppContext) -> tuple[bool, int]:
-    """DATA_DIR writability and a Redis ping. No file is created.
+    """DATA_DIR writability and a Redis ping.
 
+    The usual probe leaves no directory entry. A filesystem that rejects
+    ``O_TMPFILE`` creates a short-lived ``.ready-`` file and unlinks it.
     ``jobs`` is this session's inflight count, or 0 when Redis does not answer.
     Ready requires both checks.
     """
@@ -161,9 +163,10 @@ def _data_dir_writable(path: Path) -> bool:
 
     ``mkdir`` on an existing directory does not add a file. A path that is
     already a file fails here. The probe opens an unnamed inode with
-    ``O_TMPFILE`` and writes one byte, so a readiness scrape never leaves a
-    name in the directory and a full disk is not reported as writable.
-    Filesystems that reject the flag fall back to the write and execute bits.
+    ``O_TMPFILE`` and writes one byte, so a full disk is not reported as
+    writable and the scrape leaves no name in the directory. Filesystems
+    that reject the flag create a short-lived ``.ready-`` file, write one
+    byte, and unlink it.
     """
     try:
         path.mkdir(parents=True, exist_ok=True)
@@ -189,10 +192,28 @@ def _data_dir_writable(path: Path) -> bool:
             finally:
                 os.close(fd)
             return True
+    return _named_write_probe(path)
+
+
+def _named_write_probe(path: Path) -> bool:
+    """Create, write, and unlink a ``.ready-`` file. Used only without ``O_TMPFILE``."""
     try:
-        return os.access(path, os.W_OK | os.X_OK)
+        fd, probe = mkstemp(prefix=".ready-", dir=path)
     except OSError:
         return False
+    try:
+        os.write(fd, b"x")
+    except OSError:
+        return False
+    finally:
+        try:
+            os.close(fd)
+        finally:
+            try:
+                os.unlink(probe)
+            except OSError:
+                return False
+    return True
 
 
 @router.post(

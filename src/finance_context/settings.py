@@ -144,7 +144,8 @@ class Settings(BaseSettings):
     # Threads for blocking API work: file I/O, hashing, JSON, and the RQ client.
     api_thread_limit: int = DEFAULT_API_THREAD_LIMIT
     # /readyz reuses one writability check and Redis ping for this long.
-    # The probe does not create a file. /healthz does no I/O.
+    # The usual probe uses an unnamed inode. Without O_TMPFILE the probe
+    # creates a short-lived .ready- file and unlinks it. /healthz does no I/O.
     readyz_cache_ttl_sec: float = DEFAULT_READYZ_CACHE_TTL_SEC
 
     @field_validator("max_concurrent_jobs", mode="before")
