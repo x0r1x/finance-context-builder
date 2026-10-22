@@ -281,6 +281,10 @@ def test_serve_alone_completes_a_job(tmp_path: Path) -> None:
             except subprocess.TimeoutExpired:
                 os.kill(proc.pid, signal.SIGKILL)
                 proc.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and _pids_using(data_dir):
+            time.sleep(0.05)
+        assert _pids_using(data_dir) == []
 
 
 def _stage(meta: Path) -> str | None:
@@ -295,6 +299,22 @@ def _stage(meta: Path) -> str | None:
 def _lost(client: TestClient, job_id: str) -> bool:
     response = client.get(f"/v1/context-jobs/{job_id}")
     return response.json().get("error") in {"queue_lost", "process_lost"}
+
+
+def _pids_using(data_dir: Path) -> list[int]:
+    needle = str(data_dir).encode()
+    found: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            env = (entry / "environ").read_bytes()
+            command = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if needle in env and b"finance-context" in command:
+            found.append(int(entry.name))
+    return found
 
 
 def _free_port() -> int:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 from pathlib import Path
 from typing import Annotated
 
@@ -15,6 +17,7 @@ from finance_context.app.shared_cache import record_rebuild_stage
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import LEGACY_SOURCE, SOURCE, source_name
 from finance_context.jobqueue.embedded import start_for_serve, stop_for_serve
+from finance_context.jobqueue.parents import arm_embedded_parent
 from finance_context.jobqueue.pool import serve_workers, worker_check
 from finance_context.memory import MEMORY_ERROR_DETAIL
 from finance_context.observability import configure_logging
@@ -139,8 +142,6 @@ def serve(
     data_dir: Annotated[Path | None, typer.Option("--data-dir")] = None,
 ) -> None:
     """Serve the API. The RQ pool starts as a child unless EMBEDDED_WORKER is false."""
-    import os
-
     if data_dir is not None:
         os.environ["DATA_DIR"] = str(data_dir)
     settings = Settings()
@@ -148,6 +149,19 @@ def serve(
     # The child has to be up before the socket accepts traffic. workers=1 keeps
     # this process, and the supervisor flag, in the process that serves /readyz.
     supervisor = start_for_serve(settings)
+    # uvicorn restores the previous handler and re-raises SIGTERM after the
+    # socket closes, which skips a finally. Stop the child from that handler.
+    previous_term = signal.getsignal(signal.SIGTERM)
+    previous_int = signal.getsignal(signal.SIGINT)
+
+    def _stop_child(signum: int, frame: object) -> None:
+        del frame
+        stop_for_serve(supervisor)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    signal.signal(signal.SIGTERM, _stop_child)
+    signal.signal(signal.SIGINT, _stop_child)
     try:
         uvicorn.run(
             "finance_context.api.app:app_from_env",
@@ -158,6 +172,8 @@ def serve(
         )
     finally:
         stop_for_serve(supervisor)
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGINT, previous_int)
 
 
 @app.command()
@@ -166,12 +182,12 @@ def worker(
     check: Annotated[bool, typer.Option("--check")] = False,
 ) -> None:
     """Run the shared job queue, or check Redis and DATA_DIR and exit."""
-    import os
-
     if data_dir is not None:
         os.environ["DATA_DIR"] = str(data_dir)
     settings = Settings()
     configure_logging(level=settings.log_level, json_output=settings.log_json)
+    if os.environ.get("FINANCE_CONTEXT_EMBEDDED_WORKER") == "1":
+        arm_embedded_parent(settings.job_parent_watch_interval_sec)
     if check:
         raise typer.Exit(code=worker_check(settings))
     serve_workers(settings)

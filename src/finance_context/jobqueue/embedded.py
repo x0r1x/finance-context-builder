@@ -192,6 +192,8 @@ def _child_env(settings: Settings) -> dict[str, str]:
             env[spec.env_name] = "true" if value else "false"
         else:
             env[spec.env_name] = str(value)
+    # The pool arms PR_SET_PDEATHSIG so it exits with this server.
+    env["FINANCE_CONTEXT_EMBEDDED_WORKER"] = "1"
     return env
 
 
