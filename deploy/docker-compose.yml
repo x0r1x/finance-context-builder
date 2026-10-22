@@ -33,19 +33,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-
-  # RQ worker. Redis runs outside this file; its URL comes from .env.
-  worker:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    command: ["finance-context", "worker"]
-    env_file:
-      - path: ../.env
-        required: false
-    environment:
-      DATA_DIR: /app/data
-    volumes:
-      - ../data:/app/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
