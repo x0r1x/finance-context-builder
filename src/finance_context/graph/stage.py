@@ -598,9 +598,9 @@ def _cycles_packed(id_of: dict[str, int], src_ids, tgt_ids, flags) -> list[Cycle
     all_period: dict[int, bool] = {}
     saw: set[int] = set()
     self_loop: set[int] = set()
-    for pos in range(n_edges):
-        if labels[rows[pos]] != labels[cols[pos]]:
-            continue
+    same = labels[rows] == labels[cols]
+    for pos_raw in np.flatnonzero(same):
+        pos = int(pos_raw)
         label = int(labels[rows[pos]])
         if sizes[label] < 2 and int(rows[pos]) != int(cols[pos]):
             continue
