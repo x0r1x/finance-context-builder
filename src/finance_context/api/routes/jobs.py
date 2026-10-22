@@ -26,6 +26,7 @@ from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.jobs import list_session_jobs
 from finance_context.app.pipeline import mark_job_failed
 from finance_context.app.publisher import publisher_changed, publisher_matches, stale_from_meta
+from finance_context.app.shared_cache import record_rebuild_stage
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, check_legacy_workbook, source_name
 from finance_context.excel.ole2 import is_ole2
@@ -40,9 +41,10 @@ from finance_context.jobqueue.queue import (
 from finance_context.jobqueue.spawn import horse_owner_alive, run_lock_busy
 from finance_context.models.context import JobStatus
 from finance_context.observability import log_event
-from finance_context.store.fs import atomic_write_bytes, file_lock, write_json
+from finance_context.store.fs import atomic_write_bytes, file_lock, update_json, write_json
 
 router = APIRouter()
+
 
 @router.get("/healthz", response_model=HealthBody, summary="Process is up")
 async def healthz() -> dict[str, str]:
@@ -69,6 +71,7 @@ async def readyz(request: Request) -> JSONResponse:
         "jobs": jobs,
     }
     return JSONResponse(body, status_code=200 if writable else 503)
+
 
 _JobStatusQuery = Annotated[
     JobStatus | None,
@@ -128,6 +131,7 @@ async def post_job(
     # Fsync, the publisher hash, and the enqueue share one worker thread.
     body = await asyncio.to_thread(_accept_upload, ctx, filename, data, digest, job_id)
     return JSONResponse(body, status_code=202)
+
 
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
 
@@ -348,30 +352,35 @@ def _enqueue_or_reuse(
     if queue.session_inflight(settings.session_id) >= settings.job_queue_max_per_session:
         raise ApiError(429, "too_many_jobs", headers=_retry_after(ctx))
     generation = max(1, _disk_generation(stored) + 1)
-    # A matching publisher with no ready snapshot is not "keep the files".
-    # The child returns those files as soon as context.json and context.md exist.
+    # Session publications only. Keep meta so the stage map and generation
+    # survive. Shared files stay until the child holds shared/books/{job_id}/.lock.
+    shared.mkdir(parents=True, exist_ok=True)
     stale = stale_from_meta(stored)
-    if stale is None:
-        stale = "layout"
-    clear_downstream_artifacts(dest, stale_from=stale, shared=shared)
-    log_event(
-        _LOGGER,
-        logging.INFO,
-        "snapshot_invalidated",
-        "stale artifacts invalidated",
-        job_id=job_id,
-    )
-    write_json(
-        dest / "meta.json",
-        {
-            "job_id": job_id,
-            "status": "queued",
-            "stage": "queued",
-            "source_filename": filename,
-            "content_sha256": digest,
-            "generation": generation,
-        },
-    )
+    clear_downstream_artifacts(dest, stale_from=stale, drop_meta=False)
+    record_rebuild_stage(dest, stale, generation=generation)
+    if stale is not None:
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "snapshot_invalidated",
+            "stale session artifacts invalidated",
+            job_id=job_id,
+            stale_from=stale,
+        )
+
+    def stamp(current: dict) -> dict:
+        updated = dict(current)
+        updated["job_id"] = job_id
+        updated["source_filename"] = filename
+        updated["content_sha256"] = digest
+        updated["generation"] = generation
+        updated["status"] = "queued"
+        updated["stage"] = "queued"
+        updated.pop("error", None)
+        updated.pop("detail", None)
+        return updated
+
+    update_json(dest / "meta.json", stamp)
     payload = {
         "session_id": settings.session_id,
         "job_id": job_id,
@@ -443,6 +452,7 @@ def _ready_meta(dest: Path) -> dict | None:
         return None
     return meta
 
+
 @router.get(
     "/v1/context-jobs/{job_id}",
     response_model=JobBody,
@@ -457,7 +467,9 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     meta = await asyncio.to_thread(_read_job, ctx, job_id)
     if meta is None:
         raise ApiError(404, "not_found")
-    return JSONResponse(_job_body(job_id, meta))
+    # A missing meta.json during a live run is still working, same as 202 on POST.
+    code = 202 if meta.pop("_inflight_without_meta", None) else 200
+    return JSONResponse(_job_body(job_id, meta), status_code=code)
 
 
 def _read_job(ctx: AppContext, job_id: str) -> dict | None:
@@ -466,7 +478,9 @@ def _read_job(ctx: AppContext, job_id: str) -> dict | None:
         return None
     meta = _load_meta(dest)
     if meta is None:
-        return None
+        # The child unlinks meta.json while it rebuilds. A missing or
+        # unreadable file is the live run, not an HTTP 500 and not a loss.
+        return _inflight_without_meta(ctx, job_id, dest)
     # The lost probe stays outside dest/.lock. The pipeline child holds that
     # lock for the whole run, and the write below must not wait on it.
     if not _queue_lost(ctx, job_id, dest, meta):
@@ -497,6 +511,28 @@ def _read_job(ctx: AppContext, job_id: str) -> dict | None:
         return reloaded if reloaded is not None else current
 
 
+def _inflight_without_meta(ctx: AppContext, job_id: str, dest: Path) -> dict | None:
+    """A live queue job whose meta.json is gone for a moment.
+
+    ``scheduled`` and ``deferred`` are the shared-cache wait. They stay
+    queued. Redis down is a 404, not a 500 and not ``queue_lost``.
+    """
+    running = run_lock_busy(dest)
+    try:
+        status = ctx.queue.status(rq_job_id(ctx.settings.session_id, job_id))
+    except QueueUnavailable:
+        status = "started" if running else None
+    if not running and status not in INFLIGHT_STATUSES:
+        return None
+    live = "running" if running or status == "started" else "queued"
+    return {
+        "job_id": job_id,
+        "status": live,
+        "stage": live,
+        "_inflight_without_meta": True,
+    }
+
+
 def _lost_now(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
     """Same as ``_queue_lost`` without the abandoned-job pause.
 
@@ -515,9 +551,11 @@ def _lost_now(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
     # A started job is lost only when its horse lock is free. A held lock
     # means the horse is still importing the child. The check is a flock on
     # the shared volume, not a PID in this container.
-    return _started_without_child(status, dest, meta) and horse_owner_alive(
-        dest, _disk_generation(meta)
-    ) is False
+    return (
+        _started_without_child(status, dest, meta)
+        and horse_owner_alive(dest, _disk_generation(meta)) is False
+    )
+
 
 # Short sentences this process writes itself. Converter stderr and workbook
 # paths stay in the log and in meta.json, not in the job response.
@@ -543,9 +581,7 @@ def _job_body(job_id: str, meta: dict) -> dict:
     return body
 
 
-def _validate_upload(
-    filename: str, data: bytes, max_bytes: int, converter: XlsConverter
-) -> None:
+def _validate_upload(filename: str, data: bytes, max_bytes: int, converter: XlsConverter) -> None:
     suffix = Path(filename).suffix.lower()
     if suffix not in _ALLOWED:
         raise ContextError("unsupported_media_type", suffix or "missing")

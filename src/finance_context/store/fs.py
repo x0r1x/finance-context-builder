@@ -33,13 +33,35 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(data)
+    atomic_replace(tmp, path)
+
+
+def atomic_replace(tmp: Path, path: Path) -> None:
+    """Publish ``tmp`` as ``path``.
+
+    The bytes are fsynced, then ``os.replace`` swaps the name in the same
+    directory, then the directory is fsynced. A reader of ``path`` sees the
+    previous file or the complete new one.
+    """
     _fsync(tmp)
-    tmp.replace(path)
+    os.replace(tmp, path)
+    _fsync_dir(path.parent)
 
 
 def _fsync(path: Path) -> None:
     with path.open("rb") as handle:
         os.fsync(handle.fileno())
+
+
+def _fsync_dir(directory: Path) -> None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    fd = os.open(directory, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 @contextmanager
@@ -119,7 +141,7 @@ def stream_json(path: Path, data: Any, *, sort_keys: bool = False) -> None:
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
-    tmp.replace(path)
+    atomic_replace(tmp, path)
 
 
 _ARROW_TYPES = {
@@ -168,8 +190,7 @@ def _write_table_file(path: Path, table: pa.Table) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     pq.write_table(table, tmp)
-    _fsync(tmp)
-    tmp.replace(path)
+    atomic_replace(tmp, path)
 
 
 def read_parquet(path: Path) -> list[dict[str, Any]]:
@@ -271,8 +292,7 @@ class RowGroupWriter:
         if self._writer is not None:
             self._writer.close()
             assert self._tmp is not None
-            _fsync(self._tmp)
-            self._tmp.replace(self.path)
+            atomic_replace(self._tmp, self.path)
             return
         merged: list[list[Any]] = [[] for _ in self.names]
         for chunk in self._chunks:

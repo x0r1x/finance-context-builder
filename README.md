@@ -115,6 +115,7 @@ HTTP `error` codes:
 | `job_still_running` | 409 |
 | `too_many_jobs` | 429 |
 | `queue_unavailable` | 503 |
+| `shared_cache_busy` | job `error` only |
 
 `report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book. `workbook_too_large` is a finished job: the workbook's formula and range estimate, or its resident memory, is over the per-job budget. `error` is the code and `detail` is the short reason. There is no traceback.
 
@@ -126,7 +127,7 @@ Queue settings, used by the API and by `finance-context worker`: `REDIS_URL` (de
 
 ## Data
 
-`data/shared/books/{job_id}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. `data/sessions/{session}/jobs/{job_id}/` holds that session's context and graph. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash. The session defaults to `local`. The id must match `SESSION_ID_PATTERN` and fit `SESSION_ID_MAX_LENGTH`; startup rejects a separator or `..`. GET looks up a job only inside that session. A network filesystem under `DATA_DIR` refuses startup unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
+`data/shared/books/{job_id}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. POST does not delete them. The job child holds `shared/books/{job_id}/.lock` with `LOCK_NB` and drops a stale tail there, then publishes each file with fsync and `os.replace`. `stages.json` is the stage-fingerprint sidecar and is not a published artifact. `.lock` is never removed. When that lock is already held, the horse returns RQ `Retry(interval=SHARED_CACHE_BUSY_RETRY_SEC)` (default 30) and releases the worker slot, at most `SHARED_CACHE_BUSY_MAX_RETRIES` extra times (default 120). `meta.json` stays `queued` during that wait, and GET does not mark the job `queue_lost`. The last attempt fails with `shared_cache_busy`. CLI `build` still waits in-process and records the same error if the next wait would reach `JOB_TIMEOUT_SEC`. See `.env.example`. `data/sessions/{session}/jobs/{job_id}/` holds that session's context and graph. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash. The session defaults to `local`. The id must match `SESSION_ID_PATTERN` and fit `SESSION_ID_MAX_LENGTH`; startup rejects a separator or `..`. GET looks up a job only inside that session. A network filesystem under `DATA_DIR` refuses startup unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
 
 At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2, on the worker pool. `finance-context serve` is the API, one process per `SESSION_ID`. Those API processes and `finance-context worker` share one `DATA_DIR` and one queue.
 

@@ -38,6 +38,13 @@ DEFAULT_MALLOC_ARENA_MAX = 2
 # One directory segment. Length is SESSION_ID_MAX_LENGTH, not part of the pattern.
 DEFAULT_SESSION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 DEFAULT_SESSION_ID_MAX_LENGTH = 64
+# Wait between attempts while another session holds the shared book lock.
+DEFAULT_SHARED_CACHE_BUSY_RETRY_SEC = 30
+# Extra attempts after the first busy result. 0 fails on the first busy result.
+# 120 is the queue bound. Those waits happen outside the worker. The interim
+# in-process sleep stops before JOB_TIMEOUT_SEC so the child can record
+# shared_cache_busy before the parent watchdog.
+DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES = 120
 
 
 class Settings(BaseSettings):
@@ -68,9 +75,7 @@ class Settings(BaseSettings):
     job_estimate_bytes_per_present_cell: int = DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL
     # Previous fit. Used when parse, graph streaming, or AST compression is off.
     job_estimate_unstreamed_base_bytes: int = DEFAULT_ESTIMATE_UNSTREAMED_BASE_BYTES
-    job_estimate_unstreamed_bytes_per_formula: int = (
-        DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA
-    )
+    job_estimate_unstreamed_bytes_per_formula: int = DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA
     job_estimate_unstreamed_bytes_per_expanded_cell: int = (
         DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_EXPANDED_CELL
     )
@@ -117,9 +122,12 @@ class Settings(BaseSettings):
     queue_failure_ttl_sec: int = 604800
     # Retries after a lost worker or horse. Pipeline errors and OOM do not use this.
     job_retry_on_lost: int = 1
-    # PR2 raises the shared-cache busy signal. The worker turns it into Retry(interval).
-    shared_cache_busy_retry_sec: float = 30
-    shared_cache_busy_max_retries: int = 120
+    # Seconds between attempts while another session holds shared/books/{job_id}/.lock.
+    # The horse maps SharedCacheBusy to Retry(interval) and releases the slot.
+    # CLI build still waits in-process, and stops before JOB_TIMEOUT_SEC.
+    shared_cache_busy_retry_sec: float = DEFAULT_SHARED_CACHE_BUSY_RETRY_SEC
+    # Extra attempts after the first busy result. 0 fails on that first result.
+    shared_cache_busy_max_retries: int = DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES
     job_admission_cgroup_check: bool = True
     job_admission_retry_sec: float = 30
     # How often a child, and a horse, notice that their parent pid changed.

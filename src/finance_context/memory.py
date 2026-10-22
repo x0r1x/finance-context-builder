@@ -420,6 +420,8 @@ def _log_effective_memory(settings: Settings, budget: int) -> None:
         malloc_arena_max=arena,
         malloc_trim=settings.job_malloc_trim,
         estimate_streaming=streaming_estimate(settings),
+        retry_after_sec=settings.shared_cache_busy_retry_sec,
+        max_retries=settings.shared_cache_busy_max_retries,
     )
 
 

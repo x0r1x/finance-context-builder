@@ -112,6 +112,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 | `job_still_running` | 409 |
 | `too_many_jobs` | 429 |
 | `queue_unavailable` | 503 |
+| `shared_cache_busy` | только `error` джобы |
 
 `report_not_ready` — артефакт или trace запрошены до того, как джоб записал этот файл. Каталогу нужен `context.json`. Паспорту и наблюдениям нужен ещё и `graph.json`. Наблюдения без `row_key` или `q` — это `selector_required`, а не вся книга. `workbook_too_large` — завершённая джоба: оценка по формулам и диапазонам или резидентная память выше бюджета одной джобы. `error` — код, `detail` — короткая причина. Трейсбэка нет.
 
@@ -123,7 +124,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 
 ## Данные
 
-`data/shared/books/{job_id}/` хранит книгу, raw, formula IR и layout. Они общие для всех сессий. `data/sessions/{session}/jobs/{job_id}/` хранит context и graph этой сессии. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла. Сессия по умолчанию `local`. Id должен совпадать с `SESSION_ID_PATTERN` и умещаться в `SESSION_ID_MAX_LENGTH`; старт отклоняет разделитель и `..`. GET ищет джобу только внутри этой сессии. Сетевая ФС под `DATA_DIR` не даёт стартовать, пока `DATA_DIR_ALLOW_NETWORK_FS` не равен `true`.
+`data/shared/books/{job_id}/` хранит книгу, raw, formula IR и layout. Они общие для всех сессий. POST их не удаляет. Ребёнок джобы берёт `shared/books/{job_id}/.lock` через `LOCK_NB`, снимает там устаревший хвост и публикует каждый файл через fsync и `os.replace`. `stages.json` — файл отпечатков стадий, это не опубликованный артефакт. `.lock` не удаляется. Если лок уже занят, лошадь возвращает RQ `Retry(interval=SHARED_CACHE_BUSY_RETRY_SEC)` (по умолчанию 30) и освобождает слот воркера, не больше `SHARED_CACHE_BUSY_MAX_RETRIES` дополнительных раз (по умолчанию 120). Пока джоба ждёт, `meta.json` остаётся `queued`, и GET не помечает её `queue_lost`. Последняя попытка падает с `shared_cache_busy`. CLI `build` по-прежнему ждёт в процессе и пишет ту же ошибку, если следующее ожидание дошло бы до `JOB_TIMEOUT_SEC`. См. `.env.example`. `data/sessions/{session}/jobs/{job_id}/` хранит context и graph этой сессии. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла. Сессия по умолчанию `local`. Id должен совпадать с `SESSION_ID_PATTERN` и умещаться в `SESSION_ID_MAX_LENGTH`; старт отклоняет разделитель и `..`. GET ищет джобу только внутри этой сессии. Сетевая ФС под `DATA_DIR` не даёт стартовать, пока `DATA_DIR_ALLOW_NETWORK_FS` не равен `true`.
 
 Одновременно считается не больше `MAX_CONCURRENT_JOBS` книг, по умолчанию 2, на пуле воркера. `finance-context serve` — это API, один процесс на `SESSION_ID`. Эти процессы API и `finance-context worker` делят один `DATA_DIR` и одну очередь.
 
