@@ -315,6 +315,8 @@ def test_arena_overrides_do_not_overlap_across_instances(
                 if len(built) == 2 and len(seen) == 1:
                     break
             time.sleep(0.01)
+        with state:
+            assert len(built) == 2 and len(seen) == 1
         time.sleep(0.2)
         with state:
             during = list(seen)
