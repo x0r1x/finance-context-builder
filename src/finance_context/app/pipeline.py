@@ -429,6 +429,9 @@ def run_job_process(
     except Exception as exc:
         mark_job_failed(dest, job_id, type(exc).__name__, generation)
         raise
+    finally:
+        # In-process tests call this too. A leftover deadline would outlive the job.
+        _clear_child_watchdog()
 
 
 def execute_job(
@@ -496,6 +499,11 @@ def _arm_child_watchdog(timeout: object) -> None:
         _child_watchdog_deadline = None
         return
     _child_watchdog_deadline = process_mono_start + float(timeout)
+
+
+def _clear_child_watchdog() -> None:
+    global _child_watchdog_deadline
+    _child_watchdog_deadline = None
 
 
 def _busy_deadline(pipeline: Pipeline) -> float | None:

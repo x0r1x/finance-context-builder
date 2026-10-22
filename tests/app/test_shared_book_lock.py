@@ -307,6 +307,26 @@ def test_arm_child_watchdog_counts_from_process_start(monkeypatch: pytest.Monkey
         pipeline_module._child_watchdog_deadline = None
 
 
+def test_run_job_process_clears_the_child_deadline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from finance_context.app import pipeline as pipeline_module
+
+    seen: dict[str, float | None] = {}
+
+    def _run(*_args: object, **_kwargs: object) -> None:
+        seen["deadline"] = pipeline_module._child_watchdog_deadline
+        raise ContextError("shared_cache_busy", "shared book cache stayed busy")
+
+    monkeypatch.setattr(pipeline_module, "execute_job", _run)
+    monkeypatch.setattr(pipeline_module, "prefer_oom_kill", lambda **_kwargs: None)
+    monkeypatch.setattr(pipeline_module, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(pipeline_module, "_install_stage_pause", lambda: None)
+    pipeline_module.run_job_process(str(tmp_path), "job-clear")
+    assert seen["deadline"] is not None
+    assert pipeline_module._child_watchdog_deadline is None
+
+
 def test_execute_job_busy_fails_before_job_timeout(tmp_path: Path) -> None:
     class _Pipeline:
         def __init__(self) -> None:
