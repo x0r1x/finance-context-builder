@@ -79,10 +79,17 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.json" -o graph.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 ```
 
+Живой прогресс пишется в Redis Stream, а читается через `GET /v1/context-jobs/$ID/events` (`text/event-stream`). Первое SSE-событие — текущий `meta.json`. Дальше идут `queued`, `running`, старт и конец стадий (`compile`, `layout`, `graph`, `publish`), `succeeded`, `failed`, `queue_lost` и `retry`, если общий кэш занят. Источник истины остаётся `meta.json`. Ошибка Redis при публикации джобу не роняет. Поток закрывается после терминального события. Продолжение — заголовок `Last-Event-ID`.
+
+```bash
+curl -N "http://127.0.0.1:8080/v1/context-jobs/$ID/events"
+```
+
 Эндпоинты:
 
 - `POST /v1/context-jobs` — загрузка книги
 - `GET /v1/context-jobs/{id}` — статус (`context_json_url`, `context_md_url`, `graph_json_url`, `graph_md_url`)
+- `GET /v1/context-jobs/{id}/events` — SSE. Сначала снимок `meta.json`, затем поток Redis. `Last-Event-ID` продолжает с записи. Строка-комментарий — heartbeat.
 - `GET /v1/context-jobs/{id}/context.json`
 - `GET /v1/context-jobs/{id}/context.md`
 - `GET /v1/context-jobs/{id}/graph.json`

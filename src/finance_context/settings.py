@@ -50,6 +50,14 @@ DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES = 120
 DEFAULT_API_THREAD_LIMIT = 40
 # How long one /readyz disk and Redis probe is reused.
 DEFAULT_READYZ_CACHE_TTL_SEC = 10.0
+# Redis stream of progress events for one job. Approximate cap.
+DEFAULT_JOB_EVENTS_MAXLEN = 256
+# Seconds the stream key lives after a terminal event.
+DEFAULT_JOB_EVENTS_TTL_SEC = 3600
+# SSE comment interval while the stream is quiet.
+DEFAULT_JOB_EVENTS_HEARTBEAT_SEC = 15.0
+# Open GET .../events responses at once.
+DEFAULT_JOB_EVENTS_MAX_CONNECTIONS = 32
 
 
 class Settings(BaseSettings):
@@ -160,6 +168,14 @@ class Settings(BaseSettings):
     embedded_worker: bool = True
     # Seconds before that child is started again after it exits.
     embedded_worker_restart_backoff_sec: float = 1.0
+    # Approximate MAXLEN for one job's progress stream.
+    job_events_maxlen: int = DEFAULT_JOB_EVENTS_MAXLEN
+    # EXPIRE the stream key this many seconds after succeeded, failed, or queue_lost.
+    job_events_ttl_sec: int = DEFAULT_JOB_EVENTS_TTL_SEC
+    # How often GET .../events writes an SSE comment while Redis is quiet.
+    job_events_heartbeat_sec: float = DEFAULT_JOB_EVENTS_HEARTBEAT_SEC
+    # Concurrent SSE responses. Above this, the route is 503.
+    job_events_max_connections: int = DEFAULT_JOB_EVENTS_MAX_CONNECTIONS
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -226,6 +242,7 @@ class Settings(BaseSettings):
         "job_kill_grace_sec",
         "readyz_cache_ttl_sec",
         "embedded_worker_restart_backoff_sec",
+        "job_events_heartbeat_sec",
         mode="before",
     )
     @classmethod
@@ -331,7 +348,14 @@ class Settings(BaseSettings):
             raise ValueError("QUEUE_NAME must be a single token")
         return token
 
-    @field_validator("job_queue_max_per_session", "api_thread_limit", mode="before")
+    @field_validator(
+        "job_queue_max_per_session",
+        "api_thread_limit",
+        "job_events_maxlen",
+        "job_events_ttl_sec",
+        "job_events_max_connections",
+        mode="before",
+    )
     @classmethod
     def require_session_cap(cls, value: object, info: ValidationInfo) -> int:
         return _require_whole_int(value, info, minimum=1)

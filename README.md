@@ -82,10 +82,17 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.json" -o graph.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 ```
 
+Live progress is a Redis stream, then `GET /v1/context-jobs/$ID/events` (`text/event-stream`). The first SSE event is the current `meta.json`. Later events are `queued`, `running`, stage start and done (`compile`, `layout`, `graph`, `publish`), `succeeded`, `failed`, `queue_lost`, and a shared-cache `retry`. `meta.json` stays the source of truth. A Redis error while publishing does not fail the job. The stream closes after a terminal event. Resume with `Last-Event-ID`.
+
+```bash
+curl -N "http://127.0.0.1:8080/v1/context-jobs/$ID/events"
+```
+
 Endpoints:
 
 - `POST /v1/context-jobs` — upload workbook
 - `GET /v1/context-jobs/{id}` — status (`context_json_url`, `context_md_url`, `graph_json_url`, `graph_md_url`)
+- `GET /v1/context-jobs/{id}/events` — SSE. Snapshot from `meta.json`, then the Redis stream. `Last-Event-ID` resumes. A comment line is the heartbeat.
 - `GET /v1/context-jobs/{id}/context.json`
 - `GET /v1/context-jobs/{id}/context.md`
 - `GET /v1/context-jobs/{id}/graph.json`

@@ -35,6 +35,7 @@ from finance_context.excel.legacy import XlsConverter, check_legacy_workbook, so
 from finance_context.excel.ole2 import is_ole2
 from finance_context.excel.zip_guard import open_xlsx_zip
 from finance_context.jobqueue.embedded import embedded_worker_ready
+from finance_context.jobqueue.progress import emit_progress
 from finance_context.jobqueue.queue import (
     INFLIGHT_STATUSES,
     LOST_STATUSES,
@@ -245,6 +246,9 @@ async def post_job(
     digest, job_id = await run_blocking(ctx, _digest_job, data)
     # Fsync, the publisher hash, and the enqueue share one worker thread.
     body = await run_blocking(ctx, _accept_upload, ctx, filename, data, digest, job_id)
+    if isinstance(body, dict) and isinstance(body.get("job_id"), str):
+        body = dict(body)
+        body["events_url"] = f"/v1/context-jobs/{body['job_id']}/events"
     return JSONResponse(body, status_code=202)
 
 
@@ -586,6 +590,15 @@ def _enqueue_or_reuse(
             rq_job_id=rq_id,
         )
         return _running_body(job_id, dest)
+    emit_progress(
+        settings,
+        session_id=settings.session_id,
+        job_id=job_id,
+        event="queued",
+        status="queued",
+        stage="queued",
+        generation=generation,
+    )
     return {"job_id": job_id, "status": "queued", "stage": "queued"}
 
 

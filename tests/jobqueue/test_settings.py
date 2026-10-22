@@ -38,6 +38,10 @@ def test_queue_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.readyz_cache_ttl_sec == 10
     assert settings.embedded_worker is True
     assert settings.embedded_worker_restart_backoff_sec == 1.0
+    assert settings.job_events_maxlen == 256
+    assert settings.job_events_ttl_sec == 3600
+    assert settings.job_events_heartbeat_sec == 15
+    assert settings.job_events_max_connections == 32
     # 3600 + 5 + 5 + 120
     assert settings.queue_job_timeout_sec() == 3730
 
