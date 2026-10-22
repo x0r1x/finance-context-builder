@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Annotated
@@ -30,6 +31,14 @@ from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, check_legacy_workbook, source_name
 from finance_context.excel.ole2 import is_ole2
 from finance_context.excel.zip_guard import open_xlsx_zip
+from finance_context.jobqueue.queue import (
+    INFLIGHT_STATUSES,
+    LOST_STATUSES,
+    DuplicateEnqueue,
+    QueueUnavailable,
+    rq_job_id,
+)
+from finance_context.jobqueue.spawn import run_lock_busy
 from finance_context.models.context import JobStatus
 from finance_context.observability import log_event
 from finance_context.store.fs import atomic_write_bytes, file_lock, write_json
@@ -51,10 +60,14 @@ async def readyz(request: Request) -> JSONResponse:
     ctx = _ctx(request)
     settings = ctx.settings
     writable = _data_dir_writable(settings.data_dir)
+    try:
+        jobs = ctx.queue.session_inflight(settings.session_id)
+    except QueueUnavailable:
+        jobs = 0
     body = {
         "status": "ready" if writable else "unavailable",
-        "queue": "in_process",
-        "jobs": ctx.processes.alive_count(),
+        "queue": settings.queue_name,
+        "jobs": jobs,
     }
     return JSONResponse(body, status_code=200 if writable else 503)
 
@@ -97,7 +110,7 @@ def _data_dir_writable(path: Path) -> bool:
     status_code=202,
     response_model=JobBody,
     summary="Upload a workbook and start or reuse its job",
-    responses=_errors(400, 413, 422, 429),
+    responses=_errors(400, 413, 422, 429, 503),
 )
 async def post_job(
     request: Request,
@@ -113,93 +126,9 @@ async def post_job(
     )
     digest = await asyncio.to_thread(sha256_bytes, data)
     job_id = job_id_for(digest)
-    dest = ctx.store.dest_dir(job_id)
-    shared = ctx.store.shared_dir(job_id)
-    dest.mkdir(parents=True, exist_ok=True)
-    shared.mkdir(parents=True, exist_ok=True)
-    source = shared / source_name(data)
-    if not source.exists():
-        atomic_write_bytes(source, data)
-    owner_path = dest / "owner.json"
-    if not owner_path.exists():
-        write_json(
-            owner_path,
-            {"content_sha256": digest, "source_filename": filename},
-        )
-    if _stop_for_publisher_change(ctx, job_id, dest):
-        ctx.processes.stop(job_id)
-    elif ctx.processes.is_alive(job_id):
-        return JSONResponse(_running_body(job_id, dest), status_code=202)
-    with file_lock(dest / ".lock", blocking=False) as acquired:
-        if not acquired:
-            return JSONResponse(_running_body(job_id, dest), status_code=202)
-        live = ctx.bus.get(job_id)
-        if live is not None and live.status in {"queued", "running"}:
-            if _stop_for_publisher_change(ctx, job_id, dest):
-                ctx.processes.stop(job_id)
-            elif ctx.processes.is_alive(job_id):
-                return JSONResponse(
-                    {"job_id": job_id, "status": live.status, "stage": live.stage},
-                    status_code=202,
-                )
-            elif not ctx.bus.abandon(job_id, live.generation, "process_lost"):
-                return JSONResponse(
-                    {"job_id": job_id, "status": live.status, "stage": live.stage},
-                    status_code=202,
-                )
-        ready = _ready_meta(dest)
-        if ready is not None:
-            log_event(
-                _LOGGER,
-                logging.INFO,
-                "job_reuse",
-                "finished job reused",
-                job_id=job_id,
-                status=ready.get("status"),
-                stage=ready.get("stage"),
-            )
-            return JSONResponse(
-                {
-                    "job_id": job_id,
-                    "status": ready.get("status"),
-                    "stage": ready.get("stage"),
-                },
-                status_code=202,
-            )
-        if not ctx.processes.try_acquire(job_id):
-            raise ApiError(429, "too_many_jobs")
-        try:
-            stored = _load_meta(dest)
-            disk_generation = _disk_generation(stored)
-            clear_downstream_artifacts(
-                dest, stale_from=stale_from_meta(stored), shared=shared
-            )
-            log_event(
-                _LOGGER,
-                logging.INFO,
-                "snapshot_invalidated",
-                "stale artifacts invalidated",
-                job_id=job_id,
-            )
-            started = ctx.bus.enqueue(job_id, minimum_generation=disk_generation)
-            launched = ctx.processes.launch(job_id) if started else False
-        except Exception:
-            ctx.processes.release_reservation(job_id)
-            raise
-        if not launched:
-            ctx.processes.release_reservation(job_id)
-            if started:
-                ctx.bus.abandon(job_id, ctx.bus.current_generation(job_id), "too_many_jobs")
-                raise ApiError(429, "too_many_jobs")
-    rec = ctx.bus.get(job_id)
-    return JSONResponse(
-        {
-            "job_id": job_id,
-            "status": rec.status if rec else "queued",
-            "stage": rec.stage if rec else "queued",
-        },
-        status_code=202,
-    )
+    # Fsync, the publisher hash, and the enqueue share one worker thread.
+    body = await asyncio.to_thread(_accept_upload, ctx, filename, data, digest, job_id)
+    return JSONResponse(body, status_code=202)
 
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
 # meta.json wins over the in-memory bus once the job has finished.
@@ -237,12 +166,6 @@ def _newer_bus_run(meta: dict, live: object) -> bool:
     return bus_generation > disk_generation
 
 
-def _orphan_running(meta: dict, *, live: object, alive: bool) -> bool:
-    if meta.get("status") not in {"queued", "running"} or alive:
-        return False
-    return getattr(live, "status", None) not in {"queued", "running"}
-
-
 def _disk_generation(meta: dict | None) -> int:
     if not isinstance(meta, dict):
         return 0
@@ -265,8 +188,156 @@ def _load_meta(dest: Path) -> dict | None:
     return meta
 
 
-def _stop_for_publisher_change(ctx: AppContext, job_id: str, dest: Path) -> bool:
-    return ctx.processes.is_alive(job_id) and publisher_changed(_load_meta(dest))
+def _retry_after(ctx: AppContext) -> dict[str, str]:
+    return {"Retry-After": str(ctx.settings.job_retry_after_sec)}
+
+
+def _accept_upload(
+    ctx: AppContext,
+    filename: str,
+    data: bytes,
+    digest: str,
+    job_id: str,
+) -> dict[str, object]:
+    """Fsync the book, hash the publisher, and enqueue. One thread, one lock."""
+    dest = ctx.store.dest_dir(job_id)
+    shared = ctx.store.shared_dir(job_id)
+    dest.mkdir(parents=True, exist_ok=True)
+    shared.mkdir(parents=True, exist_ok=True)
+    source = shared / source_name(data)
+    if not source.exists():
+        atomic_write_bytes(source, data)
+    owner_path = dest / "owner.json"
+    if not owner_path.exists():
+        write_json(owner_path, {"content_sha256": digest, "source_filename": filename})
+    try:
+        with file_lock(dest / ".lock"):
+            return _enqueue_or_reuse(ctx, filename, digest, job_id, dest, shared)
+    except QueueUnavailable as exc:
+        raise ApiError(
+            503,
+            "queue_unavailable",
+            headers=_retry_after(ctx),
+        ) from exc
+
+
+def _enqueue_or_reuse(
+    ctx: AppContext,
+    filename: str,
+    digest: str,
+    job_id: str,
+    dest: Path,
+    shared: Path,
+) -> dict[str, object]:
+    settings = ctx.settings
+    queue = ctx.queue
+    rq_id = rq_job_id(settings.session_id, job_id)
+    status = queue.status(rq_id)
+    stored = _load_meta(dest)
+    inflight = status in INFLIGHT_STATUSES or run_lock_busy(dest)
+    if inflight and not publisher_changed(stored):
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "job_dedup",
+            "duplicate post dropped",
+            job_id=job_id,
+            session_id=settings.session_id,
+            queue=settings.queue_name,
+            rq_job_id=rq_id,
+            status=None if stored is None else stored.get("status"),
+        )
+        return _running_body(job_id, dest)
+    if inflight and publisher_changed(stored):
+        queue.request_stop(rq_id)
+        _wait_until_clear(ctx, rq_id, dest)
+        queue.delete(rq_id)
+        status = None
+        stored = _load_meta(dest)
+    ready = _ready_meta(dest)
+    if ready is not None:
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "job_reuse",
+            "finished job reused",
+            job_id=job_id,
+            status=ready.get("status"),
+            stage=ready.get("stage"),
+        )
+        return {
+            "job_id": job_id,
+            "status": ready.get("status"),
+            "stage": ready.get("stage"),
+        }
+    if status is not None:
+        queue.delete(rq_id)
+    if queue.session_inflight(settings.session_id) >= settings.job_queue_max_per_session:
+        raise ApiError(429, "too_many_jobs", headers=_retry_after(ctx))
+    generation = max(1, _disk_generation(stored) + 1)
+    clear_downstream_artifacts(dest, stale_from=stale_from_meta(stored), shared=shared)
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "snapshot_invalidated",
+        "stale artifacts invalidated",
+        job_id=job_id,
+    )
+    write_json(
+        dest / "meta.json",
+        {
+            "job_id": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "source_filename": filename,
+            "content_sha256": digest,
+            "generation": generation,
+        },
+    )
+    payload = {
+        "session_id": settings.session_id,
+        "job_id": job_id,
+        "data_dir": str(settings.data_dir),
+        "generation": generation,
+    }
+    try:
+        queue.enqueue(payload)
+    except DuplicateEnqueue:
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "job_dedup",
+            "duplicate post dropped",
+            job_id=job_id,
+            session_id=settings.session_id,
+            queue=settings.queue_name,
+            rq_job_id=rq_id,
+        )
+        return _running_body(job_id, dest)
+    return {"job_id": job_id, "status": "queued", "stage": "queued"}
+
+
+def _wait_until_clear(ctx: AppContext, rq_id: str, dest: Path) -> None:
+    """The old horse must leave before the same id is enqueued again."""
+    settings = ctx.settings
+    deadline = time.monotonic() + settings.job_terminate_grace_sec + settings.job_kill_grace_sec
+    while time.monotonic() < deadline:
+        status = ctx.queue.status(rq_id)
+        if status not in INFLIGHT_STATUSES and not run_lock_busy(dest):
+            return
+        time.sleep(0.05)
+
+
+def _queue_lost(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
+    if meta.get("status") not in {"queued", "running"}:
+        return False
+    if run_lock_busy(dest):
+        return False
+    try:
+        status = ctx.queue.status(rq_job_id(ctx.settings.session_id, job_id))
+    except QueueUnavailable:
+        return False
+    return status in LOST_STATUSES
 
 
 def _ready_meta(dest: Path) -> dict | None:
@@ -301,14 +372,23 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     meta_path = dest / "meta.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if isinstance(meta, dict) and _orphan_running(
-            meta, live=live, alive=ctx.processes.is_alive(job_id)
-        ):
+        if isinstance(meta, dict) and _queue_lost(ctx, job_id, dest, meta):
             try:
                 generation = int(meta.get("generation") or 0)
             except (TypeError, ValueError):
                 generation = 0
-            mark_job_failed(dest, job_id, "process_lost", generation)
+            mark_job_failed(dest, job_id, "queue_lost", generation)
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "job_queue_lost",
+                "queued job is missing from the queue",
+                job_id=job_id,
+                session_id=ctx.settings.session_id,
+                queue=ctx.settings.queue_name,
+                generation=generation,
+                error_code="queue_lost",
+            )
             reloaded = _load_meta(dest)
             if reloaded is not None:
                 meta = reloaded

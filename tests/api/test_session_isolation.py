@@ -12,6 +12,7 @@ from tests.api.conftest import (
     _capture_finance_logs,
     _hold_stage,
     _job_dir,
+    _serving,
     _upload,
     _wait_disk_stage,
     _xlsx,
@@ -289,7 +290,7 @@ def test_other_session_startup_leaves_a_live_job_running(tmp_path: Path, monkeyp
         _env_file=None,
     )
     try:
-        with TestClient(create_app(settings_a)) as client_a:
+        with _serving(settings_a) as client_a:
             created = _upload(client_a, source)
             assert created.status_code == 202
             job_id = created.json()["job_id"]
@@ -306,7 +307,9 @@ def test_other_session_startup_leaves_a_live_job_running(tmp_path: Path, monkeyp
                 assert stored["stage"] == "parse"
                 assert stored["source_filename"] == before["source_filename"]
                 assert "error" not in stored or stored["error"] in {None, ""}
-                assert client_a.app.state.ctx.processes.is_alive(job_id)
+                from finance_context.jobqueue.spawn import run_lock_busy
+
+                assert run_lock_busy(dest)
                 body = client_a.get(f"/v1/context-jobs/{job_id}").json()
                 assert body["status"] == "running"
                 assert body["stage"] == "parse"
@@ -342,15 +345,12 @@ def test_repost_after_restart_seeds_generation_above_disk(tmp_path: Path, monkey
             created = _upload(client, source)
             assert created.status_code == 202
             assert created.json()["status"] in {"queued", "running"}
-            assert client.app.state.ctx.processes.is_alive(job_id)
             body = client.get(f"/v1/context-jobs/{job_id}").json()
             assert body["status"] in {"queued", "running"}
             assert body.get("error") in {None, ""}
-            generation = client.app.state.ctx.bus.current_generation(job_id)
-            assert generation == 2
             assert _wait_disk_stage(tmp_path, job_id, "parse")
             stored = _read_meta(dest)
-            assert stored["generation"] == generation
+            assert stored["generation"] == 2
             assert stored["status"] == "running"
             assert stored["stage"] == "parse"
     finally:
@@ -400,12 +400,9 @@ def test_generation_two_failure_with_artifacts_relaunches(
             assert not any(
                 record.__dict__.get("event") == "job_reuse" for record in caplog.records
             )
-            assert client.app.state.ctx.processes.is_alive(job_id)
             body = client.get(f"/v1/context-jobs/{job_id}").json()
             assert body["status"] in {"queued", "running"}
             assert body.get("error") in {None, ""}
-            generation = client.app.state.ctx.bus.current_generation(job_id)
-            assert generation == 3
             assert _wait_disk_stage(tmp_path, job_id, "parse")
             stored = _read_meta(dest)
             assert stored["generation"] == 3

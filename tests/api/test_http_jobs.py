@@ -13,6 +13,7 @@ from tests.api.conftest import (
     _disk_stage,
     _hold_stage,
     _job_dir,
+    _serving,
     _upload,
     _wait_disk_stage,
     _wait_for_terminal,
@@ -40,7 +41,7 @@ def test_readyz_reports_jobs_and_a_blocked_data_dir(client: TestClient, tmp_path
     body = client.get("/readyz").json()
     assert body["status"] == "ready"
     assert body["jobs"] == 0
-    assert body["queue"] == "in_process"
+    assert body["queue"] == "finance-context"
     blocked = tmp_path / "not-a-directory"
     blocked.write_text("x", encoding="utf-8")
     settings = Settings(
@@ -227,9 +228,10 @@ def test_two_children_reach_layout_together(tmp_path: Path, monkeypatch) -> None
                 time.sleep(0.05)
             assert stages[first_id] not in {None, "", "queued"}
             assert stages[second_id] not in {None, "", "queued"}
-            processes = client.app.state.ctx.processes
-            assert processes.is_alive(first_id)
-            assert processes.is_alive(second_id)
+            from finance_context.jobqueue.spawn import run_lock_busy
+
+            assert run_lock_busy(_job_dir(tmp_path, first_id))
+            assert run_lock_busy(_job_dir(tmp_path, second_id))
     finally:
         pause.unlink(missing_ok=True)
 
@@ -291,28 +293,25 @@ def test_second_job_waits_behind_the_process_cap(tmp_path: Path, monkeypatch) ->
         _env_file=None,
     )
     try:
-        with TestClient(create_app(settings)) as client:
+        with _serving(settings) as client:
             first = _upload(client, source)
             assert first.status_code == 202
             job_id = first.json()["job_id"]
             assert _wait_disk_stage(tmp_path, job_id, "layout")
-            repeated = _upload(client, source)
-            assert repeated.status_code == 202
-            blocked = _upload(client, other)
-            assert blocked.status_code == 429
-            assert blocked.json()["error"] == "too_many_jobs"
+            queued = _upload(client, other)
+            assert queued.status_code == 202
+            second_id = queued.json()["job_id"]
+            assert queued.json()["status"] == "queued"
+            # A same-book POST would block on the child's directory lock. This
+            # book is a different directory, so the only worker slot is what
+            # keeps it queued.
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                assert _disk_stage(tmp_path, second_id) in {None, "queued"}
+                time.sleep(0.05)
             pause.unlink()
             assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                if client.app.state.ctx.processes.alive_count() == 0:
-                    break
-                time.sleep(0.05)
-            else:
-                raise AssertionError("job process did not exit")
-            accepted = _upload(client, other)
-            assert accepted.status_code == 202
-            assert accepted.json()["status"] in {"queued", "running"}
+            assert _wait_for_terminal(client, second_id)["status"] == "succeeded"
     finally:
         pause.unlink(missing_ok=True)
 
@@ -321,15 +320,27 @@ def test_dead_queued_job_relaunches(client: TestClient, tmp_path: Path) -> None:
     source = _xlsx(tmp_path / "model.xlsx")
     data = source.read_bytes()
     job_id = job_id_for(sha256_bytes(data))
-    ctx = client.app.state.ctx
-    assert ctx.bus.enqueue(job_id)
-    assert ctx.bus.current_generation(job_id) == 1
+    dest = _job_dir(tmp_path, job_id)
+    dest.mkdir(parents=True)
+    (dest / "meta.json").write_text(
+        json.dumps(
+            {
+                "job_id": job_id,
+                "status": "failed",
+                "stage": "failed",
+                "error": "process_lost",
+                "generation": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
     response = _upload(client, source)
     assert response.status_code == 202
-    assert ctx.bus.current_generation(job_id) == 2
     body = response.json()
     assert body["job_id"] == job_id
-    assert body["status"] in {"queued", "running", "succeeded", "degraded", "needs_input"}
+    assert body["status"] == "queued"
+    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert stored["generation"] == 2
 
 
 def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
@@ -342,7 +353,7 @@ def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
         _env_file=None,
     )
     try:
-        with TestClient(create_app(settings)) as client:
+        with _serving(settings) as client:
             created = _upload(client, source)
             assert created.status_code == 202
             job_id = created.json()["job_id"]
@@ -394,5 +405,5 @@ def test_get_marks_orphaned_running_job(client: TestClient, tmp_path: Path) -> N
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "failed"
-    assert body["error"] == "process_lost"
+    assert body["error"] == "queue_lost"
     assert not (dest / "context.json").exists()

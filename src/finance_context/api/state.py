@@ -7,6 +7,7 @@ from finance_context.adapters.disk_store import DiskStore
 from finance_context.adapters.memory_bus import MemoryJobBus
 from finance_context.api.processes import JobProcesses
 from finance_context.app.pipeline import Pipeline
+from finance_context.jobqueue.queue import RQJobQueue
 from finance_context.settings import Settings
 
 
@@ -17,6 +18,7 @@ class AppContext:
     bus: MemoryJobBus
     pipeline: Pipeline
     processes: JobProcesses
+    queue: RQJobQueue
     max_upload_bytes: int
 
     @property

@@ -16,6 +16,7 @@ from finance_context.api.routes import router
 from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline, mark_job_failed
 from finance_context.errors import ContextError
+from finance_context.jobqueue.queue import RQJobQueue
 from finance_context.memory import budget_for_settings, unusable_cap_detail
 from finance_context.observability import configure_logging, log_event
 from finance_context.settings import Settings
@@ -48,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         watch_interval_sec=settings.job_memory_watch_interval_sec,
         malloc_arena_max=settings.job_malloc_arena_max,
     )
+    queue = RQJobQueue.from_settings(settings, connect_timeout=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -62,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         bus=bus,
         pipeline=pipeline,
         processes=processes,
+        queue=queue,
         max_upload_bytes=settings.max_upload_bytes,
     )
     app.add_exception_handler(ApiError, api_error_handler)

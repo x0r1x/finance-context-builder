@@ -11,7 +11,7 @@ class HealthBody(BaseModel):
 
 class ReadyBody(BaseModel):
     status: Literal["ready", "unavailable"]
-    queue: Literal["in_process"]
+    queue: str
     jobs: int
 
 
