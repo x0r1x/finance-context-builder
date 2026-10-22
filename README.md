@@ -45,7 +45,7 @@ Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If those docu
 
 ### HTTP API
 
-`POST` only enqueues. Redis has to be reachable, and `finance-context worker` has to be running in another terminal. The default `REDIS_URL` is `redis://redis:6379/0`. For Compose, set `REDIS_URL` in `.env` (for example `redis://host.docker.internal:6379/0` when Redis is on the host). On the host, point both processes at a local Redis and the same `DATA_DIR`. Client scripts only call HTTP; they do not start or stop the server.
+`POST` only enqueues. Redis has to be reachable, and `finance-context worker` has to be running in another terminal. The default `REDIS_URL` is `redis://redis:6379/0`. For Compose, set `REDIS_URL` in `.env` (for example `redis://host.docker.internal:6379/0` when Redis is on the host). On Linux that hostname is the host bridge address, so Redis has to listen there and not only on `127.0.0.1`. On the host, point both processes at a local Redis and the same `DATA_DIR`. Client scripts only call HTTP; they do not start or stop the server.
 
 ```bash
 REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context serve --host 127.0.0.1 --port 8080
@@ -136,10 +136,11 @@ At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2, on the worker po
 
 ```bash
 cp .env.example .env   # set REDIS_URL; Redis runs outside this Compose file
+mkdir -p data && sudo chown 1000:1000 data
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-Leave Compose running. Run that command from the repo root. `deploy/docker-compose.yml` starts the API (`finance-context`) and the RQ worker (`finance-context worker`). Redis runs separately, for example in the user's finance-stack compose. Set `REDIS_URL` in `.env`, for example `redis://host.docker.internal:6379/0` (`host.docker.internal` is mapped in the compose file). The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`. The API service is `mem_limit: 4g`. The worker is the same image with command `finance-context worker`, `DATA_DIR`, the `./data` volume, and that host mapping. `DATA_DIR` has to be a local filesystem on one node. The API and the worker share flocks there, and startup refuses a network filesystem unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
+Leave Compose running. Run that command from the repo root. `deploy/docker-compose.yml` starts the API (`finance-context`) and the RQ worker (`finance-context worker`). Redis runs separately, for example in the user's finance-stack compose. Set `REDIS_URL` in `.env`, for example `redis://host.docker.internal:6379/0` (`host.docker.internal` is mapped in the compose file). On Linux that name is the host bridge address. Redis has to listen on that bridge address, or on another non-public address the containers can reach. A listener bound only to `127.0.0.1` is not reachable from these containers. The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Create that directory and give it to uid 1000 before `up` (the commands above). The containers run as that user, and on a fresh Linux checkout Docker would otherwise create a root-owned bind source. Compose mounts **`./data` only**, not `src/`. The API service is `mem_limit: 4g`. The worker is the same image with command `finance-context worker`, `DATA_DIR`, the `./data` volume, and that host mapping. `DATA_DIR` has to be a local filesystem on one node. The API and the worker share flocks there, and startup refuses a network filesystem unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
 
 The image runs as `app` (uid 1000) with `HOME=/app` and includes `libreoffice-calc-nogui`. A `.xls` upload converts inside the container. Conversion writes a temporary profile under the book directory, not into the image home. `XLS_CONVERT_TIMEOUT_SEC` (default 300) stays below `JOB_TIMEOUT_SEC` (default 3600) so a hung conversion fails the job before the server stops the process. `.env` can still set `SOFFICE_BIN` and `XLS_CONVERT_TIMEOUT_SEC`; Compose does not override them. `scripts/docker-xls-smoke.sh` checks that path against a real `.xls`. It needs Docker and is not part of `uv run pytest`.
 
