@@ -353,6 +353,12 @@ class MemberStatus(NamedTuple):
     evidence: str | None
 
 
+def _share(pool: dict[str, str] | None, text: str) -> str:
+    if pool is None:
+        return text
+    return pool.setdefault(text, text)
+
+
 def expand_cell_edges(
     edges: list[Edge],
     known_nodes: set[str] | None = None,
@@ -360,6 +366,7 @@ def expand_cell_edges(
     known_sheets: set[str] | None = None,
     presence: dict[str, str] | None = None,
     usage: SheetUsage | None = None,
+    pool: dict[str, str] | None = None,
 ) -> list[CellEdge]:
     """Expand formula edges to cell-to-cell rows with blank vs unresolved status."""
     known = known_nodes or set()
@@ -369,6 +376,7 @@ def expand_cell_edges(
     seen: set[tuple[str, str, str]] = set()
     for edge in edges:
         for target, unresolved, truncated in _expanded_targets(edge, usage):
+            target = _share(pool, target)
             classified = classify_member(
                 target,
                 kind=edge.kind,
@@ -402,6 +410,121 @@ def expand_cell_edges(
                 )
             )
     return rows
+
+
+_CELL_EDGE_COLUMNS = (
+    "source",
+    "target",
+    "kind",
+    "unresolved",
+    "truncated",
+    "dangling",
+    "col_offset",
+    "period_lag",
+    "dangling_reason",
+    "status",
+    "reason",
+    "evidence",
+    "range_ref",
+    "abs_col",
+    "abs_row",
+    "abs_col_end",
+    "abs_row_end",
+    "named",
+)
+
+
+def expand_cell_edges_column_batches(
+    edges: list[Edge],
+    known_nodes: set[str] | None = None,
+    *,
+    consume: Any,
+    known_sheets: set[str] | None = None,
+    presence: dict[str, str] | None = None,
+    usage: SheetUsage | None = None,
+    pool: dict[str, str] | None = None,
+    batch_size: int = 65536,
+) -> int:
+    """Same rows as expand_cell_edges, flushed as column lists. No CellEdge objects.
+
+    ``consume`` must finish with the batch before it returns. The lists are then cleared.
+    ``batch_size`` <= 0 keeps one batch for the whole expansion.
+    """
+    known = known_nodes or set()
+    sheets = known_sheets or set()
+    seen_cells = presence or {}
+    seen: set[int] = set()
+    ids: dict[str, int] = {}
+    id_box: list[int] = []
+    kinds: dict[str, int] = {}
+    columns: dict[str, list[Any]] = {name: [] for name in _CELL_EDGE_COLUMNS}
+    count = 0
+    limit = batch_size if batch_size > 0 else 0
+
+    def node_id(text: str) -> int:
+        slot = ids.get(text)
+        if slot is None:
+            slot = len(id_box)
+            ids[text] = slot
+            id_box.append(slot)
+        return id_box[slot]
+
+    def kind_id(kind: str) -> int:
+        slot = kinds.get(kind)
+        if slot is None:
+            slot = len(kinds) + 1
+            kinds[kind] = slot
+        return slot
+
+    def flush() -> None:
+        nonlocal count
+        if not columns["source"]:
+            return
+        consume(columns)
+        count += len(columns["source"])
+        for values in columns.values():
+            values.clear()
+
+    for edge in edges:
+        for target, unresolved, truncated in _expanded_targets(edge, usage):
+            target = _share(pool, target)
+            classified = classify_member(
+                target,
+                kind=edge.kind,
+                known=known,
+                sheets=sheets,
+                unresolved=unresolved,
+                presence=seen_cells,
+            )
+            key = (node_id(edge.source) << 40) | (node_id(target) << 8) | kind_id(edge.kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            columns["source"].append(edge.source)
+            columns["target"].append(target)
+            columns["kind"].append(edge.kind)
+            columns["unresolved"].append(unresolved)
+            columns["truncated"].append(truncated)
+            columns["dangling"].append(classified.dangling)
+            columns["col_offset"].append(None)
+            columns["period_lag"].append(None)
+            columns["dangling_reason"].append(classified.dangling_reason)
+            columns["status"].append(classified.status)
+            columns["reason"].append(classified.reason)
+            columns["evidence"].append(classified.evidence)
+            columns["range_ref"].append(edge.target)
+            columns["abs_col"].append(edge.abs_col)
+            columns["abs_row"].append(edge.abs_row)
+            columns["abs_col_end"].append(edge.abs_col_end)
+            columns["abs_row_end"].append(edge.abs_row_end)
+            columns["named"].append(edge.named)
+            if limit and len(columns["source"]) >= limit:
+                flush()
+    flush()
+    seen.clear()
+    ids.clear()
+    id_box.clear()
+    return count
 
 
 def classify_member(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing
+import os
 import threading
 import time
 from multiprocessing.connection import wait as wait_for_exit
@@ -56,6 +57,7 @@ class JobProcesses:
         memory_budget_bytes: int | None = None,
         unusable_detail: str | None = None,
         watch_interval_sec: float = 0.2,
+        malloc_arena_max: int | None = None,
     ) -> None:
         self._data_dir = str(data_dir)
         self._session_id = session_id or LOCAL_SESSION
@@ -67,6 +69,7 @@ class JobProcesses:
         )
         self._unusable_detail = unusable_detail
         self._watch_interval = watch_interval_sec
+        self._malloc_arena_max = malloc_arena_max if malloc_arena_max else None
         self._procs: dict[str, multiprocessing.Process] = {}
         self._generations: dict[str, int] = {}
         self._closed: set[tuple[str, int]] = set()
@@ -122,8 +125,20 @@ class JobProcesses:
         )
         started = False
         try:
-            proc.start()
-            started = True
+            with self._lock:
+                previous_arena = os.environ.get("MALLOC_ARENA_MAX")
+                if self._malloc_arena_max:
+                    os.environ["MALLOC_ARENA_MAX"] = str(self._malloc_arena_max)
+                else:
+                    os.environ.pop("MALLOC_ARENA_MAX", None)
+                try:
+                    proc.start()
+                    started = True
+                finally:
+                    if previous_arena is None:
+                        os.environ.pop("MALLOC_ARENA_MAX", None)
+                    else:
+                        os.environ["MALLOC_ARENA_MAX"] = previous_arena
         finally:
             if not started:
                 self.release_reservation(job_id)

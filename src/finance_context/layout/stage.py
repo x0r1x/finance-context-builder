@@ -9,6 +9,7 @@ from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 from finance_context.layout.models import Layout
 from finance_context.observability import log_event
+from finance_context.settings import Settings
 from finance_context.store.fs import read_parquet, write_json
 
 _PARSE_FACTS = ("style_indent", "outline_level", "col_outline_level")
@@ -38,10 +39,12 @@ def layout_workbook(
     *,
     cells: list[dict] | None = None,
     edges: list[dict] | None = None,
+    settings: Settings | None = None,
 ) -> Layout:
+    chosen = settings if isinstance(settings, Settings) else Settings()
     if cells is None:
         cells = read_parquet(dest_dir / "ir" / "cells.parquet")
-    cells = _overlay_parse_facts(dest_dir, cells)
+    cells = _overlay_parse_facts(dest_dir, cells, columnar=chosen.layout_columnar_facts)
     if edges is None:
         edges = _read_edges(dest_dir)
     date1904 = False
@@ -88,7 +91,11 @@ def layout_workbook(
     _timed_step(
         "layout_write",
         "layout.json write done",
-        lambda: write_json(dest_dir / "layout.json", layout.model_dump(mode="json")),
+        lambda: write_json(
+            dest_dir / "layout.json",
+            layout.model_dump(mode="json"),
+            stream=chosen.json_stream,
+        ),
     )
     return layout
 
@@ -128,12 +135,20 @@ def _overlay_merges(cells: list[dict], meta: dict | None) -> list[dict]:
     return updated
 
 
-def _overlay_parse_facts(dest_dir: Path, cells: list[dict]) -> list[dict]:
+def _overlay_parse_facts(
+    dest_dir: Path, cells: list[dict], *, columnar: bool = False
+) -> list[dict]:
     """Copy alignment indent and outline levels from the raw parse onto IR cells.
 
     Formula IR does not carry those columns. A missing raw file, or a parquet
     written before the columns existed, leaves the IR cells unchanged.
     """
+    if columnar:
+        return _timed_step(
+            "layout_cells_read",
+            "raw/cells.parquet read done",
+            lambda: _overlay_facts_columnar(dest_dir, cells),
+        )
     path = dest_dir / "raw" / "cells.parquet"
     if not cells or not path.is_file():
         return cells
@@ -157,6 +172,66 @@ def _overlay_parse_facts(dest_dir: Path, cells: list[dict]) -> list[dict]:
                 picked[key] = number
         if picked:
             facts[(raw.get("sheet"), int(raw.get("row") or 0), int(raw.get("col") or 0))] = picked
+    if not facts:
+        return cells
+    merged: list[dict] = []
+    for cell in cells:
+        extra = facts.get((cell.get("sheet"), int(cell.get("row") or 0), int(cell.get("col") or 0)))
+        if not extra:
+            merged.append(cell)
+            continue
+        updated = dict(cell)
+        updated.update(extra)
+        merged.append(updated)
+    return merged
+
+
+def _overlay_facts_columnar(dest_dir: Path, cells: list[dict]) -> list[dict]:
+    """Scan fact columns in Arrow and skip the dict list when every value is zero."""
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    path = dest_dir / "raw" / "cells.parquet"
+    if not cells or not path.is_file():
+        return cells
+    columns = ["sheet", "row", "col", *_PARSE_FACTS]
+    try:
+        schema = pq.read_schema(path)
+    except (OSError, ValueError):
+        return cells
+    if any(name not in schema.names for name in columns):
+        return cells
+    table = pq.read_table(path, columns=columns)
+    mask = None
+    for key in _PARSE_FACTS:
+        filled = pc.fill_null(table.column(key), 0)
+        positive = pc.greater(filled, 0)
+        mask = positive if mask is None else pc.or_kleene(mask, positive)
+    if int(pc.sum(pc.fill_null(mask, False)).as_py() or 0) == 0:
+        del table
+        return cells
+    picked = table.filter(mask)
+    del table
+    facts: dict[tuple[object, int, int], dict[str, int]] = {}
+    sheets = picked.column("sheet").to_pylist()
+    rows = picked.column("row").to_pylist()
+    cols = picked.column("col").to_pylist()
+    fact_cols = {key: picked.column(key).to_pylist() for key in _PARSE_FACTS}
+    del picked
+    for index, sheet in enumerate(sheets):
+        extra: dict[str, int] = {}
+        for key in _PARSE_FACTS:
+            value = fact_cols[key][index]
+            if not value:
+                continue
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                extra[key] = number
+        if extra:
+            facts[(sheet, int(rows[index] or 0), int(cols[index] or 0))] = extra
     if not facts:
         return cells
     merged: list[dict] = []

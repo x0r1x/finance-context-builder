@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import os
@@ -21,11 +22,12 @@ _LOGGER = logging.getLogger("finance_context.pipeline")
 # Above this, cgroup v1 is reporting "no limit" (page_counter max).
 _UNLIMITED_BYTES = 1 << 60
 
-# Coefficients live on Settings (JOB_ESTIMATE_*). Fitted after parsed-edge
-# preflight: 132 MiB + 3840 bytes/formula + 960/expanded cell + 960/present
-# cell. Highest-stage peaks and the ceiling estimate sit between 1.07 and
-# 1.15. The 40k-formula book stays under the 1536 MiB default; the
-# 380k-formula timeline does not.
+# Coefficients live on Settings (JOB_ESTIMATE_*). Fitted to ru_maxrss with the
+# streaming switches on: 166 MiB + 128 bytes/formula + 220/expanded cell +
+# 1120/present cell. Those peaks and the ceiling estimate sit between 1.08 and
+# 1.20, including the 384k-formula timeline, which stays under the 1536 MiB
+# default. The switches off restore the previous resident set, and this
+# estimate can then fall short of it.
 
 _budget_warnings: set[str] = set()
 _logged_effective = False
@@ -66,6 +68,33 @@ class WorkbookEstimate:
     expanded_cells: int
     present_cells: int
     estimate_bytes: int
+
+
+_trim_fn: object | None = None
+_trim_resolved = False
+
+
+def trim_process_heap() -> bool:
+    """Ask glibc to return free arenas to the OS. Missing ``malloc_trim`` is a no-op."""
+    global _trim_fn, _trim_resolved
+    if not _trim_resolved:
+        _trim_resolved = True
+        try:
+            libc = ctypes.CDLL(None)
+            fn = getattr(libc, "malloc_trim", None)
+        except (OSError, AttributeError):
+            fn = None
+        if fn is not None:
+            fn.argtypes = [ctypes.c_size_t]
+            fn.restype = ctypes.c_int
+        _trim_fn = fn
+    fn = _trim_fn
+    if fn is None:
+        return False
+    try:
+        return bool(fn(0))  # type: ignore[operator]
+    except (OSError, AttributeError):
+        return False
 
 
 def rss_bytes() -> int:
@@ -276,6 +305,15 @@ def _log_effective_memory(settings: Settings, budget: int) -> None:
         oom_score_adj=settings.job_oom_score_adj,
         preflight_refusal=settings.job_memory_preflight_refusal,
         budget_bytes=budget,
+        parse_streaming=settings.parse_streaming,
+        json_stream=settings.json_stream,
+        parquet_row_group_rows=settings.parquet_row_group_rows,
+        compile_string_pool=settings.compile_string_pool,
+        compile_ast_zlib=settings.compile_ast_zlib,
+        graph_stream=settings.graph_stream,
+        layout_columnar_facts=settings.layout_columnar_facts,
+        malloc_arena_max=settings.job_malloc_arena_max,
+        malloc_trim=settings.job_malloc_trim,
     )
 
 

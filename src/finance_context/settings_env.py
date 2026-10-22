@@ -31,4 +31,13 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("RANGE_EXPAND_CAP", "range_expand_cap"),
     EnvSpec("JOB_OOM_SCORE_ADJ", "job_oom_score_adj"),
     EnvSpec("JOB_MEMORY_PREFLIGHT_REFUSAL", "job_memory_preflight_refusal"),
+    EnvSpec("PARSE_STREAMING", "parse_streaming"),
+    EnvSpec("JSON_STREAM", "json_stream"),
+    EnvSpec("PARQUET_ROW_GROUP_ROWS", "parquet_row_group_rows"),
+    EnvSpec("COMPILE_STRING_POOL", "compile_string_pool"),
+    EnvSpec("COMPILE_AST_ZLIB", "compile_ast_zlib"),
+    EnvSpec("GRAPH_STREAM", "graph_stream"),
+    EnvSpec("LAYOUT_COLUMNAR_FACTS", "layout_columnar_facts"),
+    EnvSpec("JOB_MALLOC_ARENA_MAX", "job_malloc_arena_max"),
+    EnvSpec("JOB_MALLOC_TRIM", "job_malloc_trim"),
 )

@@ -167,10 +167,10 @@ def test_estimate_is_linear_in_formulas_expanded_cells_and_present_cells() -> No
         + 3 * DEFAULT_ESTIMATE_BYTES_PER_EXPANDED_CELL
         + 4 * DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL
     )
-    assert settings.job_estimate_base_bytes == 132 * 1024 * 1024
-    assert settings.job_estimate_bytes_per_formula == 3840
-    assert settings.job_estimate_bytes_per_expanded_cell == 960
-    assert settings.job_estimate_bytes_per_present_cell == 960
+    assert settings.job_estimate_base_bytes == 166 * 1024 * 1024
+    assert settings.job_estimate_bytes_per_formula == 128
+    assert settings.job_estimate_bytes_per_expanded_cell == 220
+    assert settings.job_estimate_bytes_per_present_cell == 1120
 
 
 def test_stage_done_carries_rss_counts_and_budget() -> None:
