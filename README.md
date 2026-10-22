@@ -150,7 +150,7 @@ Local testing adds Redis from the override (`redis:8.6.7-alpine` on `127.0.0.1:6
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up --build
 ```
 
-`cd deploy && docker compose up` merges that override on its own. The `finance-context` container uses `REDIS_URL=redis://redis:6379/0`. A process on the host, such as `scripts/run.sh` against the API, uses `redis://127.0.0.1:6379/0`.
+`cd deploy && docker compose up` merges that override on its own. Compose does not set `REDIS_URL`. The container reads it from `.env`. For this Redis service, set `REDIS_URL=redis://redis:6379/0`, or leave it unset so the Settings default is that address. A process on the host, such as `scripts/run.sh` against the API, uses `redis://127.0.0.1:6379/0`. That loopback address is the host's published port. It is not reachable from the container.
 
 The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Create that directory and give it to uid 1000 before `up` (the commands above). The container runs as that user, and on a fresh Linux checkout Docker would otherwise create a root-owned bind source. Compose mounts **`./data` only**, not `src/`. The service is `mem_limit: 4g`. `DATA_DIR` has to be a local filesystem on one node. Startup refuses a network filesystem unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
 

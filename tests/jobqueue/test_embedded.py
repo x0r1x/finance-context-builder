@@ -24,6 +24,7 @@ from tests.jobqueue.conftest import local_test_redis_url
 
 from finance_context.api.app import create_app
 from finance_context.jobqueue.embedded import (
+    _child_env,
     embedded_worker_ready,
     start_for_serve,
     stop_for_serve,
@@ -118,6 +119,25 @@ def _upload(client: TestClient, source: Path):
             )
         },
     )
+
+
+def test_disabled_arena_max_stays_disabled_in_the_child_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("JOB_MALLOC_ARENA_MAX", "4")
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", "999")
+    settings = _settings(tmp_path, job_malloc_arena_max=None, job_memory_budget_bytes=None)
+    env = _child_env(settings)
+    assert env["JOB_MALLOC_ARENA_MAX"] == "0"
+    assert "JOB_MEMORY_BUDGET_BYTES" not in env
+    dotenv = tmp_path / "child.env"
+    dotenv.write_text("JOB_MALLOC_ARENA_MAX=2\n", encoding="utf-8")
+    monkeypatch.setenv("JOB_MALLOC_ARENA_MAX", env["JOB_MALLOC_ARENA_MAX"])
+    loaded = Settings(_env_file=dotenv)
+    assert loaded.job_malloc_arena_max is None
+
+    kept = _child_env(_settings(tmp_path, job_malloc_arena_max=4))
+    assert kept["JOB_MALLOC_ARENA_MAX"] == "4"
 
 
 def test_embedded_worker_rejects_a_non_positive_backoff() -> None:

@@ -192,7 +192,12 @@ def _child_env(settings: Settings) -> dict[str, str]:
             continue
         value = getattr(settings, spec.field_name)
         if value is None:
-            env.pop(spec.env_name, None)
+            # 0 is the wire form of a disabled arena cap. Dropping the variable
+            # lets the child Settings use the default 2, or a value from .env.
+            if spec.field_name == "job_malloc_arena_max":
+                env[spec.env_name] = "0"
+            else:
+                env.pop(spec.env_name, None)
             continue
         if isinstance(value, bool):
             env[spec.env_name] = "true" if value else "false"

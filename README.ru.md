@@ -147,7 +147,7 @@ docker compose -f deploy/docker-compose.yml up --build
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up --build
 ```
 
-`cd deploy && docker compose up` подмешивает этот override сам. Контейнер `finance-context` использует `REDIS_URL=redis://redis:6379/0`. Процесс на хосте, например `scripts/run.sh` к API, использует `redis://127.0.0.1:6379/0`.
+`cd deploy && docker compose up` подмешивает этот override сам. Compose не задаёт `REDIS_URL`. Контейнер читает его из `.env`. Для этого Redis задайте `REDIS_URL=redis://redis:6379/0` или оставьте переменную пустой: тогда адрес по умолчанию в Settings — тот же. Процесс на хосте, например `scripts/run.sh` к API, использует `redis://127.0.0.1:6379/0`. Это опубликованный порт на хосте. Из контейнера он недоступен.
 
 API опубликован только на `127.0.0.1:8080`. Общий кэш книг и публикации сессии попадают в `./data` на хосте. Создайте этот каталог и отдайте его uid 1000 до `up` (команды выше). Контейнер работает от этого пользователя, и на свежем Linux-чекауте Docker иначе создаст каталог от root. Compose монтирует **только `./data`**, не `src/`. У сервиса `mem_limit: 4g`. `DATA_DIR` должен быть локальной файловой системой на одном узле. Старт отказывается от сетевой ФС, пока `DATA_DIR_ALLOW_NETWORK_FS` не равен `true`.
 
