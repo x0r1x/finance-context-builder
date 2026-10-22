@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from tests.api.conftest import (
     _app,
@@ -104,6 +105,34 @@ def test_reconcile_touches_only_this_session_and_keeps_filename(tmp_path: Path) 
     assert stored["source_filename"] == "beta.xlsx"
     assert stored["content_sha256"] == "c" * 64
     assert stored["generation"] == 1
+
+
+def test_aliased_jobs_root_does_not_fail_the_other_session(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    job_id = "ab" * 32
+    alpha = _job(root, "alpha", job_id)
+    original = _write_meta(
+        alpha,
+        job_id=job_id,
+        status="running",
+        stage="parse",
+        source_filename="alpha.xlsx",
+        generation=1,
+    )
+    beta = root / "sessions" / "beta"
+    beta.mkdir(parents=True)
+    (beta / "jobs").symlink_to(alpha.parent, target_is_directory=True)
+    settings = Settings(
+        data_dir=root,
+        session_id="beta",
+        max_upload_bytes=1024 * 1024,
+        _env_file=None,
+    )
+    with pytest.raises(ValueError, match="DATA_DIR"):
+        reconcile_orphaned_jobs(root, "beta")
+    with pytest.raises(ValueError, match="DATA_DIR"):
+        create_app(settings)
+    assert _read_meta(alpha) == original
 
 
 def test_reconcile_skips_a_job_symlink_outside_the_session(tmp_path: Path) -> None:
