@@ -161,8 +161,7 @@ def test_ready_post_logs_job_reuse_and_does_not_launch(tmp_path: Path, caplog) -
     with _app(tmp_path) as client:
         logging.getLogger("finance_context").addHandler(caplog.handler)
         response = _upload(client, source)
-        processes = client.app.state.ctx.processes
-        assert job_id not in processes._procs
+        assert client.app.state.ctx.queue.status(f"local--{job_id}") is None
     assert response.status_code == 202
     assert response.json()["status"] == "succeeded"
     assert response.json()["stage"] == "done"
@@ -368,7 +367,7 @@ def test_job_timeout_marks_failed(tmp_path: Path, monkeypatch) -> None:
         pause.unlink(missing_ok=True)
 
 
-def test_startup_marks_orphaned_running_job(tmp_path: Path) -> None:
+def test_startup_leaves_a_running_job_on_disk(tmp_path: Path) -> None:
     job_id = "ab" * 32
     dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
@@ -380,8 +379,9 @@ def test_startup_marks_orphaned_running_job(tmp_path: Path) -> None:
     )
     with _app(tmp_path):
         stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
-    assert stored["status"] == "failed"
-    assert stored["error"] == "process_lost"
+    assert stored["status"] == "running"
+    assert stored["stage"] == "parse"
+    assert "error" not in stored
     assert stored["generation"] == 2
     assert not (dest / "context.json").exists()
 

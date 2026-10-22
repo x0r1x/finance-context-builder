@@ -18,7 +18,7 @@ from tests.api.conftest import (
     _xlsx,
 )
 
-from finance_context.api.app import create_app, reconcile_orphaned_jobs
+from finance_context.api.app import create_app
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.pipeline import mark_job_failed
 from finance_context.app.publisher import publisher_fingerprint
@@ -74,7 +74,7 @@ def test_mark_job_failed_preserves_existing_meta_fields(tmp_path: Path) -> None:
         assert stored[key] == original[key]
 
 
-def test_reconcile_touches_only_this_session_and_keeps_filename(tmp_path: Path) -> None:
+def test_get_marks_only_this_session_and_keeps_filename(tmp_path: Path) -> None:
     root = tmp_path / "data"
     job_id = "ab" * 32
     alpha = _job(root, "alpha", job_id)
@@ -98,11 +98,19 @@ def test_reconcile_touches_only_this_session_and_keeps_filename(tmp_path: Path) 
         content_sha256="c" * 64,
         generation=1,
     )
-    reconcile_orphaned_jobs(root, "beta")
+    settings = Settings(
+        data_dir=root,
+        session_id="beta",
+        max_upload_bytes=1024 * 1024,
+        _env_file=None,
+    )
+    with TestClient(create_app(settings)) as client:
+        body = client.get(f"/v1/context-jobs/{job_id}").json()
+    assert body["error"] == "queue_lost"
     assert _read_meta(alpha) == alpha_meta
     stored = _read_meta(beta)
     assert stored["status"] == "failed"
-    assert stored["error"] == "process_lost"
+    assert stored["error"] == "queue_lost"
     assert stored["source_filename"] == "beta.xlsx"
     assert stored["content_sha256"] == "c" * 64
     assert stored["generation"] == 1
@@ -130,13 +138,11 @@ def test_aliased_jobs_root_does_not_fail_the_other_session(tmp_path: Path) -> No
         _env_file=None,
     )
     with pytest.raises(ValueError, match="DATA_DIR"):
-        reconcile_orphaned_jobs(root, "beta")
-    with pytest.raises(ValueError, match="DATA_DIR"):
         create_app(settings)
     assert _read_meta(alpha) == original
 
 
-def test_reconcile_skips_a_job_symlink_outside_the_session(tmp_path: Path) -> None:
+def test_startup_skips_a_job_symlink_outside_the_session(tmp_path: Path) -> None:
     root = tmp_path / "data"
     outside = tmp_path / "outside"
     original = _write_meta(
@@ -150,8 +156,14 @@ def test_reconcile_skips_a_job_symlink_outside_the_session(tmp_path: Path) -> No
     jobs = root / "sessions" / "beta" / "jobs"
     jobs.mkdir(parents=True)
     (jobs / "linked").symlink_to(outside, target_is_directory=True)
-    reconcile_orphaned_jobs(root, "beta")
-    assert _read_meta(outside) == original
+    settings = Settings(
+        data_dir=root,
+        session_id="beta",
+        max_upload_bytes=1024 * 1024,
+        _env_file=None,
+    )
+    with TestClient(create_app(settings)):
+        assert _read_meta(outside) == original
 
 
 def test_other_session_startup_does_not_fail_a_foreign_job(tmp_path: Path) -> None:
@@ -177,7 +189,7 @@ def test_other_session_startup_does_not_fail_a_foreign_job(tmp_path: Path) -> No
         assert _read_meta(dest) == original
 
 
-def test_own_startup_marks_orphan_and_keeps_filename(tmp_path: Path) -> None:
+def test_get_marks_orphan_and_keeps_filename(tmp_path: Path) -> None:
     job_id = "ef" * 32
     dest = tmp_path / "data" / "sessions" / "local" / "jobs" / job_id
     _write_meta(
@@ -193,9 +205,15 @@ def test_own_startup_marks_orphan_and_keeps_filename(tmp_path: Path) -> None:
         stages={"layout": "old"},
     )
     with _app(tmp_path) as client:
+        untouched = _read_meta(dest)
+        assert untouched["status"] == "queued"
+        assert "error" not in untouched
+        body = client.get(f"/v1/context-jobs/{job_id}").json()
+        assert body["status"] == "failed"
+        assert body["error"] == "queue_lost"
         stored = _read_meta(dest)
         assert stored["status"] == "failed"
-        assert stored["error"] == "process_lost"
+        assert stored["error"] == "queue_lost"
         assert stored["source_filename"] == "book.xlsx"
         assert stored["content_sha256"] == "e" * 64
         assert stored["warnings"] == ["kept"]
@@ -204,12 +222,9 @@ def test_own_startup_marks_orphan_and_keeps_filename(tmp_path: Path) -> None:
         listed = client.get("/v1/context-jobs").json()
         assert listed[0]["status"] == "failed"
         assert listed[0]["source_filename"] == "book.xlsx"
-        body = client.get(f"/v1/context-jobs/{job_id}").json()
-        assert body["status"] == "failed"
-        assert body["error"] == "process_lost"
 
 
-def test_get_job_prefers_terminal_disk_status_over_queued_bus(tmp_path: Path) -> None:
+def test_get_job_returns_the_failed_status_on_disk(tmp_path: Path) -> None:
     job_id = "aa" * 32
     dest = tmp_path / "data" / "sessions" / "local" / "jobs" / job_id
     _write_meta(
@@ -222,51 +237,6 @@ def test_get_job_prefers_terminal_disk_status_over_queued_bus(tmp_path: Path) ->
         generation=1,
     )
     with _app(tmp_path) as client:
-        assert client.app.state.ctx.bus.enqueue(job_id)
-        body = client.get(f"/v1/context-jobs/{job_id}").json()
-        assert body["status"] == "failed"
-        assert body["stage"] == "failed"
-        assert body["error"] == "process_lost"
-
-
-def test_get_job_shows_a_newer_bus_run_over_an_old_failed_meta(tmp_path: Path) -> None:
-    job_id = "ac" * 32
-    dest = tmp_path / "data" / "sessions" / "local" / "jobs" / job_id
-    _write_meta(
-        dest,
-        job_id=job_id,
-        status="failed",
-        stage="failed",
-        error="process_lost",
-        source_filename="book.xlsx",
-        generation=1,
-    )
-    with _app(tmp_path) as client:
-        bus = client.app.state.ctx.bus
-        assert bus.enqueue(job_id)
-        assert bus.abandon(job_id, 1, "process_lost")
-        assert bus.enqueue(job_id)
-        body = client.get(f"/v1/context-jobs/{job_id}").json()
-        assert body["status"] == "queued"
-        assert body["stage"] == "queued"
-
-
-def test_get_job_keeps_failed_disk_when_bus_stage_is_ahead(tmp_path: Path) -> None:
-    job_id = "bb" * 32
-    dest = tmp_path / "data" / "sessions" / "local" / "jobs" / job_id
-    _write_meta(
-        dest,
-        job_id=job_id,
-        status="failed",
-        stage="failed",
-        error="process_lost",
-        source_filename="book.xlsx",
-        generation=1,
-    )
-    with _app(tmp_path) as client:
-        bus = client.app.state.ctx.bus
-        assert bus.enqueue(job_id)
-        bus.set_progress(job_id, "layout", generation=bus.current_generation(job_id))
         body = client.get(f"/v1/context-jobs/{job_id}").json()
         assert body["status"] == "failed"
         assert body["stage"] == "failed"
@@ -321,7 +291,7 @@ def test_other_session_startup_leaves_a_live_job_running(tmp_path: Path, monkeyp
 
 
 def test_repost_after_restart_seeds_generation_above_disk(tmp_path: Path, monkeypatch) -> None:
-    """A fresh process must not hide a re-POST behind the reconciled failure."""
+    """Startup leaves the running meta. The re-POST still moves the generation."""
     pause = _hold_stage(tmp_path, monkeypatch, "parse")
     source = _xlsx(tmp_path / "model.xlsx")
     data = source.read_bytes()
@@ -338,10 +308,10 @@ def test_repost_after_restart_seeds_generation_above_disk(tmp_path: Path, monkey
     )
     try:
         with _app(tmp_path) as client:
-            failed = _read_meta(dest)
-            assert failed["status"] == "failed"
-            assert failed["error"] == "process_lost"
-            assert failed["generation"] == 1
+            kept = _read_meta(dest)
+            assert kept["status"] == "running"
+            assert "error" not in kept
+            assert kept["generation"] == 1
             created = _upload(client, source)
             assert created.status_code == 202
             assert created.json()["status"] in {"queued", "running"}
@@ -360,7 +330,7 @@ def test_repost_after_restart_seeds_generation_above_disk(tmp_path: Path, monkey
 def test_generation_two_failure_with_artifacts_relaunches(
     tmp_path: Path, monkeypatch, caplog
 ) -> None:
-    """process_lost must not look like a finished snapshot at generation 2."""
+    """A running meta with artifacts is not a finished snapshot."""
     pause = _hold_stage(tmp_path, monkeypatch, "parse")
     source = _xlsx(tmp_path / "model.xlsx")
     data = source.read_bytes()
@@ -384,15 +354,13 @@ def test_generation_two_failure_with_artifacts_relaunches(
     )
     try:
         with _app(tmp_path) as client:
-            failed = _read_meta(dest)
-            assert failed["status"] == "failed"
-            assert failed["error"] == "process_lost"
-            assert failed["generation"] == 2
-            assert failed["source_filename"] == "model.xlsx"
-            assert failed["content_sha256"] == digest
-            assert failed["warnings"] == ["kept"]
-            assert "publisher" not in failed
-            assert "stages" not in failed
+            kept = _read_meta(dest)
+            assert kept["status"] == "running"
+            assert kept["generation"] == 2
+            assert kept["source_filename"] == "model.xlsx"
+            assert kept["content_sha256"] == digest
+            assert kept["warnings"] == ["kept"]
+            assert kept["publisher"] == publisher_fingerprint()
             _capture_finance_logs(caplog)
             created = _upload(client, source)
             assert created.status_code == 202

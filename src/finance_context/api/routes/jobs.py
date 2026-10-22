@@ -15,7 +15,6 @@ from finance_context.api.errors import ApiError
 from finance_context.api.http import (
     _ALLOWED,
     _LOGGER,
-    _STAGE_RANK,
     _check_job_id,
     _ctx,
     _errors,
@@ -131,8 +130,6 @@ async def post_job(
     return JSONResponse(body, status_code=202)
 
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
-# meta.json wins over the in-memory bus once the job has finished.
-_DISK_TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
 
 
 def _running_body(job_id: str, dest: Path) -> dict[str, object]:
@@ -149,21 +146,6 @@ def _running_body(job_id: str, dest: Path) -> dict[str, object]:
                 "stage": meta.get("stage"),
             }
     return {"job_id": job_id, "status": "running", "stage": "running"}
-
-
-def _newer_bus_run(meta: dict, live: object) -> bool:
-    """A higher bus generation is a new run, not a stale queued record."""
-    if live is None or getattr(live, "status", None) not in {"queued", "running"}:
-        return False
-    try:
-        disk_generation = int(meta.get("generation") or 0)
-    except (TypeError, ValueError):
-        disk_generation = 0
-    try:
-        bus_generation = int(getattr(live, "generation", 0) or 0)
-    except (TypeError, ValueError):
-        bus_generation = 0
-    return bus_generation > disk_generation
 
 
 def _disk_generation(meta: dict | None) -> int:
@@ -275,7 +257,12 @@ def _enqueue_or_reuse(
     if queue.session_inflight(settings.session_id) >= settings.job_queue_max_per_session:
         raise ApiError(429, "too_many_jobs", headers=_retry_after(ctx))
     generation = max(1, _disk_generation(stored) + 1)
-    clear_downstream_artifacts(dest, stale_from=stale_from_meta(stored), shared=shared)
+    # A matching publisher with no ready snapshot is not "keep the files".
+    # The child returns those files as soon as context.json and context.md exist.
+    stale = stale_from_meta(stored)
+    if stale is None:
+        stale = "layout"
+    clear_downstream_artifacts(dest, stale_from=stale, shared=shared)
     log_event(
         _LOGGER,
         logging.INFO,
@@ -368,65 +355,27 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     dest = ctx.store.dest_dir(job_id)
     if not dest.exists():
         raise ApiError(404, "not_found")
-    live = ctx.bus.get(job_id)
-    meta_path = dest / "meta.json"
-    if meta_path.exists():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if isinstance(meta, dict) and _queue_lost(ctx, job_id, dest, meta):
-            try:
-                generation = int(meta.get("generation") or 0)
-            except (TypeError, ValueError):
-                generation = 0
-            mark_job_failed(dest, job_id, "queue_lost", generation)
-            log_event(
-                _LOGGER,
-                logging.WARNING,
-                "job_queue_lost",
-                "queued job is missing from the queue",
-                job_id=job_id,
-                session_id=ctx.settings.session_id,
-                queue=ctx.settings.queue_name,
-                generation=generation,
-                error_code="queue_lost",
-            )
-            reloaded = _load_meta(dest)
-            if reloaded is not None:
-                meta = reloaded
-        artifacts_ready = (dest / "context.json").exists() and (dest / "context.md").exists() and (
-            dest / "graph.json"
-        ).exists() and (dest / "graph.md").exists()
-        disk_terminal = meta.get("status") in _DISK_TERMINAL_STATUS and not _newer_bus_run(
-            meta, live
+    meta = _load_meta(dest)
+    if meta is None:
+        raise ApiError(404, "not_found")
+    if _queue_lost(ctx, job_id, dest, meta):
+        generation = _disk_generation(meta)
+        mark_job_failed(dest, job_id, "queue_lost", generation)
+        log_event(
+            _LOGGER,
+            logging.WARNING,
+            "job_queue_lost",
+            "queued job is missing from the queue",
+            job_id=job_id,
+            session_id=ctx.settings.session_id,
+            queue=ctx.settings.queue_name,
+            generation=generation,
+            error_code="queue_lost",
         )
-        if (
-            not disk_terminal
-            and artifacts_ready
-            and meta.get("status") in {"queued", "running", None}
-            and live is not None
-            and live.status not in {"queued", "running"}
-        ):
-            meta["status"] = live.status
-            meta["stage"] = live.stage
-            meta["error"] = live.error
-        elif (
-            not disk_terminal
-            and live is not None
-            and live.status in {"queued", "running"}
-            and not artifacts_ready
-        ):
-            if _STAGE_RANK.get(str(live.stage or ""), -1) > _STAGE_RANK.get(
-                str(meta.get("stage") or ""), -1
-            ):
-                meta["status"] = live.status
-                meta["stage"] = live.stage
-                meta["error"] = live.error
-        return JSONResponse(_job_body(job_id, meta))
-    if live is not None:
-        return JSONResponse(
-            {"job_id": job_id, "status": live.status, "stage": live.stage},
-            status_code=202,
-        )
-    raise ApiError(404, "not_found")
+        reloaded = _load_meta(dest)
+        if reloaded is not None:
+            meta = reloaded
+    return JSONResponse(_job_body(job_id, meta))
 
 # Short sentences this process writes itself. Converter stderr and workbook
 # paths stay in the log and in meta.json, not in the job response.

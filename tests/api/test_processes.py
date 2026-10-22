@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import json
-import math
 import multiprocessing
-import os
-import threading
 import time
 from pathlib import Path
 
-from finance_context.adapters.memory_bus import MemoryJobBus
-from finance_context.api.processes import JobProcesses, reap_process
 from finance_context.app.pipeline import mark_job_failed
+from finance_context.jobqueue.jobs import _finish
+from finance_context.jobqueue.spawn import stop_child, watch_child
 from finance_context.store.paths import session_job_dir
 
 
@@ -33,9 +30,9 @@ class _StubProcess:
         self.events.append(("join", timeout))
 
 
-def test_reap_kills_when_terminate_leaves_the_process_alive() -> None:
+def test_stop_kills_when_terminate_leaves_the_process_alive() -> None:
     proc = _StubProcess()
-    reap_process(proc, join_sec=5)
+    stop_child(proc, terminate_grace_sec=5, kill_grace_sec=5)  # type: ignore[arg-type]
     assert proc.events[0] == "terminate"
     assert ("join", 5) in proc.events
     assert "kill" in proc.events
@@ -62,11 +59,9 @@ def _block_for_timeout() -> None:
     time.sleep(30)
 
 
-def _running_meta(tmp_path: Path) -> tuple[MemoryJobBus, str, int, Path]:
-    bus = MemoryJobBus()
+def _running_meta(tmp_path: Path) -> tuple[str, int, Path]:
     job_id = "job"
-    assert bus.enqueue(job_id)
-    generation = bus.current_generation(job_id)
+    generation = 1
     dest = session_job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
     (dest / "meta.json").write_text(
@@ -80,12 +75,16 @@ def _running_meta(tmp_path: Path) -> tuple[MemoryJobBus, str, int, Path]:
         ),
         encoding="utf-8",
     )
-    return bus, job_id, generation, dest
+    return job_id, generation, dest
+
+
+def _stored(dest: Path) -> dict:
+    return json.loads((dest / "meta.json").read_text(encoding="utf-8"))
 
 
 def test_watch_does_not_time_out_a_child_another_thread_already_reaped(tmp_path: Path) -> None:
-    """GET's is_alive() can reap the child. waitpid then raises ECHILD and poll()
-    leaves returncode unset, so a later is_alive() still reports the child as alive.
+    """A waiter can reap the child. waitpid then raises ECHILD and poll() leaves
+    the process looking alive. The sentinel, not is_alive(), decides the exit.
     """
     proc = multiprocessing.get_context("spawn").Process(target=_exit_immediately)
     proc.start()
@@ -95,29 +94,40 @@ def test_watch_does_not_time_out_a_child_another_thread_already_reaped(tmp_path:
     proc._popen.returncode = None
     assert proc.is_alive()
 
-    bus, job_id, generation, dest = _running_meta(tmp_path)
-    JobProcesses(data_dir=tmp_path, bus=bus, timeout_sec=30)._watch(proc, job_id, generation)
-
-    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    job_id, generation, dest = _running_meta(tmp_path)
+    result = watch_child(
+        proc,
+        timeout_sec=30,
+        budget_bytes=None,
+        watch_interval_sec=0.05,
+        terminate_grace_sec=1,
+        kill_grace_sec=1,
+    )
+    assert result.timed_out is False
+    _finish(result, dest, job_id, generation, 1024, None)
+    stored = _stored(dest)
     assert stored["status"] == "failed"
     assert stored["error"] == "pipeline_failed"
-    record = bus.get(job_id)
-    assert record is not None
-    assert record.error == "pipeline_failed"
 
 
 def test_watch_marks_a_real_timeout_failed(tmp_path: Path) -> None:
     proc = multiprocessing.get_context("spawn").Process(target=_block_for_timeout)
     proc.start()
     try:
-        bus, job_id, generation, dest = _running_meta(tmp_path)
-        JobProcesses(data_dir=tmp_path, bus=bus, timeout_sec=0.2)._watch(proc, job_id, generation)
-        stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+        job_id, generation, dest = _running_meta(tmp_path)
+        result = watch_child(
+            proc,
+            timeout_sec=0.2,
+            budget_bytes=None,
+            watch_interval_sec=0.05,
+            terminate_grace_sec=1,
+            kill_grace_sec=1,
+        )
+        assert result.timed_out is True
+        _finish(result, dest, job_id, generation, 1024, None)
+        stored = _stored(dest)
         assert stored["status"] == "failed"
         assert stored["error"] == "TimeoutError"
-        record = bus.get(job_id)
-        assert record is not None
-        assert record.error == "TimeoutError"
     finally:
         if proc.is_alive():
             proc.kill()
@@ -135,30 +145,29 @@ def _allocate_and_sleep() -> None:
     time.sleep(30)
 
 
-def test_watch_kills_when_reported_rss_exceeds_the_budget(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_watch_kills_when_reported_rss_exceeds_the_budget(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "finance_context.api.processes.process_rss_bytes",
+        "finance_context.jobqueue.spawn.process_rss_bytes",
         lambda _pid: 10**12,
     )
     proc = multiprocessing.get_context("spawn").Process(target=_sleep_until_killed)
     proc.start()
     try:
-        bus, job_id, generation, dest = _running_meta(tmp_path)
-        JobProcesses(
-            data_dir=tmp_path,
-            bus=bus,
+        job_id, generation, dest = _running_meta(tmp_path)
+        result = watch_child(
+            proc,
             timeout_sec=10,
-            memory_budget_bytes=1024,
-        )._watch(proc, job_id, generation)
-        stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+            budget_bytes=1024,
+            watch_interval_sec=0.05,
+            terminate_grace_sec=1,
+            kill_grace_sec=1,
+        )
+        assert result.over_budget is True
+        _finish(result, dest, job_id, generation, 1024, None)
+        stored = _stored(dest)
         assert stored["status"] == "failed"
         assert stored["error"] == "workbook_too_large"
         assert "resident" in stored["detail"]
-        record = bus.get(job_id)
-        assert record is not None
-        assert record.error == "workbook_too_large"
         assert not proc.is_alive()
     finally:
         if proc.is_alive():
@@ -170,181 +179,23 @@ def test_watch_kills_a_child_whose_real_rss_exceeds_the_budget(tmp_path: Path) -
     proc = multiprocessing.get_context("spawn").Process(target=_allocate_and_sleep)
     proc.start()
     try:
-        bus, job_id, generation, dest = _running_meta(tmp_path)
-        JobProcesses(
-            data_dir=tmp_path,
-            bus=bus,
+        job_id, generation, dest = _running_meta(tmp_path)
+        result = watch_child(
+            proc,
             timeout_sec=15,
-            memory_budget_bytes=32 * 1024 * 1024,
-        )._watch(proc, job_id, generation)
-        stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+            budget_bytes=32 * 1024 * 1024,
+            watch_interval_sec=0.05,
+            terminate_grace_sec=1,
+            kill_grace_sec=1,
+        )
+        _finish(result, dest, job_id, generation, 32 * 1024 * 1024, None)
+        stored = _stored(dest)
         assert stored["error"] == "workbook_too_large"
         assert not proc.is_alive()
     finally:
         if proc.is_alive():
             proc.kill()
             proc.join(5)
-
-
-def test_watch_interval_is_stored_without_a_fallback(tmp_path: Path) -> None:
-    bus = MemoryJobBus()
-    kept = JobProcesses(data_dir=tmp_path, bus=bus, timeout_sec=1, watch_interval_sec=0.05)
-    assert kept._watch_interval == 0.05
-    untouched = JobProcesses(
-        data_dir=tmp_path, bus=bus, timeout_sec=1, watch_interval_sec=float("nan")
-    )
-    assert math.isnan(untouched._watch_interval)
-
-
-_SPAWN = multiprocessing.get_context("spawn")
-
-
-def _write_malloc_arena(path: str) -> None:
-    value = os.environ.get("MALLOC_ARENA_MAX")
-    Path(path).write_text("" if value is None else value, encoding="utf-8")
-
-
-def _launch_recording_child(tmp_path: Path, monkeypatch, *, arena: int | None) -> str:
-    recorded = tmp_path / "arena.txt"
-
-    class _RecordingContext:
-        def Process(self, *, target, args, name):
-            del target, args, name
-            return _SPAWN.Process(target=_write_malloc_arena, args=(str(recorded),))
-
-    monkeypatch.setattr(
-        "finance_context.api.processes.multiprocessing.get_context",
-        lambda _method: _RecordingContext(),
-    )
-    bus, job_id, _generation, dest = _running_meta(tmp_path)
-    procs = JobProcesses(
-        data_dir=tmp_path, bus=bus, timeout_sec=30, malloc_arena_max=arena
-    )
-    assert procs.launch(job_id) is True
-    proc = procs._procs[job_id]
-    deadline = time.time() + 20
-    while time.time() < deadline and not recorded.is_file():
-        time.sleep(0.05)
-    proc.join(5)
-    assert recorded.is_file()
-    return recorded.read_text(encoding="utf-8")
-
-
-def test_disabled_arena_keeps_an_inherited_malloc_arena_max(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("MALLOC_ARENA_MAX", "8")
-    seen = _launch_recording_child(tmp_path / "inherit", monkeypatch, arena=None)
-    assert seen == "8"
-    assert os.environ["MALLOC_ARENA_MAX"] == "8"
-
-    monkeypatch.setenv("MALLOC_ARENA_MAX", "8")
-    overridden = _launch_recording_child(tmp_path / "override", monkeypatch, arena=2)
-    assert overridden == "2"
-    assert os.environ["MALLOC_ARENA_MAX"] == "8"
-
-    monkeypatch.delenv("MALLOC_ARENA_MAX", raising=False)
-    unset = _launch_recording_child(tmp_path / "unset", monkeypatch, arena=None)
-    assert unset == ""
-    assert os.environ.get("MALLOC_ARENA_MAX") is None
-
-
-def test_arena_overrides_do_not_overlap_across_instances(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("MALLOC_ARENA_MAX", "8")
-    monkeypatch.setattr(JobProcesses, "_watch", lambda self, proc, job_id, generation: None)
-    seen: list[str | None] = []
-    built: list[int] = []
-    state = threading.Lock()
-    first_inside = threading.Event()
-    release_first = threading.Event()
-
-    class _Proc:
-        def start(self) -> None:
-            value = os.environ.get("MALLOC_ARENA_MAX")
-            with state:
-                index = len(seen)
-                seen.append(value)
-            if index == 0:
-                first_inside.set()
-                release_first.wait(5)
-
-        def is_alive(self) -> bool:
-            return False
-
-    class _Context:
-        def Process(self, *, target, args, name):
-            del target, args, name
-            with state:
-                built.append(1)
-            return _Proc()
-
-    monkeypatch.setattr(
-        "finance_context.api.processes.multiprocessing.get_context",
-        lambda _method: _Context(),
-    )
-    left_bus, left_id, _generation, _dest = _running_meta(tmp_path / "left")
-    right_bus, right_id, _generation_right, _dest_right = _running_meta(tmp_path / "right")
-    left = JobProcesses(
-        data_dir=tmp_path / "left", bus=left_bus, timeout_sec=5, malloc_arena_max=2
-    )
-    right = JobProcesses(
-        data_dir=tmp_path / "right", bus=right_bus, timeout_sec=5, malloc_arena_max=5
-    )
-    errors: list[BaseException] = []
-
-    def _go(procs: JobProcesses, job_id: str) -> None:
-        try:
-            assert procs.launch(job_id) is True
-        except BaseException as exc:
-            errors.append(exc)
-            release_first.set()
-
-    threads = [
-        threading.Thread(target=_go, args=(left, left_id)),
-        threading.Thread(target=_go, args=(right, right_id)),
-    ]
-    probe: threading.Thread | None = None
-    for thread in threads:
-        thread.start()
-    try:
-        assert first_inside.wait(5)
-        deadline = time.time() + 2
-        while time.time() < deadline:
-            with state:
-                if len(built) == 2 and len(seen) == 1:
-                    break
-            time.sleep(0.01)
-        with state:
-            assert len(built) == 2 and len(seen) == 1
-        time.sleep(0.2)
-        with state:
-            during = list(seen)
-        assert during in (["2"], ["5"])
-        waiter = right if during == ["2"] else left
-        counted: list[int] = []
-
-        def _count() -> None:
-            counted.append(waiter.alive_count())
-
-        probe = threading.Thread(target=_count)
-        probe.start()
-        probe.join(1)
-        assert not probe.is_alive()
-        assert counted == [0]
-    finally:
-        release_first.set()
-        for thread in threads:
-            thread.join(5)
-        if probe is not None:
-            probe.join(2)
-    assert errors == []
-    assert not any(thread.is_alive() for thread in threads)
-    with state:
-        finished = list(seen)
-    assert sorted(finished) == ["2", "5"]
-    assert os.environ["MALLOC_ARENA_MAX"] == "8"
 
 
 def test_mark_job_failed_keeps_a_terminal_snapshot(tmp_path: Path) -> None:

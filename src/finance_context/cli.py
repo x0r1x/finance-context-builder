@@ -139,7 +139,7 @@ def serve(
     port: int = 8080,
     data_dir: Annotated[Path | None, typer.Option("--data-dir")] = None,
 ) -> None:
-    """Serve the API. Each workbook runs in its own process."""
+    """Serve the API. Workbooks run on the RQ worker."""
     if data_dir is not None:
         import os
 
