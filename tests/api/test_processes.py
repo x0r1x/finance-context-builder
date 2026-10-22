@@ -305,6 +305,7 @@ def test_arena_overrides_do_not_overlap_across_instances(
         threading.Thread(target=_go, args=(left, left_id)),
         threading.Thread(target=_go, args=(right, right_id)),
     ]
+    probe: threading.Thread | None = None
     for thread in threads:
         thread.start()
     try:
@@ -315,14 +316,29 @@ def test_arena_overrides_do_not_overlap_across_instances(
                 if len(built) == 2 and len(seen) == 1:
                     break
             time.sleep(0.01)
+        with state:
+            assert len(built) == 2 and len(seen) == 1
         time.sleep(0.2)
         with state:
             during = list(seen)
         assert during in (["2"], ["5"])
+        waiter = right if during == ["2"] else left
+        counted: list[int] = []
+
+        def _count() -> None:
+            counted.append(waiter.alive_count())
+
+        probe = threading.Thread(target=_count)
+        probe.start()
+        probe.join(1)
+        assert not probe.is_alive()
+        assert counted == [0]
     finally:
         release_first.set()
         for thread in threads:
             thread.join(5)
+        if probe is not None:
+            probe.join(2)
     assert errors == []
     assert not any(thread.is_alive() for thread in threads)
     with state:

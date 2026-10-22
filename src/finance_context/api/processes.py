@@ -128,7 +128,8 @@ class JobProcesses:
         )
         started = False
         try:
-            with self._lock, JobProcesses._malloc_arena_lock:
+            # Class lock first, so a waiting instance does not hold its own lock.
+            with JobProcesses._malloc_arena_lock, self._lock:
                 previous_arena = os.environ.get("MALLOC_ARENA_MAX")
                 if self._malloc_arena_max:
                     os.environ["MALLOC_ARENA_MAX"] = str(self._malloc_arena_max)
