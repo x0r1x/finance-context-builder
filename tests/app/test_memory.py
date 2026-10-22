@@ -604,6 +604,8 @@ def test_effective_memory_settings_are_logged_once(monkeypatch, caplog) -> None:
         "malloc_trim",
         "estimate_streaming",
         "estimate_base_bytes",
+        "retry_after_sec",
+        "max_retries",
     ):
         assert key in payload
     assert payload["malloc_arena_max"] == 2

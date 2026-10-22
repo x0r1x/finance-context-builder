@@ -8,7 +8,14 @@ import time
 from pathlib import Path
 
 from finance_context.adapters.soffice import SofficeConverter
+from finance_context.app.job_clock import process_mono_start
 from finance_context.app.publisher import publisher_stamp, stamped_stages
+from finance_context.app.shared_cache import (
+    SharedCacheBusy,
+    invalidate_for_run,
+    shared_book_lock,
+    write_shared_stamp,
+)
 from finance_context.context.build import build_context
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, ensure_xlsx, has_source
@@ -44,7 +51,12 @@ from finance_context.store.paths import session_job_dir, shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
 _TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
+# Interpreter startup sits between proc.start() and process_mono_start, and
+# mark_job_failed still has to hit disk. Both fit in this margin.
+_BUSY_TIMEOUT_MARGIN_SEC = 2.0
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
+# Set only in the spawned child. In-process callers measure from execute_job.
+_child_watchdog_deadline: float | None = None
 
 
 class Pipeline:
@@ -67,12 +79,35 @@ class Pipeline:
     ) -> ContextDocument:
         token_job = job_id_var.set(job_id)
         book = shared_dir or dest_dir
+        shared = book != dest_dir
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             book.mkdir(parents=True, exist_ok=True)
-            if book == dest_dir:
-                with file_lock(dest_dir / ".lock"):
-                    return self._run(
+            with shared_book_lock(
+                book,
+                job_id=job_id,
+                retry_after_sec=self.settings.shared_cache_busy_retry_sec,
+                max_retries=self.settings.shared_cache_busy_max_retries,
+            ):
+                if shared:
+                    with file_lock(dest_dir / ".lock"):
+                        invalidation = invalidate_for_run(
+                            dest_dir, book, shared=True, job_id=job_id
+                        )
+                        document = self._run(
+                            dest_dir,
+                            job_id=job_id,
+                            source_filename=source_filename,
+                            content_sha256=content_sha256,
+                            progress=progress,
+                            generation=generation,
+                            shared_dir=book,
+                        )
+                else:
+                    invalidation = invalidate_for_run(
+                        dest_dir, book, shared=False, job_id=job_id
+                    )
+                    document = self._run(
                         dest_dir,
                         job_id=job_id,
                         source_filename=source_filename,
@@ -81,17 +116,14 @@ class Pipeline:
                         generation=generation,
                         shared_dir=None,
                     )
-            with file_lock(book / ".lock"):
-                with file_lock(dest_dir / ".lock"):
-                    return self._run(
-                        dest_dir,
-                        job_id=job_id,
-                        source_filename=source_filename,
-                        content_sha256=content_sha256,
-                        progress=progress,
-                        generation=generation,
-                        shared_dir=book,
+                if shared:
+                    write_shared_stamp(
+                        book,
+                        rebuilt_from=invalidation.rebuilt_from,
+                        trusted=invalidation.trusted_stages,
+                        adopt=invalidation.adopt,
                     )
+                return document
         finally:
             job_id_var.reset(token_job)
 
@@ -245,6 +277,7 @@ class Pipeline:
                 settings=self.settings,
             )
         else:
+            _pause_layout_reuse()
             layout = Layout.model_validate_json((book / "layout.json").read_text(encoding="utf-8"))
         cells = ir_cells
         edges = ir_edges
@@ -358,13 +391,20 @@ def run_job_process(
 ) -> None:
     """Entry point for a spawned interpreter. Runs one book on this process's main thread."""
     settings = Settings(data_dir=Path(data_dir), session_id=session_id)
+    _arm_child_watchdog(settings.job_timeout_sec)
     prefer_oom_kill(score=settings.job_oom_score_adj)
     configure_logging(level=settings.log_level, json_output=settings.log_json)
     _install_stage_pause()
     dest = session_job_dir(settings.data_dir, job_id, settings.session_id)
     shared = shared_book_dir(settings.data_dir, job_id)
     try:
-        Pipeline(settings).run(dest, job_id=job_id, generation=generation, shared_dir=shared)
+        execute_job(
+            Pipeline(settings),
+            dest,
+            job_id=job_id,
+            generation=generation,
+            shared_dir=shared,
+        )
     except ContextError as exc:
         # A known refusal (encrypted book, over budget, bad zip): the code, no traceback.
         mark_job_failed(dest, job_id, exc.code, generation, detail=exc.detail or None)
@@ -389,6 +429,98 @@ def run_job_process(
     except Exception as exc:
         mark_job_failed(dest, job_id, type(exc).__name__, generation)
         raise
+    finally:
+        # In-process tests call this too. A leftover deadline would outlive the job.
+        _clear_child_watchdog()
+
+
+def execute_job(
+    pipeline: Pipeline,
+    dest_dir: Path,
+    *,
+    job_id: str,
+    source_filename: str | None = None,
+    content_sha256: str | None = None,
+    progress: object | None = None,
+    generation: int = 0,
+    shared_dir: Path | None = None,
+) -> ContextDocument:
+    """Run one job, waiting out :class:`SharedCacheBusy` inside this process.
+
+    This wait is the stand-in until PR3. The RQ worker must not call it.
+    Catch ``SharedCacheBusy`` from :meth:`Pipeline.run` and raise
+    ``rq.Retry(interval=exc.retry_after_sec)`` instead of sleeping. After
+    ``exc.max_retries`` requeues, fail the job with ``shared_cache_busy``.
+
+    Here the first busy result is followed by at most ``max_retries`` more
+    attempts, sleeping ``retry_after_sec`` between them. ``max_retries`` of 0
+    fails on the first busy result. A sleep that would reach the parent
+    watchdog fails the same way, so the parent does not record ``TimeoutError``
+    first. The spawned child counts that watchdog from process start. Each
+    wait logs ``shared_cache_busy_requeue``.
+    """
+    attempts = 0
+    deadline = _busy_deadline(pipeline)
+    while True:
+        try:
+            return pipeline.run(
+                dest_dir,
+                job_id=job_id,
+                source_filename=source_filename,
+                content_sha256=content_sha256,
+                progress=progress,
+                generation=generation,
+                shared_dir=shared_dir,
+            )
+        except SharedCacheBusy as exc:
+            attempts += 1
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "shared_cache_busy_requeue",
+                "shared cache busy",
+                job_id=exc.job_id,
+                attempt=attempts,
+                retry_after_sec=exc.retry_after_sec,
+                max_retries=exc.max_retries,
+            )
+            if attempts > exc.max_retries or _busy_wait_exceeds(deadline, exc.retry_after_sec):
+                raise ContextError(
+                    "shared_cache_busy",
+                    "shared book cache stayed busy",
+                ) from exc
+            time.sleep(exc.retry_after_sec)
+
+
+def _arm_child_watchdog(timeout: object) -> None:
+    """Anchor the busy wait to process start. The parent clock already includes imports."""
+    global _child_watchdog_deadline
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        _child_watchdog_deadline = None
+        return
+    _child_watchdog_deadline = process_mono_start + float(timeout)
+
+
+def _clear_child_watchdog() -> None:
+    global _child_watchdog_deadline
+    _child_watchdog_deadline = None
+
+
+def _busy_deadline(pipeline: Pipeline) -> float | None:
+    if _child_watchdog_deadline is not None:
+        return _child_watchdog_deadline
+    settings = getattr(pipeline, "settings", None)
+    timeout = getattr(settings, "job_timeout_sec", None)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        return None
+    return time.monotonic() + float(timeout)
+
+
+def _busy_wait_exceeds(deadline: float | None, retry_after_sec: float) -> bool:
+    if deadline is None:
+        return False
+    remaining = deadline - time.monotonic() - _BUSY_TIMEOUT_MARGIN_SEC
+    return remaining < retry_after_sec
 
 
 def mark_job_failed(
@@ -423,6 +555,13 @@ def mark_job_failed(
         return failed
 
     update_json(dest / "meta.json", mutate)
+
+
+def _pause_layout_reuse() -> None:
+    """Test seam: hold the layout-already-exists read until the pause file is gone."""
+    if os.environ.get("FINANCE_CONTEXT_PAUSE_STAGE", "").strip() != "layout_reuse":
+        return
+    _wait_for_pause_release()
 
 
 def _install_stage_pause() -> None:

@@ -56,4 +56,6 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("LAYOUT_COLUMNAR_FACTS", "layout_columnar_facts"),
     EnvSpec("JOB_MALLOC_ARENA_MAX", "job_malloc_arena_max"),
     EnvSpec("JOB_MALLOC_TRIM", "job_malloc_trim"),
+    EnvSpec("SHARED_CACHE_BUSY_RETRY_SEC", "shared_cache_busy_retry_sec"),
+    EnvSpec("SHARED_CACHE_BUSY_MAX_RETRIES", "shared_cache_busy_max_retries"),
 )

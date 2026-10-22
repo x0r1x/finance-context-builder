@@ -26,6 +26,7 @@ from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.jobs import list_session_jobs
 from finance_context.app.pipeline import mark_job_failed
 from finance_context.app.publisher import publisher_changed, publisher_matches, stale_from_meta
+from finance_context.app.shared_cache import record_rebuild_stage
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, check_legacy_workbook, source_name
 from finance_context.excel.ole2 import is_ole2
@@ -171,17 +172,16 @@ async def post_job(
         try:
             stored = _load_meta(dest)
             disk_generation = _disk_generation(stored)
-            clear_downstream_artifacts(
-                dest, stale_from=stale_from_meta(stored), shared=shared
-            )
-            log_event(
-                _LOGGER,
-                logging.INFO,
-                "snapshot_invalidated",
-                "stale artifacts invalidated",
-                job_id=job_id,
-            )
+            stale = stale_from_meta(stored)
+            # Session publications only. Keep meta so generation and the stage
+            # map survive the wait. The shared book stays until the child holds
+            # shared/.lock.
+            clear_downstream_artifacts(dest, stale_from=stale, drop_meta=False)
             started = ctx.bus.enqueue(job_id, minimum_generation=disk_generation)
+            # The bus generation has to be on disk before launch. A restart
+            # during the busy wait reads this file, not the bus.
+            generation = ctx.bus.current_generation(job_id) if started else None
+            record_rebuild_stage(dest, stale, generation=generation)
             launched = ctx.processes.launch(job_id) if started else False
         except Exception:
             ctx.processes.release_reservation(job_id)
@@ -298,10 +298,11 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     if not dest.exists():
         raise ApiError(404, "not_found")
     live = ctx.bus.get(job_id)
-    meta_path = dest / "meta.json"
-    if meta_path.exists():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if isinstance(meta, dict) and _orphan_running(
+    # The child unlinks meta.json while it rebuilds. A missing or unreadable
+    # file is the live run, not an HTTP 500.
+    meta = _load_meta(dest)
+    if meta is not None:
+        if _orphan_running(
             meta, live=live, alive=ctx.processes.is_alive(job_id)
         ):
             try:

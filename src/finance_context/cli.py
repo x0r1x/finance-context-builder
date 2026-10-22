@@ -8,10 +8,10 @@ import typer
 import uvicorn
 
 from finance_context.adapters.disk_store import DiskStore
-from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
-from finance_context.app.pipeline import Pipeline, mark_job_failed
+from finance_context.app.pipeline import Pipeline, execute_job, mark_job_failed
 from finance_context.app.publisher import publisher_matches, stale_from_meta
+from finance_context.app.shared_cache import record_rebuild_stage
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import LEGACY_SOURCE, SOURCE, source_name
 from finance_context.memory import MEMORY_ERROR_DETAIL
@@ -106,10 +106,12 @@ def build(
         typer.echo("reused")
         return
     # A different workbook must not keep the previous raw/ parse.
+    # The child drops those files under the book lock. POST and build only record the stage.
     stale = "compile" if source_changed else stale_from_meta(_read_meta(dest))
-    clear_downstream_artifacts(dest, stale_from=stale, shared=shared)
+    record_rebuild_stage(dest, stale)
     try:
-        doc = Pipeline(settings).run(
+        doc = execute_job(
+            Pipeline(settings),
             dest,
             job_id=job_id,
             source_filename=source.name,

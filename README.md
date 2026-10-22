@@ -113,6 +113,7 @@ HTTP `error` codes:
 | `not_found` | 404 |
 | `report_not_ready` | 409 |
 | `too_many_jobs` | 429 |
+| `shared_cache_busy` | job `error` only |
 
 `report_not_ready` is an artifact or trace fetched before the job has written that file. Catalog needs `context.json`. Summary and observations also need `graph.json`. Observations without `row_key` or `q` are `selector_required`, not the whole book. `workbook_too_large` is a finished job: the workbook's formula and range estimate, or its resident memory, is over the per-job budget. `error` is the code and `detail` is the short reason. There is no traceback.
 
@@ -122,7 +123,7 @@ Memory switches, all on by default: `PARSE_STREAMING` (iterparse, raw parquet by
 
 ## Data
 
-`data/shared/books/{job_id}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. `data/sessions/{session}/jobs/{job_id}/` holds that session's context and graph. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash. The session defaults to `local`. The id must match `SESSION_ID_PATTERN` and fit `SESSION_ID_MAX_LENGTH`; startup rejects a separator or `..`. Only that session's jobs are reconciled. A network filesystem under `DATA_DIR` refuses startup unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
+`data/shared/books/{job_id}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. POST does not delete them. The job child holds `shared/books/{job_id}/.lock` and drops a stale tail there. `SHARED_CACHE_BUSY_RETRY_SEC` (30) and `SHARED_CACHE_BUSY_MAX_RETRIES` (120) are the wait and the extra attempts when that lock is already held (`shared_cache_busy` after the last attempt, and also when the next wait would reach `JOB_TIMEOUT_SEC`). See `.env.example`. `data/sessions/{session}/jobs/{job_id}/` holds that session's context and graph. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash. The session defaults to `local`. The id must match `SESSION_ID_PATTERN` and fit `SESSION_ID_MAX_LENGTH`; startup rejects a separator or `..`. Only that session's jobs are reconciled. A network filesystem under `DATA_DIR` refuses startup unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
 
 At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2. `finance-context serve` starts one worker. Several API replicas on one data directory are not supported.
 

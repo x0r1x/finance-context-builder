@@ -61,11 +61,10 @@ def _book_dir(tmp_path: Path, job_id: str) -> Path:
 
 def _disk_stage(tmp_path: Path, job_id: str) -> str | None:
     path = _job_dir(tmp_path, job_id) / "meta.json"
-    if not path.is_file():
-        return None
     try:
         meta = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
+        # The child unlinks meta.json while it rebuilds. A poll in that gap is not a failure.
         return None
     stage = meta.get("stage")
     return str(stage) if stage else None
