@@ -92,6 +92,17 @@ def job_belongs(session_id: str, rq_id: str) -> bool:
     return _BOOK_ID.fullmatch(rq_id[len(prefix) :]) is not None
 
 
+def redis_client(settings: Settings, **kwargs: float | str) -> Redis:
+    """One Redis client for the API, the worker, and ``worker --check``.
+
+    Credential kwargs are omitted when both settings are empty, so a
+    credential-less URL does not send AUTH.
+    """
+    url, credentials = settings.redis_from_url_args()
+    kwargs.update(credentials)
+    return Redis.from_url(url, **kwargs)
+
+
 def redis_target(url: str) -> dict[str, object]:
     """Scheme, host, port, and db. The userinfo, which may be a password, is dropped."""
     parts = urlsplit(url)
@@ -118,7 +129,7 @@ class RQJobQueue:
         if timeout is not None:
             kwargs["socket_connect_timeout"] = timeout
             kwargs["socket_timeout"] = timeout
-        self._redis = Redis.from_url(settings.redis_url, **kwargs)
+        self._redis = redis_client(settings, **kwargs)
         self._queue = Queue(
             settings.queue_name,
             connection=self._redis,

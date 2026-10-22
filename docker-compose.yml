@@ -13,6 +13,8 @@ services:
     environment:
       DATA_DIR: /app/data
       # The `redis` hostname is the service on the external finance-stack network.
+      # No credentials in the URL. REDIS_USERNAME and REDIS_PASSWORD come from
+      # the environment or .env. Both unset means no AUTH.
       REDIS_URL: redis://redis:6379/0
     # The API only accepts work. The 4 GiB budget lives on the worker.
     mem_limit: 512m
@@ -47,6 +49,8 @@ services:
         required: false
     environment:
       DATA_DIR: /app/data
+      # No credentials in the URL. REDIS_USERNAME and REDIS_PASSWORD come from
+      # the environment or .env. Both unset means no AUTH.
       REDIS_URL: redis://redis:6379/0
     # 4 GiB worker. Two job slots derive a 1536 MiB RSS cap
     # (three quarters of this limit, split across MAX_CONCURRENT_JOBS).

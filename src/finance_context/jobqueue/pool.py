@@ -5,14 +5,13 @@ from __future__ import annotations
 import logging
 import os
 
-from redis import Redis
 from rq import Worker
 from rq.serializers import JSONSerializer
 from rq.worker_pool import WorkerPool
 
 from finance_context.jobqueue.jobs import on_horse_killed
 from finance_context.jobqueue.parents import HORSE_ENV
-from finance_context.jobqueue.queue import QueueUnavailable, RQJobQueue, redis_target
+from finance_context.jobqueue.queue import QueueUnavailable, RQJobQueue, redis_client, redis_target
 from finance_context.memory import budget_for_settings, prefer_oom_kill
 from finance_context.observability import log_event
 from finance_context.settings import Settings
@@ -51,7 +50,7 @@ def serve_workers(settings: Settings) -> None:
     """
     prefer_oom_kill(score=0)
     _log_queue_config(settings)
-    connection = Redis.from_url(settings.redis_url)
+    connection = redis_client(settings)
     pool = WorkerPool(
         [settings.queue_name],
         connection=connection,

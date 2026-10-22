@@ -10,6 +10,7 @@ from finance_context.jobqueue.queue import (
     QueueUnavailable,
     RQJobQueue,
     job_belongs,
+    redis_client,
     redis_target,
     rq_job_id,
 )
@@ -32,7 +33,7 @@ def test_job_id_keeps_a_dashed_session_from_matching_a_shorter_one() -> None:
 
 
 def test_redis_target_drops_the_password() -> None:
-    fields = redis_target("redis://:s3cret@redis.internal:6379/2")
+    fields = redis_target("redis://alice:s3cret@redis.internal:6379/2")
     assert fields == {
         "redis_scheme": "redis",
         "redis_host": "redis.internal",
@@ -40,6 +41,7 @@ def test_redis_target_drops_the_password() -> None:
         "redis_db": "2",
     }
     assert "s3cret" not in json.dumps(fields)
+    assert "alice" not in json.dumps(fields)
 
 
 def test_enqueue_is_unique_and_counts_the_session(redis_settings: Settings, caplog) -> None:
@@ -72,7 +74,6 @@ def test_enqueue_is_unique_and_counts_the_session(redis_settings: Settings, capl
 
 def test_delete_drops_a_started_registry_entry(redis_settings: Settings) -> None:
     """A dead STARTED hash must not keep unique=True from accepting the same id."""
-    from redis import Redis
     from rq.job import Job, JobStatus
     from rq.registry import StartedJobRegistry
     from rq.serializers import JSONSerializer
@@ -85,7 +86,7 @@ def test_delete_drops_a_started_registry_entry(redis_settings: Settings) -> None
         "generation": 1,
     }
     rq_id = queue.enqueue(payload)
-    client = Redis.from_url(redis_settings.redis_url)
+    client = redis_client(redis_settings)
     job = Job.fetch(rq_id, connection=client, serializer=JSONSerializer)
     job.set_status(JobStatus.STARTED)
     registry = StartedJobRegistry(
@@ -122,7 +123,6 @@ def test_delete_lets_the_same_id_enqueue_again(redis_settings: Settings) -> None
 
 
 def test_lost_retry_is_stored_on_the_job(redis_settings: Settings) -> None:
-    from redis import Redis
     from rq.job import Job
     from rq.serializers import JSONSerializer
 
@@ -135,7 +135,7 @@ def test_lost_retry_is_stored_on_the_job(redis_settings: Settings) -> None:
             "generation": 1,
         }
     )
-    client = Redis.from_url(redis_settings.redis_url)
+    client = redis_client(redis_settings)
     job = Job.fetch(rq_id, connection=client, serializer=JSONSerializer)
     assert job.retries_left == 1
     assert job.timeout == redis_settings.queue_job_timeout_sec()

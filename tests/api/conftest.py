@@ -14,13 +14,13 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from redis import Redis
 from redis.exceptions import RedisError
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from tests.jobqueue.conftest import local_test_redis_url
 
 from finance_context.api.app import create_app
-from finance_context.settings import Settings
+from finance_context.jobqueue.queue import redis_client
+from finance_context.settings import Settings, write_redis_env
 
 # An 8s lock on the loop must fail the suite. AnyIO's portal has been seen
 # spending about 0.27s inside one callback while it starts a worker thread,
@@ -80,7 +80,7 @@ def _spawn_worker(settings: Settings) -> subprocess.Popen[bytes]:
     env = os.environ.copy()
     env["DATA_DIR"] = str(settings.data_dir)
     env["SESSION_ID"] = settings.session_id
-    env["REDIS_URL"] = settings.redis_url
+    write_redis_env(env, settings)
     env["QUEUE_NAME"] = settings.queue_name
     env["MAX_CONCURRENT_JOBS"] = str(settings.max_concurrent_jobs)
     env["JOB_TIMEOUT_SEC"] = str(settings.job_timeout_sec)
@@ -207,7 +207,13 @@ def _queue_redis(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """API tests share database 15. A missing Redis fails the test."""
     url = local_test_redis_url()
     monkeypatch.setenv("REDIS_URL", url)
-    client = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+    monkeypatch.delenv("REDIS_USERNAME", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    client = redis_client(
+        Settings(redis_url=url, redis_username="", redis_password=None, _env_file=None),
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
     try:
         try:
             client.ping()

@@ -16,6 +16,8 @@ def test_queue_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear(monkeypatch)
     settings = Settings(_env_file=None)
     assert settings.redis_url == "redis://redis:6379/0"
+    assert settings.redis_username == ""
+    assert settings.redis_password is None
     assert settings.redis_connect_timeout_sec == 2
     assert settings.queue_name == "finance-context"
     assert settings.job_queue_max_per_session == 3
