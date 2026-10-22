@@ -280,6 +280,30 @@ def test_get_job_reads_compile_stage_from_disk(tmp_path: Path, monkeypatch) -> N
         pause.unlink(missing_ok=True)
 
 
+def test_get_job_vanished_meta_uses_the_live_run(tmp_path: Path, monkeypatch) -> None:
+    job_id = "a" * 64
+    real = Path.read_text
+
+    def _read(self: Path, *args: object, **kwargs: object) -> str:
+        if self.name == "meta.json":
+            raise FileNotFoundError(self)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _read)
+    with _app(tmp_path) as client:
+        dest = client.app.state.ctx.store.dest_dir(job_id)
+        dest.mkdir(parents=True)
+        (dest / "meta.json").write_text(
+            '{"status":"running","stage":"layout"}\n', encoding="utf-8"
+        )
+        client.app.state.ctx.bus.enqueue(job_id)
+        response = client.get(f"/v1/context-jobs/{job_id}")
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["stage"] == "queued"
+
+
 def test_second_job_waits_behind_the_process_cap(tmp_path: Path, monkeypatch) -> None:
     pause = _hold_stage(tmp_path, monkeypatch, "layout")
     other = build_xlsx(

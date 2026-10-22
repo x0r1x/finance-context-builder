@@ -298,10 +298,11 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
     if not dest.exists():
         raise ApiError(404, "not_found")
     live = ctx.bus.get(job_id)
-    meta_path = dest / "meta.json"
-    if meta_path.exists():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if isinstance(meta, dict) and _orphan_running(
+    # The child unlinks meta.json while it rebuilds. A missing or unreadable
+    # file is the live run, not an HTTP 500.
+    meta = _load_meta(dest)
+    if meta is not None:
+        if _orphan_running(
             meta, live=live, alive=ctx.processes.is_alive(job_id)
         ):
             try:
