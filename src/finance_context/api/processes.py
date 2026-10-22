@@ -46,6 +46,9 @@ def reap_process(proc: object, *, join_sec: float = 5) -> None:
 class JobProcesses:
     """One spawned interpreter per accepted job. The parent only watches the process."""
 
+    # os.environ is process-global, so two instances must not start children at once.
+    _malloc_arena_lock = threading.Lock()
+
     def __init__(
         self,
         *,
@@ -125,7 +128,7 @@ class JobProcesses:
         )
         started = False
         try:
-            with self._lock:
+            with self._lock, JobProcesses._malloc_arena_lock:
                 previous_arena = os.environ.get("MALLOC_ARENA_MAX")
                 if self._malloc_arena_max:
                     os.environ["MALLOC_ARENA_MAX"] = str(self._malloc_arena_max)

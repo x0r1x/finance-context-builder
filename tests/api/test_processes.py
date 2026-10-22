@@ -4,6 +4,7 @@ import json
 import math
 import multiprocessing
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -246,6 +247,88 @@ def test_disabled_arena_keeps_an_inherited_malloc_arena_max(
     unset = _launch_recording_child(tmp_path / "unset", monkeypatch, arena=None)
     assert unset == ""
     assert os.environ.get("MALLOC_ARENA_MAX") is None
+
+
+def test_arena_overrides_do_not_overlap_across_instances(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MALLOC_ARENA_MAX", "8")
+    monkeypatch.setattr(JobProcesses, "_watch", lambda self, proc, job_id, generation: None)
+    seen: list[str | None] = []
+    built: list[int] = []
+    state = threading.Lock()
+    first_inside = threading.Event()
+    release_first = threading.Event()
+
+    class _Proc:
+        def start(self) -> None:
+            value = os.environ.get("MALLOC_ARENA_MAX")
+            with state:
+                index = len(seen)
+                seen.append(value)
+            if index == 0:
+                first_inside.set()
+                release_first.wait(5)
+
+        def is_alive(self) -> bool:
+            return False
+
+    class _Context:
+        def Process(self, *, target, args, name):
+            del target, args, name
+            with state:
+                built.append(1)
+            return _Proc()
+
+    monkeypatch.setattr(
+        "finance_context.api.processes.multiprocessing.get_context",
+        lambda _method: _Context(),
+    )
+    left_bus, left_id, _generation, _dest = _running_meta(tmp_path / "left")
+    right_bus, right_id, _generation_right, _dest_right = _running_meta(tmp_path / "right")
+    left = JobProcesses(
+        data_dir=tmp_path / "left", bus=left_bus, timeout_sec=5, malloc_arena_max=2
+    )
+    right = JobProcesses(
+        data_dir=tmp_path / "right", bus=right_bus, timeout_sec=5, malloc_arena_max=5
+    )
+    errors: list[BaseException] = []
+
+    def _go(procs: JobProcesses, job_id: str) -> None:
+        try:
+            assert procs.launch(job_id) is True
+        except BaseException as exc:
+            errors.append(exc)
+            release_first.set()
+
+    threads = [
+        threading.Thread(target=_go, args=(left, left_id)),
+        threading.Thread(target=_go, args=(right, right_id)),
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        assert first_inside.wait(5)
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            with state:
+                if len(built) == 2 and len(seen) == 1:
+                    break
+            time.sleep(0.01)
+        time.sleep(0.2)
+        with state:
+            during = list(seen)
+        assert during in (["2"], ["5"])
+    finally:
+        release_first.set()
+        for thread in threads:
+            thread.join(5)
+    assert errors == []
+    assert not any(thread.is_alive() for thread in threads)
+    with state:
+        finished = list(seen)
+    assert sorted(finished) == ["2", "5"]
+    assert os.environ["MALLOC_ARENA_MAX"] == "8"
 
 
 def test_mark_job_failed_keeps_a_terminal_snapshot(tmp_path: Path) -> None:
