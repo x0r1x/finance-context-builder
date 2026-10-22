@@ -122,8 +122,9 @@ def invalidate_for_run(dest: Path, book: Path, *, shared: bool, job_id: str) -> 
 
     Shared freshness comes from ``stages.json``. A missing sidecar is stale
     from layout only when this session cannot show the cache was built by the
-    current code. Session publications follow ``rebuild_from`` and the session
-    stage map. A shared deletion is the only path that logs
+    current code. Session publications follow the recorded ``rebuild_from``
+    when it is set, otherwise the session stage map. A shared deletion is the
+    only path that logs
     ``shared_cache_invalidate``.
     """
     meta = _read_meta(dest)
@@ -169,13 +170,18 @@ def shared_stale_stage(book: Path, *, adopt_current: bool) -> str | None:
 
 
 def session_stale_stage(meta: dict | None) -> str | None:
-    """Earlier of the recorded ``rebuild_from`` and the session stage map."""
-    recorded = None
+    """Recorded ``rebuild_from`` wins. Otherwise use the session stage map.
+
+    POST drops ``meta.json`` before recording the stage, so the replacement
+    document has no stage map. A missing map means layout, which would widen a
+    publish or graph rebuild. The recorded stage is the one computed from the
+    map that was just removed.
+    """
     if isinstance(meta, dict):
         value = meta.get(REBUILD_FROM)
         if isinstance(value, str) and value in STAGE_ORDER:
-            recorded = value
-    return _earlier(recorded, stale_from_meta(meta))
+            return value
+    return stale_from_meta(meta)
 
 
 def write_shared_stamp(book: Path) -> None:
@@ -194,13 +200,6 @@ def _cache_has_body(book: Path) -> bool:
         or (book / "raw" / "workbook.json").is_file()
         or (book / "ir" / "cells.parquet").is_file()
     )
-
-
-def _earlier(left: str | None, right: str | None) -> str | None:
-    ranked = [stage for stage in (left, right) if stage in STAGE_ORDER]
-    if not ranked:
-        return None
-    return min(ranked, key=STAGE_ORDER.index)
 
 
 def _read_meta(dest: Path) -> dict | None:

@@ -15,6 +15,8 @@ from finance_context.app.pipeline import Pipeline, execute_job
 from finance_context.app.shared_cache import (
     SharedCacheBusy,
     invalidate_for_run,
+    record_rebuild_stage,
+    session_stale_stage,
     shared_book_lock,
     write_shared_stamp,
 )
@@ -153,6 +155,32 @@ def test_execute_job_exhausted_is_shared_cache_busy(tmp_path: Path) -> None:
     with pytest.raises(ContextError) as caught:
         execute_job(_Pipeline(), tmp_path, job_id="job-4")  # type: ignore[arg-type]
     assert caught.value.code == "shared_cache_busy"
+
+
+def test_recorded_publish_is_not_widened_to_layout(tmp_path: Path) -> None:
+    """A wiped stage map must not turn a publish rebuild into a layout rebuild.
+
+    POST drops meta.json and then records rebuild_from. The replacement meta has
+    no stages map, and a missing map otherwise means layout.
+    """
+    dest = tmp_path / "job"
+    dest.mkdir()
+    (dest / "graph.json").write_text("keep-graph", encoding="utf-8")
+    (dest / "context.json").write_text("drop-context", encoding="utf-8")
+    record_rebuild_stage(dest, "publish")
+    assert session_stale_stage(json.loads((dest / "meta.json").read_text(encoding="utf-8"))) == (
+        "publish"
+    )
+    book = tmp_path / "book"
+    book.mkdir()
+    (book / "layout.json").write_text('{"sheets": []}\n', encoding="utf-8")
+    (book / "source.xlsx").write_bytes(b"PK\x03\x04")
+    write_shared_stamp(book)
+    with shared_book_lock(book, job_id="job-pub", retry_after_sec=1, max_retries=0):
+        invalidate_for_run(dest, book, shared=True, job_id="job-pub")
+    assert (dest / "graph.json").read_text(encoding="utf-8") == "keep-graph"
+    assert not (dest / "context.json").exists()
+    assert (book / "layout.json").is_file()
 
 
 def test_busy_settings_reject_bad_values() -> None:

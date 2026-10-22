@@ -109,6 +109,15 @@ def test_post_other_session_keeps_shared_layout(
         assert created.status_code == 202
         job_id = created.json()["job_id"]
         assert _wait_for_terminal(alpha, job_id)["status"] == "succeeded"
+        # Succeeded is visible before the child releases the book lock. A second
+        # POST while that process is alive is treated as the same run.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if not alpha.app.state.ctx.processes.is_alive(job_id):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("alpha process did not exit")
         book = root / "shared" / "books" / job_id
         layout = book / "layout.json"
         layout_bytes = layout.read_bytes()

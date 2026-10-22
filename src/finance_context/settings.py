@@ -41,6 +41,9 @@ DEFAULT_SESSION_ID_MAX_LENGTH = 64
 # Wait between attempts while another session holds the shared book lock.
 DEFAULT_SHARED_CACHE_BUSY_RETRY_SEC = 30
 # Extra attempts after the first busy result. 0 fails on the first busy result.
+# 120 is the queue bound. Those waits happen outside the worker. The interim
+# in-process sleep can run as long as JOB_TIMEOUT_SEC, so the parent may
+# record TimeoutError before shared_cache_busy.
 DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES = 120
 
 
