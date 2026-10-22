@@ -167,10 +167,28 @@ def test_estimate_is_linear_in_formulas_expanded_cells_and_present_cells() -> No
         + 3 * DEFAULT_ESTIMATE_BYTES_PER_EXPANDED_CELL
         + 4 * DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL
     )
-    assert settings.job_estimate_base_bytes == 132 * 1024 * 1024
-    assert settings.job_estimate_bytes_per_formula == 3840
-    assert settings.job_estimate_bytes_per_expanded_cell == 960
-    assert settings.job_estimate_bytes_per_present_cell == 960
+    assert settings.job_estimate_base_bytes == 166 * 1024 * 1024
+    assert settings.job_estimate_bytes_per_formula == 128
+    assert settings.job_estimate_bytes_per_expanded_cell == 220
+    assert settings.job_estimate_bytes_per_present_cell == 1120
+    assert settings.job_estimate_unstreamed_base_bytes == 132 * 1024 * 1024
+    assert settings.job_estimate_unstreamed_bytes_per_formula == 3840
+    assert settings.job_estimate_unstreamed_bytes_per_expanded_cell == 960
+    assert settings.job_estimate_unstreamed_bytes_per_present_cell == 960
+    off = Settings(_env_file=None, graph_stream=False)
+    # 384k-formula book, switches off, measured peak 2461 MiB. The unstreamed
+    # fit stays above that peak; the streaming fit stays above 807 MiB and
+    # under 1.25 times it.
+    formulas, expanded, present = 384_000, 1_152_000, 390_644
+    streaming = estimate_bytes(
+        formulas=formulas, expanded_cells=expanded, present_cells=present, settings=settings
+    )
+    unstreamed = estimate_bytes(
+        formulas=formulas, expanded_cells=expanded, present_cells=present, settings=off
+    )
+    assert streaming >= int(806.8 * 1024 * 1024)
+    assert streaming <= int(1.25 * 806.8 * 1024 * 1024)
+    assert unstreamed >= int(2461.1 * 1024 * 1024)
 
 
 def test_stage_done_carries_rss_counts_and_budget() -> None:
@@ -570,6 +588,45 @@ def test_effective_memory_settings_are_logged_once(monkeypatch, caplog) -> None:
     assert rows[0].range_expand_cap == DEFAULT_RANGE_EXPAND_CAP
     assert rows[0].preflight_refusal is True
     assert rows[0].budget_bytes == DEFAULT_MEMORY_BUDGET_BYTES
+    assert rows[0].parse_streaming is True
+    assert rows[0].malloc_trim is True
+    assert rows[0].estimate_streaming is True
+    payload = json.loads(JsonFormatter().format(rows[0]))
+    for key in (
+        "parse_streaming",
+        "json_stream",
+        "parquet_row_group_rows",
+        "compile_string_pool",
+        "compile_ast_zlib",
+        "graph_stream",
+        "layout_columnar_facts",
+        "malloc_arena_max",
+        "malloc_trim",
+        "estimate_streaming",
+        "estimate_base_bytes",
+    ):
+        assert key in payload
+    assert payload["malloc_arena_max"] == 2
+    assert payload["estimate_base_bytes"] == DEFAULT_ESTIMATE_BASE_BYTES
+
+
+def test_disabled_switches_log_the_unstreamed_fit(monkeypatch, caplog) -> None:
+    memory._logged_effective = False
+    memory._budget_warnings.clear()
+    monkeypatch.setattr(memory, "cgroup_memory_limit_bytes", lambda *_args, **_kwargs: None)
+    caplog.set_level(logging.DEBUG, logger="finance_context.pipeline")
+    settings = Settings(_env_file=None, job_malloc_arena_max=None, compile_ast_zlib=False)
+    memory.budget_for_settings(settings)
+    rows = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "effective memory settings"
+    ]
+    payload = json.loads(JsonFormatter().format(rows[0]))
+    assert payload["estimate_streaming"] is False
+    assert payload["malloc_arena_max"] == 0
+    assert payload["estimate_base_bytes"] == 132 * 1024 * 1024
+    assert payload["bytes_per_formula"] == 3840
 
 
 def test_preflight_switch_off_lets_the_child_finish(tmp_path: Path, monkeypatch) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -70,7 +71,7 @@ class IrCell:
     hidden: bool | None = None
     number_format: str | None = None
     comment: str | None = None
-    ast_json: str | None = None
+    ast_json: str | bytes | None = None
     merge_end_col: int | None = None
     style_indent: int | None = None
     outline_level: int | None = None
@@ -132,6 +133,15 @@ def as_ir_cell(value: IrCell | Mapping[str, Any]) -> IrCell:
     )
 
 
+def ast_json_text(value: str | bytes | None) -> str | None:
+    """Plain AST JSON. In-memory cells may hold zlib bytes until relations run."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return zlib.decompress(value).decode("utf-8")
+    return value
+
+
 def cell_parquet_row(cell: IrCell) -> tuple[object, ...]:
     return (
         cell.sheet,
@@ -145,7 +155,7 @@ def cell_parquet_row(cell: IrCell) -> tuple[object, ...]:
         cell.hidden,
         cell.number_format,
         cell.comment,
-        cell.ast_json,
+        ast_json_text(cell.ast_json),
     )
 
 

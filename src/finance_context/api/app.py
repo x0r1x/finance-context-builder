@@ -38,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         memory_budget_bytes=budget_for_settings(settings),
         unusable_detail=unusable_cap_detail(settings),
         watch_interval_sec=settings.job_memory_watch_interval_sec,
+        malloc_arena_max=settings.job_malloc_arena_max,
     )
 
     @asynccontextmanager

@@ -24,6 +24,19 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("JOB_ESTIMATE_BYTES_PER_FORMULA", "job_estimate_bytes_per_formula"),
     EnvSpec("JOB_ESTIMATE_BYTES_PER_EXPANDED_CELL", "job_estimate_bytes_per_expanded_cell"),
     EnvSpec("JOB_ESTIMATE_BYTES_PER_PRESENT_CELL", "job_estimate_bytes_per_present_cell"),
+    EnvSpec("JOB_ESTIMATE_UNSTREAMED_BASE_BYTES", "job_estimate_unstreamed_base_bytes"),
+    EnvSpec(
+        "JOB_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA",
+        "job_estimate_unstreamed_bytes_per_formula",
+    ),
+    EnvSpec(
+        "JOB_ESTIMATE_UNSTREAMED_BYTES_PER_EXPANDED_CELL",
+        "job_estimate_unstreamed_bytes_per_expanded_cell",
+    ),
+    EnvSpec(
+        "JOB_ESTIMATE_UNSTREAMED_BYTES_PER_PRESENT_CELL",
+        "job_estimate_unstreamed_bytes_per_present_cell",
+    ),
     EnvSpec("JOB_MEMORY_FLOOR_BYTES", "job_memory_floor_bytes"),
     EnvSpec("JOB_MEMORY_API_RESERVE_FRACTION", "job_memory_api_reserve_fraction"),
     EnvSpec("JOB_MEMORY_DEFAULT_BUDGET_BYTES", "job_memory_default_budget_bytes"),
@@ -31,4 +44,13 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("RANGE_EXPAND_CAP", "range_expand_cap"),
     EnvSpec("JOB_OOM_SCORE_ADJ", "job_oom_score_adj"),
     EnvSpec("JOB_MEMORY_PREFLIGHT_REFUSAL", "job_memory_preflight_refusal"),
+    EnvSpec("PARSE_STREAMING", "parse_streaming"),
+    EnvSpec("JSON_STREAM", "json_stream"),
+    EnvSpec("PARQUET_ROW_GROUP_ROWS", "parquet_row_group_rows"),
+    EnvSpec("COMPILE_STRING_POOL", "compile_string_pool"),
+    EnvSpec("COMPILE_AST_ZLIB", "compile_ast_zlib"),
+    EnvSpec("GRAPH_STREAM", "graph_stream"),
+    EnvSpec("LAYOUT_COLUMNAR_FACTS", "layout_columnar_facts"),
+    EnvSpec("JOB_MALLOC_ARENA_MAX", "job_malloc_arena_max"),
+    EnvSpec("JOB_MALLOC_TRIM", "job_malloc_trim"),
 )

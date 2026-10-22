@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import os
@@ -21,11 +22,11 @@ _LOGGER = logging.getLogger("finance_context.pipeline")
 # Above this, cgroup v1 is reporting "no limit" (page_counter max).
 _UNLIMITED_BYTES = 1 << 60
 
-# Coefficients live on Settings (JOB_ESTIMATE_*). Fitted after parsed-edge
-# preflight: 132 MiB + 3840 bytes/formula + 960/expanded cell + 960/present
-# cell. Highest-stage peaks and the ceiling estimate sit between 1.07 and
-# 1.15. The 40k-formula book stays under the 1536 MiB default; the
-# 380k-formula timeline does not.
+# Coefficients live on Settings (JOB_ESTIMATE_*). With parse streaming, graph
+# streaming, and AST compression on: 166 MiB + 128 bytes/formula + 220/expanded
+# cell + 1120/present cell (1.08–1.20 of that peak). If any of those three is
+# off, the unstreamed coefficients apply: 132 MiB + 3840/formula + 960/expanded
+# cell + 960/present cell, the previous fit for that higher resident set.
 
 _budget_warnings: set[str] = set()
 _logged_effective = False
@@ -66,6 +67,33 @@ class WorkbookEstimate:
     expanded_cells: int
     present_cells: int
     estimate_bytes: int
+
+
+_trim_fn: object | None = None
+_trim_resolved = False
+
+
+def trim_process_heap() -> bool:
+    """Ask glibc to return free arenas to the OS. Missing ``malloc_trim`` is a no-op."""
+    global _trim_fn, _trim_resolved
+    if not _trim_resolved:
+        _trim_resolved = True
+        try:
+            libc = ctypes.CDLL(None)
+            fn = getattr(libc, "malloc_trim", None)
+        except (OSError, AttributeError):
+            fn = None
+        if fn is not None:
+            fn.argtypes = [ctypes.c_size_t]
+            fn.restype = ctypes.c_int
+        _trim_fn = fn
+    fn = _trim_fn
+    if fn is None:
+        return False
+    try:
+        return bool(fn(0))  # type: ignore[operator]
+    except (OSError, AttributeError):
+        return False
 
 
 def rss_bytes() -> int:
@@ -253,21 +281,45 @@ def unusable_cap_detail(settings: Settings) -> str | None:
     )
 
 
+def streaming_estimate(settings: Settings) -> bool:
+    """The lower fit applies only while parse, graph, and AST compression are on."""
+    return bool(settings.parse_streaming and settings.graph_stream and settings.compile_ast_zlib)
+
+
+def _estimate_coefficients(settings: Settings) -> tuple[int, int, int, int]:
+    if streaming_estimate(settings):
+        return (
+            settings.job_estimate_base_bytes,
+            settings.job_estimate_bytes_per_formula,
+            settings.job_estimate_bytes_per_expanded_cell,
+            settings.job_estimate_bytes_per_present_cell,
+        )
+    return (
+        settings.job_estimate_unstreamed_base_bytes,
+        settings.job_estimate_unstreamed_bytes_per_formula,
+        settings.job_estimate_unstreamed_bytes_per_expanded_cell,
+        settings.job_estimate_unstreamed_bytes_per_present_cell,
+    )
+
+
 def _log_effective_memory(settings: Settings, budget: int) -> None:
     """One DEBUG memory_budget line with the knobs this process is using."""
     global _logged_effective
     if _logged_effective:
         return
     _logged_effective = True
+    base, per_formula, per_expanded, per_present = _estimate_coefficients(settings)
+    # 0 is the disabled arena. JsonFormatter drops None, which would hide the knob.
+    arena = settings.job_malloc_arena_max if settings.job_malloc_arena_max is not None else 0
     log_event(
         _LOGGER,
         logging.DEBUG,
         "memory_budget",
         "effective memory settings",
-        estimate_base_bytes=settings.job_estimate_base_bytes,
-        bytes_per_formula=settings.job_estimate_bytes_per_formula,
-        bytes_per_expanded_cell=settings.job_estimate_bytes_per_expanded_cell,
-        bytes_per_present_cell=settings.job_estimate_bytes_per_present_cell,
+        estimate_base_bytes=base,
+        bytes_per_formula=per_formula,
+        bytes_per_expanded_cell=per_expanded,
+        bytes_per_present_cell=per_present,
         floor_bytes=settings.job_memory_floor_bytes,
         api_reserve_fraction=settings.job_memory_api_reserve_fraction,
         default_budget_bytes=settings.job_memory_default_budget_bytes,
@@ -276,6 +328,16 @@ def _log_effective_memory(settings: Settings, budget: int) -> None:
         oom_score_adj=settings.job_oom_score_adj,
         preflight_refusal=settings.job_memory_preflight_refusal,
         budget_bytes=budget,
+        parse_streaming=settings.parse_streaming,
+        json_stream=settings.json_stream,
+        parquet_row_group_rows=settings.parquet_row_group_rows,
+        compile_string_pool=settings.compile_string_pool,
+        compile_ast_zlib=settings.compile_ast_zlib,
+        graph_stream=settings.graph_stream,
+        layout_columnar_facts=settings.layout_columnar_facts,
+        malloc_arena_max=arena,
+        malloc_trim=settings.job_malloc_trim,
+        estimate_streaming=streaming_estimate(settings),
     )
 
 
@@ -287,11 +349,12 @@ def estimate_bytes(
     settings: Settings | None = None,
 ) -> int:
     chosen = settings if settings is not None else Settings()
+    base, per_formula, per_expanded, per_present = _estimate_coefficients(chosen)
     return (
-        chosen.job_estimate_base_bytes
-        + formulas * chosen.job_estimate_bytes_per_formula
-        + expanded_cells * chosen.job_estimate_bytes_per_expanded_cell
-        + present_cells * chosen.job_estimate_bytes_per_present_cell
+        base
+        + formulas * per_formula
+        + expanded_cells * per_expanded
+        + present_cells * per_present
     )
 
 

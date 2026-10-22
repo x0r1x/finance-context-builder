@@ -19,7 +19,7 @@ from finance_context.formulas.csr import (
     reset_range_expand_cap,
 )
 from finance_context.formulas.models import as_edge, as_ir_cell, release_cell_asts
-from finance_context.formulas.stage import compile_workbook, ir_is_current
+from finance_context.formulas.stage import EdgeCount, compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
 from finance_context.layout.models import Layout
 from finance_context.layout.relations import formula_relations
@@ -31,6 +31,7 @@ from finance_context.memory import (
     check_budget,
     prefer_oom_kill,
     rss_bytes,
+    trim_process_heap,
     unusable_cap_detail,
     usage_for_book,
 )
@@ -177,7 +178,7 @@ class Pipeline:
             parse_profile: dict[str, int] = {}
 
             def parse_and_count():
-                parse_workbook(ensure_xlsx(book, self.converter), book)
+                parse_workbook(ensure_xlsx(book, self.converter), book, settings=self.settings)
                 counted = assess_raw(
                     book, usage_box[0] or book_usage(), settings=self.settings
                 )
@@ -189,7 +190,7 @@ class Pipeline:
                     parse_profile["budget_bytes"] = job_budget
                 return counted
 
-            estimate = _timed("parse", parse_and_count, parse_profile)
+            estimate = _timed("parse", parse_and_count, parse_profile, settings=self.settings)
         set_stage("compile")
         if not ir_is_current(book):
             budget = budget_for_settings(self.settings)
@@ -223,20 +224,25 @@ class Pipeline:
                 profile["cell_edges"] = len(compiled_book.cell_edges)
                 return compiled_book
 
-            compiled = _timed("compile", compile_and_count, profile)
+            compiled = _timed("compile", compile_and_count, profile, settings=self.settings)
             ir_cells = compiled.cells
             ir_edges = compiled.edges
             ir_cell_edges = compiled.cell_edges
             compiled = None
         else:
-            ir_cells, ir_edges, ir_cell_edges = _read_ir(book)
+            ir_cells, ir_edges, ir_cell_edges = _read_ir(
+                book, count_cell_edges=self.settings.graph_stream
+            )
         set_stage("layout")
         if not (book / "layout.json").is_file():
             layout_profile = {"cells": len(ir_cells), "edges": len(ir_edges)}
             layout = _timed(
                 "layout",
-                lambda: layout_workbook(book, cells=ir_cells, edges=ir_edges),
+                lambda: layout_workbook(
+                    book, cells=ir_cells, edges=ir_edges, settings=self.settings
+                ),
                 layout_profile,
+                settings=self.settings,
             )
         else:
             layout = Layout.model_validate_json((book / "layout.json").read_text(encoding="utf-8"))
@@ -257,6 +263,7 @@ class Pipeline:
                 "edges": len(ir_edges),
                 "cell_edges": len(ir_cell_edges),
             }
+            graph_edges = None if isinstance(ir_cell_edges, EdgeCount) else ir_cell_edges
             graph = _timed(
                 "graph",
                 lambda: build_formula_graph(
@@ -265,10 +272,12 @@ class Pipeline:
                     layout=layout,
                     cells=ir_cells,
                     edges=ir_edges,
-                    cell_edges=ir_cell_edges,
+                    cell_edges=graph_edges,
                     book_dir=book,
+                    settings=self.settings,
                 ),
                 graph_profile,
+                settings=self.settings,
             )
         else:
             payload = json.loads((dest_dir / "graph.json").read_text(encoding="utf-8"))
@@ -315,11 +324,19 @@ class Pipeline:
             build_profile["formulas"] = built.workbook.formula_count
             return built
 
-        doc = _timed("build", build_and_count, build_profile)
+        doc = _timed("build", build_and_count, build_profile, settings=self.settings)
         cells = edges = ir_cells = ir_edges = relations = None
-        _write_sorted_json(dest_dir / "context.json", doc.model_dump(mode="json"))
+        _write_sorted_json(
+            dest_dir / "context.json",
+            doc.model_dump(mode="json"),
+            stream=self.settings.json_stream,
+        )
         set_stage("render", status="running")
-        _timed("render", lambda: write_context_markdown(dest_dir, doc))
+        _timed(
+            "render",
+            lambda: write_context_markdown(dest_dir, doc),
+            settings=self.settings,
+        )
         _raise_if_cancelled(progress)
         _write_meta(
             dest_dir,
@@ -331,6 +348,7 @@ class Pipeline:
             warnings=doc.warnings,
             questions=[],
             generation=generation,
+            stream=self.settings.json_stream,
         )
         return doc
 
@@ -436,16 +454,24 @@ def _wait_for_pause_release() -> None:
         time.sleep(0.05)
 
 
-def _read_ir(dest_dir: Path) -> tuple[list[dict], list, list]:
+def _read_ir(
+    dest_dir: Path, *, count_cell_edges: bool = False
+) -> tuple[list, list, list | EdgeCount]:
     cells = read_parquet(dest_dir / "ir" / "cells.parquet")
     edges_path = dest_dir / "ir" / "edges.parquet"
     edges = read_parquet(edges_path) if edges_path.is_file() else []
     cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
-    cell_edges = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
+    if count_cell_edges and cell_edges_path.is_file():
+        import pyarrow.parquet as pq
+
+        cell_edges: list | EdgeCount = EdgeCount(pq.ParquetFile(cell_edges_path).metadata.num_rows)
+    else:
+        loaded = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
+        cell_edges = [as_cell_edge(edge) for edge in loaded]
     return (
         [as_ir_cell(cell) for cell in cells],
         [as_edge(edge) for edge in edges],
-        [as_cell_edge(edge) for edge in cell_edges],
+        cell_edges,
     )
 
 
@@ -461,7 +487,13 @@ def _final_status() -> str:
     return "succeeded"
 
 
-def _timed(stage: str, fn, counts: dict[str, int] | None = None):
+def _timed(
+    stage: str,
+    fn,
+    counts: dict[str, int] | None = None,
+    *,
+    settings: Settings | None = None,
+):
     token = stage_var.set(stage)
     rss_in = rss_bytes()
     peak = rss_in
@@ -504,6 +536,8 @@ def _timed(stage: str, fn, counts: dict[str, int] | None = None):
             if counts and key in counts:
                 fields[key] = counts[key]
         log_event(_LOGGER, logging.INFO, "stage_done", f"{stage} done", **fields)
+        if settings is not None and settings.job_malloc_trim:
+            trim_process_heap()
         stage_var.reset(token)
 
 
@@ -542,15 +576,18 @@ def _write_meta(dest_dir: Path, **fields: object) -> None:
             return current
         return meta
 
-    update_json(dest_dir / "meta.json", mutate)
+    stream = fields.get("stream")
+    update_json(
+        dest_dir / "meta.json",
+        mutate,
+        stream=stream if isinstance(stream, bool) else None,
+    )
 
 
-def _write_sorted_json(path: Path, data: dict) -> None:
-    payload = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(path)
+def _write_sorted_json(path: Path, data: dict, *, stream: bool | None = None) -> None:
+    from finance_context.store.fs import write_json
+
+    write_json(path, data, sort_keys=True, stream=stream)
 
 
 def _load_owner(dest_dir: Path) -> dict:
