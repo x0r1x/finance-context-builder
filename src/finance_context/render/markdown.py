@@ -12,6 +12,7 @@ from finance_context.models.context import (
     FinancialBlock,
     RowSeries,
 )
+from finance_context.store.fs import atomic_write_bytes
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
 # Bump when period-cell text changes, so a finished job rewrites context.md.
@@ -50,9 +51,7 @@ def render_markdown(doc: ContextDocument) -> str:
 def write_context_markdown(dest: Path, doc: ContextDocument) -> None:
     """Write context.md and the renderer stamp. The workbook is not read."""
     dest.mkdir(parents=True, exist_ok=True)
-    tmp = dest / "context.md.tmp"
-    tmp.write_text(render_markdown(doc), encoding="utf-8")
-    tmp.replace(dest / "context.md")
+    atomic_write_bytes(dest / "context.md", render_markdown(doc).encode("utf-8"))
     (dest / _RENDERER_STAMP).write_text(MARKDOWN_RENDERER + "\n", encoding="utf-8")
 
 
@@ -113,11 +112,7 @@ def _one_axis(axis: ContextAxis) -> list[str]:
     lines = [
         f"### `{axis.id}`",
         "",
-        (
-            f"Grain: `{axis.grain or 'n/a'}`. "
-            f"Sheet: `{axis.sheet}`. "
-            f"Periods: {len(axis.periods)}."
-        ),
+        (f"Grain: `{axis.grain or 'n/a'}`. Sheet: `{axis.sheet}`. Periods: {len(axis.periods)}."),
         "",
     ]
     if _month_runs(axis) is not None:
