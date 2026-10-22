@@ -200,6 +200,8 @@ async def post_job(
     )
 
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
+# meta.json wins over the in-memory bus once the job has finished.
+_DISK_TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
 
 
 def _running_body(job_id: str, dest: Path) -> dict[str, object]:
@@ -216,6 +218,21 @@ def _running_body(job_id: str, dest: Path) -> dict[str, object]:
                 "stage": meta.get("stage"),
             }
     return {"job_id": job_id, "status": "running", "stage": "running"}
+
+
+def _newer_bus_run(meta: dict, live: object) -> bool:
+    """A higher bus generation is a new run, not a stale queued record."""
+    if live is None or getattr(live, "status", None) not in {"queued", "running"}:
+        return False
+    try:
+        disk_generation = int(meta.get("generation") or 0)
+    except (TypeError, ValueError):
+        disk_generation = 0
+    try:
+        bus_generation = int(getattr(live, "generation", 0) or 0)
+    except (TypeError, ValueError):
+        bus_generation = 0
+    return bus_generation > disk_generation
 
 
 def _orphan_running(meta: dict, *, live: object, alive: bool) -> bool:
@@ -287,8 +304,12 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
         artifacts_ready = (dest / "context.json").exists() and (dest / "context.md").exists() and (
             dest / "graph.json"
         ).exists() and (dest / "graph.md").exists()
+        disk_terminal = meta.get("status") in _DISK_TERMINAL_STATUS and not _newer_bus_run(
+            meta, live
+        )
         if (
-            artifacts_ready
+            not disk_terminal
+            and artifacts_ready
             and meta.get("status") in {"queued", "running", None}
             and live is not None
             and live.status not in {"queued", "running"}
@@ -296,7 +317,12 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
             meta["status"] = live.status
             meta["stage"] = live.stage
             meta["error"] = live.error
-        elif live is not None and live.status in {"queued", "running"} and not artifacts_ready:
+        elif (
+            not disk_terminal
+            and live is not None
+            and live.status in {"queued", "running"}
+            and not artifacts_ready
+        ):
             if _STAGE_RANK.get(str(live.stage or ""), -1) > _STAGE_RANK.get(
                 str(meta.get("stage") or ""), -1
             ):

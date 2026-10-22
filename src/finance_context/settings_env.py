@@ -11,7 +11,10 @@ class EnvSpec:
 
 ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("DATA_DIR", "data_dir"),
+    EnvSpec("DATA_DIR_ALLOW_NETWORK_FS", "data_dir_allow_network_fs"),
     EnvSpec("SESSION_ID", "session_id"),
+    EnvSpec("SESSION_ID_PATTERN", "session_id_pattern"),
+    EnvSpec("SESSION_ID_MAX_LENGTH", "session_id_max_length"),
     EnvSpec("MAX_UPLOAD_BYTES", "max_upload_bytes"),
     EnvSpec("MAX_CONCURRENT_JOBS", "max_concurrent_jobs"),
     EnvSpec("JOB_MEMORY_BUDGET_BYTES", "job_memory_budget_bytes"),

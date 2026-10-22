@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from finance_context.settings import Settings
 from finance_context.settings_env import ENV_SPECS
@@ -46,3 +47,43 @@ def test_unset_job_timeout_and_session_use_field_defaults(
     settings = Settings(_env_file=None)
     assert settings.job_timeout_sec == 3600
     assert settings.session_id == "local"
+    assert settings.session_id_pattern == r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    assert settings.session_id_max_length == 64
+    assert settings.data_dir_allow_network_fs is False
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["../etc", "..", ".", "a/b", "a\\b", "", " ", "-lead", "_lead", "a" * 65],
+)
+def test_session_id_rejects_traversal_and_separators(session_id: str) -> None:
+    with pytest.raises(ValidationError, match="SESSION_ID"):
+        Settings(session_id=session_id, _env_file=None)
+
+
+def test_session_id_accepts_a_single_directory_name() -> None:
+    settings = Settings(session_id="Job_1-a", _env_file=None)
+    assert settings.session_id == "Job_1-a"
+
+
+def test_session_id_pattern_and_length_come_from_settings() -> None:
+    Settings(
+        session_id="ab",
+        session_id_pattern=r"^[a-z]{2}$",
+        session_id_max_length=4,
+        _env_file=None,
+    )
+    with pytest.raises(ValidationError, match="SESSION_ID"):
+        Settings(
+            session_id="abc",
+            session_id_pattern=r"^[a-z]{2}$",
+            session_id_max_length=4,
+            _env_file=None,
+        )
+    with pytest.raises(ValidationError, match="SESSION_ID"):
+        Settings(session_id="abcd", session_id_max_length=3, _env_file=None)
+
+
+def test_session_id_pattern_must_compile() -> None:
+    with pytest.raises(ValidationError, match="SESSION_ID_PATTERN"):
+        Settings(session_id="local", session_id_pattern="(", _env_file=None)

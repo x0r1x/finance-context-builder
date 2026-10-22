@@ -17,6 +17,7 @@ from finance_context.excel.legacy import LEGACY_SOURCE, SOURCE, source_name
 from finance_context.memory import MEMORY_ERROR_DETAIL
 from finance_context.observability import configure_logging
 from finance_context.settings import DEFAULT_DATA_DIR, Settings
+from finance_context.store.filesystem import ensure_data_dir_local
 from finance_context.store.fs import atomic_write_bytes, write_json
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -56,6 +57,10 @@ def build(
 ) -> None:
     """Parse an Excel workbook and write context and graph as JSON and Markdown."""
     settings = Settings(data_dir=data_dir)
+    ensure_data_dir_local(
+        settings.data_dir,
+        allow_network=settings.data_dir_allow_network_fs,
+    )
     configure_logging(level=settings.log_level, json_output=False)
     data = source.read_bytes()
     digest = sha256_bytes(data)
