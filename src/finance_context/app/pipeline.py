@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from finance_context.adapters.soffice import SofficeConverter
+from finance_context.app.job_clock import process_mono_start
 from finance_context.app.publisher import publisher_stamp, stamped_stages
 from finance_context.app.shared_cache import (
     SharedCacheBusy,
@@ -50,7 +51,12 @@ from finance_context.store.paths import session_job_dir, shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
 _TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
+# Interpreter startup sits between proc.start() and process_mono_start, and
+# mark_job_failed still has to hit disk. Both fit in this margin.
+_BUSY_TIMEOUT_MARGIN_SEC = 2.0
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
+# Set only in the spawned child. In-process callers measure from execute_job.
+_child_watchdog_deadline: float | None = None
 
 
 class Pipeline:
@@ -85,7 +91,9 @@ class Pipeline:
             ):
                 if shared:
                     with file_lock(dest_dir / ".lock"):
-                        invalidate_for_run(dest_dir, book, shared=True, job_id=job_id)
+                        invalidation = invalidate_for_run(
+                            dest_dir, book, shared=True, job_id=job_id
+                        )
                         document = self._run(
                             dest_dir,
                             job_id=job_id,
@@ -96,7 +104,9 @@ class Pipeline:
                             shared_dir=book,
                         )
                 else:
-                    invalidate_for_run(dest_dir, book, shared=False, job_id=job_id)
+                    invalidation = invalidate_for_run(
+                        dest_dir, book, shared=False, job_id=job_id
+                    )
                     document = self._run(
                         dest_dir,
                         job_id=job_id,
@@ -107,7 +117,12 @@ class Pipeline:
                         shared_dir=None,
                     )
                 if shared:
-                    write_shared_stamp(book)
+                    write_shared_stamp(
+                        book,
+                        rebuilt_from=invalidation.rebuilt_from,
+                        trusted=invalidation.trusted_stages,
+                        adopt=invalidation.adopt,
+                    )
                 return document
         finally:
             job_id_var.reset(token_job)
@@ -376,6 +391,7 @@ def run_job_process(
 ) -> None:
     """Entry point for a spawned interpreter. Runs one book on this process's main thread."""
     settings = Settings(data_dir=Path(data_dir), session_id=session_id)
+    _arm_child_watchdog(settings.job_timeout_sec)
     prefer_oom_kill(score=settings.job_oom_score_adj)
     configure_logging(level=settings.log_level, json_output=settings.log_json)
     _install_stage_pause()
@@ -435,9 +451,13 @@ def execute_job(
 
     Here the first busy result is followed by at most ``max_retries`` more
     attempts, sleeping ``retry_after_sec`` between them. ``max_retries`` of 0
-    fails on the first busy result. Each wait logs ``shared_cache_busy_requeue``.
+    fails on the first busy result. A sleep that would reach the parent
+    watchdog fails the same way, so the parent does not record ``TimeoutError``
+    first. The spawned child counts that watchdog from process start. Each
+    wait logs ``shared_cache_busy_requeue``.
     """
     attempts = 0
+    deadline = _busy_deadline(pipeline)
     while True:
         try:
             return pipeline.run(
@@ -461,12 +481,38 @@ def execute_job(
                 retry_after_sec=exc.retry_after_sec,
                 max_retries=exc.max_retries,
             )
-            if attempts > exc.max_retries:
+            if attempts > exc.max_retries or _busy_wait_exceeds(deadline, exc.retry_after_sec):
                 raise ContextError(
                     "shared_cache_busy",
                     "shared book cache stayed busy",
                 ) from exc
             time.sleep(exc.retry_after_sec)
+
+
+def _arm_child_watchdog(timeout: object) -> None:
+    """Anchor the busy wait to process start. The parent clock already includes imports."""
+    global _child_watchdog_deadline
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        _child_watchdog_deadline = None
+        return
+    _child_watchdog_deadline = process_mono_start + float(timeout)
+
+
+def _busy_deadline(pipeline: Pipeline) -> float | None:
+    if _child_watchdog_deadline is not None:
+        return _child_watchdog_deadline
+    settings = getattr(pipeline, "settings", None)
+    timeout = getattr(settings, "job_timeout_sec", None)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        return None
+    return time.monotonic() + float(timeout)
+
+
+def _busy_wait_exceeds(deadline: float | None, retry_after_sec: float) -> bool:
+    if deadline is None:
+        return False
+    remaining = deadline - time.monotonic() - _BUSY_TIMEOUT_MARGIN_SEC
+    return remaining < retry_after_sec
 
 
 def mark_job_failed(

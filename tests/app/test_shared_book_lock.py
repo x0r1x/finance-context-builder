@@ -10,14 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from finance_context.app.artifacts import clear_shared_artifacts
+from finance_context.app.artifacts import clear_downstream_artifacts, clear_shared_artifacts
 from finance_context.app.pipeline import Pipeline, execute_job
+from finance_context.app.publisher import stamped_stages
 from finance_context.app.shared_cache import (
     SharedCacheBusy,
     invalidate_for_run,
     record_rebuild_stage,
     session_stale_stage,
     shared_book_lock,
+    shared_stale_stage,
     write_shared_stamp,
 )
 from finance_context.errors import ContextError
@@ -181,6 +183,147 @@ def test_recorded_publish_is_not_widened_to_layout(tmp_path: Path) -> None:
     assert (dest / "graph.json").read_text(encoding="utf-8") == "keep-graph"
     assert not (dest / "context.json").exists()
     assert (book / "layout.json").is_file()
+
+
+def _book_with_body(tmp_path: Path) -> Path:
+    book = tmp_path / "book"
+    ir = book / "ir"
+    raw = book / "raw"
+    ir.mkdir(parents=True)
+    raw.mkdir()
+    (book / "source.xlsx").write_bytes(b"PK\x03\x04")
+    (book / "layout.json").write_text('{"sheets": []}\n', encoding="utf-8")
+    (raw / "workbook.json").write_text("{}\n", encoding="utf-8")
+    (ir / "cells.parquet").write_bytes(b"old-ir")
+    (ir / "compile.json").write_text('{"schema_id":"old"}\n', encoding="utf-8")
+    return book
+
+
+def test_missing_sidecar_compile_rebuild_drops_formula_ir(tmp_path: Path) -> None:
+    book = _book_with_body(tmp_path)
+    dest = tmp_path / "job"
+    dest.mkdir()
+    record_rebuild_stage(dest, "compile")
+    with shared_book_lock(book, job_id="job-c", retry_after_sec=1, max_retries=0):
+        invalidate_for_run(dest, book, shared=True, job_id="job-c")
+    assert not (book / "ir" / "cells.parquet").exists()
+    assert not (book / "raw" / "workbook.json").exists()
+    assert not (book / "layout.json").exists()
+    assert (book / "source.xlsx").is_file()
+
+
+def test_stamp_leaves_an_unrebuilt_compile_unverified(tmp_path: Path) -> None:
+    book = _book_with_body(tmp_path)
+    write_shared_stamp(book, rebuilt_from="layout", trusted=None, adopt=False)
+    assert shared_stale_stage(book, adopt_current=False, recorded=None) == "compile"
+    stamp = json.loads((book / "stages.json").read_text(encoding="utf-8"))
+    assert stamp["stages"]["compile"] == "unverified"
+    assert stamp["publisher"] == "partial"
+
+
+def test_stamp_keeps_a_compile_hash_that_already_matched(tmp_path: Path) -> None:
+    book = _book_with_body(tmp_path)
+    current = stamped_stages()
+    write_shared_stamp(
+        book,
+        rebuilt_from="layout",
+        trusted={"compile": current["compile"]},
+        adopt=False,
+    )
+    assert shared_stale_stage(book, adopt_current=False) is None
+
+
+def test_queued_meta_keeps_generation_and_stage_map(tmp_path: Path) -> None:
+    dest = tmp_path / "job"
+    dest.mkdir()
+    (dest / "context.json").write_text("{}", encoding="utf-8")
+    (dest / "graph.json").write_text("keep", encoding="utf-8")
+    (dest / "meta.json").write_text(
+        json.dumps(
+            {
+                "generation": 5,
+                "status": "succeeded",
+                "source_filename": "model.xlsx",
+                "warnings": ["w"],
+                "stages": {"compile": "abc", "layout": "d", "graph": "e", "publish": "f"},
+                "publisher": "old",
+                "error": "process_lost",
+            }
+        ),
+        encoding="utf-8",
+    )
+    clear_downstream_artifacts(dest, "publish", drop_meta=False)
+    record_rebuild_stage(dest, "publish", generation=6)
+    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert meta["generation"] == 6
+    assert meta["rebuild_from"] == "publish"
+    assert meta["status"] == "queued"
+    assert "error" not in meta
+    assert meta["stages"]["compile"] == "abc"
+    assert meta["source_filename"] == "model.xlsx"
+    assert meta["warnings"] == ["w"]
+    assert not (dest / "context.json").exists()
+    assert (dest / "graph.json").read_text(encoding="utf-8") == "keep"
+    assert session_stale_stage(meta) == "publish"
+
+
+def test_execute_job_child_deadline_already_elapsed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "finance_context.app.pipeline._child_watchdog_deadline",
+        time.monotonic() - 1,
+    )
+
+    class _Pipeline:
+        def __init__(self) -> None:
+            self.settings = _settings(job_timeout_sec=3600)
+            self.calls = 0
+
+        def run(self, *_args: object, **_kwargs: object) -> None:
+            self.calls += 1
+            raise SharedCacheBusy("job-d", retry_after_sec=30, max_retries=120)
+
+    pipeline = _Pipeline()
+    started = time.monotonic()
+    with pytest.raises(ContextError) as caught:
+        execute_job(pipeline, tmp_path, job_id="job-d")  # type: ignore[arg-type]
+    assert caught.value.code == "shared_cache_busy"
+    assert time.monotonic() - started < 1
+    assert pipeline.calls == 1
+
+
+def test_arm_child_watchdog_counts_from_process_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    from finance_context.app import pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "process_mono_start", time.monotonic() - 100)
+    pipeline_module._arm_child_watchdog(3600)
+    try:
+        deadline = pipeline_module._child_watchdog_deadline
+        assert deadline is not None
+        remaining = deadline - time.monotonic()
+        assert 3490 < remaining < 3510
+    finally:
+        pipeline_module._child_watchdog_deadline = None
+
+
+def test_execute_job_busy_fails_before_job_timeout(tmp_path: Path) -> None:
+    class _Pipeline:
+        def __init__(self) -> None:
+            self.settings = _settings(job_timeout_sec=0.05)
+            self.calls = 0
+
+        def run(self, *_args: object, **_kwargs: object) -> None:
+            self.calls += 1
+            raise SharedCacheBusy("job-t", retry_after_sec=30, max_retries=120)
+
+    pipeline = _Pipeline()
+    started = time.monotonic()
+    with pytest.raises(ContextError) as caught:
+        execute_job(pipeline, tmp_path, job_id="job-t")  # type: ignore[arg-type]
+    assert caught.value.code == "shared_cache_busy"
+    assert time.monotonic() - started < 1
+    assert pipeline.calls == 1
 
 
 def test_busy_settings_reject_bad_values() -> None:

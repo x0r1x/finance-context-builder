@@ -22,7 +22,11 @@ _RAW = ("cells.parquet", "cell_presence.parquet", "workbook.json")
 
 
 def clear_downstream_artifacts(
-    dest: Path, stale_from: str | None = "layout", *, shared: Path | None = None
+    dest: Path,
+    stale_from: str | None = "layout",
+    *,
+    shared: Path | None = None,
+    drop_meta: bool = True,
 ) -> None:
     """Drop artifacts from the first stale stage downward. Parse bytes in source.xlsx stay.
 
@@ -30,6 +34,7 @@ def clear_downstream_artifacts(
     layout. When ``shared`` is omitted both live in ``dest``. ``stale_from=None`` leaves
     the directories alone. A missing stage map uses ``layout``, which keeps formula IR.
     ``compile`` also drops the parsed raw sheets. ``.lock`` is never removed.
+    ``drop_meta`` keeps ``meta.json`` when POST still has to record generation.
     """
     if stale_from is None:
         return
@@ -50,7 +55,8 @@ def clear_downstream_artifacts(
         for name in _GRAPH_IR:
             (ir / name).unlink(missing_ok=True)
     clear_shared_artifacts(book, normalized)
-    (dest / "meta.json").unlink(missing_ok=True)
+    if drop_meta:
+        (dest / "meta.json").unlink(missing_ok=True)
 
 
 def clear_shared_artifacts(book: Path, stale_from: str | None) -> bool:

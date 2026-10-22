@@ -173,11 +173,15 @@ async def post_job(
             stored = _load_meta(dest)
             disk_generation = _disk_generation(stored)
             stale = stale_from_meta(stored)
-            # Session publications only. The shared book stays until the child
-            # holds shared/.lock.
-            clear_downstream_artifacts(dest, stale_from=stale)
-            record_rebuild_stage(dest, stale)
+            # Session publications only. Keep meta so generation and the stage
+            # map survive the wait. The shared book stays until the child holds
+            # shared/.lock.
+            clear_downstream_artifacts(dest, stale_from=stale, drop_meta=False)
             started = ctx.bus.enqueue(job_id, minimum_generation=disk_generation)
+            # The bus generation has to be on disk before launch. A restart
+            # during the busy wait reads this file, not the bus.
+            generation = ctx.bus.current_generation(job_id) if started else None
+            record_rebuild_stage(dest, stale, generation=generation)
             launched = ctx.processes.launch(job_id) if started else False
         except Exception:
             ctx.processes.release_reservation(job_id)
