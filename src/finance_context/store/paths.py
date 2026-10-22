@@ -10,7 +10,8 @@ LOCAL_SESSION = "local"
 def session_job_dir(root: Path, job_id: str, session_id: str = LOCAL_SESSION) -> Path:
     session = _segment(session_id or LOCAL_SESSION, "SESSION_ID")
     job = _segment(job_id, "job_id")
-    return _contained(root, "sessions", session, "jobs", job)
+    jobs_root = session_jobs_root(root, session)
+    return _contained(jobs_root, job, reject_alias=True)
 
 
 def session_jobs_root(root: Path, session_id: str = LOCAL_SESSION) -> Path:
