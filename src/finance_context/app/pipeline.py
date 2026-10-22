@@ -409,6 +409,10 @@ def mark_job_failed(
         if ready and current.get("status") in _TERMINAL_STATUS:
             return current
         failed = dict(current)
+        # A failure that still carries this process's publisher looks finished
+        # to the next POST, so the book is never launched again.
+        failed.pop("publisher", None)
+        failed.pop("stages", None)
         failed["job_id"] = job_id
         failed["status"] = "failed"
         failed["stage"] = "failed"

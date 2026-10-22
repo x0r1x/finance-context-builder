@@ -169,8 +169,10 @@ async def post_job(
         if not ctx.processes.try_acquire(job_id):
             raise ApiError(429, "too_many_jobs")
         try:
+            stored = _load_meta(dest)
+            disk_generation = _disk_generation(stored)
             clear_downstream_artifacts(
-                dest, stale_from=stale_from_meta(_load_meta(dest)), shared=shared
+                dest, stale_from=stale_from_meta(stored), shared=shared
             )
             log_event(
                 _LOGGER,
@@ -179,7 +181,7 @@ async def post_job(
                 "stale artifacts invalidated",
                 job_id=job_id,
             )
-            started = ctx.bus.enqueue(job_id)
+            started = ctx.bus.enqueue(job_id, minimum_generation=disk_generation)
             launched = ctx.processes.launch(job_id) if started else False
         except Exception:
             ctx.processes.release_reservation(job_id)
@@ -239,6 +241,15 @@ def _orphan_running(meta: dict, *, live: object, alive: bool) -> bool:
     if meta.get("status") not in {"queued", "running"} or alive:
         return False
     return getattr(live, "status", None) not in {"queued", "running"}
+
+
+def _disk_generation(meta: dict | None) -> int:
+    if not isinstance(meta, dict):
+        return 0
+    try:
+        return int(meta.get("generation") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _load_meta(dest: Path) -> dict | None:
