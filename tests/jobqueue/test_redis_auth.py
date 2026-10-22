@@ -1,16 +1,19 @@
 """REDIS_USERNAME and REDIS_PASSWORD, separate from REDIS_URL.
 
 ACL changes go through redis-py on the suite Redis (database 15). CI has that
-server and no redis-cli or redis-server binary. Each test restores the default
-user to nopass and deletes the ``app`` user before it returns.
+server and no redis-server binary. The fixture snapshots the ``default`` and
+``app`` ACL lines and writes those lines back. ``app`` is removed only when it
+did not exist before the test.
 """
 
 from __future__ import annotations
 
 import logging
+import shlex
 import threading
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -18,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 from redis import Redis
-from redis.exceptions import AuthenticationError, RedisError
+from redis.exceptions import RedisError
 from tests.jobqueue.conftest import local_test_redis_url
 
 from finance_context.api.app import create_app
@@ -66,42 +69,61 @@ def _grant(client: Redis, username: str, *, password: str | None) -> None:
     client.acl_setuser(username, passwords=[f"+{password}"], **common)  # type: ignore[arg-type]
 
 
-def _restore(client: Redis) -> None:
-    _grant(client, "default", password=None)
-    client.acl_deluser("app")
+@dataclass(frozen=True)
+class _AclSnapshot:
+    default_line: str
+    app_line: str | None
 
 
-def _open_admin(url: str) -> Redis:
-    client = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
-    try:
-        client.ping()
-    except AuthenticationError:
-        client.close()
-        client = Redis.from_url(
-            url,
-            password=_SECRET,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
-        client.ping()
-        _restore(client)
-    return client
+def _acl_text(raw: object) -> str:
+    if isinstance(raw, bytes):
+        return raw.decode()
+    return str(raw)
+
+
+def _acl_line(client: Redis, username: str) -> str | None:
+    for raw in client.acl_list():
+        line = _acl_text(raw)
+        tokens = shlex.split(line)
+        if len(tokens) >= 2 and tokens[0] == "user" and tokens[1] == username:
+            return line
+    return None
+
+
+def _apply_acl_line(client: Redis, line: str) -> None:
+    tokens = shlex.split(line)
+    if len(tokens) < 2 or tokens[0] != "user":
+        raise RuntimeError("unexpected ACL LIST entry")
+    client.execute_command("ACL", "SETUSER", tokens[1], "reset", *tokens[2:])
+
+
+def _restore(client: Redis, snapshot: _AclSnapshot) -> None:
+    _apply_acl_line(client, snapshot.default_line)
+    if snapshot.app_line is None:
+        client.acl_deluser("app")
+        return
+    _apply_acl_line(client, snapshot.app_line)
 
 
 @pytest.fixture
 def admin() -> Iterator[Redis]:
     url = local_test_redis_url()
+    client = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
     try:
-        client = _open_admin(url)
-    except RedisError as exc:
-        pytest.fail(f"Redis is required for auth tests ({url}): {exc}")
-    try:
-        yield client
-    finally:
         try:
-            _restore(client)
+            client.ping()
+        except RedisError as exc:
+            pytest.fail(f"Redis is required for auth tests ({url}): {exc}")
+        default_line = _acl_line(client, "default")
+        if default_line is None:
+            pytest.fail(f"suite Redis has no default ACL user ({url})")
+        snapshot = _AclSnapshot(default_line, _acl_line(client, "app"))
+        try:
+            yield client
         finally:
-            client.close()
+            _restore(client, snapshot)
+    finally:
+        client.close()
 
 
 @pytest.fixture
@@ -122,6 +144,33 @@ def _command_has_auth(command: str) -> bool:
 
 def _saw_ping(commands: list[str]) -> bool:
     return any("PING" in command.split() for command in commands)
+
+
+def test_restore_replays_saved_acl_lines(admin: Redis) -> None:
+    default_before = _acl_line(admin, "default")
+    assert default_before is not None
+    assert _acl_line(admin, "app") is None
+    _grant(admin, "app", password="prior-secret")
+    prior_app = _acl_line(admin, "app")
+    assert prior_app is not None
+    assert "prior-secret" not in prior_app
+    _grant(admin, "default", password=_SECRET)
+    _grant(admin, "app", password=_SECRET)
+    _restore(admin, _AclSnapshot(default_before, prior_app))
+    assert _acl_line(admin, "default") == default_before
+    assert _acl_line(admin, "app") == prior_app
+    bare = Redis.from_url(local_test_redis_url(), socket_connect_timeout=2, socket_timeout=2)
+    assert bare.ping() is True
+    bare.close()
+    app = Redis.from_url(
+        local_test_redis_url(),
+        username="app",
+        password="prior-secret",
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
+    assert app.ping() is True
+    app.close()
 
 
 def test_unset_credentials_pass_no_auth_kwargs() -> None:
