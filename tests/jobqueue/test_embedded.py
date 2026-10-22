@@ -155,20 +155,21 @@ def test_embedded_worker_starts_and_stops(tmp_path: Path) -> None:
 
 
 def test_dead_embedded_worker_is_not_ready_and_restarts(tmp_path: Path) -> None:
-    settings = _settings(tmp_path, embedded_worker_restart_backoff_sec=1.0)
+    settings = _settings(tmp_path, embedded_worker_restart_backoff_sec=1.0, readyz_cache_ttl_sec=30)
     worker = start_for_serve(settings)
     assert worker is not None
     assert _wait_until(worker.healthy)
     pid = worker.pid()
     assert pid is not None
-    os.kill(pid, signal.SIGKILL)
-    assert _wait_until(lambda: not worker.healthy(), timeout=5)
     with TestClient(create_app(settings)) as client:
+        assert client.get("/readyz").status_code == 200
+        os.kill(pid, signal.SIGKILL)
+        assert _wait_until(lambda: not worker.healthy(), timeout=5)
+        # The disk and Redis probe stays cached. The dead child is still not ready.
         down = client.get("/readyz")
-    assert down.status_code == 503
-    assert down.json()["status"] == "unavailable"
-    assert _wait_until(lambda: worker.healthy() and worker.pid() not in {None, pid}, timeout=8)
-    with TestClient(create_app(settings)) as client:
+        assert down.status_code == 503
+        assert down.json()["status"] == "unavailable"
+        assert _wait_until(lambda: worker.healthy() and worker.pid() not in {None, pid}, timeout=8)
         up = client.get("/readyz")
     assert up.status_code == 200
     assert up.json()["status"] == "ready"

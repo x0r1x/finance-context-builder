@@ -6,11 +6,11 @@ same job object. ``enqueue_in`` would create a second id.
 
 from __future__ import annotations
 
-from redis import Redis
 from rq import Queue, Retry, SimpleWorker
 from rq.job import Job, JobStatus
 from rq.serializers import JSONSerializer
 
+from finance_context.jobqueue.queue import redis_client
 from finance_context.settings import Settings
 
 _BOOK = "ef" * 32
@@ -21,8 +21,8 @@ def _defer() -> Retry:
 
 
 def test_retry_interval_does_not_create_a_second_job(redis_settings: Settings) -> None:
-    client = Redis.from_url(
-        redis_settings.redis_url,
+    client = redis_client(
+        redis_settings,
         socket_connect_timeout=2,
         socket_timeout=2,
     )

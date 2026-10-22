@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from finance_context.observability import log_event
-from finance_context.settings import Settings
+from finance_context.settings import Settings, write_redis_env
 from finance_context.settings_env import ENV_SPECS
 
 _LOGGER = logging.getLogger("finance_context.jobqueue")
@@ -181,9 +181,15 @@ def _worker_argv() -> list[str]:
 
 
 def _child_env(settings: Settings) -> dict[str, str]:
-    """The worker process loads ``Settings`` itself, so export this object's fields."""
+    """The worker process loads ``Settings`` itself, so export this object's fields.
+
+    Redis credentials go through :func:`write_redis_env`. A ``SecretStr`` must
+    not be stringified, and an empty username or password must not be exported.
+    """
     env = os.environ.copy()
     for spec in ENV_SPECS:
+        if spec.field_name in {"redis_url", "redis_username", "redis_password"}:
+            continue
         value = getattr(settings, spec.field_name)
         if value is None:
             env.pop(spec.env_name, None)
@@ -192,6 +198,7 @@ def _child_env(settings: Settings) -> dict[str, str]:
             env[spec.env_name] = "true" if value else "false"
         else:
             env[spec.env_name] = str(value)
+    write_redis_env(env, settings)
     # The pool arms PR_SET_PDEATHSIG so it exits with this server.
     env["FINANCE_CONTEXT_EMBEDDED_WORKER"] = "1"
     return env

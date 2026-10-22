@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
 
 from finance_context.api.errors import ApiError
-from finance_context.api.etag import cached_json, etag_matches, not_modified, strong_etag
+from finance_context.api.etag import (
+    CACHE_CONTROL,
+    cached_json,
+    etag_matches,
+    not_modified,
+    strong_etag,
+)
 from finance_context.api.http import (
     _content_sha256,
     _ctx,
@@ -18,6 +23,7 @@ from finance_context.api.http import (
 )
 from finance_context.api.routes.jobs import _load_meta
 from finance_context.api.routes.trace import _precedents
+from finance_context.api.threads import run_blocking
 from finance_context.context.catalog import build_catalog
 from finance_context.context.observations import build_observations
 from finance_context.context.summary import build_summary
@@ -31,6 +37,22 @@ router = APIRouter()
 
 _NOT_MODIFIED = {304: {"description": "Not modified"}}
 _OWN_LABEL = "Case-insensitive substring of the row's own label."
+
+
+def _stat_head(etag: str) -> Response:
+    """HEAD answers from the file stat. It does not build a projection."""
+    return Response(
+        status_code=200,
+        media_type="application/json",
+        headers={"ETag": etag, "Cache-Control": CACHE_CONTROL},
+    )
+
+
+def _not_modified_or_none(request: Request, etag: str) -> Response | None:
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return not_modified(etag)
+    return None
+
 
 @router.get(
     "/v1/context-jobs/{job_id}/catalog",
@@ -46,14 +68,39 @@ async def get_catalog(
     limit: Annotated[int | None, Query(ge=1, le=10000)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> Response:
+    ctx = _ctx(request)
+    return await run_blocking(
+        ctx,
+        _catalog,
+        request,
+        job_id,
+        q,
+        sheet,
+        limit,
+        offset,
+        request.method == "HEAD",
+    )
+
+
+def _catalog(
+    request: Request,
+    job_id: str,
+    q: str | None,
+    sheet: str | None,
+    limit: int | None,
+    offset: int,
+    head: bool,
+) -> Response:
     path = _require_artifact(request, job_id, "context.json")
     etag = strong_etag(_schema_id(CatalogDocument), _content_sha256(path.parent), path)
-    if etag_matches(request.headers.get("if-none-match"), etag):
-        return not_modified(etag)
-    payload = await asyncio.to_thread(_read_json, path)
+    cached = _not_modified_or_none(request, etag)
+    if cached is not None:
+        return cached
+    if head:
+        return _stat_head(etag)
+    payload = _read_json(path)
     context = ContextDocument.model_validate(payload)
-    doc = await asyncio.to_thread(
-        build_catalog,
+    doc = build_catalog(
         context,
         q=q,
         sheet=sheet,
@@ -79,6 +126,11 @@ router.add_api_route(
     responses={**_NOT_MODIFIED, **_errors(404, 409)},
 )
 async def get_summary(request: Request, job_id: str) -> Response:
+    ctx = _ctx(request)
+    return await run_blocking(ctx, _summary, request, job_id, request.method == "HEAD")
+
+
+def _summary(request: Request, job_id: str, head: bool) -> Response:
     context_path = _require_artifact(request, job_id, "context.json")
     graph_path = _require_artifact(request, job_id, "graph.json")
     dest = context_path.parent
@@ -88,12 +140,14 @@ async def get_summary(request: Request, job_id: str) -> Response:
         context_path,
         graph_path,
     )
-    if etag_matches(request.headers.get("if-none-match"), etag):
-        return not_modified(etag)
-    context_payload = await asyncio.to_thread(_read_json, context_path)
-    graph_payload = await asyncio.to_thread(_read_json, graph_path)
-    doc = await asyncio.to_thread(
-        build_summary,
+    cached = _not_modified_or_none(request, etag)
+    if cached is not None:
+        return cached
+    if head:
+        return _stat_head(etag)
+    context_payload = _read_json(context_path)
+    graph_payload = _read_json(graph_path)
+    doc = build_summary(
         context_payload,
         graph_payload,
         meta=_load_meta(dest),
@@ -125,6 +179,31 @@ async def get_observations(
     precedent_depth: Annotated[int, Query(ge=0, le=3)] = 0,
     limit: Annotated[int, Query(ge=1, le=48)] = 24,
 ) -> Response:
+    ctx = _ctx(request)
+    return await run_blocking(
+        ctx,
+        _observations,
+        request,
+        job_id,
+        row_key,
+        q,
+        period_id,
+        precedent_depth,
+        limit,
+        request.method == "HEAD",
+    )
+
+
+def _observations(
+    request: Request,
+    job_id: str,
+    row_key: list[str] | None,
+    q: str | None,
+    period_id: list[str] | None,
+    precedent_depth: int,
+    limit: int,
+    head: bool,
+) -> Response:
     context_path = _require_artifact(request, job_id, "context.json")
     graph_path = _require_artifact(request, job_id, "graph.json")
     if not (row_key or (q and q.strip())):
@@ -136,10 +215,13 @@ async def get_observations(
         context_path,
         graph_path,
     )
-    if etag_matches(request.headers.get("if-none-match"), etag):
-        return not_modified(etag)
-    context_payload = await asyncio.to_thread(_read_json, context_path)
-    graph_payload = await asyncio.to_thread(_read_json, graph_path)
+    cached = _not_modified_or_none(request, etag)
+    if cached is not None:
+        return cached
+    if head:
+        return _stat_head(etag)
+    context_payload = _read_json(context_path)
+    graph_payload = _read_json(graph_path)
     context = ContextDocument.model_validate(context_payload)
     raw_links = graph_payload.get("links") or []
     links = [
@@ -148,8 +230,7 @@ async def get_observations(
         if isinstance(raw_links, list) and isinstance(item, dict)
     ]
     lookup = _precedents(dest, _ctx(request).store.shared_dir(job_id))
-    doc = await asyncio.to_thread(
-        build_observations,
+    doc = build_observations(
         context,
         links,
         row_keys=row_key,

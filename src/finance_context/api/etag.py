@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 
 CACHE_CONTROL = "private, no-cache"
 
@@ -38,8 +39,26 @@ def etag_matches(header: str | None, etag: str) -> bool:
     return False
 
 
-def cached_json(body: dict, etag: str) -> JSONResponse:
-    return JSONResponse(body, headers={"ETag": etag, "Cache-Control": CACHE_CONTROL})
+def json_bytes(body: object) -> bytes:
+    """The same encoding as Starlette's JSONResponse, done by the caller.
+
+    Slice and trace routes call this from a worker thread so ``json.dumps``
+    does not run on the event loop.
+    """
+    return json.dumps(
+        body,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def cached_json(body: dict, etag: str) -> Response:
+    return Response(
+        content=json_bytes(body),
+        media_type="application/json",
+        headers={"ETag": etag, "Cache-Control": CACHE_CONTROL},
+    )
 
 
 def not_modified(etag: str) -> Response:

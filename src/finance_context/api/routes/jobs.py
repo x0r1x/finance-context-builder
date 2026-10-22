@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import asyncio
+import errno
 import json
 import logging
+import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, mkstemp
 from typing import Annotated
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
@@ -21,6 +23,7 @@ from finance_context.api.http import (
 )
 from finance_context.api.schemas import HealthBody, JobBody, JobListItem, ReadyBody
 from finance_context.api.state import AppContext
+from finance_context.api.threads import run_blocking
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.jobs import list_session_jobs
@@ -49,6 +52,7 @@ router = APIRouter()
 
 @router.get("/healthz", response_model=HealthBody, summary="Process is up")
 async def healthz() -> dict[str, str]:
+    # Async and I/O-free so a full thread pool cannot fail liveness.
     return {"status": "ok"}
 
 
@@ -61,19 +65,22 @@ async def healthz() -> dict[str, str]:
 async def readyz(request: Request) -> JSONResponse:
     ctx = _ctx(request)
     settings = ctx.settings
-    writable = await asyncio.to_thread(_data_dir_writable, settings.data_dir)
-    try:
-        jobs = await asyncio.to_thread(ctx.queue.session_inflight, settings.session_id)
-    except QueueUnavailable:
-        jobs = 0
+    # A fresh cache is memory only. The probe runs on a cache miss.
+    cached = _cached_ready(request, settings.readyz_cache_ttl_sec)
+    if cached is None:
+        ready, jobs = await run_blocking(ctx, _probe_ready, ctx)
+        cached = _ReadyCache(at=time.monotonic(), ready=ready, jobs=jobs)
+        request.app.state.ready_cache = cached
     # None: this process is not supervising a worker (tests, or EMBEDDED_WORKER=false).
-    # False: the child is down, including the restart backoff. That is not ready.
+    # False: the child is down, including the restart backoff. The poll is not
+    # part of the Redis and disk cache, so a dead child is not ready for the
+    # rest of READYZ_CACHE_TTL_SEC.
     worker_up = embedded_worker_ready()
-    ready = writable and worker_up is not False
+    ready = cached.ready and worker_up is not False
     body = {
         "status": "ready" if ready else "unavailable",
         "queue": settings.queue_name,
-        "jobs": jobs,
+        "jobs": cached.jobs,
     }
     return JSONResponse(body, status_code=200 if ready else 503)
 
@@ -98,18 +105,122 @@ async def list_jobs(
     status: _JobStatusQuery = None,
     q: _JobQuery = None,
 ) -> list[dict[str, str | None]]:
-    store = _ctx(request).store
-    jobs_root = store.dest_dir("_").parent
-    return await asyncio.to_thread(list_session_jobs, jobs_root, status=status, q=q)
+    ctx = _ctx(request)
+    return await run_blocking(ctx, _list_jobs, ctx, status, q)
+
+
+@dataclass
+class _ReadyCache:
+    at: float
+    ready: bool
+    jobs: int
+
+
+def _cached_ready(request: Request, ttl: float) -> _ReadyCache | None:
+    cached = getattr(request.app.state, "ready_cache", None)
+    if not isinstance(cached, _ReadyCache):
+        return None
+    if time.monotonic() - cached.at >= ttl:
+        return None
+    return cached
+
+
+def _list_jobs(
+    ctx: AppContext,
+    status: JobStatus | None,
+    q: str | None,
+) -> list[dict[str, str | None]]:
+    jobs_root = ctx.store.dest_dir("_").parent
+    return list_session_jobs(jobs_root, status=status, q=q)
+
+
+def _probe_ready(ctx: AppContext) -> tuple[bool, int]:
+    """DATA_DIR writability and a Redis ping.
+
+    The usual probe leaves no directory entry. A filesystem that rejects
+    ``O_TMPFILE`` creates a short-lived ``.ready-`` file and unlinks it.
+    ``jobs`` is this session's inflight count, or 0 when Redis does not answer.
+    Ready requires both checks.
+    """
+    writable = _data_dir_writable(ctx.settings.data_dir)
+    try:
+        redis_ok = ctx.queue.health()
+        jobs = ctx.queue.session_inflight(ctx.settings.session_id) if redis_ok else 0
+    except QueueUnavailable:
+        redis_ok = False
+        jobs = 0
+    return writable and redis_ok, jobs
+
+
+# Kernels and filesystems that do not implement O_TMPFILE. A real write
+# failure (ENOSPC, EACCES, EROFS) is not in this set.
+_TMPFILE_UNSUPPORTED = frozenset(
+    {
+        errno.EINVAL,
+        errno.EISDIR,
+        errno.ENOSYS,
+        errno.ENOTSUP,
+        errno.EOPNOTSUPP,
+    }
+)
 
 
 def _data_dir_writable(path: Path) -> bool:
+    """True when ``path`` is a directory the process can create a file in.
+
+    ``mkdir`` on an existing directory does not add a file. A path that is
+    already a file fails here. The probe opens an unnamed inode with
+    ``O_TMPFILE`` and writes one byte, so a full disk is not reported as
+    writable and the scrape leaves no name in the directory. Filesystems
+    that reject the flag create a short-lived ``.ready-`` file, write one
+    byte, and unlink it.
+    """
     try:
         path.mkdir(parents=True, exist_ok=True)
-        with NamedTemporaryFile(dir=path, prefix=".ready-", delete=True):
-            return True
     except OSError:
         return False
+    try:
+        if not path.is_dir():
+            return False
+    except OSError:
+        return False
+    tmpfile = getattr(os, "O_TMPFILE", 0)
+    if tmpfile:
+        try:
+            fd = os.open(path, tmpfile | os.O_WRONLY, 0o600)
+        except OSError as exc:
+            if exc.errno not in _TMPFILE_UNSUPPORTED:
+                return False
+        else:
+            try:
+                os.write(fd, b"x")
+            except OSError:
+                return False
+            finally:
+                os.close(fd)
+            return True
+    return _named_write_probe(path)
+
+
+def _named_write_probe(path: Path) -> bool:
+    """Create, write, and unlink a ``.ready-`` file. Used only without ``O_TMPFILE``."""
+    try:
+        fd, probe = mkstemp(prefix=".ready-", dir=path)
+    except OSError:
+        return False
+    try:
+        os.write(fd, b"x")
+    except OSError:
+        return False
+    finally:
+        try:
+            os.close(fd)
+        finally:
+            try:
+                os.unlink(probe)
+            except OSError:
+                return False
+    return True
 
 
 @router.post(
@@ -128,13 +239,12 @@ async def post_job(
         raise ContextError("empty_file")
     filename = Path(file.filename or "upload.xlsx").name
     data = await file.read()
-    await asyncio.to_thread(
-        _validate_upload, filename, data, ctx.max_upload_bytes, ctx.pipeline.converter
+    await run_blocking(
+        ctx, _validate_upload, filename, data, ctx.max_upload_bytes, ctx.pipeline.converter
     )
-    digest = await asyncio.to_thread(sha256_bytes, data)
-    job_id = job_id_for(digest)
+    digest, job_id = await run_blocking(ctx, _digest_job, data)
     # Fsync, the publisher hash, and the enqueue share one worker thread.
-    body = await asyncio.to_thread(_accept_upload, ctx, filename, data, digest, job_id)
+    body = await run_blocking(ctx, _accept_upload, ctx, filename, data, digest, job_id)
     return JSONResponse(body, status_code=202)
 
 
@@ -166,7 +276,13 @@ def _disk_generation(meta: dict | None) -> int:
         return 0
 
 
+def _digest_job(data: bytes) -> tuple[str, str]:
+    digest = sha256_bytes(data)
+    return digest, job_id_for(digest)
+
+
 def _load_meta(dest: Path) -> dict | None:
+    # meta.json is published with os.replace, so a reader does not take a flock.
     meta_path = dest / "meta.json"
     if not meta_path.is_file():
         return None
@@ -531,9 +647,9 @@ def _ready_meta(dest: Path) -> dict | None:
 async def get_job(request: Request, job_id: str) -> JSONResponse:
     _check_job_id(job_id)
     ctx = _ctx(request)
-    # Redis and the job directory stay off the event loop. A slow Redis must
-    # not stall readyz or every other request on this process.
-    meta = await asyncio.to_thread(_read_job, ctx, job_id)
+    # meta.json is read without a flock. The run lock, the horse lock, and
+    # every RQ call inside _read_job use the API thread limiter.
+    meta = await run_blocking(ctx, _read_job, ctx, job_id)
     if meta is None:
         raise ApiError(404, "not_found")
     # A missing meta.json during a live run is still working, same as 202 on POST.

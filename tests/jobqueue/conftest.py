@@ -5,9 +5,9 @@ from collections.abc import Iterator
 from urllib.parse import urlsplit, urlunsplit
 
 import pytest
-from redis import Redis
 from redis.exceptions import RedisError
 
+from finance_context.jobqueue.queue import redis_client
 from finance_context.settings import Settings
 
 _LOCAL = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -33,7 +33,11 @@ def local_test_redis_url() -> str:
 @pytest.fixture
 def redis_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
     url = local_test_redis_url()
-    client = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+    client = redis_client(
+        Settings(redis_url=url, redis_username="", redis_password=None, _env_file=None),
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
     try:
         try:
             client.ping()
@@ -41,6 +45,8 @@ def redis_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
             pytest.fail(f"Redis is required for queue tests ({url}): {exc}")
         client.flushdb()
         monkeypatch.setenv("REDIS_URL", url)
+        monkeypatch.delenv("REDIS_USERNAME", raising=False)
+        monkeypatch.delenv("REDIS_PASSWORD", raising=False)
         yield Settings(_env_file=None)
     finally:
         try:

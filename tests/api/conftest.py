@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -13,13 +14,62 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from redis import Redis
 from redis.exceptions import RedisError
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from tests.jobqueue.conftest import local_test_redis_url
 
 from finance_context.api.app import create_app
-from finance_context.settings import Settings
+from finance_context.jobqueue.queue import redis_client
+from finance_context.settings import Settings, write_redis_env
+
+# An 8s lock on the loop must fail the suite. AnyIO's portal has been seen
+# spending about 0.27s inside one callback while it starts a worker thread,
+# so the debug threshold sits above that noise and far below the lock.
+# test_get_job_does_not_block_loop keeps its own 100ms bound for /healthz.
+_SLOW_CALLBACK_SEC = 0.5
+
+
+class _SlowCallbackTrap(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        if message.startswith("Executing ") and " took " in message:
+            self.messages.append(message)
+
+
+@pytest.fixture(autouse=True)
+def _asyncio_debug(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run API clients with asyncio debug mode and fail on a slow callback."""
+    trap = _SlowCallbackTrap()
+    logger = logging.getLogger("asyncio")
+    logger.addHandler(trap)
+    original = TestClient.__init__
+
+    def _init(self: TestClient, *args: object, **kwargs: object) -> None:
+        options = dict(kwargs.get("backend_options") or {})
+        previous = options.get("loop_factory")
+
+        def _factory() -> asyncio.AbstractEventLoop:
+            loop = previous() if previous is not None else asyncio.new_event_loop()
+            loop.set_debug(True)
+            loop.slow_callback_duration = _SLOW_CALLBACK_SEC
+            return loop
+
+        options["debug"] = True
+        options["loop_factory"] = _factory
+        kwargs["backend_options"] = options
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(TestClient, "__init__", _init)
+    try:
+        yield
+    finally:
+        logger.removeHandler(trap)
+        if trap.messages:
+            pytest.fail("slow asyncio callback on the event loop:\n" + "\n".join(trap.messages))
 
 
 def _spawn_worker(settings: Settings) -> subprocess.Popen[bytes]:
@@ -30,7 +80,7 @@ def _spawn_worker(settings: Settings) -> subprocess.Popen[bytes]:
     env = os.environ.copy()
     env["DATA_DIR"] = str(settings.data_dir)
     env["SESSION_ID"] = settings.session_id
-    env["REDIS_URL"] = settings.redis_url
+    write_redis_env(env, settings)
     env["QUEUE_NAME"] = settings.queue_name
     env["MAX_CONCURRENT_JOBS"] = str(settings.max_concurrent_jobs)
     env["JOB_TIMEOUT_SEC"] = str(settings.job_timeout_sec)
@@ -157,7 +207,13 @@ def _queue_redis(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """API tests share database 15. A missing Redis fails the test."""
     url = local_test_redis_url()
     monkeypatch.setenv("REDIS_URL", url)
-    client = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+    monkeypatch.delenv("REDIS_USERNAME", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    client = redis_client(
+        Settings(redis_url=url, redis_username="", redis_password=None, _env_file=None),
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
     try:
         try:
             client.ping()

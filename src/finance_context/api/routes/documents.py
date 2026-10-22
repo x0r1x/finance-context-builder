@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from finance_context.api.http import _LOGGER, _MARKDOWN, _errors, _require_artifact
+from finance_context.api.http import _LOGGER, _MARKDOWN, _ctx, _errors, _require_artifact
+from finance_context.api.threads import run_blocking
 from finance_context.graph.models import GraphDocument
 from finance_context.models.context import ContextDocument
 from finance_context.observability import log_event
 from finance_context.render.markdown import refresh_context_markdown
 
 router = APIRouter()
+
 
 @router.get(
     "/v1/context-jobs/{job_id}/context.json",
@@ -21,7 +22,8 @@ router = APIRouter()
     responses=_errors(404, 409),
 )
 async def get_context_json(request: Request, job_id: str) -> FileResponse:
-    path = _require_artifact(request, job_id, "context.json")
+    ctx = _ctx(request)
+    path = await run_blocking(ctx, _require_artifact, request, job_id, "context.json")
     return FileResponse(path, media_type="application/json")
 
 
@@ -32,8 +34,9 @@ async def get_context_json(request: Request, job_id: str) -> FileResponse:
     responses={200: _MARKDOWN, **_errors(404, 409)},
 )
 async def get_context_md(request: Request, job_id: str) -> FileResponse:
-    path = _require_artifact(request, job_id, "context.md")
-    if await asyncio.to_thread(refresh_context_markdown, path.parent):
+    ctx = _ctx(request)
+    path = await run_blocking(ctx, _require_artifact, request, job_id, "context.md")
+    if await run_blocking(ctx, refresh_context_markdown, path.parent):
         log_event(
             _LOGGER,
             logging.INFO,
@@ -51,7 +54,8 @@ async def get_context_md(request: Request, job_id: str) -> FileResponse:
     responses=_errors(404, 409),
 )
 async def get_graph_json(request: Request, job_id: str) -> FileResponse:
-    path = _require_artifact(request, job_id, "graph.json")
+    ctx = _ctx(request)
+    path = await run_blocking(ctx, _require_artifact, request, job_id, "graph.json")
     return FileResponse(path, media_type="application/json")
 
 
@@ -62,5 +66,6 @@ async def get_graph_json(request: Request, job_id: str) -> FileResponse:
     responses={200: _MARKDOWN, **_errors(404, 409)},
 )
 async def get_graph_md(request: Request, job_id: str) -> FileResponse:
-    path = _require_artifact(request, job_id, "graph.md")
+    ctx = _ctx(request)
+    path = await run_blocking(ctx, _require_artifact, request, job_id, "graph.md")
     return FileResponse(path, media_type="text/markdown")
