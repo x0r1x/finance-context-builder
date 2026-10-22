@@ -2,6 +2,9 @@
 # Run one API Deployment per SESSION_ID (change metadata.name, the label,
 # and SESSION_ID). They share this PVC. Do not put DATA_DIR on NFS or RWX.
 # Label the node first: finance-context/storage=local
+# The storage label can match more than one node. Every pod that mounts the
+# data claim must also pod-affinity the worker, so the scheduler cannot place
+# the second mount on a different node and leave it Pending.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -115,6 +118,12 @@ spec:
                     operator: In
                     values:
                       - local
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: finance-context-worker
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: api
           image: finance-context-builder:local

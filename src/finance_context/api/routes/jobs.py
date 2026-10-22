@@ -109,7 +109,7 @@ def _data_dir_writable(path: Path) -> bool:
     status_code=202,
     response_model=JobBody,
     summary="Upload a workbook and start or reuse its job",
-    responses=_errors(400, 413, 422, 429, 503),
+    responses=_errors(400, 409, 413, 422, 429, 503),
 )
 async def post_job(
     request: Request,
@@ -174,6 +174,10 @@ def _retry_after(ctx: AppContext) -> dict[str, str]:
     return {"Retry-After": str(ctx.settings.job_retry_after_sec)}
 
 
+class _JobStillRunning(Exception):
+    """The previous id is still in flight. Do not enqueue over it."""
+
+
 def _accept_upload(
     ctx: AppContext,
     filename: str,
@@ -181,7 +185,12 @@ def _accept_upload(
     digest: str,
     job_id: str,
 ) -> dict[str, object]:
-    """Fsync the book, hash the publisher, and enqueue. One thread, one lock."""
+    """Fsync the book, hash the publisher, and enqueue. One thread.
+
+    Dedup and stop run before ``dest/.lock``. The pipeline child holds that
+    lock for the whole run, so a blocking acquire would wait until the book
+    finished and could neither dedup nor cancel.
+    """
     dest = ctx.store.dest_dir(job_id)
     shared = ctx.store.shared_dir(job_id)
     dest.mkdir(parents=True, exist_ok=True)
@@ -193,14 +202,99 @@ def _accept_upload(
     if not owner_path.exists():
         write_json(owner_path, {"content_sha256": digest, "source_filename": filename})
     try:
-        with file_lock(dest / ".lock"):
+        early = _inflight_response(ctx, job_id, dest)
+        if early is not None:
+            return early
+        with file_lock(dest / ".lock", blocking=False) as locked:
+            if not locked or run_lock_busy(dest):
+                return _dedup(ctx, job_id, dest)
             return _enqueue_or_reuse(ctx, filename, digest, job_id, dest, shared)
+    except _JobStillRunning as exc:
+        raise ApiError(
+            409,
+            "job_still_running",
+            headers=_retry_after(ctx),
+        ) from exc
     except QueueUnavailable as exc:
         raise ApiError(
             503,
             "queue_unavailable",
             headers=_retry_after(ctx),
         ) from exc
+
+
+def _inflight_response(ctx: AppContext, job_id: str, dest: Path) -> dict[str, object] | None:
+    """Return the current job, or None when the caller may enqueue.
+
+    A ``started`` hash with a free run lock is abandoned after one recheck:
+    the worker that would run ``on_horse_killed`` is already gone, and RQ
+    keeps the hash until a later maintenance pass.
+    """
+    settings = ctx.settings
+    rq_id = rq_job_id(settings.session_id, job_id)
+    status = ctx.queue.status(rq_id)
+    stored = _load_meta(dest)
+    if _abandoned_started(ctx, rq_id, dest, stored, status):
+        return None
+    if not _still_inflight(status, dest):
+        return None
+    if not publisher_changed(stored):
+        return _dedup(ctx, job_id, dest)
+    ctx.queue.request_stop(rq_id)
+    if not _wait_until_clear(ctx, rq_id, dest):
+        raise _JobStillRunning
+    return None
+
+
+def _still_inflight(status: str | None, dest: Path) -> bool:
+    return status in INFLIGHT_STATUSES or run_lock_busy(dest)
+
+
+def _started_without_child(status: str | None, dest: Path, stored: dict | None) -> bool:
+    if status != "started" or run_lock_busy(dest):
+        return False
+    if not isinstance(stored, dict):
+        return False
+    return stored.get("status") in {"queued", "running"}
+
+
+def _abandoned_started(
+    ctx: AppContext,
+    rq_id: str,
+    dest: Path,
+    stored: dict | None,
+    status: str | None,
+) -> bool:
+    """True when ``started`` survives one recheck with nobody holding the run lock.
+
+    A normal exit releases the lock before the horse writes terminal meta and
+    RQ leaves ``started``. The pause is ``JOB_PARENT_WATCH_INTERVAL_SEC``.
+    Redis down on the recheck is not abandoned.
+    """
+    if not _started_without_child(status, dest, stored):
+        return False
+    time.sleep(ctx.settings.job_parent_watch_interval_sec)
+    try:
+        again = ctx.queue.status(rq_id)
+    except QueueUnavailable:
+        return False
+    return _started_without_child(again, dest, _load_meta(dest))
+
+
+def _dedup(ctx: AppContext, job_id: str, dest: Path) -> dict[str, object]:
+    stored = _load_meta(dest)
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "job_dedup",
+        "duplicate post dropped",
+        job_id=job_id,
+        session_id=ctx.settings.session_id,
+        queue=ctx.settings.queue_name,
+        rq_job_id=rq_job_id(ctx.settings.session_id, job_id),
+        status=None if stored is None else stored.get("status"),
+    )
+    return _running_body(job_id, dest)
 
 
 def _enqueue_or_reuse(
@@ -216,26 +310,14 @@ def _enqueue_or_reuse(
     rq_id = rq_job_id(settings.session_id, job_id)
     status = queue.status(rq_id)
     stored = _load_meta(dest)
-    inflight = status in INFLIGHT_STATUSES or run_lock_busy(dest)
-    if inflight and not publisher_changed(stored):
-        log_event(
-            _LOGGER,
-            logging.INFO,
-            "job_dedup",
-            "duplicate post dropped",
-            job_id=job_id,
-            session_id=settings.session_id,
-            queue=settings.queue_name,
-            rq_job_id=rq_id,
-            status=None if stored is None else stored.get("status"),
-        )
-        return _running_body(job_id, dest)
-    if inflight and publisher_changed(stored):
-        queue.request_stop(rq_id)
-        _wait_until_clear(ctx, rq_id, dest)
-        queue.delete(rq_id)
-        status = None
-        stored = _load_meta(dest)
+    # Re-check under the lock. Do not wait here: the pipeline child needs
+    # this same lock, and a wait would deadlock a stop.
+    if run_lock_busy(dest) or (
+        status in INFLIGHT_STATUSES and not _started_without_child(status, dest, stored)
+    ):
+        if publisher_changed(stored):
+            raise _JobStillRunning
+        return _dedup(ctx, job_id, dest)
     ready = _ready_meta(dest)
     if ready is not None:
         log_event(
@@ -304,14 +386,20 @@ def _enqueue_or_reuse(
     return {"job_id": job_id, "status": "queued", "stage": "queued"}
 
 
-def _wait_until_clear(ctx: AppContext, rq_id: str, dest: Path) -> None:
-    """The old horse must leave before the same id is enqueued again."""
+def _wait_until_clear(ctx: AppContext, rq_id: str, dest: Path) -> bool:
+    """True when the id is gone and the run lock is free.
+
+    False when the grace expires and the id is still in flight. The caller
+    must not delete that id or enqueue another generation over it.
+    """
     settings = ctx.settings
     deadline = time.monotonic() + settings.job_terminate_grace_sec + settings.job_kill_grace_sec
-    while time.monotonic() < deadline:
+    while True:
         status = ctx.queue.status(rq_id)
         if status not in INFLIGHT_STATUSES and not run_lock_busy(dest):
-            return
+            return True
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(0.05)
 
 
@@ -320,11 +408,14 @@ def _queue_lost(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
         return False
     if run_lock_busy(dest):
         return False
+    rq_id = rq_job_id(ctx.settings.session_id, job_id)
     try:
-        status = ctx.queue.status(rq_job_id(ctx.settings.session_id, job_id))
+        status = ctx.queue.status(rq_id)
     except QueueUnavailable:
         return False
-    return status in LOST_STATUSES
+    if status in LOST_STATUSES:
+        return True
+    return _abandoned_started(ctx, rq_id, dest, meta, status)
 
 
 def _ready_meta(dest: Path) -> dict | None:

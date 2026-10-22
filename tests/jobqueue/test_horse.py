@@ -64,7 +64,7 @@ def test_oom_kill_zeroes_retries_and_writes_oom_killed(tmp_path: Path, monkeypat
     assert "publisher" not in meta
 
 
-def test_lost_horse_keeps_the_retry_and_writes_process_lost(
+def test_lost_horse_keeps_the_retry_and_leaves_meta_running(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(
@@ -75,12 +75,24 @@ def test_lost_horse_keeps_the_retry_and_writes_process_lost(
     on_horse_killed(job, 0, _wait_status(signal.SIGKILL), None)  # type: ignore[arg-type]
     assert job.retries_left == 1
     assert job.saved == 0
+    assert not (session_job_dir(tmp_path, _BOOK, "local") / "meta.json").exists()
+
+
+def test_exhausted_lost_horse_writes_process_lost(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "finance_context.jobqueue.jobs.cgroup_oom_kill_count",
+        lambda: 1,
+    )
+    job = _Job(_meta(tmp_path, before=1))
+    job.retries_left = 0
+    on_horse_killed(job, 0, _wait_status(signal.SIGKILL), None)  # type: ignore[arg-type]
+    assert job.retries_left == 0
     meta = json.loads((session_job_dir(tmp_path, _BOOK, "local") / "meta.json").read_text())
     assert meta["error"] == "process_lost"
     assert meta["generation"] == 2
 
 
-def test_sigterm_stays_process_lost_when_another_slot_was_oom_killed(
+def test_sigterm_with_a_retry_does_not_fail_when_another_slot_was_oom_killed(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(
@@ -91,8 +103,7 @@ def test_sigterm_stays_process_lost_when_another_slot_was_oom_killed(
     on_horse_killed(job, 0, _wait_status(signal.SIGTERM), None)  # type: ignore[arg-type]
     assert job.retries_left == 1
     assert job.saved == 0
-    meta = json.loads((session_job_dir(tmp_path, _BOOK, "local") / "meta.json").read_text())
-    assert meta["error"] == "process_lost"
+    assert not (session_job_dir(tmp_path, _BOOK, "local") / "meta.json").exists()
 
 
 def test_admission_returns_retry_on_the_same_call(monkeypatch) -> None:

@@ -130,10 +130,10 @@ def on_horse_killed(job: Job, retpid: int, ret_val: int, rusage: object) -> None
     RQ calls this from ``monitor_work_horse`` and then ``handle_job_failure``.
     ``ret_val`` is the ``os.wait4`` status. An OOM is that status reporting
     SIGKILL and the cgroup ``oom_kill`` counter moving; that zeroes
-    ``retries_left``. Any other death, including a counter that moved because
-    another slot was killed, stays ``process_lost`` and keeps the one
-    ``JOB_RETRY_ON_LOST`` retry. A stopped job does not come through here.
-    The same generation lets the retry's child replace ``process_lost``.
+    ``retries_left``. Any other death keeps the ``JOB_RETRY_ON_LOST`` retry
+    and leaves ``meta.json`` unchanged while ``retries_left`` is still
+    positive. ``process_lost`` is written only when that retry is already
+    spent. A stopped job does not come through here.
     """
     del retpid, rusage
     meta = job.meta if isinstance(getattr(job, "meta", None), dict) else {}
@@ -160,6 +160,23 @@ def on_horse_killed(job: Job, retpid: int, ret_val: int, rusage: object) -> None
             generation=meta.get("generation"),
             error_code="oom_killed",
             oom_kill=after,
+        )
+        return
+    remaining = getattr(job, "retries_left", None)
+    if isinstance(remaining, int) and remaining > 0:
+        # RQ requeues this same generation after the handler returns.
+        # A terminal process_lost here would show failed while that retry runs.
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "job_requeued",
+            "work horse killed: retry remains",
+            job_id=meta.get("book_job_id"),
+            session_id=meta.get("session_id"),
+            rq_job_id=getattr(job, "id", None),
+            generation=meta.get("generation"),
+            reason="worker_lost",
+            retry_in_sec=0,
         )
         return
     _mark_from_meta(meta, "process_lost")
