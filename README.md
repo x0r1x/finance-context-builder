@@ -45,7 +45,7 @@ Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If those docu
 
 ### HTTP API
 
-`POST` only enqueues. Redis has to be reachable, and `finance-context worker` has to be running in another terminal. The default `REDIS_URL` is `redis://redis:6379/0`, the Compose hostname. On the host, point both processes at a local Redis and the same `DATA_DIR`. Client scripts only call HTTP; they do not start or stop the server.
+`POST` only enqueues. Redis has to be reachable, and `finance-context worker` has to be running in another terminal. The default `REDIS_URL` is `redis://redis:6379/0`. For Compose, set `REDIS_URL` in `.env` (for example `redis://host.docker.internal:6379/0` when Redis is on the host). On the host, point both processes at a local Redis and the same `DATA_DIR`. Client scripts only call HTTP; they do not start or stop the server.
 
 ```bash
 REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context serve --host 127.0.0.1 --port 8080
@@ -135,18 +135,18 @@ At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2, on the worker po
 ## Docker
 
 ```bash
-cp .env.example .env   # optional
-docker compose up --build
+cp .env.example .env   # set REDIS_URL; Redis runs outside this Compose file
+docker compose -f deploy/docker-compose.yml up --build
 ```
 
-Leave Compose running. The API and the worker join the external `finance-stack` network (`docker network create finance-stack` once) and use its `redis` service. `REDIS_URL` defaults to `redis://redis:6379/0`. `docker compose --profile dev up --build` also starts a Redis in this repo (AOF every second, `noeviction`) on that same network. The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`. The API service is `mem_limit: 512m`. The worker service is `mem_limit: 4g`, `stop_grace_period: 3730s`, and its healthcheck is `finance-context worker --check`. At the default of two job slots that worker limit derives a 1536 MiB RSS cap per job. `DATA_DIR` has to be a local filesystem on one node. The API and the worker share flocks there, and startup refuses a network filesystem unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
+Leave Compose running. Run that command from the repo root. `deploy/docker-compose.yml` starts the API (`finance-context`) and the RQ worker (`finance-context worker`). Redis runs separately, for example in the user's finance-stack compose. Set `REDIS_URL` in `.env`, for example `redis://host.docker.internal:6379/0` (`host.docker.internal` is mapped in the compose file). The API is published only on `127.0.0.1:8080`. The shared book cache and session publications go to `./data` on the host. Compose mounts **`./data` only**, not `src/`. The API service is `mem_limit: 4g`. The worker is the same image with command `finance-context worker`, `DATA_DIR`, the `./data` volume, and that host mapping. `DATA_DIR` has to be a local filesystem on one node. The API and the worker share flocks there, and startup refuses a network filesystem unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
 
 The image runs as `app` (uid 1000) with `HOME=/app` and includes `libreoffice-calc-nogui`. A `.xls` upload converts inside the container. Conversion writes a temporary profile under the book directory, not into the image home. `XLS_CONVERT_TIMEOUT_SEC` (default 300) stays below `JOB_TIMEOUT_SEC` (default 3600) so a hung conversion fails the job before the server stops the process. `.env` can still set `SOFFICE_BIN` and `XLS_CONVERT_TIMEOUT_SEC`; Compose does not override them. `scripts/docker-xls-smoke.sh` checks that path against a real `.xls`. It needs Docker and is not part of `uv run pytest`.
 
 API container without Compose. The image command is `finance-context serve`:
 
 ```bash
-docker build -t finance-context-builder .
+docker build -f deploy/Dockerfile -t finance-context-builder .
 docker run --rm -v "$PWD/data:/app/data" --env-file .env -p 127.0.0.1:8080:8080 \
   --add-host=host.docker.internal:host-gateway finance-context-builder
 ```

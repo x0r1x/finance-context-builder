@@ -42,7 +42,7 @@ uv run finance-context build path/to/model.xlsx -o ./out
 
 ### HTTP API
 
-`POST` только ставит книгу в очередь. Redis должен быть доступен, а `finance-context worker` должен работать в другом терминале. `REDIS_URL` по умолчанию — `redis://redis:6379/0`, имя сервиса Compose. На хосте укажите обоим процессам локальный Redis и один и тот же `DATA_DIR`. Клиентские скрипты только вызывают HTTP; сервер они не запускают и не останавливают.
+`POST` только ставит книгу в очередь. Redis должен быть доступен, а `finance-context worker` должен работать в другом терминале. `REDIS_URL` по умолчанию — `redis://redis:6379/0`. Для Compose задайте `REDIS_URL` в `.env` (например `redis://host.docker.internal:6379/0`, если Redis на хосте). На хосте укажите обоим процессам локальный Redis и один и тот же `DATA_DIR`. Клиентские скрипты только вызывают HTTP; сервер они не запускают и не останавливают.
 
 ```bash
 REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context serve --host 127.0.0.1 --port 8080
@@ -132,18 +132,18 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 ## Docker
 
 ```bash
-cp .env.example .env   # необязательно
-docker compose up --build
+cp .env.example .env   # задайте REDIS_URL; Redis работает вне этого Compose-файла
+docker compose -f deploy/docker-compose.yml up --build
 ```
 
-Оставьте Compose запущенным. API и воркер подключаются к внешней сети `finance-stack` (один раз `docker network create finance-stack`) и используют её сервис `redis`. `REDIS_URL` по умолчанию `redis://redis:6379/0`. `docker compose --profile dev up --build` поднимает Redis из этого репозитория (AOF каждую секунду, `noeviction`) в той же сети. API опубликован только на `127.0.0.1:8080`. Общий кэш книг и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`. У API `mem_limit: 512m`. У воркера `mem_limit: 4g`, `stop_grace_period: 3730s`, healthcheck — `finance-context worker --check`. При двух слотах джоб из лимита воркера получается потолок RSS 1536 МиБ на джобу. `DATA_DIR` должен быть локальной файловой системой на одном узле. API и воркер делят flock на этом каталоге, и старт отказывается от сетевой ФС, пока `DATA_DIR_ALLOW_NETWORK_FS` не равен `true`.
+Оставьте Compose запущенным. Команду запускайте из корня репозитория. `deploy/docker-compose.yml` поднимает API (`finance-context`) и RQ-воркер (`finance-context worker`). Redis работает отдельно, например в compose пользователя finance-stack. Задайте `REDIS_URL` в `.env`, например `redis://host.docker.internal:6379/0` (`host.docker.internal` прописан в compose). API опубликован только на `127.0.0.1:8080`. Общий кэш книг и публикации сессии попадают в `./data` на хосте. Compose монтирует **только `./data`**, не `src/`. У API `mem_limit: 4g`. Воркер — тот же образ с командой `finance-context worker`, `DATA_DIR`, томом `./data` и той же записью host. `DATA_DIR` должен быть локальной файловой системой на одном узле. API и воркер делят flock на этом каталоге, и старт отказывается от сетевой ФС, пока `DATA_DIR_ALLOW_NETWORK_FS` не равен `true`.
 
 Образ работает от пользователя `app` (uid 1000) с `HOME=/app` и содержит `libreoffice-calc-nogui`. Загрузка `.xls` конвертируется внутри контейнера. Конвертация пишет временный профиль в каталог книги, а не в домашний каталог образа. `XLS_CONVERT_TIMEOUT_SEC` (по умолчанию 300) меньше `JOB_TIMEOUT_SEC` (по умолчанию 3600), поэтому зависшая конвертация роняет джобу раньше, чем сервер остановит процесс. `.env` по-прежнему может задать `SOFFICE_BIN` и `XLS_CONVERT_TIMEOUT_SEC`; Compose их не перезаписывает. `scripts/docker-xls-smoke.sh` проверяет этот путь на настоящем `.xls`. Скрипту нужен Docker, и он не входит в `uv run pytest`.
 
 Контейнер API без Compose. Команда образа — `finance-context serve`:
 
 ```bash
-docker build -t finance-context-builder .
+docker build -f deploy/Dockerfile -t finance-context-builder .
 docker run --rm -v "$PWD/data:/app/data" --env-file .env -p 127.0.0.1:8080:8080 \
   --add-host=host.docker.internal:host-gateway finance-context-builder
 ```
