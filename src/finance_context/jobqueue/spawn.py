@@ -113,22 +113,35 @@ def write_horse_owner(dest: Path, generation: int) -> None:
     write_json(dest / HORSE_FILE, {"pid": os.getpid(), "generation": generation})
 
 
-def horse_lock_held(dest: Path) -> bool:
-    """True when a horse holds ``.horse.lock``. A missing file is free."""
+def horse_lock_held(dest: Path) -> bool | None:
+    """True when a horse holds ``.horse.lock``.
+
+    False when the file is missing or the lock is free. None when the file
+    cannot be inspected. An access error is not a dead horse.
+    """
     path = dest / HORSE_LOCK
-    if not path.is_file():
+    try:
+        exists = path.is_file()
+    except OSError:
+        return None
+    if not exists:
         return False
     try:
         handle = path.open("rb")
+    except FileNotFoundError:
+        return False
     except OSError:
-        return False
+        return None
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        return True
-    else:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        return False
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        except OSError:
+            return None
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return False
     finally:
         handle.close()
 
@@ -137,7 +150,8 @@ def horse_owner_alive(dest: Path, generation: int) -> bool | None:
     """True when this generation's horse holds ``.horse.lock``.
 
     False when the record exists and the lock is free: the horse exited.
-    None when this generation has no record yet. That is not a dead worker.
+    None when this generation has no record yet, or the lock file cannot be
+    inspected. That is not a dead worker.
     """
     path = dest / HORSE_FILE
     if not path.is_file():

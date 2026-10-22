@@ -52,7 +52,7 @@ Markdown пишет **полноту контента** как `1.00 (rows/rows 
 | --- | --- |
 | `queued` / `running` | Ещё считается |
 | `succeeded` | Документы готовы |
-| `failed` | Ошибка пайплайна, процесс книги остановлен серверным `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`), или GET увидел, что джобы RQ нет (`error` = `queue_lost`). Годного context нет |
+| `failed` | Ошибка пайплайна, процесс книги остановлен серверным `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`), воркер умер (`error` = `process_lost`) или его убила нехватка памяти (`error` = `oom_killed`), или GET увидел, что джобы RQ нет (`error` = `queue_lost`). Годного context нет |
 
 Старые снимки могут ещё говорить `needs_input` или `degraded`. Такая джоба уже закончена, те же четыре документа отдаются.
 

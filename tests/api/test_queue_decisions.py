@@ -15,7 +15,7 @@ from finance_context.api.errors import ApiError
 from finance_context.api.routes.jobs import _accept_upload, _queue_lost, _read_job
 from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline
-from finance_context.jobqueue.spawn import HORSE_FILE, HORSE_LOCK
+from finance_context.jobqueue.spawn import HORSE_FILE, HORSE_LOCK, horse_owner_alive
 from finance_context.settings import Settings
 from finance_context.store.fs import write_json
 from finance_context.store.paths import session_job_dir
@@ -197,6 +197,28 @@ def test_get_marks_lost_when_the_enqueue_lock_is_free(tmp_path: Path) -> None:
     assert body["error"] == "queue_lost"
     stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
     assert stored["error"] == "queue_lost"
+
+
+def test_unreadable_horse_lock_is_not_lost(tmp_path: Path, monkeypatch) -> None:
+    """An access error on ``.horse.lock`` is not a dead horse."""
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(ctx, status="queued", stage="queued")
+    _horse(dest, _dead_pid())
+    (dest / HORSE_LOCK).write_bytes(b"")
+    real_open = Path.open
+
+    def _open(self: Path, *args: object, **kwargs: object):
+        if self.name == HORSE_LOCK:
+            raise PermissionError(self)
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _open)
+    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert horse_owner_alive(dest, 1) is None
+    assert _queue_lost(ctx, _JOB, dest, meta) is False
+    disk = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert disk.get("error") != "queue_lost"
 
 
 def test_get_marks_a_started_job_with_a_free_run_lock_lost(tmp_path: Path) -> None:

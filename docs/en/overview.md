@@ -52,7 +52,7 @@ Markdown reports **content completeness** as `1.00 (rows/rows layout rows)`: eve
 | --- | --- |
 | `queued` / `running` | Still working |
 | `succeeded` | Documents are ready |
-| `failed` | Pipeline error, the book's process was stopped by the server `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`), or GET found the RQ job gone (`error` = `queue_lost`). No usable context |
+| `failed` | Pipeline error, the book's process was stopped by the server `JOB_TIMEOUT_SEC` (`error` = `TimeoutError`), the worker died (`error` = `process_lost`) or was OOM-killed (`error` = `oom_killed`), or GET found the RQ job gone (`error` = `queue_lost`). No usable context |
 
 Older snapshots may still say `needs_input` or `degraded`. Those jobs are finished, and the same four documents are served.
 

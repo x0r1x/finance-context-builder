@@ -45,10 +45,11 @@ Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If those docu
 
 ### HTTP API
 
-Keep this process running in its own terminal. Client scripts only call HTTP; they do not start or stop the server.
+`POST` only enqueues. Redis has to be reachable, and `finance-context worker` has to be running in another terminal. The default `REDIS_URL` is `redis://redis:6379/0`, the Compose hostname. On the host, point both processes at a local Redis and the same `DATA_DIR`. Client scripts only call HTTP; they do not start or stop the server.
 
 ```bash
-uv run finance-context serve --host 127.0.0.1 --port 8080
+REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context serve --host 127.0.0.1 --port 8080
+REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context worker
 ```
 
 Check:

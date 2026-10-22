@@ -42,10 +42,11 @@ uv run finance-context build path/to/model.xlsx -o ./out
 
 ### HTTP API
 
-Держите этот процесс в своём терминале. Клиентские скрипты только вызывают HTTP; сервер они не запускают и не останавливают.
+`POST` только ставит книгу в очередь. Redis должен быть доступен, а `finance-context worker` должен работать в другом терминале. `REDIS_URL` по умолчанию — `redis://redis:6379/0`, имя сервиса Compose. На хосте укажите обоим процессам локальный Redis и один и тот же `DATA_DIR`. Клиентские скрипты только вызывают HTTP; сервер они не запускают и не останавливают.
 
 ```bash
-uv run finance-context serve --host 127.0.0.1 --port 8080
+REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context serve --host 127.0.0.1 --port 8080
+REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context worker
 ```
 
 Проверка:
