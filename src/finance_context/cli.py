@@ -57,11 +57,11 @@ def build(
 ) -> None:
     """Parse an Excel workbook and write context and graph as JSON and Markdown."""
     settings = Settings(data_dir=data_dir)
+    configure_logging(level=settings.log_level, json_output=False)
     ensure_data_dir_local(
         settings.data_dir,
         allow_network=settings.data_dir_allow_network_fs,
     )
-    configure_logging(level=settings.log_level, json_output=False)
     data = source.read_bytes()
     digest = sha256_bytes(data)
     job_id = job_id_for(digest)

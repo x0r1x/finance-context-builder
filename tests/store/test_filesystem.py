@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 import pytest
 
 from finance_context.api.app import create_app
+from finance_context.cli import build
+from finance_context.observability import configure_logging
 from finance_context.settings import Settings
 from finance_context.store import filesystem
 from finance_context.store.filesystem import (
@@ -163,3 +166,79 @@ def test_create_app_allows_network_data_dir_when_configured(tmp_path: Path, monk
         _env_file=None,
     )
     create_app(settings)
+
+
+def _fresh_finance_logger() -> logging.Logger:
+    named = logging.getLogger("finance_context")
+    named.handlers.clear()
+    named.propagate = True
+    return named
+
+
+def test_undetected_filesystem_warning_is_one_json_line(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(filesystem, "probe_filesystem_kind", lambda _path: None)
+    root_seen: list[logging.LogRecord] = []
+    root_handler = logging.Handler()
+    root_handler.emit = root_seen.append  # type: ignore[method-assign]
+    logging.getLogger().addHandler(root_handler)
+    _fresh_finance_logger()
+    try:
+        create_app(
+            Settings(
+                data_dir=tmp_path,
+                data_dir_allow_network_fs=False,
+                log_json=True,
+                _env_file=None,
+            )
+        )
+    finally:
+        logging.getLogger().removeHandler(root_handler)
+    lines = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if "could not be detected" in line
+    ]
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["level"] == "WARNING"
+    assert payload["logger"] == "finance_context.store.filesystem"
+    assert "continuing" in payload["msg"]
+    assert not any("could not be detected" in record.getMessage() for record in root_seen)
+
+
+def test_build_configures_logging_before_the_filesystem_probe(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    order: list[str] = []
+
+    def configure(*args, **kwargs):
+        order.append("configure")
+        return configure_logging(*args, **kwargs)
+
+    def ensure(path, **kwargs):
+        order.append("probe")
+        return ensure_data_dir_local(path, kind_of=lambda _path: None, **kwargs)
+
+    monkeypatch.setattr("finance_context.cli.configure_logging", configure)
+    monkeypatch.setattr("finance_context.cli.ensure_data_dir_local", ensure)
+    monkeypatch.setattr(
+        "finance_context.cli.Settings",
+        lambda data_dir: Settings(
+            data_dir=data_dir,
+            data_dir_allow_network_fs=False,
+            _env_file=None,
+        ),
+    )
+    _fresh_finance_logger()
+    with pytest.raises(FileNotFoundError):
+        build(tmp_path / "missing.xlsx", data_dir=tmp_path / "data")
+    assert order == ["configure", "probe"]
+    warning = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if "could not be detected" in line
+    ]
+    assert len(warning) == 1
+    assert warning[0].startswith("WARNING finance_context.store.filesystem ")

@@ -27,13 +27,13 @@ _HTTP_LOGGER = logging.getLogger("finance_context.api.http")
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
+    configure_logging(level=settings.log_level, json_output=settings.log_json)
     ensure_data_dir_local(
         settings.data_dir,
         allow_network=settings.data_dir_allow_network_fs,
     )
     # Reject a SESSION_ID that would leave data/sessions before the server listens.
     session_jobs_root(settings.data_dir, settings.session_id)
-    configure_logging(level=settings.log_level, json_output=settings.log_json)
     store = DiskStore(settings.data_dir, session_id=settings.session_id)
     bus = MemoryJobBus()
     pipeline = Pipeline(settings)
