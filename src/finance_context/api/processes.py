@@ -129,8 +129,6 @@ class JobProcesses:
                 previous_arena = os.environ.get("MALLOC_ARENA_MAX")
                 if self._malloc_arena_max:
                     os.environ["MALLOC_ARENA_MAX"] = str(self._malloc_arena_max)
-                else:
-                    os.environ.pop("MALLOC_ARENA_MAX", None)
                 try:
                     proc.start()
                     started = True

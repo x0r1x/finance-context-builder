@@ -31,7 +31,7 @@ DEFAULT_RANGE_EXPAND_CAP = 2000
 DEFAULT_OOM_SCORE_ADJ = 1000
 # One parquet row group of this many rows. 0 keeps a single row group.
 DEFAULT_PARQUET_ROW_GROUP_ROWS = 65536
-# glibc arenas for a spawned job child. None leaves the process default.
+# glibc arenas for a spawned job child. None leaves an inherited value.
 DEFAULT_MALLOC_ARENA_MAX = 2
 
 
@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     graph_stream: bool = True
     # Arrow scan of indent and outline. An all-zero book skips the dict list.
     layout_columnar_facts: bool = True
-    # MALLOC_ARENA_MAX on the spawned job child. 0 or blank disables it.
+    # MALLOC_ARENA_MAX on the spawned job child. 0 or blank keeps an inherited value.
     job_malloc_arena_max: int | None = DEFAULT_MALLOC_ARENA_MAX
     # malloc_trim after each pipeline stage. A no-op where libc has no such function.
     job_malloc_trim: bool = True

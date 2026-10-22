@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import multiprocessing
+import os
 import time
 from pathlib import Path
 
@@ -192,6 +193,59 @@ def test_watch_interval_is_stored_without_a_fallback(tmp_path: Path) -> None:
         data_dir=tmp_path, bus=bus, timeout_sec=1, watch_interval_sec=float("nan")
     )
     assert math.isnan(untouched._watch_interval)
+
+
+_SPAWN = multiprocessing.get_context("spawn")
+
+
+def _write_malloc_arena(path: str) -> None:
+    value = os.environ.get("MALLOC_ARENA_MAX")
+    Path(path).write_text("" if value is None else value, encoding="utf-8")
+
+
+def _launch_recording_child(tmp_path: Path, monkeypatch, *, arena: int | None) -> str:
+    recorded = tmp_path / "arena.txt"
+
+    class _RecordingContext:
+        def Process(self, *, target, args, name):
+            del target, args, name
+            return _SPAWN.Process(target=_write_malloc_arena, args=(str(recorded),))
+
+    monkeypatch.setattr(
+        "finance_context.api.processes.multiprocessing.get_context",
+        lambda _method: _RecordingContext(),
+    )
+    bus, job_id, _generation, dest = _running_meta(tmp_path)
+    procs = JobProcesses(
+        data_dir=tmp_path, bus=bus, timeout_sec=30, malloc_arena_max=arena
+    )
+    assert procs.launch(job_id) is True
+    proc = procs._procs[job_id]
+    deadline = time.time() + 20
+    while time.time() < deadline and not recorded.is_file():
+        time.sleep(0.05)
+    proc.join(5)
+    assert recorded.is_file()
+    return recorded.read_text(encoding="utf-8")
+
+
+def test_disabled_arena_keeps_an_inherited_malloc_arena_max(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MALLOC_ARENA_MAX", "8")
+    seen = _launch_recording_child(tmp_path / "inherit", monkeypatch, arena=None)
+    assert seen == "8"
+    assert os.environ["MALLOC_ARENA_MAX"] == "8"
+
+    monkeypatch.setenv("MALLOC_ARENA_MAX", "8")
+    overridden = _launch_recording_child(tmp_path / "override", monkeypatch, arena=2)
+    assert overridden == "2"
+    assert os.environ["MALLOC_ARENA_MAX"] == "8"
+
+    monkeypatch.delenv("MALLOC_ARENA_MAX", raising=False)
+    unset = _launch_recording_child(tmp_path / "unset", monkeypatch, arena=None)
+    assert unset == ""
+    assert os.environ.get("MALLOC_ARENA_MAX") is None
 
 
 def test_mark_job_failed_keeps_a_terminal_snapshot(tmp_path: Path) -> None:
