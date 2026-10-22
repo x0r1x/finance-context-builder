@@ -1,110 +1,145 @@
-"""REDIS_USERNAME and REDIS_PASSWORD, separate from REDIS_URL."""
+"""REDIS_USERNAME and REDIS_PASSWORD, separate from REDIS_URL.
+
+ACL changes go through redis-py on the suite Redis (database 15). CI has that
+server and no redis-cli or redis-server binary. Each test restores the default
+user to nopass and deletes the ``app`` user before it returns.
+"""
 
 from __future__ import annotations
 
 import logging
-import subprocess
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 from redis import Redis
-from redis.exceptions import RedisError
+from redis.exceptions import AuthenticationError, RedisError
+from tests.jobqueue.conftest import local_test_redis_url
 
 from finance_context.api.app import create_app
 from finance_context.jobqueue.pool import _log_queue_config, serve_workers, worker_check
 from finance_context.jobqueue.queue import redis_client
 from finance_context.settings import Settings, write_redis_env
 
-_PORT = 6391
 _SECRET = "queue-secret"
-_URL = f"redis://127.0.0.1:{_PORT}/0"
 
 
-def _argv() -> list[str]:
-    return [
-        "redis-server",
-        "--port",
-        str(_PORT),
-        "--bind",
-        "127.0.0.1",
-        "--save",
-        "",
-        "--appendonly",
-        "no",
-        "--daemonize",
-        "yes",
-        "--protected-mode",
-        "yes",
-        "--dir",
-        "/tmp",
-        "--dbfilename",
-        "dump-6391.rdb",
-        "--user",
-        "default",
-        "on",
-        f">{_SECRET}",
-        "~*",
-        "&*",
-        "+@all",
-        "--user",
-        "app",
-        "on",
-        f">{_SECRET}",
-        "~*",
-        "&*",
-        "+@all",
-    ]
-
-
-def _shutdown() -> None:
-    subprocess.run(
-        ["redis-cli", "-p", str(_PORT), "--no-auth-warning", "-a", _SECRET, "SHUTDOWN", "NOSAVE"],
-        check=False,
-        capture_output=True,
+def _settings(
+    url: str,
+    *,
+    redis_username: str = "",
+    redis_password: SecretStr | None = None,
+) -> Settings:
+    return Settings(
+        redis_url=url,
+        redis_username=redis_username,
+        redis_password=redis_password,
+        _env_file=None,
     )
 
 
-@pytest.fixture(scope="module")
-def acl_redis() -> str:
-    _shutdown()
-    subprocess.run(_argv(), check=True)
-    deadline = time.monotonic() + 5
-    last: Exception | None = None
-    while time.monotonic() < deadline:
+def _userinfo(url: str, userinfo: str) -> str:
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = f":{parts.port}" if parts.port else ""
+    return urlunsplit((parts.scheme, f"{userinfo}@{host}{port}", parts.path, "", ""))
+
+
+def _grant(client: Redis, username: str, *, password: str | None) -> None:
+    common: dict[str, object] = {
+        "enabled": True,
+        "reset": True,
+        "categories": ["+@all"],
+        "keys": ["*"],
+        "channels": ["*"],
+    }
+    if password is None:
+        client.acl_setuser(username, nopass=True, **common)  # type: ignore[arg-type]
+        return
+    client.acl_setuser(username, passwords=[f"+{password}"], **common)  # type: ignore[arg-type]
+
+
+def _restore(client: Redis) -> None:
+    _grant(client, "default", password=None)
+    client.acl_deluser("app")
+
+
+def _open_admin(url: str) -> Redis:
+    client = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+    try:
+        client.ping()
+    except AuthenticationError:
+        client.close()
+        client = Redis.from_url(
+            url,
+            password=_SECRET,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        client.ping()
+        _restore(client)
+    return client
+
+
+@pytest.fixture
+def admin() -> Iterator[Redis]:
+    url = local_test_redis_url()
+    try:
+        client = _open_admin(url)
+    except RedisError as exc:
+        pytest.fail(f"Redis is required for auth tests ({url}): {exc}")
+    try:
+        yield client
+    finally:
         try:
-            client = Redis.from_url(_URL, password=_SECRET, socket_connect_timeout=0.5)
-            client.ping()
+            _restore(client)
+        finally:
             client.close()
-            break
-        except RedisError as exc:
-            last = exc
-            time.sleep(0.05)
-    else:
-        pytest.fail(f"ACL Redis on {_PORT} did not start: {last}")
-    yield _URL
-    _shutdown()
 
 
-def _settings(url: str, **overrides: object) -> Settings:
-    return Settings(redis_url=url, _env_file=None, **overrides)  # type: ignore[arg-type]
+@pytest.fixture
+def password_redis(admin: Redis) -> str:
+    _grant(admin, "default", password=_SECRET)
+    return local_test_redis_url()
+
+
+@pytest.fixture
+def app_user_redis(admin: Redis) -> str:
+    _grant(admin, "app", password=_SECRET)
+    return local_test_redis_url()
+
+
+def _command_has_auth(command: str) -> bool:
+    return "AUTH" in command.split()
+
+
+def _saw_ping(commands: list[str]) -> bool:
+    return any("PING" in command.split() for command in commands)
 
 
 def test_unset_credentials_pass_no_auth_kwargs() -> None:
-    settings = _settings("redis://127.0.0.1:6390/15")
-    url, kwargs = settings.redis_from_url_args()
-    assert url == "redis://127.0.0.1:6390/15"
+    url = "redis://host:6379/0"
+    settings = _settings(url)
+    resolved, kwargs = settings.redis_from_url_args()
+    assert resolved == url
     assert kwargs == {}
+    assert "username" not in kwargs
+    assert "password" not in kwargs
 
 
 def test_credentialless_url_sends_no_auth() -> None:
-    url = "redis://127.0.0.1:6390/15"
+    url = local_test_redis_url()
     commands: list[str] = []
     started = threading.Event()
-    watcher = Redis.from_url(url, socket_timeout=1)
+    failed: list[BaseException] = []
+    watcher = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=5)
 
     def _watch() -> None:
         try:
@@ -113,26 +148,28 @@ def test_credentialless_url_sends_no_auth() -> None:
                 while True:
                     item = monitor.next_command()
                     if item is not None:
-                        commands.append(item["command"])
-        except (RedisError, OSError, ValueError):
-            return
+                        commands.append(str(item["command"]))
+        except (RedisError, OSError, ValueError) as exc:
+            failed.append(exc)
 
     thread = threading.Thread(target=_watch, daemon=True)
     thread.start()
-    assert started.wait(2)
+    assert started.wait(5), failed
     client = redis_client(_settings(url), socket_connect_timeout=2, socket_timeout=2)
     assert client.ping() is True
     client.close()
-    time.sleep(0.2)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not _saw_ping(commands):
+        time.sleep(0.05)
     watcher.close()
     thread.join(timeout=2)
-    assert commands
-    assert not any(command == "AUTH" or command.startswith("AUTH ") for command in commands)
+    assert _saw_ping(commands), (commands, failed)
+    assert not any(_command_has_auth(command) for command in commands)
 
 
-def test_password_is_passed_and_overrides_url_userinfo(acl_redis: str) -> None:
+def test_password_is_passed_and_overrides_url_userinfo(password_redis: str) -> None:
     settings = _settings(
-        "redis://:wrong-pass@127.0.0.1:6391/0",
+        _userinfo(password_redis, ":wrong-pass"),
         redis_password=SecretStr(_SECRET),
     )
     url, kwargs = settings.redis_from_url_args()
@@ -143,9 +180,9 @@ def test_password_is_passed_and_overrides_url_userinfo(acl_redis: str) -> None:
     client.close()
 
 
-def test_username_overrides_url_userinfo(acl_redis: str) -> None:
+def test_username_overrides_url_userinfo(app_user_redis: str) -> None:
     settings = _settings(
-        "redis://other:wrong-pass@127.0.0.1:6391/0",
+        _userinfo(app_user_redis, "other:wrong-pass"),
         redis_username="app",
         redis_password=SecretStr(_SECRET),
     )
@@ -158,8 +195,8 @@ def test_username_overrides_url_userinfo(acl_redis: str) -> None:
     client.close()
 
 
-def test_url_password_still_authenticates_when_env_is_unset(acl_redis: str) -> None:
-    settings = _settings(f"redis://:{_SECRET}@127.0.0.1:6391/0")
+def test_url_password_still_authenticates_when_env_is_unset(password_redis: str) -> None:
+    settings = _settings(_userinfo(password_redis, f":{_SECRET}"))
     url, kwargs = settings.redis_from_url_args()
     assert kwargs == {}
     assert url.startswith("redis://:")
@@ -168,22 +205,24 @@ def test_url_password_still_authenticates_when_env_is_unset(acl_redis: str) -> N
     client.close()
 
 
-def test_username_without_password_is_rejected(acl_redis: str) -> None:
+def test_username_without_password_is_rejected() -> None:
+    url = local_test_redis_url()
     with pytest.raises(ValidationError, match="REDIS_USERNAME requires REDIS_PASSWORD") as caught:
-        _settings(acl_redis, redis_username="app")
+        _settings(url, redis_username="app")
     assert _SECRET not in str(caught.value)
     with pytest.raises(ValidationError, match="REDIS_USERNAME requires REDIS_PASSWORD"):
-        _settings(acl_redis, redis_username="app", redis_password=SecretStr(""))
+        _settings(url, redis_username="app", redis_password=SecretStr(""))
     with pytest.raises(ValidationError, match="REDIS_USERNAME requires REDIS_PASSWORD"):
-        _settings("redis://app@127.0.0.1:6391/0")
+        _settings(_userinfo(url, "app"))
 
 
 def test_secret_is_absent_from_logs_repr_and_readyz(
-    acl_redis: str, caplog: pytest.LogCaptureFixture, tmp_path: Path
+    password_redis: str, caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",
-        redis_url="redis://:wrong-pass@127.0.0.1:6391/0",
+        redis_url=_userinfo(password_redis, ":wrong-pass"),
+        redis_username="",
         redis_password=SecretStr(_SECRET),
         _env_file=None,
     )
@@ -200,19 +239,26 @@ def test_secret_is_absent_from_logs_repr_and_readyz(
     assert "wrong-pass" not in response.text
 
 
-def test_worker_check_requires_the_password(acl_redis: str, tmp_path: Path) -> None:
+def test_worker_check_requires_the_password(password_redis: str, tmp_path: Path) -> None:
     authed = Settings(
         data_dir=tmp_path,
-        redis_url=acl_redis,
+        redis_url=password_redis,
+        redis_username="",
         redis_password=SecretStr(_SECRET),
         _env_file=None,
     )
     assert worker_check(authed) == 0
-    bare = Settings(data_dir=tmp_path, redis_url=acl_redis, _env_file=None)
+    bare = Settings(
+        data_dir=tmp_path,
+        redis_url=password_redis,
+        redis_username="",
+        redis_password=None,
+        _env_file=None,
+    )
     assert worker_check(bare) == 1
 
 
-def test_worker_pool_receives_the_password(acl_redis: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_pool_receives_the_password(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
     class _Pool:
@@ -225,7 +271,11 @@ def test_worker_pool_receives_the_password(acl_redis: str, monkeypatch: pytest.M
             seen["started"] = True
 
     monkeypatch.setattr("finance_context.jobqueue.pool.WorkerPool", _Pool)
-    settings = _settings(acl_redis, redis_username="app", redis_password=SecretStr(_SECRET))
+    settings = _settings(
+        local_test_redis_url(),
+        redis_username="app",
+        redis_password=SecretStr(_SECRET),
+    )
     serve_workers(settings)
     connection = seen["connection"]
     assert seen["started"] is True
@@ -236,18 +286,15 @@ def test_worker_pool_receives_the_password(acl_redis: str, monkeypatch: pytest.M
 
 
 def test_child_env_carries_credentials_and_drops_them_when_unset() -> None:
+    url = local_test_redis_url()
     env = {"REDIS_USERNAME": "stale", "REDIS_PASSWORD": "stale-secret"}
-    write_redis_env(env, _settings("redis://127.0.0.1:6390/15"))
-    assert env["REDIS_URL"] == "redis://127.0.0.1:6390/15"
+    write_redis_env(env, _settings(url))
+    assert env["REDIS_URL"] == url
     assert "REDIS_USERNAME" not in env
     assert "REDIS_PASSWORD" not in env
     write_redis_env(
         env,
-        _settings(
-            "redis://127.0.0.1:6391/0",
-            redis_username="app",
-            redis_password=SecretStr(_SECRET),
-        ),
+        _settings(url, redis_username="app", redis_password=SecretStr(_SECRET)),
     )
     assert env["REDIS_USERNAME"] == "app"
     assert env["REDIS_PASSWORD"] == _SECRET
