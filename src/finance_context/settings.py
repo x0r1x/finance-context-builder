@@ -12,12 +12,17 @@ _DEFAULT_MAX_CONCURRENT_JOBS = 2
 # per formula, 220 per expanded cell, and 1120 per present cell. On Packt, RVI,
 # the private .xlsx and .xls books, and the 384k-formula synthetic book the
 # estimate is 1.08–1.20 of that peak, and the synthetic book stays under the
-# 1536 MiB default budget. Turning the streaming switches off brings the old
-# peaks back, and this estimate can sit below those.
+# 1536 MiB default budget. If PARSE_STREAMING, GRAPH_STREAM, or
+# COMPILE_AST_ZLIB is off, preflight uses the unstreamed coefficients below
+# (the previous fit, about 1.04–1.16 of the switches-off peak).
 DEFAULT_ESTIMATE_BASE_BYTES = 166 * 1024 * 1024
 DEFAULT_ESTIMATE_BYTES_PER_FORMULA = 128
 DEFAULT_ESTIMATE_BYTES_PER_EXPANDED_CELL = 220
 DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL = 1120
+DEFAULT_ESTIMATE_UNSTREAMED_BASE_BYTES = 132 * 1024 * 1024
+DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA = 3840
+DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_EXPANDED_CELL = 960
+DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_PRESENT_CELL = 960
 DEFAULT_MEMORY_FLOOR_BYTES = 128 * 1024 * 1024
 DEFAULT_API_RESERVE_FRACTION = 0.25
 DEFAULT_MEMORY_BUDGET_BYTES = 1536 * 1024 * 1024
@@ -52,6 +57,17 @@ class Settings(BaseSettings):
     job_estimate_bytes_per_formula: int = DEFAULT_ESTIMATE_BYTES_PER_FORMULA
     job_estimate_bytes_per_expanded_cell: int = DEFAULT_ESTIMATE_BYTES_PER_EXPANDED_CELL
     job_estimate_bytes_per_present_cell: int = DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL
+    # Previous fit. Used when parse, graph streaming, or AST compression is off.
+    job_estimate_unstreamed_base_bytes: int = DEFAULT_ESTIMATE_UNSTREAMED_BASE_BYTES
+    job_estimate_unstreamed_bytes_per_formula: int = (
+        DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA
+    )
+    job_estimate_unstreamed_bytes_per_expanded_cell: int = (
+        DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_EXPANDED_CELL
+    )
+    job_estimate_unstreamed_bytes_per_present_cell: int = (
+        DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_PRESENT_CELL
+    )
     job_memory_floor_bytes: int = DEFAULT_MEMORY_FLOOR_BYTES
     job_memory_api_reserve_fraction: float = DEFAULT_API_RESERVE_FRACTION
     job_memory_default_budget_bytes: int = DEFAULT_MEMORY_BUDGET_BYTES
@@ -109,6 +125,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "job_estimate_base_bytes",
+        "job_estimate_unstreamed_base_bytes",
         "job_memory_floor_bytes",
         "job_memory_default_budget_bytes",
         "range_expand_cap",
@@ -122,6 +139,9 @@ class Settings(BaseSettings):
         "job_estimate_bytes_per_formula",
         "job_estimate_bytes_per_expanded_cell",
         "job_estimate_bytes_per_present_cell",
+        "job_estimate_unstreamed_bytes_per_formula",
+        "job_estimate_unstreamed_bytes_per_expanded_cell",
+        "job_estimate_unstreamed_bytes_per_present_cell",
         mode="before",
     )
     @classmethod

@@ -24,6 +24,19 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("JOB_ESTIMATE_BYTES_PER_FORMULA", "job_estimate_bytes_per_formula"),
     EnvSpec("JOB_ESTIMATE_BYTES_PER_EXPANDED_CELL", "job_estimate_bytes_per_expanded_cell"),
     EnvSpec("JOB_ESTIMATE_BYTES_PER_PRESENT_CELL", "job_estimate_bytes_per_present_cell"),
+    EnvSpec("JOB_ESTIMATE_UNSTREAMED_BASE_BYTES", "job_estimate_unstreamed_base_bytes"),
+    EnvSpec(
+        "JOB_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA",
+        "job_estimate_unstreamed_bytes_per_formula",
+    ),
+    EnvSpec(
+        "JOB_ESTIMATE_UNSTREAMED_BYTES_PER_EXPANDED_CELL",
+        "job_estimate_unstreamed_bytes_per_expanded_cell",
+    ),
+    EnvSpec(
+        "JOB_ESTIMATE_UNSTREAMED_BYTES_PER_PRESENT_CELL",
+        "job_estimate_unstreamed_bytes_per_present_cell",
+    ),
     EnvSpec("JOB_MEMORY_FLOOR_BYTES", "job_memory_floor_bytes"),
     EnvSpec("JOB_MEMORY_API_RESERVE_FRACTION", "job_memory_api_reserve_fraction"),
     EnvSpec("JOB_MEMORY_DEFAULT_BUDGET_BYTES", "job_memory_default_budget_bytes"),
