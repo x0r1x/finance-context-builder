@@ -165,6 +165,9 @@ spec:
       labels:
         app: finance-context-worker
     spec:
+      # JOB_TIMEOUT_SEC 3600 + JOB_TERMINATE_GRACE_SEC 5 + JOB_KILL_GRACE_SEC 5
+      # + QUEUE_JOB_TIMEOUT_MARGIN_SEC 120. Same window as Compose stop_grace_period.
+      terminationGracePeriodSeconds: 3730
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

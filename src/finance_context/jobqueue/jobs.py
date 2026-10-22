@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 from pathlib import Path
 
 from rq import Retry, get_current_job
@@ -103,7 +104,7 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
         return None
     proc = spawn_child(
         run_child,
-        (data_dir, job_id, generation, session_id),
+        (data_dir, job_id, generation, session_id, os.getpid()),
         malloc_arena_max=settings.job_malloc_arena_max,
         name=f"finance-job-{job_id[:8]}",
     )
@@ -127,16 +128,23 @@ def on_horse_killed(job: Job, retpid: int, ret_val: int, rusage: object) -> None
     """Write ``oom_killed`` or ``process_lost`` before RQ decides on a retry.
 
     RQ calls this from ``monitor_work_horse`` and then ``handle_job_failure``.
-    A stopped job does not come through here. An OOM zeroes ``retries_left``
-    so the failure is not retried. A lost worker leaves ``retries_left`` and
-    RQ requeues once (``JOB_RETRY_ON_LOST``). The same generation lets the
-    retry's child replace ``process_lost`` in ``meta.json``.
+    ``ret_val`` is the ``os.wait4`` status. An OOM is that status reporting
+    SIGKILL and the cgroup ``oom_kill`` counter moving; that zeroes
+    ``retries_left``. Any other death, including a counter that moved because
+    another slot was killed, stays ``process_lost`` and keeps the one
+    ``JOB_RETRY_ON_LOST`` retry. A stopped job does not come through here.
+    The same generation lets the retry's child replace ``process_lost``.
     """
-    del retpid, ret_val, rusage
+    del retpid, rusage
     meta = job.meta if isinstance(getattr(job, "meta", None), dict) else {}
     before = meta.get("oom_kill_before")
     after = cgroup_oom_kill_count()
-    oom = isinstance(before, int) and after is not None and after > before
+    oom = (
+        _sigkill_wait_status(ret_val)
+        and isinstance(before, int)
+        and after is not None
+        and after > before
+    )
     if oom:
         job.retries_left = 0
         _save(job)
@@ -166,6 +174,20 @@ def on_horse_killed(job: Job, retpid: int, ret_val: int, rusage: object) -> None
         generation=meta.get("generation"),
         error_code="process_lost",
     )
+
+
+def _sigkill_wait_status(ret_val: object) -> bool:
+    """True when an ``os.wait4`` status is SIGKILL.
+
+    RQ passes that status through, not the bare signal number. A normal
+    non-zero exit and SIGTERM both stay false.
+    """
+    if isinstance(ret_val, bool) or not isinstance(ret_val, int) or ret_val == 0:
+        return False
+    try:
+        return bool(os.WIFSIGNALED(ret_val) and os.WTERMSIG(ret_val) == signal.SIGKILL)
+    except (OSError, OverflowError, ValueError):
+        return False
 
 
 def _admission_waiting(settings: Settings, budget: int) -> bool:

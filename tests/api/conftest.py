@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -45,7 +46,63 @@ def _spawn_worker(settings: Settings) -> subprocess.Popen[bytes]:
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
+
+
+def _process_children() -> dict[int, list[int]]:
+    """pid → children, from ``ps``. macOS reports ``sess`` as 0, so ppid is the link."""
+    try:
+        listed = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return {}
+    children: dict[int, list[int]] = {}
+    for line in listed.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+    return children
+
+
+def _descendants(root: int) -> list[int]:
+    children = _process_children()
+    found: list[int] = []
+    stack = list(children.get(root, []))
+    me = os.getpid()
+    while stack:
+        current = stack.pop()
+        if current in {root, me}:
+            continue
+        found.append(current)
+        stack.extend(children.get(current, []))
+    return found
+
+
+def _kill_worker_group(pid: int) -> None:
+    """SIGKILL the worker group and horses that called ``os.setpgrp``.
+
+    ``start_new_session`` makes ``pid`` its own process group, so ``killpg``
+    stops the pool. RQ's horse then calls ``os.setpgrp`` (rq#2495) and leaves
+    that group; it stays a child of the worker until the worker exits. The
+    descendant list is taken first, then the group is signalled, then each
+    horse and spawn child is signalled. ``ps sess`` is 0 on macOS, so the
+    session column cannot find them.
+    """
+    descendants = _descendants(pid)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    for member in [pid, *descendants]:
+        try:
+            os.kill(member, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _stop_workers(client: TestClient) -> None:
@@ -56,7 +113,7 @@ def _stop_workers(client: TestClient) -> None:
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _kill_worker_group(proc.pid)
                 proc.wait(timeout=5)
 
 

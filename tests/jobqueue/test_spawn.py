@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import multiprocessing
 import os
 import subprocess
 import threading
@@ -9,6 +10,7 @@ from pathlib import Path
 
 from finance_context.jobqueue.spawn import (
     hold_for_probe,
+    run_child,
     run_lock_busy,
     spawn_child,
     stop_child,
@@ -124,6 +126,20 @@ def test_arena_starts_do_not_overlap(monkeypatch) -> None:
 def test_run_lock_busy_does_not_create_a_missing_file(tmp_path: Path) -> None:
     assert run_lock_busy(tmp_path) is False
     assert not (tmp_path / ".run.lock").exists()
+
+
+def test_run_child_exits_before_the_pipeline_when_the_horse_pid_does_not_match(
+    tmp_path: Path,
+) -> None:
+    """A child whose parent is not the horse must not take the run lock."""
+    proc = multiprocessing.get_context("spawn").Process(
+        target=run_child,
+        args=(str(tmp_path), "book", 1, "local", 1),
+    )
+    proc.start()
+    proc.join(10)
+    assert proc.exitcode == 1
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_run_lock_busy_while_held(tmp_path: Path) -> None:

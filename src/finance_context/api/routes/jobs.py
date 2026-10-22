@@ -58,9 +58,9 @@ async def healthz() -> dict[str, str]:
 async def readyz(request: Request) -> JSONResponse:
     ctx = _ctx(request)
     settings = ctx.settings
-    writable = _data_dir_writable(settings.data_dir)
+    writable = await asyncio.to_thread(_data_dir_writable, settings.data_dir)
     try:
-        jobs = ctx.queue.session_inflight(settings.session_id)
+        jobs = await asyncio.to_thread(ctx.queue.session_inflight, settings.session_id)
     except QueueUnavailable:
         jobs = 0
     body = {
@@ -352,30 +352,38 @@ def _ready_meta(dest: Path) -> dict | None:
 async def get_job(request: Request, job_id: str) -> JSONResponse:
     _check_job_id(job_id)
     ctx = _ctx(request)
-    dest = ctx.store.dest_dir(job_id)
-    if not dest.exists():
-        raise ApiError(404, "not_found")
-    meta = _load_meta(dest)
+    # Redis and the job directory stay off the event loop. A slow Redis must
+    # not stall readyz or every other request on this process.
+    meta = await asyncio.to_thread(_read_job, ctx, job_id)
     if meta is None:
         raise ApiError(404, "not_found")
-    if _queue_lost(ctx, job_id, dest, meta):
-        generation = _disk_generation(meta)
-        mark_job_failed(dest, job_id, "queue_lost", generation)
-        log_event(
-            _LOGGER,
-            logging.WARNING,
-            "job_queue_lost",
-            "queued job is missing from the queue",
-            job_id=job_id,
-            session_id=ctx.settings.session_id,
-            queue=ctx.settings.queue_name,
-            generation=generation,
-            error_code="queue_lost",
-        )
-        reloaded = _load_meta(dest)
-        if reloaded is not None:
-            meta = reloaded
     return JSONResponse(_job_body(job_id, meta))
+
+
+def _read_job(ctx: AppContext, job_id: str) -> dict | None:
+    dest = ctx.store.dest_dir(job_id)
+    if not dest.exists():
+        return None
+    meta = _load_meta(dest)
+    if meta is None:
+        return None
+    if not _queue_lost(ctx, job_id, dest, meta):
+        return meta
+    generation = _disk_generation(meta)
+    mark_job_failed(dest, job_id, "queue_lost", generation)
+    log_event(
+        _LOGGER,
+        logging.WARNING,
+        "job_queue_lost",
+        "queued job is missing from the queue",
+        job_id=job_id,
+        session_id=ctx.settings.session_id,
+        queue=ctx.settings.queue_name,
+        generation=generation,
+        error_code="queue_lost",
+    )
+    reloaded = _load_meta(dest)
+    return reloaded if reloaded is not None else meta
 
 # Short sentences this process writes itself. Converter stderr and workbook
 # paths stay in the log and in meta.json, not in the job response.

@@ -6,6 +6,7 @@ import fcntl
 import json
 import multiprocessing
 import os
+import signal
 import threading
 import time
 from dataclasses import dataclass
@@ -37,19 +38,33 @@ def hold_for_probe(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def run_child(data_dir: str, job_id: str, generation: int, session_id: str) -> None:
+def run_child(
+    data_dir: str,
+    job_id: str,
+    generation: int,
+    session_id: str,
+    horse_pid: int,
+) -> None:
     """Hold the run lock, watch the horse, and run one book.
 
-    The lock file is never unlinked. GET treats a free lock plus a missing
-    RQ job as ``queue_lost``. ``os._exit`` from the parent watch skips this
+    The parent check and the death watch run before the blocking flock. A
+    child whose horse is already gone must not sit on the lock, then start
+    the pipeline after the previous holder releases it. The lock file is
+    never unlinked. GET treats a free lock plus a missing RQ job as
+    ``queue_lost``. ``os._exit`` from the parent watch skips this
     ``finally``; the kernel drops the flock.
     """
+    if os.getppid() != horse_pid:
+        os._exit(1)
+    arm_child_death(Settings().job_parent_watch_interval_sec)
     dest = session_job_dir(Path(data_dir), job_id, session_id)
     dest.mkdir(parents=True, exist_ok=True)
     handle = (dest / RUN_LOCK).open("a+")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        arm_child_death(Settings().job_parent_watch_interval_sec)
+        # The horse can die while this call is blocked on the previous child.
+        if os.getppid() != horse_pid:
+            os._exit(1)
         run_job_process(data_dir, job_id, generation, session_id)
     finally:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -160,16 +175,17 @@ def watch_child(
                 return _with_oom(
                     ChildResult(timed_out=True),
                     oom_before,
+                    proc.exitcode,
                 )
             slice_s = min(watch_interval_sec, remaining)
         if wait_for_exit([proc.sentinel], slice_s):
             proc.join()
-            return _with_oom(ChildResult(), oom_before)
+            return _with_oom(ChildResult(), oom_before, proc.exitcode)
         # The oom_kill counter is the whole cgroup. Another slot dying must
         # not abandon a child that is still running.
         if not proc.is_alive():
             proc.join()
-            return _with_oom(ChildResult(), oom_before)
+            return _with_oom(ChildResult(), oom_before, proc.exitcode)
         if budget_bytes is None:
             continue
         rss = process_rss_bytes(proc.pid)
@@ -183,8 +199,19 @@ def watch_child(
             return ChildResult(over_budget=True, rss_bytes=rss)
 
 
-def _with_oom(result: ChildResult, oom_before: int | None) -> ChildResult:
+def _with_oom(
+    result: ChildResult,
+    oom_before: int | None,
+    exitcode: int | None,
+) -> ChildResult:
+    """Count a cgroup oom only when this child itself died by SIGKILL.
+
+    ``memory.events`` is the whole cgroup. Another slot can move the counter
+    while this child exits on its own. A clean exit stays a clean exit.
+    """
     if result.over_budget or not _oom_increased(oom_before):
+        return result
+    if exitcode != -signal.SIGKILL:
         return result
     return ChildResult(kernel_oom=True, rss_bytes=result.rss_bytes)
 

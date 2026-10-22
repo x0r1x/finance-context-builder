@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 from pathlib import Path
 
 from rq import Retry
@@ -32,13 +34,27 @@ def _meta(tmp_path: Path, *, before: int) -> dict:
     }
 
 
+def _wait_status(sig: int) -> int:
+    """An ``os.wait`` status whose terminating signal is ``sig``.
+
+    RQ hands ``on_horse_killed`` the ``wait4`` status, not the signal number.
+    """
+    for candidate in range(1, 256):
+        try:
+            if os.WIFSIGNALED(candidate) and os.WTERMSIG(candidate) == sig:
+                return candidate
+        except (OSError, OverflowError, ValueError):
+            continue
+    raise AssertionError(f"no wait status encodes signal {sig}")
+
+
 def test_oom_kill_zeroes_retries_and_writes_oom_killed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs.cgroup_oom_kill_count",
         lambda: 4,
     )
     job = _Job(_meta(tmp_path, before=1))
-    on_horse_killed(job, 0, 9, None)  # type: ignore[arg-type]
+    on_horse_killed(job, 0, _wait_status(signal.SIGKILL), None)  # type: ignore[arg-type]
     assert job.retries_left == 0
     assert job.saved == 1
     meta = json.loads((session_job_dir(tmp_path, _BOOK, "local") / "meta.json").read_text())
@@ -56,12 +72,27 @@ def test_lost_horse_keeps_the_retry_and_writes_process_lost(
         lambda: 1,
     )
     job = _Job(_meta(tmp_path, before=1))
-    on_horse_killed(job, 0, 9, None)  # type: ignore[arg-type]
+    on_horse_killed(job, 0, _wait_status(signal.SIGKILL), None)  # type: ignore[arg-type]
     assert job.retries_left == 1
     assert job.saved == 0
     meta = json.loads((session_job_dir(tmp_path, _BOOK, "local") / "meta.json").read_text())
     assert meta["error"] == "process_lost"
     assert meta["generation"] == 2
+
+
+def test_sigterm_stays_process_lost_when_another_slot_was_oom_killed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "finance_context.jobqueue.jobs.cgroup_oom_kill_count",
+        lambda: 4,
+    )
+    job = _Job(_meta(tmp_path, before=1))
+    on_horse_killed(job, 0, _wait_status(signal.SIGTERM), None)  # type: ignore[arg-type]
+    assert job.retries_left == 1
+    assert job.saved == 0
+    meta = json.loads((session_job_dir(tmp_path, _BOOK, "local") / "meta.json").read_text())
+    assert meta["error"] == "process_lost"
 
 
 def test_admission_returns_retry_on_the_same_call(monkeypatch) -> None:

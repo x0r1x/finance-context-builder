@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
+import signal
+import subprocess
+import sys
 import time
 from pathlib import Path
+
+from tests.api.conftest import _kill_worker_group
 
 from finance_context.app.pipeline import mark_job_failed
 from finance_context.jobqueue.jobs import _finish
@@ -28,6 +34,54 @@ class _StubProcess:
 
     def join(self, timeout: float | None = None) -> None:
         self.events.append(("join", timeout))
+
+
+def test_kill_worker_group_reaps_a_horse_that_called_setpgrp() -> None:
+    """killpg on the worker misses a horse that left the group (rq#2495)."""
+    script = (
+        "import os, time\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    os.setpgrp()\n"
+        "    time.sleep(60)\n"
+        "    os._exit(0)\n"
+        "time.sleep(60)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    member: int | None = None
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and member is None:
+            listed = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid="], text=True)
+            for line in listed.splitlines():
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                child, parent, group = (int(parts[0]), int(parts[1]), int(parts[2]))
+                if parent == proc.pid and group != proc.pid:
+                    member = child
+                    break
+            time.sleep(0.05)
+        assert member is not None
+        _kill_worker_group(proc.pid)
+        proc.wait(timeout=5)
+        gone = time.monotonic() + 5
+        while time.monotonic() < gone:
+            try:
+                os.kill(member, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        raise AssertionError("setpgrp child still alive")
+    finally:
+        if proc.poll() is None:
+            _kill_worker_group(proc.pid)
+            proc.wait(timeout=5)
 
 
 def test_stop_kills_when_terminate_leaves_the_process_alive() -> None:
@@ -173,6 +227,54 @@ def test_watch_kills_when_reported_rss_exceeds_the_budget(tmp_path: Path, monkey
         if proc.is_alive():
             proc.kill()
             proc.join(5)
+
+
+def _die_by_sigkill() -> None:
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def test_watch_ignores_a_cgroup_oom_that_did_not_sigkill_this_child(monkeypatch) -> None:
+    seen = {"n": 0}
+
+    def count() -> int:
+        seen["n"] += 1
+        return 1 if seen["n"] == 1 else 4
+
+    monkeypatch.setattr("finance_context.jobqueue.spawn.cgroup_oom_kill_count", count)
+    proc = multiprocessing.get_context("spawn").Process(target=_exit_immediately)
+    proc.start()
+    result = watch_child(
+        proc,
+        timeout_sec=10,
+        budget_bytes=None,
+        watch_interval_sec=0.05,
+        terminate_grace_sec=1,
+        kill_grace_sec=1,
+    )
+    assert proc.exitcode == 0
+    assert result.kernel_oom is False
+
+
+def test_watch_marks_sigkill_with_an_oom_counter_as_kernel_oom(monkeypatch) -> None:
+    seen = {"n": 0}
+
+    def count() -> int:
+        seen["n"] += 1
+        return 1 if seen["n"] == 1 else 4
+
+    monkeypatch.setattr("finance_context.jobqueue.spawn.cgroup_oom_kill_count", count)
+    proc = multiprocessing.get_context("spawn").Process(target=_die_by_sigkill)
+    proc.start()
+    result = watch_child(
+        proc,
+        timeout_sec=10,
+        budget_bytes=None,
+        watch_interval_sec=0.05,
+        terminate_grace_sec=1,
+        kill_grace_sec=1,
+    )
+    assert proc.exitcode == -signal.SIGKILL
+    assert result.kernel_oom is True
 
 
 def test_watch_kills_a_child_whose_real_rss_exceeds_the_budget(tmp_path: Path) -> None:
