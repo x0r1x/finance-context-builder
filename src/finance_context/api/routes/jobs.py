@@ -354,9 +354,13 @@ def _enqueue_or_reuse(
     generation = max(1, _disk_generation(stored) + 1)
     # Session publications only. Keep meta so the stage map and generation
     # survive. Shared files stay until the child holds shared/books/{job_id}/.lock.
+    # A matching publisher leaves that cache alone (stale is None). The session
+    # context is still not a snapshot: _ready_meta already refused it, and the
+    # child returns immediately when context.json and context.md are both there.
     shared.mkdir(parents=True, exist_ok=True)
     stale = stale_from_meta(stored)
-    clear_downstream_artifacts(dest, stale_from=stale, drop_meta=False)
+    session_clear = stale if stale is not None else "layout"
+    clear_downstream_artifacts(dest, stale_from=session_clear, drop_meta=False)
     record_rebuild_stage(dest, stale, generation=generation)
     if stale is not None:
         log_event(
