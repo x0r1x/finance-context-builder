@@ -11,7 +11,7 @@ import pytest
 
 from finance_context.adapters.disk_store import DiskStore
 from finance_context.api.errors import ApiError
-from finance_context.api.routes.jobs import _accept_upload, _queue_lost
+from finance_context.api.routes.jobs import _accept_upload, _queue_lost, _read_job
 from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline
 from finance_context.settings import Settings
@@ -141,6 +141,35 @@ def test_started_without_a_run_lock_is_enqueued_again(tmp_path: Path) -> None:
         (session_job_dir(ctx.settings.data_dir, _JOB, "local") / "meta.json").read_text()
     )
     assert stored["generation"] == 2
+
+
+def test_get_does_not_mark_lost_while_post_holds_the_enqueue_lock(tmp_path: Path) -> None:
+    queue = _Queue(None)
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(ctx, status="queued", stage="queued")
+    held = _hold(dest / ".lock")
+    try:
+        body = _read_job(ctx, _JOB)
+    finally:
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
+    assert body is not None
+    assert body["status"] == "queued"
+    assert "error" not in body
+    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert stored["status"] == "queued"
+
+
+def test_get_marks_lost_when_the_enqueue_lock_is_free(tmp_path: Path) -> None:
+    queue = _Queue(None)
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(ctx, status="queued", stage="queued")
+    body = _read_job(ctx, _JOB)
+    assert body is not None
+    assert body["status"] == "failed"
+    assert body["error"] == "queue_lost"
+    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert stored["error"] == "queue_lost"
 
 
 def test_get_marks_a_started_job_with_a_free_run_lock_lost(tmp_path: Path) -> None:

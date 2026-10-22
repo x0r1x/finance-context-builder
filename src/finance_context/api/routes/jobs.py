@@ -458,23 +458,52 @@ def _read_job(ctx: AppContext, job_id: str) -> dict | None:
     meta = _load_meta(dest)
     if meta is None:
         return None
+    # The lost probe may sleep. It stays outside dest/.lock so a running
+    # pipeline, which holds that lock, is not stalled by the recheck.
     if not _queue_lost(ctx, job_id, dest, meta):
         return meta
-    generation = _disk_generation(meta)
-    mark_job_failed(dest, job_id, "queue_lost", generation)
-    log_event(
-        _LOGGER,
-        logging.WARNING,
-        "job_queue_lost",
-        "queued job is missing from the queue",
-        job_id=job_id,
-        session_id=ctx.settings.session_id,
-        queue=ctx.settings.queue_name,
-        generation=generation,
-        error_code="queue_lost",
-    )
-    reloaded = _load_meta(dest)
-    return reloaded if reloaded is not None else meta
+    # POST writes queued meta and enqueues under this same lock. Marking
+    # lost in that window would report failed for a job that is about to run.
+    # A busy lock means that window, or the pipeline, is in progress.
+    with file_lock(dest / ".lock", blocking=False) as locked:
+        if not locked:
+            return _load_meta(dest) or meta
+        current = _load_meta(dest)
+        if current is None or not _lost_now(ctx, job_id, dest, current):
+            return current
+        generation = _disk_generation(current)
+        mark_job_failed(dest, job_id, "queue_lost", generation)
+        log_event(
+            _LOGGER,
+            logging.WARNING,
+            "job_queue_lost",
+            "queued job is missing from the queue",
+            job_id=job_id,
+            session_id=ctx.settings.session_id,
+            queue=ctx.settings.queue_name,
+            generation=generation,
+            error_code="queue_lost",
+        )
+        reloaded = _load_meta(dest)
+        return reloaded if reloaded is not None else current
+
+
+def _lost_now(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
+    """Same as ``_queue_lost`` without the abandoned-job pause.
+
+    The caller already waited once. This is the check under ``dest/.lock``.
+    """
+    if meta.get("status") not in {"queued", "running"}:
+        return False
+    if run_lock_busy(dest):
+        return False
+    try:
+        status = ctx.queue.status(rq_job_id(ctx.settings.session_id, job_id))
+    except QueueUnavailable:
+        return False
+    if status in LOST_STATUSES:
+        return True
+    return _started_without_child(status, dest, meta)
 
 # Short sentences this process writes itself. Converter stderr and workbook
 # paths stay in the log and in meta.json, not in the job response.

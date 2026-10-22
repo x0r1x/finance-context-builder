@@ -7,6 +7,7 @@ import os
 import signal
 from pathlib import Path
 
+from redis.exceptions import RedisError
 from rq import Retry, get_current_job
 from rq.job import Job
 
@@ -136,7 +137,9 @@ def on_horse_killed(job: Job, retpid: int, ret_val: int, rusage: object) -> None
     spent. A stopped job does not come through here.
     """
     del retpid, rusage
-    meta = job.meta if isinstance(getattr(job, "meta", None), dict) else {}
+    # The horse saved oom_kill_before after the fork. The parent's Job.meta
+    # is still the pre-fork copy, so an OOM would look like a plain lost worker.
+    meta = _refreshed_meta(job)
     before = meta.get("oom_kill_before")
     after = cgroup_oom_kill_count()
     oom = (
@@ -191,6 +194,20 @@ def on_horse_killed(job: Job, retpid: int, ret_val: int, rusage: object) -> None
         generation=meta.get("generation"),
         error_code="process_lost",
     )
+
+
+def _refreshed_meta(job: Job) -> dict:
+    """Meta from Redis when this Job can reload it, else the in-memory copy."""
+    refresh = getattr(job, "get_meta", None)
+    if callable(refresh):
+        try:
+            loaded = refresh(refresh=True)
+        except (RedisError, OSError, TypeError, ValueError):
+            loaded = None
+        if isinstance(loaded, dict):
+            return loaded
+    meta = getattr(job, "meta", None)
+    return meta if isinstance(meta, dict) else {}
 
 
 def _sigkill_wait_status(ret_val: object) -> bool:

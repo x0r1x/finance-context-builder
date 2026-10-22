@@ -48,6 +48,22 @@ def _wait_status(sig: int) -> int:
     raise AssertionError(f"no wait status encodes signal {sig}")
 
 
+def test_oom_reads_the_baseline_the_horse_saved_after_the_fork(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The parent Job.meta is the pre-fork copy. Redis has the baseline."""
+    monkeypatch.setattr(
+        "finance_context.jobqueue.jobs.cgroup_oom_kill_count",
+        lambda: 4,
+    )
+    job = _Job({})
+    job.get_meta = lambda refresh=True: _meta(tmp_path, before=1)  # type: ignore[method-assign]
+    on_horse_killed(job, 0, _wait_status(signal.SIGKILL), None)  # type: ignore[arg-type]
+    assert job.retries_left == 0
+    meta = json.loads((session_job_dir(tmp_path, _BOOK, "local") / "meta.json").read_text())
+    assert meta["error"] == "oom_killed"
+
+
 def test_oom_kill_zeroes_retries_and_writes_oom_killed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs.cgroup_oom_kill_count",
