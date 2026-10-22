@@ -22,14 +22,17 @@ on that lock fails. Attributes:
 - ``max_retries``: ``Settings.shared_cache_busy_max_retries``
   (``SHARED_CACHE_BUSY_MAX_RETRIES``, default 120)
 
-The child does not wait inside :meth:`Pipeline.run`. PR3 catches this
-exception in the RQ worker and raises ``rq.Retry(interval=exc.retry_after_sec)``.
-Count attempts in the queue. After ``max_retries`` requeues, fail the job
-with error ``shared_cache_busy``. Do not sleep in the work horse: that would
-hold the slot.
+The child does not wait inside :meth:`Pipeline.run`. The RQ spawn child
+exits 75 (``EX_TEMPFAIL``) on :class:`SharedCacheBusy`. The horse returns
+``rq.Retry(interval=...)`` for that same job (rq#2499: ``enqueue_in`` drops
+``unique``). Attempts are ``meta.json`` ``shared_cache_busy_retries``, not
+RQ's lost-horse counter. After ``max_retries`` requeues the next busy result
+fails the job with error ``shared_cache_busy``. While a retry is scheduled,
+meta stays ``queued`` and GET does not mark ``queue_lost``. Do not sleep in
+the work horse: that would hold the slot.
 
-Until that queue exists, :func:`finance_context.app.pipeline.execute_job`
-sleeps ``retry_after_sec`` and calls ``Pipeline.run`` again, at most
+CLI ``build`` still calls :func:`finance_context.app.pipeline.execute_job`,
+which sleeps ``retry_after_sec`` and calls ``Pipeline.run`` again, at most
 ``max_retries`` extra times. A sleep that would reach ``JOB_TIMEOUT_SEC``,
 counted from process start, raises ``ContextError("shared_cache_busy")``
 instead of waiting. Each wait logs ``shared_cache_busy_requeue`` (``attempt``,

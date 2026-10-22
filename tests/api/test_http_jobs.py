@@ -24,6 +24,7 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from finance_context.api.app import create_app
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.publisher import publisher_fingerprint
+from finance_context.jobqueue.spawn import run_lock_busy
 from finance_context.settings import Settings
 
 
@@ -91,16 +92,15 @@ def test_repeated_upload_reuses_parse_and_compile(client: TestClient, tmp_path: 
     job_id = created.json()["job_id"]
     assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
     # Terminal meta is visible before the child writes stages.json. Wait until
-    # that process has exited so the stale stamp is not overwritten.
+    # that process has released the run lock so the stale stamp is not overwritten.
+    job_dir = _job_dir(tmp_path, job_id)
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        if not client.app.state.ctx.processes.is_alive(job_id):
+        if not run_lock_busy(job_dir):
             break
         time.sleep(0.05)
     else:
         raise AssertionError("job process did not exit")
-
-    job_dir = _job_dir(tmp_path, job_id)
     book_dir = _book_dir(tmp_path, job_id)
     sentinel = book_dir / "raw" / "keep-on-publisher-change"
     sentinel.write_text("keep", encoding="utf-8")
@@ -290,14 +290,22 @@ def test_get_job_vanished_meta_uses_the_live_run(tmp_path: Path, monkeypatch) ->
             raise FileNotFoundError(self)
         return real(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", _read)
     with _app(tmp_path) as client:
         dest = client.app.state.ctx.store.dest_dir(job_id)
         dest.mkdir(parents=True)
         (dest / "meta.json").write_text(
             '{"status":"running","stage":"layout"}\n', encoding="utf-8"
         )
-        client.app.state.ctx.bus.enqueue(job_id)
+        ctx = client.app.state.ctx
+        ctx.queue.enqueue(
+            {
+                "session_id": ctx.settings.session_id,
+                "job_id": job_id,
+                "data_dir": str(ctx.settings.data_dir),
+                "generation": 1,
+            }
+        )
+        monkeypatch.setattr(Path, "read_text", _read)
         response = client.get(f"/v1/context-jobs/{job_id}")
     assert response.status_code == 202
     body = response.json()

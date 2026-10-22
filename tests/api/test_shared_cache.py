@@ -5,25 +5,38 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.api.conftest import _upload, _wait_for_terminal, _xlsx
+from tests.api.conftest import _serving, _stop_workers, _upload, _wait_for_terminal, _xlsx
 
-from finance_context.api.app import create_app
+from finance_context.jobqueue.spawn import run_lock_busy
 from finance_context.settings import Settings
 from finance_context.store.fs import file_lock
 
 
-def _session(root: Path, session_id: str) -> TestClient:
+@contextmanager
+def _session(root: Path, session_id: str) -> Iterator[TestClient]:
     settings = Settings(
         data_dir=root,
         session_id=session_id,
         max_upload_bytes=1024 * 1024,
         _env_file=None,
     )
-    return TestClient(create_app(settings))
+    with _serving(settings) as client:
+        yield client
+
+
+def _wait_child_exit(dest: Path) -> None:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if not run_lock_busy(dest):
+            return
+        time.sleep(0.05)
+    raise AssertionError("job child did not release the run lock")
 
 
 def test_post_under_held_shared_lock_keeps_layout(tmp_path: Path) -> None:
@@ -111,17 +124,15 @@ def test_post_other_session_keeps_shared_layout(
         assert _wait_for_terminal(alpha, job_id)["status"] == "succeeded"
         # Succeeded is visible before the child releases the book lock. A second
         # POST while that process is alive is treated as the same run.
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if not alpha.app.state.ctx.processes.is_alive(job_id):
-                break
-            time.sleep(0.05)
-        else:
-            raise AssertionError("alpha process did not exit")
+        dest = root / "sessions" / "alpha" / "jobs" / job_id
+        _wait_child_exit(dest)
+        # The first worker copied its environ at start. Stop it so the reuse
+        # POST starts a worker that can see the layout pause.
+        _stop_workers(alpha)
+        alpha.app.state.test_workers.clear()
         book = root / "shared" / "books" / job_id
         layout = book / "layout.json"
         layout_bytes = layout.read_bytes()
-        dest = root / "sessions" / "alpha" / "jobs" / job_id
         for name in ("context.json", "context.md", "graph.json", "graph.md"):
             (dest / name).unlink()
         pause.write_text("hold", encoding="utf-8")

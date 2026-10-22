@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from multiprocessing.connection import wait as wait_for_exit
 from pathlib import Path
 
-from finance_context.app.pipeline import run_job_process
+from finance_context.app.pipeline import SHARED_CACHE_BUSY_EXIT, run_queued_job
 from finance_context.jobqueue.parents import arm_child_death
 from finance_context.memory import cgroup_oom_kill_count, process_rss_bytes
 from finance_context.settings import Settings
@@ -35,6 +35,7 @@ class ChildResult:
     over_budget: bool = False
     rss_bytes: int = 0
     kernel_oom: bool = False
+    shared_cache_busy: bool = False
 
 
 def hold_for_probe(seconds: float) -> None:
@@ -56,7 +57,8 @@ def run_child(
     the pipeline after the previous holder releases it. The lock file is
     never unlinked. GET treats a free lock plus a missing RQ job as
     ``queue_lost``. ``os._exit`` from the parent watch skips this
-    ``finally``; the kernel drops the flock.
+    ``finally``; the kernel drops the flock. A busy shared book exits
+    :data:`SHARED_CACHE_BUSY_EXIT` after this ``finally`` releases the lock.
     """
     if os.getppid() != horse_pid:
         os._exit(1)
@@ -69,7 +71,7 @@ def run_child(
         # The horse can die while this call is blocked on the previous child.
         if os.getppid() != horse_pid:
             os._exit(1)
-        run_job_process(data_dir, job_id, generation, session_id)
+        run_queued_job(data_dir, job_id, generation, session_id)
     finally:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
@@ -287,6 +289,8 @@ def _with_oom(
     ``memory.events`` is the whole cgroup. Another slot can move the counter
     while this child exits on its own. A clean exit stays a clean exit.
     """
+    if exitcode == SHARED_CACHE_BUSY_EXIT:
+        return ChildResult(shared_cache_busy=True)
     if result.over_budget or not _oom_increased(oom_before):
         return result
     if exitcode != -signal.SIGKILL:

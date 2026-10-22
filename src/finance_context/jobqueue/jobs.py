@@ -35,11 +35,15 @@ from finance_context.memory import (
 )
 from finance_context.observability import log_event
 from finance_context.settings import Settings
+from finance_context.store.fs import update_json
 from finance_context.store.paths import session_job_dir
 
 _LOGGER = logging.getLogger("finance_context.jobqueue")
+_PIPELINE = logging.getLogger("finance_context.pipeline")
 
 _TERMINAL = {"succeeded", "degraded", "needs_input", "failed"}
+_BUSY_RETRIES = "shared_cache_busy_retries"
+_BUSY_DETAIL = "shared book cache stayed busy"
 
 
 def execute_job(payload: dict[str, object]) -> Retry | None:
@@ -126,12 +130,93 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
             terminate_grace_sec=settings.job_terminate_grace_sec,
             kill_grace_sec=settings.job_kill_grace_sec,
         )
-        # TODO(pr2): when the spawn child reports the shared book lock is held
-        # (PR2 busy signal), return Retry(
-        #     max=settings.shared_cache_busy_max_retries,
-        #     interval=int(settings.shared_cache_busy_retry_sec),
-        # ) so the worker slot is released. Do not use enqueue_in/enqueue_at (rq#2499).
+        if result.shared_cache_busy:
+            # Same job object, interval > 0. enqueue_in/enqueue_at ignore unique (rq#2499).
+            return _requeue_shared_cache(settings, dest, job_id, session_id, generation, current)
         return _finish(result, dest, job_id, generation, budget, current)
+
+
+def _requeue_shared_cache(
+    settings: Settings,
+    dest: Path,
+    job_id: str,
+    session_id: str,
+    generation: int,
+    current: Job | None,
+) -> Retry | None:
+    """Release the slot while another session holds the shared book.
+
+    The product cap lives in meta, not in ``Retry.max``. RQ marks the Redis
+    job failed when ``number_of_retries >= retry.max`` without calling this
+    function again, and admission retries share that counter. Growing ``max``
+    by one keeps the job scheduled. ``meta.json`` stays queued until the cap
+    is spent, then ``shared_cache_busy`` is written here.
+    """
+    cap = int(settings.shared_cache_busy_max_retries)
+    seen = _busy_seen(read_meta(dest / "meta.json"))
+    if seen >= cap:
+        mark_job_failed(dest, job_id, "shared_cache_busy", generation, detail=_BUSY_DETAIL)
+        log_event(
+            _LOGGER,
+            logging.WARNING,
+            "job_failed",
+            f"shared_cache_busy: {_BUSY_DETAIL}",
+            job_id=job_id,
+            session_id=session_id,
+            queue=settings.queue_name,
+            generation=generation,
+            error_code="shared_cache_busy",
+            reason=_BUSY_DETAIL,
+            attempt=seen,
+            max_retries=cap,
+        )
+        return None
+    release_horse_record(dest)
+    configured = float(settings.shared_cache_busy_retry_sec)
+    interval = max(1, int(configured))
+    attempt = seen + 1
+
+    def stamp(document: dict) -> dict:
+        updated = dict(document)
+        updated[_BUSY_RETRIES] = attempt
+        return updated
+
+    update_json(dest / "meta.json", stamp)
+    log_event(
+        _PIPELINE,
+        logging.INFO,
+        "shared_cache_busy_requeue",
+        "shared cache busy",
+        job_id=job_id,
+        attempt=attempt,
+        retry_after_sec=configured,
+        max_retries=cap,
+    )
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "job_requeued",
+        "job requeued: shared cache busy",
+        job_id=job_id,
+        session_id=session_id,
+        queue=settings.queue_name,
+        generation=generation,
+        retry_in_sec=interval,
+        reason="shared_cache_busy",
+        attempt=attempt,
+        max_retries=cap,
+    )
+    rq_seen = 0
+    if current is not None and current.number_of_retries:
+        rq_seen = int(current.number_of_retries)
+    return Retry(max=rq_seen + 1, interval=interval)
+
+
+def _busy_seen(meta: dict) -> int:
+    raw = meta.get(_BUSY_RETRIES)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return 0
+    return raw
 
 
 def on_horse_killed(job: Job, retpid: int, ret_val: int, rusage: object) -> None:

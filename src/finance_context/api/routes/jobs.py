@@ -559,7 +559,7 @@ def _lost_now(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
 
 # Short sentences this process writes itself. Converter stderr and workbook
 # paths stay in the log and in meta.json, not in the job response.
-_PUBLIC_DETAIL = frozenset({"workbook_too_large"})
+_PUBLIC_DETAIL = frozenset({"workbook_too_large", "shared_cache_busy"})
 
 
 def _job_body(job_id: str, meta: dict) -> dict:
