@@ -57,6 +57,8 @@ _BUSY_TIMEOUT_MARGIN_SEC = 2.0
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
 # Set only in the spawned child. In-process callers measure from execute_job.
 _child_watchdog_deadline: float | None = None
+# sysexits.h EX_TEMPFAIL. The RQ horse maps this to Retry and does not sleep.
+SHARED_CACHE_BUSY_EXIT = 75
 
 
 class Pipeline:
@@ -104,9 +106,7 @@ class Pipeline:
                             shared_dir=book,
                         )
                 else:
-                    invalidation = invalidate_for_run(
-                        dest_dir, book, shared=False, job_id=job_id
-                    )
+                    invalidation = invalidate_for_run(dest_dir, book, shared=False, job_id=job_id)
                     document = self._run(
                         dest_dir,
                         job_id=job_id,
@@ -211,9 +211,7 @@ class Pipeline:
 
             def parse_and_count():
                 parse_workbook(ensure_xlsx(book, self.converter), book, settings=self.settings)
-                counted = assess_raw(
-                    book, usage_box[0] or book_usage(), settings=self.settings
-                )
+                counted = assess_raw(book, usage_box[0] or book_usage(), settings=self.settings)
                 parse_profile["cells"] = counted.cells
                 parse_profile["formulas"] = counted.formulas
                 parse_profile["estimate_bytes"] = counted.estimate_bytes
@@ -288,9 +286,10 @@ class Pipeline:
         set_stage("graph", status="running")
         # graph.json can outlive ir/graph_edges.parquet (a publisher change drops the parquet).
         # Trace walks that file, so a missing parquet has to be rebuilt.
-        if not (dest_dir / "graph.json").is_file() or not (
-            dest_dir / "ir" / "graph_edges.parquet"
-        ).is_file():
+        if (
+            not (dest_dir / "graph.json").is_file()
+            or not (dest_dir / "ir" / "graph_edges.parquet").is_file()
+        ):
             graph_profile = {
                 "cells": len(ir_cells),
                 "edges": len(ir_edges),
@@ -389,7 +388,36 @@ class Pipeline:
 def run_job_process(
     data_dir: str, job_id: str, generation: int = 0, session_id: str = "local"
 ) -> None:
-    """Entry point for a spawned interpreter. Runs one book on this process's main thread."""
+    """Entry point that waits out a busy shared cache in this process.
+
+    CLI ``build`` and in-process tests use this. The RQ child uses
+    :func:`run_queued_job` so a busy lock does not hold a worker slot.
+    """
+    _run_pipeline_child(data_dir, job_id, generation, session_id, wait_on_busy=True)
+
+
+def run_queued_job(
+    data_dir: str, job_id: str, generation: int = 0, session_id: str = "local"
+) -> None:
+    """RQ spawn child. One :meth:`Pipeline.run`, then exit.
+
+    A busy shared book lock exits :data:`SHARED_CACHE_BUSY_EXIT` without
+    writing ``failed`` and without sleeping. The horse turns that into
+    ``rq.Retry``. Other errors are recorded the same way as
+    :func:`run_job_process`.
+    """
+    _run_pipeline_child(data_dir, job_id, generation, session_id, wait_on_busy=False)
+
+
+def _run_pipeline_child(
+    data_dir: str,
+    job_id: str,
+    generation: int,
+    session_id: str,
+    *,
+    wait_on_busy: bool,
+) -> None:
+    """Run one book on this process's main thread."""
     settings = Settings(data_dir=Path(data_dir), session_id=session_id)
     _arm_child_watchdog(settings.job_timeout_sec)
     prefer_oom_kill(score=settings.job_oom_score_adj)
@@ -397,14 +425,25 @@ def run_job_process(
     _install_stage_pause()
     dest = session_job_dir(settings.data_dir, job_id, settings.session_id)
     shared = shared_book_dir(settings.data_dir, job_id)
+    pipeline = Pipeline(settings)
     try:
-        execute_job(
-            Pipeline(settings),
-            dest,
-            job_id=job_id,
-            generation=generation,
-            shared_dir=shared,
-        )
+        if wait_on_busy:
+            execute_job(
+                pipeline,
+                dest,
+                job_id=job_id,
+                generation=generation,
+                shared_dir=shared,
+            )
+        else:
+            pipeline.run(
+                dest,
+                job_id=job_id,
+                generation=generation,
+                shared_dir=shared,
+            )
+    except SharedCacheBusy:
+        raise SystemExit(SHARED_CACHE_BUSY_EXIT) from None
     except ContextError as exc:
         # A known refusal (encrypted book, over budget, bad zip): the code, no traceback.
         mark_job_failed(dest, job_id, exc.code, generation, detail=exc.detail or None)
@@ -447,10 +486,10 @@ def execute_job(
 ) -> ContextDocument:
     """Run one job, waiting out :class:`SharedCacheBusy` inside this process.
 
-    This wait is the stand-in until PR3. The RQ worker must not call it.
-    Catch ``SharedCacheBusy`` from :meth:`Pipeline.run` and raise
-    ``rq.Retry(interval=exc.retry_after_sec)`` instead of sleeping. After
-    ``exc.max_retries`` requeues, fail the job with ``shared_cache_busy``.
+    CLI ``build`` and in-process tests use this. The RQ spawn child must not:
+    it calls :meth:`Pipeline.run` once and exits :data:`SHARED_CACHE_BUSY_EXIT`
+    so the horse can return ``rq.Retry``. After ``max_retries`` requeues, the
+    horse fails the job with ``shared_cache_busy``.
 
     Here the first busy result is followed by at most ``max_retries`` more
     attempts, sleeping ``retry_after_sec`` between them. ``max_retries`` of 0

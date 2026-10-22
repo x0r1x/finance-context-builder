@@ -82,6 +82,23 @@ _ALLOWED_EXTRA = frozenset(
         "exc_type",
         "job_id",
         "host",
+        "queue",
+        "session_id",
+        "rq_job_id",
+        "generation",
+        "redis_scheme",
+        "redis_host",
+        "redis_port",
+        "redis_db",
+        "slots",
+        "retry_in_sec",
+        "inflight",
+        "oom_kill",
+        "timeout_sec",
+        "margin_sec",
+        "ttl_sec",
+        "result_ttl_sec",
+        "failure_ttl_sec",
     }
 )
 
@@ -112,22 +129,41 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+def _build_handler(
+    *,
+    level: str,
+    json_output: bool,
+    stream: TextIO | None,
+) -> logging.Handler:
+    del level
+    handler = logging.StreamHandler(stream or sys.stdout)
+    if json_output:
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    return handler
+
+
 def configure_logging(
     *,
     level: str = "INFO",
     json_output: bool = True,
     stream: TextIO | None = None,
 ) -> None:
-    handler = logging.StreamHandler(stream or sys.stdout)
-    if json_output:
-        handler.setFormatter(JsonFormatter())
-    else:
-        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    handler = _build_handler(level=level, json_output=json_output, stream=stream)
+    chosen = getattr(logging, level.upper(), logging.INFO)
     root = logging.getLogger("finance_context")
     root.handlers.clear()
     root.addHandler(handler)
-    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    root.setLevel(chosen)
     root.propagate = False
+    # RQ's setup_loghandlers adds color handlers only when no parent handler
+    # exists. One JSON handler here covers rq.worker and rq.worker_pool.
+    rq_logger = logging.getLogger("rq")
+    rq_logger.handlers.clear()
+    rq_logger.addHandler(_build_handler(level=level, json_output=json_output, stream=stream))
+    rq_logger.setLevel(chosen)
+    rq_logger.propagate = False
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 

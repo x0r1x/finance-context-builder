@@ -75,9 +75,7 @@ class Settings(BaseSettings):
     job_estimate_bytes_per_present_cell: int = DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL
     # Previous fit. Used when parse, graph streaming, or AST compression is off.
     job_estimate_unstreamed_base_bytes: int = DEFAULT_ESTIMATE_UNSTREAMED_BASE_BYTES
-    job_estimate_unstreamed_bytes_per_formula: int = (
-        DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA
-    )
+    job_estimate_unstreamed_bytes_per_formula: int = DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA
     job_estimate_unstreamed_bytes_per_expanded_cell: int = (
         DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_EXPANDED_CELL
     )
@@ -110,11 +108,35 @@ class Settings(BaseSettings):
     job_malloc_arena_max: int | None = DEFAULT_MALLOC_ARENA_MAX
     # malloc_trim after each pipeline stage. A no-op where libc has no such function.
     job_malloc_trim: bool = True
+    # RQ. The API and the worker both take the address from here. No in-process fallback.
+    redis_url: str = "redis://redis:6379/0"
+    redis_connect_timeout_sec: float = 2
+    queue_name: str = "finance-context"
+    # Queued plus started jobs for one SESSION_ID. Above this, POST is 429.
+    job_queue_max_per_session: int = 3
+    # RQ job_timeout is JOB_TIMEOUT_SEC plus both stop pauses plus this margin.
+    queue_job_timeout_margin_sec: float = 120
+    # 0 means a queued job can wait without an RQ ttl.
+    queue_job_ttl_sec: int = 0
+    queue_result_ttl_sec: int = 3600
+    queue_failure_ttl_sec: int = 604800
+    # Retries after a lost worker or horse. Pipeline errors and OOM do not use this.
+    job_retry_on_lost: int = 1
     # Seconds between attempts while another session holds shared/books/{job_id}/.lock.
-    # PR3 maps SharedCacheBusy.retry_after_sec to an RQ Retry interval.
+    # The horse maps SharedCacheBusy to Retry(interval) and releases the slot.
+    # CLI build still waits in-process, and stops before JOB_TIMEOUT_SEC.
     shared_cache_busy_retry_sec: float = DEFAULT_SHARED_CACHE_BUSY_RETRY_SEC
-    # How many extra attempts follow the first busy result. 0 fails immediately.
+    # Extra attempts after the first busy result. 0 fails on that first result.
     shared_cache_busy_max_retries: int = DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES
+    job_admission_cgroup_check: bool = True
+    job_admission_retry_sec: float = 30
+    # How often a child, and a horse, notice that their parent pid changed.
+    job_parent_watch_interval_sec: float = 1.0
+    # Retry-After on 429 and 503.
+    job_retry_after_sec: int = 30
+    # The horse stops the spawn child with SIGTERM, then SIGKILL.
+    job_terminate_grace_sec: float = 5
+    job_kill_grace_sec: float = 5
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -172,7 +194,13 @@ class Settings(BaseSettings):
 
     @field_validator(
         "job_memory_watch_interval_sec",
+        "redis_connect_timeout_sec",
+        "queue_job_timeout_margin_sec",
         "shared_cache_busy_retry_sec",
+        "job_admission_retry_sec",
+        "job_parent_watch_interval_sec",
+        "job_terminate_grace_sec",
+        "job_kill_grace_sec",
         mode="before",
     )
     @classmethod
@@ -221,20 +249,56 @@ class Settings(BaseSettings):
         "layout_columnar_facts",
         "job_malloc_trim",
         "data_dir_allow_network_fs",
+        "job_admission_cgroup_check",
         mode="before",
     )
     @classmethod
     def require_bool(cls, value: object, info: ValidationInfo) -> bool:
         return _require_bool(value, info)
 
-    @field_validator("shared_cache_busy_max_retries", mode="before")
-    @classmethod
-    def require_busy_retries(cls, value: object, info: ValidationInfo) -> int:
-        return _require_whole_int(value, info, minimum=0)
-
     @field_validator("parquet_row_group_rows", mode="before")
     @classmethod
     def require_row_group_rows(cls, value: object, info: ValidationInfo) -> int:
+        return _require_whole_int(value, info, minimum=0)
+
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def require_redis_url(cls, value: object, info: ValidationInfo) -> str:
+        del info
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("REDIS_URL must be a Redis URL")
+        token = value.strip()
+        if not token.startswith(("redis://", "rediss://", "unix://")):
+            raise ValueError("REDIS_URL must start with redis://, rediss://, or unix://")
+        return token
+
+    @field_validator("queue_name", mode="before")
+    @classmethod
+    def require_queue_name(cls, value: object, info: ValidationInfo) -> str:
+        del info
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("QUEUE_NAME must be a non-empty name")
+        token = value.strip()
+        if any(char.isspace() for char in token) or "/" in token:
+            raise ValueError("QUEUE_NAME must be a single token")
+        return token
+
+    @field_validator("job_queue_max_per_session", mode="before")
+    @classmethod
+    def require_session_cap(cls, value: object, info: ValidationInfo) -> int:
+        return _require_whole_int(value, info, minimum=1)
+
+    @field_validator(
+        "queue_job_ttl_sec",
+        "queue_result_ttl_sec",
+        "queue_failure_ttl_sec",
+        "job_retry_on_lost",
+        "shared_cache_busy_max_retries",
+        "job_retry_after_sec",
+        mode="before",
+    )
+    @classmethod
+    def require_non_negative_whole(cls, value: object, info: ValidationInfo) -> int:
         return _require_whole_int(value, info, minimum=0)
 
     @field_validator("job_malloc_arena_max", mode="before")
@@ -262,6 +326,16 @@ class Settings(BaseSettings):
                 f"{self.session_id_max_length} characters; refusing {session!r}"
             )
         return self
+
+    def queue_job_timeout_sec(self) -> int:
+        """RQ's spare limit. The horse's own JOB_TIMEOUT_SEC stays the real stop."""
+        total = (
+            self.job_timeout_sec
+            + self.job_terminate_grace_sec
+            + self.job_kill_grace_sec
+            + self.queue_job_timeout_margin_sec
+        )
+        return max(1, math.ceil(total))
 
 
 def _require_bool(value: object, info: ValidationInfo) -> bool:

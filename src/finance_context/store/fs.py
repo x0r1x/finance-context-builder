@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,11 +30,24 @@ _CELL_COLUMNS = (
 )
 
 
-def atomic_write_bytes(path: Path, data: bytes) -> None:
+def temporary_path(path: Path) -> Path:
+    """Unique temp file in ``path``'s directory. The caller deletes it on failure."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_bytes(data)
-    atomic_replace(tmp, path)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    return Path(name)
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Publish ``data`` as ``path``. Concurrent writers use distinct temp names."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = temporary_path(path)
+    try:
+        tmp.write_bytes(data)
+        atomic_replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def atomic_replace(tmp: Path, path: Path) -> None:
@@ -135,13 +149,17 @@ def write_json(
 def stream_json(path: Path, data: Any, *, sort_keys: bool = False) -> None:
     """json.dump writes the document in chunks. No whole-document str or bytes."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=sort_keys)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    atomic_replace(tmp, path)
+    tmp = temporary_path(path)
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=sort_keys)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        atomic_replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 _ARROW_TYPES = {
@@ -188,9 +206,13 @@ def _write_row_table(
 
 def _write_table_file(path: Path, table: pa.Table) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    pq.write_table(table, tmp)
-    atomic_replace(tmp, path)
+    tmp = temporary_path(path)
+    try:
+        pq.write_table(table, tmp)
+        atomic_replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def read_parquet(path: Path) -> list[dict[str, Any]]:
@@ -312,9 +334,13 @@ class RowGroupWriter:
         if self._writer is not None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._tmp = self.path.with_name(self.path.name + ".tmp")
+        self._tmp = temporary_path(self.path)
         schema = pa.schema(list(zip(self.names, self.types, strict=True)))
-        self._writer = pq.ParquetWriter(self._tmp, schema)
+        try:
+            self._writer = pq.ParquetWriter(self._tmp, schema)
+        except BaseException:
+            self._abort_tmp()
+            raise
         pending = self._chunks
         self._chunks = []
         for chunk in pending:
@@ -323,8 +349,7 @@ class RowGroupWriter:
     def _write_group(self, columns_data: Sequence[Sequence[Any]]) -> None:
         assert self._writer is not None
         arrays = [
-            pa.array(values, type=typ)
-            for values, typ in zip(columns_data, self.types, strict=True)
+            pa.array(values, type=typ) for values, typ in zip(columns_data, self.types, strict=True)
         ]
         self._writer.write_table(pa.Table.from_arrays(arrays, names=self.names))
 
@@ -334,9 +359,22 @@ class RowGroupWriter:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
         if exc_type is None:
             self.close()
-        elif self._tmp is not None and self._tmp.is_file() and not self.path.is_file():
-            self._tmp.unlink(missing_ok=True)
+        else:
+            self._abort_tmp()
         return False
+
+    def _abort_tmp(self) -> None:
+        writer = self._writer
+        self._writer = None
+        if writer is not None:
+            try:
+                writer.close()
+            except Exception:
+                pass
+        tmp = self._tmp
+        self._tmp = None
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 class _RowView:

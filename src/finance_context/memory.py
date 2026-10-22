@@ -200,6 +200,69 @@ def _finite_limit(path: Path) -> int | None:
     return value
 
 
+def cgroup_leaf_dir(
+    proc_cgroup: Path = _PROC_CGROUP,
+    sysfs: Path = _SYS_CGROUP,
+) -> Path | None:
+    """Directory of this process's own cgroup, without walking parents."""
+    try:
+        text = proc_cgroup.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("0::"):
+            rel = line.split("::", 1)[1].strip().strip("/")
+            return sysfs.joinpath(*rel.split("/")) if rel else sysfs
+    for line in text.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3 or "memory" not in parts[1].split(","):
+            continue
+        rel = parts[2].strip().strip("/")
+        base = sysfs / "memory"
+        return base.joinpath(*rel.split("/")) if rel else base
+    return None
+
+
+def cgroup_memory_anon_bytes(
+    proc_cgroup: Path = _PROC_CGROUP,
+    sysfs: Path = _SYS_CGROUP,
+) -> int | None:
+    """Anonymous memory charged to this cgroup, from memory.stat."""
+    leaf = cgroup_leaf_dir(proc_cgroup, sysfs)
+    if leaf is None:
+        return None
+    return _named_counter(leaf / "memory.stat", "anon")
+
+
+def cgroup_oom_kill_count(
+    proc_cgroup: Path = _PROC_CGROUP,
+    sysfs: Path = _SYS_CGROUP,
+) -> int | None:
+    """How many times this cgroup's OOM killer has fired. None when unreadable."""
+    leaf = cgroup_leaf_dir(proc_cgroup, sysfs)
+    if leaf is None:
+        return None
+    events = _named_counter(leaf / "memory.events", "oom_kill")
+    if events is not None:
+        return events
+    return _named_counter(leaf / "memory.oom_control", "oom_kill")
+
+
+def _named_counter(path: Path, key: str) -> int | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == key:
+            try:
+                return int(parts[1])
+            except ValueError:
+                return None
+    return None
+
+
 def resolve_job_budget_bytes(
     *,
     slots: int,
@@ -220,6 +283,25 @@ def resolve_job_budget_bytes(
     usable = max(1, limit - reserve)
     slots = max(1, int(slots))
     return max(1, usable // slots)
+
+
+def admission_blocked(
+    *,
+    enabled: bool,
+    limit_bytes: int | None,
+    anon_bytes: int | None,
+    budget_bytes: int | None,
+) -> bool:
+    """True when the cgroup has no room for another job of this budget.
+
+    Missing numbers, or a disabled check, mean the horse runs the job.
+    macOS has no memory.stat, so the check stays quiet there.
+    """
+    if not enabled or budget_bytes is None or budget_bytes <= 0:
+        return False
+    if limit_bytes is None or anon_bytes is None:
+        return False
+    return limit_bytes - anon_bytes < budget_bytes
 
 
 def budget_for_settings(settings: Settings) -> int:

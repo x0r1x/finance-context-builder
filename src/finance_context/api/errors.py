@@ -17,9 +17,17 @@ _HTTP = {
 
 
 class ApiError(Exception):
-    def __init__(self, http_status: int, code: str, **extra: object) -> None:
+    def __init__(
+        self,
+        http_status: int,
+        code: str,
+        *,
+        headers: dict[str, str] | None = None,
+        **extra: object,
+    ) -> None:
         self.http_status = http_status
         self.code = code
+        self.headers = headers
         self.extra = extra
         super().__init__(code)
 
@@ -31,7 +39,11 @@ def error_body(code: str, **extra: object) -> dict[str, object]:
 
 
 async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
-    return JSONResponse(error_body(exc.code, **exc.extra), status_code=exc.http_status)
+    return JSONResponse(
+        error_body(exc.code, **exc.extra),
+        status_code=exc.http_status,
+        headers=exc.headers,
+    )
 
 
 async def context_error_handler(_request: Request, exc: ContextError) -> JSONResponse:

@@ -27,7 +27,13 @@ from finance_context.layout.periods import period_position
 from finance_context.layout.resolve import period_headers
 from finance_context.models.context import GraphPointer
 from finance_context.settings import Settings
-from finance_context.store.fs import read_parquet, write_json, write_parquet
+from finance_context.store.fs import (
+    atomic_write_bytes,
+    read_parquet,
+    temporary_path,
+    write_json,
+    write_parquet,
+)
 
 INDEX_COLUMNS = (
     ("node_id", "VARCHAR"),
@@ -53,8 +59,10 @@ def build_formula_graph(
     chosen = settings if isinstance(settings, Settings) else Settings()
     book = book_dir or dest_dir
     cell_edge_path = book / "ir" / "cell_edges.parquet"
-    stream = chosen.graph_stream and cell_edge_path.is_file() and (
-        cell_edges is None or isinstance(cell_edges, EdgeCount)
+    stream = (
+        chosen.graph_stream
+        and cell_edge_path.is_file()
+        and (cell_edges is None or isinstance(cell_edges, EdgeCount))
     )
     if cells is None:
         cells = read_parquet(book / "ir" / "cells.parquet")
@@ -146,9 +154,7 @@ def build_formula_graph(
             from finance_context.render.graph import render_graph_markdown
 
             markdown = render_graph_markdown(doc)
-            tmp = dest_dir / "graph.md.tmp"
-            tmp.write_text(markdown, encoding="utf-8")
-            tmp.replace(dest_dir / "graph.md")
+            atomic_write_bytes(dest_dir / "graph.md", markdown.encode("utf-8"))
     unexpected = sum(1 for c in cycles if c.class_ == "unexpected")
     iterative = sum(1 for c in cycles if c.class_ == "iterative_ok")
     classes = doc.dangling_classes
@@ -580,9 +586,7 @@ def _cycles_packed(id_of: dict[str, int], src_ids, tgt_ids, flags) -> list[Cycle
     rows = np.fromiter((rank[i] for i in src_ids), dtype=np.int32, count=n_edges)
     cols = np.fromiter((rank[i] for i in tgt_ids), dtype=np.int32, count=n_edges)
     data = np.ones(n_edges, dtype=np.uint8)
-    matrix = sparse.csr_matrix(
-        (data, (rows, cols)), shape=(len(nodes), len(nodes)), dtype=np.uint8
-    )
+    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(len(nodes), len(nodes)), dtype=np.uint8)
     _n_comp, labels = connected_components(matrix, directed=True, connection="strong")
     order: list[int] = []
     members: dict[int, list[str]] = {}
@@ -760,9 +764,7 @@ def _graph_from_parquet(
     if stream_json:
         _stream_graph_files(dest_dir, doc, grouped, identity, formula_by_node, lag_groups)
     else:
-        doc.links = _formula_links(
-            cells, edges, row_meta, period_by_cell, lags=lag_groups
-        )
+        doc.links = _formula_links(cells, edges, row_meta, period_by_cell, lags=lag_groups)
         write_json(
             dest_dir / "graph.json",
             doc.model_dump(mode="json", by_alias=True),
@@ -771,9 +773,7 @@ def _graph_from_parquet(
         from finance_context.render.graph import render_graph_markdown
 
         markdown = render_graph_markdown(doc)
-        tmp = dest_dir / "graph.md.tmp"
-        tmp.write_text(markdown, encoding="utf-8")
-        tmp.replace(dest_dir / "graph.md")
+        atomic_write_bytes(dest_dir / "graph.md", markdown.encode("utf-8"))
     return cycles, doc, iterate
 
 
@@ -818,9 +818,7 @@ def _stream_graph_files(
         payload = doc.model_dump(mode="json", by_alias=True)
         write_json(dest_dir / "graph.json", payload, stream=True)
         markdown = render_graph_markdown(doc)
-        tmp = dest_dir / "graph.md.tmp"
-        tmp.write_text(markdown, encoding="utf-8")
-        tmp.replace(dest_dir / "graph.md")
+        atomic_write_bytes(dest_dir / "graph.md", markdown.encode("utf-8"))
         return
     identity = identity or {}
     formula_by_node = formula_by_node or {}
@@ -833,52 +831,58 @@ def _stream_graph_files(
     prefix, suffix = text.split(slot, 1)
     md_head = render_graph_markdown(doc)
     md_head = md_head.replace("- Links: 0\n", f"- Links: {n_links}\n", 1)
-    json_tmp = dest_dir / "graph.json.tmp"
-    md_tmp = dest_dir / "graph.md.tmp"
-    with json_tmp.open("w", encoding="utf-8", newline="\n") as json_file, md_tmp.open(
-        "w", encoding="utf-8", newline="\n"
-    ) as md_file:
-        json_file.write(prefix)
-        md_file.write(md_head)
-        if n_links == 0:
-            json_file.write("[]")
-        else:
-            json_file.write("[\n")
-            first = True
-            for cell in sorted(grouped):
-                refs = grouped.pop(cell)
-                row_key, period_id = identity.get(cell, (None, None))
-                formula = formula_by_node.get(cell)
-                formula_class = classify_formula(formula, refs, lags.get(cell))
-                item = {
-                    "cell": cell,
-                    "formula": formula,
-                    "formula_class": formula_class,
-                    "refs": refs,
-                    "row_key": row_key,
-                    "period_id": period_id,
-                }
-                body = json.dumps(item, ensure_ascii=False, indent=2).replace("\n", "\n    ")
-                json_file.write(("" if first else ",\n") + "    " + body)
-                first = False
-                md_file.write(
-                    "| "
-                    + " | ".join(
-                        [
-                            _cell(cell),
-                            _cell(row_key or ""),
-                            _cell(period_id or ""),
-                            _cell(formula_class or ""),
-                            _cell(formula or ""),
-                            _cell(", ".join(refs)),
-                        ]
+    json_tmp = temporary_path(dest_dir / "graph.json")
+    md_tmp = temporary_path(dest_dir / "graph.md")
+    try:
+        with (
+            json_tmp.open("w", encoding="utf-8", newline="\n") as json_file,
+            md_tmp.open("w", encoding="utf-8", newline="\n") as md_file,
+        ):
+            json_file.write(prefix)
+            md_file.write(md_head)
+            if n_links == 0:
+                json_file.write("[]")
+            else:
+                json_file.write("[\n")
+                first = True
+                for cell in sorted(grouped):
+                    refs = grouped.pop(cell)
+                    row_key, period_id = identity.get(cell, (None, None))
+                    formula = formula_by_node.get(cell)
+                    formula_class = classify_formula(formula, refs, lags.get(cell))
+                    item = {
+                        "cell": cell,
+                        "formula": formula,
+                        "formula_class": formula_class,
+                        "refs": refs,
+                        "row_key": row_key,
+                        "period_id": period_id,
+                    }
+                    body = json.dumps(item, ensure_ascii=False, indent=2).replace("\n", "\n    ")
+                    json_file.write(("" if first else ",\n") + "    " + body)
+                    first = False
+                    md_file.write(
+                        "| "
+                        + " | ".join(
+                            [
+                                _cell(cell),
+                                _cell(row_key or ""),
+                                _cell(period_id or ""),
+                                _cell(formula_class or ""),
+                                _cell(formula or ""),
+                                _cell(", ".join(refs)),
+                            ]
+                        )
+                        + " |\n"
                     )
-                    + " |\n"
-                )
-            json_file.write("\n  ]")
-        json_file.write(suffix + "\n")
-        json_file.flush()
-        os.fsync(json_file.fileno())
-    json_tmp.replace(dest_dir / "graph.json")
-    md_tmp.replace(dest_dir / "graph.md")
+                json_file.write("\n  ]")
+            json_file.write(suffix + "\n")
+            json_file.flush()
+            os.fsync(json_file.fileno())
+        json_tmp.replace(dest_dir / "graph.json")
+        md_tmp.replace(dest_dir / "graph.md")
+    except BaseException:
+        json_tmp.unlink(missing_ok=True)
+        md_tmp.unlink(missing_ok=True)
+        raise
     doc.links = []
