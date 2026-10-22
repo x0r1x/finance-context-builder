@@ -233,11 +233,21 @@ def _inflight_response(ctx: AppContext, job_id: str, dest: Path) -> dict[str, ob
     A ``started`` hash with a free run lock is abandoned after one recheck:
     the worker that would run ``on_horse_killed`` is already gone, and RQ
     keeps the hash until a later maintenance pass.
+
+    A ``failed`` / ``queue_lost`` meta with that same inflight id is a corpse
+    left when the worker died before ``on_horse_killed``. A dead horse is
+    deleted and enqueued again. A held horse lock is still running (409).
+    ``horse_owner_alive`` returning None is unknown, not dead.
     """
     settings = ctx.settings
     rq_id = rq_job_id(settings.session_id, job_id)
     status = ctx.queue.status(rq_id)
     stored = _load_meta(dest)
+    corpse = _rechecked_queue_lost(ctx, rq_id, dest, stored, status)
+    if corpse is True:
+        return None
+    if corpse is False:
+        raise _JobStillRunning
     if _abandoned_started(ctx, rq_id, dest, stored, status):
         return None
     if not _still_inflight(status, dest):
@@ -252,6 +262,51 @@ def _inflight_response(ctx: AppContext, job_id: str, dest: Path) -> dict[str, ob
 
 def _still_inflight(status: str | None, dest: Path) -> bool:
     return status in INFLIGHT_STATUSES or run_lock_busy(dest)
+
+
+def _failed_queue_lost(stored: dict | None) -> bool:
+    return (
+        isinstance(stored, dict)
+        and stored.get("status") == "failed"
+        and stored.get("error") == "queue_lost"
+    )
+
+
+def _queue_lost_corpse(dest: Path, stored: dict | None, status: str | None) -> bool | None:
+    """True when an inflight RQ id is a dead ``queue_lost`` record.
+
+    False when the run lock or the horse lock is held. None when this is not
+    a ``queue_lost`` failure, or the horse cannot be inspected. None is not
+    a dead horse: a missing record and an unreadable lock both stay None.
+    """
+    if status not in INFLIGHT_STATUSES or not _failed_queue_lost(stored):
+        return None
+    if run_lock_busy(dest):
+        return False
+    alive = horse_owner_alive(dest, _disk_generation(stored))
+    if alive is None:
+        return None
+    if alive:
+        return False
+    return True
+
+
+def _rechecked_queue_lost(
+    ctx: AppContext,
+    rq_id: str,
+    dest: Path,
+    stored: dict | None,
+    status: str | None,
+) -> bool | None:
+    """Second read so RQ's own abandoned-job cleanup can win the race.
+
+    The first look only decides whether a recheck is worth doing. Redis down
+    on the second read is ``QueueUnavailable``, not a relaunch.
+    """
+    if _queue_lost_corpse(dest, stored, status) is None:
+        return None
+    again = ctx.queue.status(rq_id)
+    return _queue_lost_corpse(dest, _load_meta(dest), again)
 
 
 def _started_without_child(status: str | None, dest: Path, stored: dict | None) -> bool:
@@ -325,8 +380,13 @@ def _enqueue_or_reuse(
     stored = _load_meta(dest)
     # Re-check under the lock. Do not wait here: the pipeline child needs
     # this same lock, and a wait would deadlock a stop.
-    if run_lock_busy(dest) or (
-        status in INFLIGHT_STATUSES and not _started_without_child(status, dest, stored)
+    # A queue_lost corpse is deleted below and enqueued as the same id.
+    corpse = _queue_lost_corpse(dest, stored, status)
+    if corpse is False:
+        raise _JobStillRunning
+    if corpse is not True and (
+        run_lock_busy(dest)
+        or (status in INFLIGHT_STATUSES and not _started_without_child(status, dest, stored))
     ):
         if publisher_changed(stored):
             raise _JobStillRunning

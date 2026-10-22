@@ -70,6 +70,41 @@ def test_enqueue_is_unique_and_counts_the_session(redis_settings: Settings, capl
     assert "redis://" not in line
 
 
+def test_delete_drops_a_started_registry_entry(redis_settings: Settings) -> None:
+    """A dead STARTED hash must not keep unique=True from accepting the same id."""
+    from redis import Redis
+    from rq.job import Job, JobStatus
+    from rq.registry import StartedJobRegistry
+    from rq.serializers import JSONSerializer
+
+    queue = RQJobQueue.from_settings(redis_settings, connect_timeout=True)
+    payload = {
+        "session_id": "local",
+        "job_id": _BOOK,
+        "data_dir": "/tmp/finance-context-test",
+        "generation": 1,
+    }
+    rq_id = queue.enqueue(payload)
+    client = Redis.from_url(redis_settings.redis_url)
+    job = Job.fetch(rq_id, connection=client, serializer=JSONSerializer)
+    job.set_status(JobStatus.STARTED)
+    registry = StartedJobRegistry(
+        redis_settings.queue_name,
+        connection=client,
+        serializer=JSONSerializer,
+    )
+    client.zadd(registry.key, {f"{rq_id}:exec-stale": "+inf"})
+    queue.delete(rq_id)
+    assert queue.status(rq_id) is None
+    raw_members = client.zrange(registry.key, 0, -1)
+    members = [item.decode() if isinstance(item, bytes) else str(item) for item in raw_members]
+    assert rq_id not in members
+    assert all(not item.startswith(f"{rq_id}:") for item in members)
+    assert queue.session_inflight("local") == 0
+    assert queue.enqueue(payload) == rq_id
+    assert queue.status(rq_id) == "queued"
+
+
 def test_delete_lets_the_same_id_enqueue_again(redis_settings: Settings) -> None:
     queue = RQJobQueue.from_settings(redis_settings, connect_timeout=True)
     payload = {

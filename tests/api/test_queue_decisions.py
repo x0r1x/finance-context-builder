@@ -253,6 +253,77 @@ def test_live_horse_is_not_replaced_before_the_child_takes_the_lock(
     assert queue.enqueued == 0
 
 
+def _queue_lost_meta(ctx: AppContext) -> Path:
+    return _meta(ctx, status="failed", stage="failed", error="queue_lost", generation=1)
+
+
+@pytest.mark.parametrize("rq_status", ["started", "queued", "deferred", "scheduled"])
+def test_stale_queue_lost_relaunches(tmp_path: Path, rq_status: str) -> None:
+    queue = _Queue(rq_status)
+    ctx = _ctx(tmp_path, queue)
+    dest = _queue_lost_meta(ctx)
+    _horse(dest, _dead_pid())
+    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    assert body["status"] == "queued"
+    assert body["stage"] == "queued"
+    assert queue.deleted == 1
+    assert queue.enqueued == 1
+    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    assert stored["status"] == "queued"
+    assert stored["generation"] == 2
+    assert "error" not in stored
+
+
+def test_alive_horse_on_queue_lost_is_still_running(tmp_path: Path) -> None:
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    dest = _queue_lost_meta(ctx)
+    _horse(dest, _dead_pid())
+    held = _hold(dest / HORSE_LOCK)
+    try:
+        with pytest.raises(ApiError) as caught:
+            _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    finally:
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
+    assert caught.value.http_status == 409
+    assert caught.value.code == "job_still_running"
+    assert queue.deleted == 0
+    assert queue.enqueued == 0
+
+
+def test_unreadable_horse_lock_on_queue_lost_is_not_dead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    dest = _queue_lost_meta(ctx)
+    _horse(dest, _dead_pid())
+    (dest / HORSE_LOCK).write_bytes(b"")
+    real_open = Path.open
+
+    def _open(self: Path, *args: object, **kwargs: object):
+        if self.name == HORSE_LOCK:
+            raise PermissionError(self)
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _open)
+    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    assert body["status"] == "failed"
+    assert queue.deleted == 0
+    assert queue.enqueued == 0
+
+
+def test_missing_horse_record_on_queue_lost_is_not_dead(tmp_path: Path) -> None:
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    _queue_lost_meta(ctx)
+    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    assert body["status"] == "failed"
+    assert queue.deleted == 0
+    assert queue.enqueued == 0
+
+
 def test_started_without_a_horse_record_is_not_replaced(tmp_path: Path) -> None:
     queue = _Queue("started")
     ctx = _ctx(tmp_path, queue)

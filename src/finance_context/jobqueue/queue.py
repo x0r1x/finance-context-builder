@@ -232,16 +232,45 @@ class RQJobQueue:
         self._guard(_stop)
 
     def delete(self, rq_id: str) -> None:
-        """Drop the Redis record so unique=True does not block a real rerun."""
+        """Drop the Redis record so unique=True does not block a real rerun.
+
+        ``Job.delete`` does not remove a STARTED id from ``StartedJobRegistry``
+        (it only drops execution keys it can still see). Sweep the inflight
+        registries first, then delete the hash, then sweep again so a member
+        written during ``delete`` does not keep the id.
+        """
 
         def _delete() -> None:
+            self._drop_inflight_membership(rq_id)
             try:
                 job = Job.fetch(rq_id, connection=self._redis, serializer=self._serializer)
             except NoSuchJobError:
                 return
-            job.delete()
+            try:
+                job.delete()
+            except (InvalidJobOperation, NoSuchJobError):
+                return
+            self._drop_inflight_membership(rq_id)
 
         self._guard(_delete)
+
+    def _drop_inflight_membership(self, rq_id: str) -> None:
+        """Remove ``rq_id`` from the queue list and every inflight registry."""
+        self._redis.lrem(self._queue.key, 0, rq_id)
+        for registry_cls in (
+            StartedJobRegistry,
+            ScheduledJobRegistry,
+            DeferredJobRegistry,
+        ):
+            registry = registry_cls(
+                name=self._queue.name,
+                connection=self._redis,
+                serializer=self._serializer,
+            )
+            members = self._redis.zrange(registry.key, 0, -1)
+            doomed = [raw for raw in members if _registry_member_is(raw, rq_id)]
+            if doomed:
+                self._redis.zrem(registry.key, *doomed)
 
     def health(self) -> bool:
         def _ping() -> bool:
@@ -262,3 +291,9 @@ def _text(value: object) -> str:
     if isinstance(value, bytes):
         return value.decode()
     return str(value)
+
+
+def _registry_member_is(raw: object, rq_id: str) -> bool:
+    """True for a bare id or an RQ execution key ``{id}:{execution}``."""
+    member = _text(raw)
+    return member == rq_id or member.startswith(f"{rq_id}:")
