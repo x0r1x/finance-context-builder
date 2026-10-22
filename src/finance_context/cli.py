@@ -14,6 +14,7 @@ from finance_context.app.publisher import publisher_matches, stale_from_meta
 from finance_context.app.shared_cache import record_rebuild_stage
 from finance_context.errors import ContextError
 from finance_context.excel.legacy import LEGACY_SOURCE, SOURCE, source_name
+from finance_context.jobqueue.embedded import start_for_serve, stop_for_serve
 from finance_context.jobqueue.pool import serve_workers, worker_check
 from finance_context.memory import MEMORY_ERROR_DETAIL
 from finance_context.observability import configure_logging
@@ -137,18 +138,26 @@ def serve(
     port: int = 8080,
     data_dir: Annotated[Path | None, typer.Option("--data-dir")] = None,
 ) -> None:
-    """Serve the API. Workbooks run on the RQ worker."""
-    if data_dir is not None:
-        import os
+    """Serve the API. The RQ pool starts as a child unless EMBEDDED_WORKER is false."""
+    import os
 
+    if data_dir is not None:
         os.environ["DATA_DIR"] = str(data_dir)
-    uvicorn.run(
-        "finance_context.api.app:app_from_env",
-        host=host,
-        port=port,
-        factory=True,
-        workers=1,
-    )
+    settings = Settings()
+    configure_logging(level=settings.log_level, json_output=settings.log_json)
+    # The child has to be up before the socket accepts traffic. workers=1 keeps
+    # this process, and the supervisor flag, in the process that serves /readyz.
+    supervisor = start_for_serve(settings)
+    try:
+        uvicorn.run(
+            "finance_context.api.app:app_from_env",
+            host=host,
+            port=port,
+            factory=True,
+            workers=1,
+        )
+    finally:
+        stop_for_serve(supervisor)
 
 
 @app.command()
@@ -166,3 +175,7 @@ def worker(
     if check:
         raise typer.Exit(code=worker_check(settings))
     serve_workers(settings)
+
+
+if __name__ == "__main__":
+    app()

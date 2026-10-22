@@ -42,12 +42,13 @@ uv run finance-context build path/to/model.xlsx -o ./out
 
 ### HTTP API
 
-`POST` только ставит книгу в очередь. Redis должен быть доступен, а `finance-context worker` должен работать в другом терминале. `REDIS_URL` по умолчанию — `redis://redis:6379/0`. С локальным Redis из Compose контейнер `finance-context` использует это имя, а процесс на хосте — `redis://127.0.0.1:6379/0`. В проде override не подключается, и адрес внешний (см. Docker). На хосте укажите обоим процессам локальный Redis и один и тот же `DATA_DIR`. Клиентские скрипты только вызывают HTTP; сервер они не запускают и не останавливают.
+`POST` только ставит книгу в очередь. Redis должен быть доступен. `finance-context serve` запускает воркер RQ дочерним процессом (`EMBEDDED_WORKER`, по умолчанию true). `REDIS_URL` по умолчанию — `redis://redis:6379/0`. Локально Redis берётся из `deploy/docker-compose.override.yml` (`redis:8.6.7-alpine` на `127.0.0.1:6379`). Процесс на хосте использует этот опубликованный порт:
 
 ```bash
 REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context serve --host 127.0.0.1 --port 8080
-REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context worker
 ```
+
+`EMBEDDED_WORKER=false` — только API. Отдельный пул по-прежнему `uv run finance-context worker`. С локальным Redis из Compose контейнер `finance-context` использует `redis://redis:6379/0`. В проде override не подключается, и адрес внешний (см. Docker). Клиентские скрипты только вызывают HTTP; сервер они не запускают и не останавливают.
 
 Проверка:
 
@@ -121,13 +122,13 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 
 Переключатели памяти, все включены по умолчанию: `PARSE_STREAMING` (iterparse, raw parquet побайтно тот же), `JSON_STREAM` (`json.dump`, документы побайтно те же), `PARQUET_ROW_GROUP_ROWS` (65536; `0` — одна группа строк и побайтно тот же IR/graph parquet; меньшая группа меняет только байты файла), `COMPILE_STRING_POOL` (локальный пул compile, не `sys.intern`), `COMPILE_AST_ZLIB` (сжатие до relations; опубликованный JSON тот же), `GRAPH_STREAM` (пачки колонок, без второго списка рёбер), `LAYOUT_COLUMNAR_FACTS` (indent/outline из Arrow; `layout_cells_read` остаётся). `JOB_MALLOC_ARENA_MAX` (2; `0` или пустое значение оставляет унаследованное) ставится порождённому ребёнку джобы. `JOB_MALLOC_TRIM` (true) вызывается после каждой стадии и ничего не делает без `malloc_trim`. Любой из них можно выключить (`false` или размер группы `0`). См. `.env.example`.
 
-Настройки очереди, их читают API и `finance-context worker`: `REDIS_URL` (по умолчанию `redis://redis:6379/0`), `REDIS_CONNECT_TIMEOUT_SEC` (2; только клиент API и `worker --check`), `QUEUE_NAME` (`finance-context`), `JOB_QUEUE_MAX_PER_SESSION` (3), `QUEUE_JOB_TIMEOUT_MARGIN_SEC` (120), `QUEUE_JOB_TTL_SEC` (0 — джоба может ждать в очереди), `QUEUE_RESULT_TTL_SEC` (3600), `QUEUE_FAILURE_TTL_SEC` (604800), `JOB_RETRY_ON_LOST` (1), `SHARED_CACHE_BUSY_RETRY_SEC` (30), `SHARED_CACHE_BUSY_MAX_RETRIES` (120), `JOB_ADMISSION_CGROUP_CHECK` (true), `JOB_ADMISSION_RETRY_SEC` (30), `JOB_PARENT_WATCH_INTERVAL_SEC` (1), `JOB_RETRY_AFTER_SEC` (30), `JOB_TERMINATE_GRACE_SEC` (5), `JOB_KILL_GRACE_SEC` (5). `finance-context worker` запускает пул из `MAX_CONCURRENT_JOBS` воркеров со scheduler. Бюджет RSS одной джобы — лимит cgroup воркера минус `JOB_MEMORY_API_RESERVE_FRACTION`, делённый на слоты. Явный `JOB_MEMORY_BUDGET_BYTES` и есть потолок, он на слоты не делится. Пароль в `REDIS_URL` в лог не пишется. Старт воркера пишет `queue_config` через JSON-форматтер. См. `.env.example`.
+Настройки очереди, их читают API и `finance-context worker`: `REDIS_URL` (по умолчанию `redis://redis:6379/0`), `REDIS_CONNECT_TIMEOUT_SEC` (2; только клиент API и `worker --check`), `QUEUE_NAME` (`finance-context`), `JOB_QUEUE_MAX_PER_SESSION` (3), `QUEUE_JOB_TIMEOUT_MARGIN_SEC` (120), `QUEUE_JOB_TTL_SEC` (0 — джоба может ждать в очереди), `QUEUE_RESULT_TTL_SEC` (3600), `QUEUE_FAILURE_TTL_SEC` (604800), `JOB_RETRY_ON_LOST` (1), `SHARED_CACHE_BUSY_RETRY_SEC` (30), `SHARED_CACHE_BUSY_MAX_RETRIES` (120), `JOB_ADMISSION_CGROUP_CHECK` (true), `JOB_ADMISSION_RETRY_SEC` (30), `JOB_PARENT_WATCH_INTERVAL_SEC` (1), `JOB_RETRY_AFTER_SEC` (30), `JOB_TERMINATE_GRACE_SEC` (5), `JOB_KILL_GRACE_SEC` (5), `EMBEDDED_WORKER` (true), `EMBEDDED_WORKER_RESTART_BACKOFF_SEC` (1). `finance-context serve` запускает пул из `MAX_CONCURRENT_JOBS` воркеров со scheduler дочерним процессом. `finance-context worker` — тот же пул, когда `EMBEDDED_WORKER` выключен. Упавший ребёнок запускается снова после паузы, и `/readyz` не готов, пока его нет. Бюджет RSS одной джобы — общий лимит cgroup минус `JOB_MEMORY_API_RESERVE_FRACTION`, делённый на слоты. Этот резерв покрывает процесс API и встроенный воркер в одном cgroup. Явный `JOB_MEMORY_BUDGET_BYTES` и есть потолок, он на слоты не делится. Пароль в `REDIS_URL` в лог не пишется. Старт воркера пишет `queue_config` через JSON-форматтер. См. `.env.example`.
 
 ## Данные
 
 `data/shared/books/{job_id}/` хранит книгу, raw, formula IR и layout. Они общие для всех сессий. POST их не удаляет. Ребёнок джобы берёт `shared/books/{job_id}/.lock` через `LOCK_NB`, снимает там устаревший хвост и публикует каждый файл через fsync и `os.replace`. `stages.json` — файл отпечатков стадий, это не опубликованный артефакт. `.lock` не удаляется. Если лок уже занят, лошадь возвращает RQ `Retry(interval=SHARED_CACHE_BUSY_RETRY_SEC)` (по умолчанию 30) и освобождает слот воркера, не больше `SHARED_CACHE_BUSY_MAX_RETRIES` дополнительных раз (по умолчанию 120). Пока джоба ждёт, `meta.json` остаётся `queued`, и GET не помечает её `queue_lost`. Последняя попытка падает с `shared_cache_busy`. CLI `build` по-прежнему ждёт в процессе и пишет ту же ошибку, если следующее ожидание дошло бы до `JOB_TIMEOUT_SEC`. См. `.env.example`. `data/sessions/{session}/jobs/{job_id}/` хранит context и graph этой сессии. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла. Сессия по умолчанию `local`. Id должен совпадать с `SESSION_ID_PATTERN` и умещаться в `SESSION_ID_MAX_LENGTH`; старт отклоняет разделитель и `..`. GET ищет джобу только внутри этой сессии. Сетевая ФС под `DATA_DIR` не даёт стартовать, пока `DATA_DIR_ALLOW_NETWORK_FS` не равен `true`.
 
-Одновременно считается не больше `MAX_CONCURRENT_JOBS` книг, по умолчанию 2, на пуле воркера. `finance-context serve` — это API, один процесс на `SESSION_ID`. Эти процессы API и `finance-context worker` делят один `DATA_DIR` и одну очередь.
+Одновременно считается не больше `MAX_CONCURRENT_JOBS` книг, по умолчанию 2, в дочернем воркере, который запускает `finance-context serve`. Один контейнер — это этот процесс плюс Redis. Они делят один `DATA_DIR` и одну очередь. `EMBEDDED_WORKER=false` оставляет API без этого ребёнка.
 
 ## Docker
 
@@ -140,7 +141,7 @@ docker compose -f deploy/docker-compose.yml up --build
 
 Оставьте Compose запущенным. Команды запускайте из корня репозитория, если не сказано иначе. `deploy/docker-compose.yml` поднимает один контейнер, `finance-context`. В проде `deploy/docker-compose.override.yml` не подключается. Redis тогда снаружи, например в compose пользователя finance-stack. Задайте `REDIS_URL` в `.env`, например `redis://host.docker.internal:6379/0` (`host.docker.internal` прописан в compose). На Linux это адрес моста хоста. Redis должен слушать этот адрес моста или другой непубличный адрес, доступный контейнерам. Слушатель только на `127.0.0.1` из контейнеров недоступен.
 
-Локальная проверка добавляет Redis из override. В проекте один контейнер `finance-context` и Redis:
+Локальная проверка добавляет Redis из override (`redis:8.6.7-alpine` на `127.0.0.1:6379`, append-only, именованный том). В проекте один контейнер `finance-context` и Redis:
 
 ```bash
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up --build

@@ -31,6 +31,7 @@ from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, check_legacy_workbook, source_name
 from finance_context.excel.ole2 import is_ole2
 from finance_context.excel.zip_guard import open_xlsx_zip
+from finance_context.jobqueue.embedded import embedded_worker_ready
 from finance_context.jobqueue.queue import (
     INFLIGHT_STATUSES,
     LOST_STATUSES,
@@ -65,12 +66,16 @@ async def readyz(request: Request) -> JSONResponse:
         jobs = await asyncio.to_thread(ctx.queue.session_inflight, settings.session_id)
     except QueueUnavailable:
         jobs = 0
+    # None: this process is not supervising a worker (tests, or EMBEDDED_WORKER=false).
+    # False: the child is down, including the restart backoff. That is not ready.
+    worker_up = embedded_worker_ready()
+    ready = writable and worker_up is not False
     body = {
-        "status": "ready" if writable else "unavailable",
+        "status": "ready" if ready else "unavailable",
         "queue": settings.queue_name,
         "jobs": jobs,
     }
-    return JSONResponse(body, status_code=200 if writable else 503)
+    return JSONResponse(body, status_code=200 if ready else 503)
 
 
 _JobStatusQuery = Annotated[

@@ -1,7 +1,7 @@
 # Local Redis for testing. Production does not use this file.
 services:
   redis:
-    image: redis:7.4.11
+    image: redis:8.6.7-alpine
     ports:
       - "127.0.0.1:6379:6379"
     command: ["redis-server", "--appendonly", "yes"]

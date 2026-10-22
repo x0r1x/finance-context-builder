@@ -45,12 +45,13 @@ Writes `context.json`, `context.md`, `graph.json`, and `graph.md`. If those docu
 
 ### HTTP API
 
-`POST` only enqueues. Redis has to be reachable, and `finance-context worker` has to be running in another terminal. The default `REDIS_URL` is `redis://redis:6379/0`. With the local Compose Redis, the `finance-context` container uses that name and a process on the host uses `redis://127.0.0.1:6379/0`. Production leaves the override out and sets an external URL (see Docker). On the host, point both processes at a local Redis and the same `DATA_DIR`. Client scripts only call HTTP; they do not start or stop the server.
+`POST` only enqueues. Redis has to be reachable. `finance-context serve` starts the RQ worker as a child process (`EMBEDDED_WORKER`, default true). The default `REDIS_URL` is `redis://redis:6379/0`. Locally, Redis comes from `deploy/docker-compose.override.yml` (`redis:8.6.7-alpine` on `127.0.0.1:6379`). A process on the host uses that published port:
 
 ```bash
 REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context serve --host 127.0.0.1 --port 8080
-REDIS_URL=redis://127.0.0.1:6379/0 uv run finance-context worker
 ```
+
+`EMBEDDED_WORKER=false` is API-only. The standalone pool is still `uv run finance-context worker`. With the local Compose Redis, the `finance-context` container uses `redis://redis:6379/0`. Production leaves the override out and sets an external URL (see Docker). Client scripts only call HTTP; they do not start or stop the server.
 
 Check:
 
@@ -124,13 +125,13 @@ Environment: `DATA_DIR`, `DATA_DIR_ALLOW_NETWORK_FS` (false; startup refuses nfs
 
 Memory switches, all on by default: `PARSE_STREAMING` (iterparse, raw parquet byte-identical), `JSON_STREAM` (`json.dump`, documents byte-identical), `PARQUET_ROW_GROUP_ROWS` (65536; `0` is one row group and byte-identical IR/graph parquet; a smaller group changes bytes only), `COMPILE_STRING_POOL` (compile-local, not `sys.intern`), `COMPILE_AST_ZLIB` (compressed until relations; published JSON unchanged), `GRAPH_STREAM` (column batches, no second cell-edge list), `LAYOUT_COLUMNAR_FACTS` (Arrow indent/outline; `layout_cells_read` stays). `JOB_MALLOC_ARENA_MAX` (2; `0` or blank leaves an inherited value) applies to the spawned job child. `JOB_MALLOC_TRIM` (true) runs after each stage and is a no-op without `malloc_trim`. Set any of them false, or the row-group size to 0, to take that path off. See `.env.example`.
 
-Queue settings, used by the API and by `finance-context worker`: `REDIS_URL` (default `redis://redis:6379/0`), `REDIS_CONNECT_TIMEOUT_SEC` (2; the API client and `worker --check` only), `QUEUE_NAME` (`finance-context`), `JOB_QUEUE_MAX_PER_SESSION` (3), `QUEUE_JOB_TIMEOUT_MARGIN_SEC` (120), `QUEUE_JOB_TTL_SEC` (0 means a queued job can wait), `QUEUE_RESULT_TTL_SEC` (3600), `QUEUE_FAILURE_TTL_SEC` (604800), `JOB_RETRY_ON_LOST` (1), `SHARED_CACHE_BUSY_RETRY_SEC` (30), `SHARED_CACHE_BUSY_MAX_RETRIES` (120), `JOB_ADMISSION_CGROUP_CHECK` (true), `JOB_ADMISSION_RETRY_SEC` (30), `JOB_PARENT_WATCH_INTERVAL_SEC` (1), `JOB_RETRY_AFTER_SEC` (30), `JOB_TERMINATE_GRACE_SEC` (5), `JOB_KILL_GRACE_SEC` (5). `finance-context worker` runs a pool of `MAX_CONCURRENT_JOBS` workers with the scheduler. The per-job RSS budget is that worker's cgroup limit minus `JOB_MEMORY_API_RESERVE_FRACTION`, split across the slots. An explicit `JOB_MEMORY_BUDGET_BYTES` is the cap and is not divided. A password in `REDIS_URL` is not logged. Startup of the worker logs `queue_config` through the JSON formatter. See `.env.example`.
+Queue settings, used by the API and by `finance-context worker`: `REDIS_URL` (default `redis://redis:6379/0`), `REDIS_CONNECT_TIMEOUT_SEC` (2; the API client and `worker --check` only), `QUEUE_NAME` (`finance-context`), `JOB_QUEUE_MAX_PER_SESSION` (3), `QUEUE_JOB_TIMEOUT_MARGIN_SEC` (120), `QUEUE_JOB_TTL_SEC` (0 means a queued job can wait), `QUEUE_RESULT_TTL_SEC` (3600), `QUEUE_FAILURE_TTL_SEC` (604800), `JOB_RETRY_ON_LOST` (1), `SHARED_CACHE_BUSY_RETRY_SEC` (30), `SHARED_CACHE_BUSY_MAX_RETRIES` (120), `JOB_ADMISSION_CGROUP_CHECK` (true), `JOB_ADMISSION_RETRY_SEC` (30), `JOB_PARENT_WATCH_INTERVAL_SEC` (1), `JOB_RETRY_AFTER_SEC` (30), `JOB_TERMINATE_GRACE_SEC` (5), `JOB_KILL_GRACE_SEC` (5), `EMBEDDED_WORKER` (true), `EMBEDDED_WORKER_RESTART_BACKOFF_SEC` (1). `finance-context serve` starts a pool of `MAX_CONCURRENT_JOBS` workers with the scheduler as a child process. `finance-context worker` is that same pool when `EMBEDDED_WORKER` is false. A dead child is started again after the backoff, and `/readyz` is not ready while it is down. The per-job RSS budget is the shared cgroup limit minus `JOB_MEMORY_API_RESERVE_FRACTION`, split across the slots. That reserve covers the API process and the embedded worker in the same cgroup. An explicit `JOB_MEMORY_BUDGET_BYTES` is the cap and is not divided. A password in `REDIS_URL` is not logged. Startup of the worker logs `queue_config` through the JSON formatter. See `.env.example`.
 
 ## Data
 
 `data/shared/books/{job_id}/` holds the workbook, raw extract, formula IR, and layout. Those files are shared across sessions. POST does not delete them. The job child holds `shared/books/{job_id}/.lock` with `LOCK_NB` and drops a stale tail there, then publishes each file with fsync and `os.replace`. `stages.json` is the stage-fingerprint sidecar and is not a published artifact. `.lock` is never removed. When that lock is already held, the horse returns RQ `Retry(interval=SHARED_CACHE_BUSY_RETRY_SEC)` (default 30) and releases the worker slot, at most `SHARED_CACHE_BUSY_MAX_RETRIES` extra times (default 120). `meta.json` stays `queued` during that wait, and GET does not mark the job `queue_lost`. The last attempt fails with `shared_cache_busy`. CLI `build` still waits in-process and records the same error if the next wait would reach `JOB_TIMEOUT_SEC`. See `.env.example`. `data/sessions/{session}/jobs/{job_id}/` holds that session's context and graph. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash. The session defaults to `local`. The id must match `SESSION_ID_PATTERN` and fit `SESSION_ID_MAX_LENGTH`; startup rejects a separator or `..`. GET looks up a job only inside that session. A network filesystem under `DATA_DIR` refuses startup unless `DATA_DIR_ALLOW_NETWORK_FS=true`.
 
-At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2, on the worker pool. `finance-context serve` is the API, one process per `SESSION_ID`. Those API processes and `finance-context worker` share one `DATA_DIR` and one queue.
+At most `MAX_CONCURRENT_JOBS` workbooks run at once, default 2, in the worker child that `finance-context serve` starts. One container is that one process plus Redis. They share one `DATA_DIR` and one queue. `EMBEDDED_WORKER=false` keeps the API without the child.
 
 ## Docker
 
@@ -143,7 +144,7 @@ docker compose -f deploy/docker-compose.yml up --build
 
 Leave Compose running. Run commands from the repo root unless noted. `deploy/docker-compose.yml` starts one container, `finance-context`. Production leaves `deploy/docker-compose.override.yml` out. Redis then comes from outside, for example the user's finance-stack compose. Set `REDIS_URL` in `.env`, for example `redis://host.docker.internal:6379/0` (`host.docker.internal` is mapped in the compose file). On Linux that name is the host bridge address. Redis has to listen on that bridge address, or on another non-public address the containers can reach. A listener bound only to `127.0.0.1` is not reachable from these containers.
 
-Local testing adds Redis from the override. The project is that one `finance-context` container plus Redis:
+Local testing adds Redis from the override (`redis:8.6.7-alpine` on `127.0.0.1:6379`, append-only, named volume). The project is that one `finance-context` container plus Redis:
 
 ```bash
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up --build

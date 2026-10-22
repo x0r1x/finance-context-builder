@@ -271,7 +271,12 @@ def resolve_job_budget_bytes(
     limit_bytes: int | None = None,
     read_cgroup: bool = True,
 ) -> int | None:
-    """RSS cap for one job. An explicit override wins; otherwise derive from the cgroup."""
+    """RSS cap for one job. An explicit override wins; otherwise derive from the cgroup.
+
+    ``reserve_fraction`` is the share kept for the API process and the embedded
+    worker in that same cgroup. Job children split the remainder. The estimate
+    coefficients are not part of this split.
+    """
     if override is not None and override > 0:
         return override
     limit = limit_bytes
@@ -320,7 +325,9 @@ def budget_for_settings(settings: Settings) -> int:
                 "memory_budget_default",
                 (
                     "cgroup memory limit is unset and JOB_MEMORY_BUDGET_BYTES is unset; "
-                    f"using the default {_mib(budget)} MiB job budget"
+                    f"using the default {_mib(budget)} MiB job budget. "
+                    "JOB_MEMORY_API_RESERVE_FRACTION covers the API and the embedded "
+                    "worker in that cgroup; job children split the remainder"
                 ),
                 budget_bytes=budget,
             )

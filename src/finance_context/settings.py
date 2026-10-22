@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 50 * 1024 * 1024
     max_concurrent_jobs: int = _DEFAULT_MAX_CONCURRENT_JOBS
     # Per-job RSS cap in bytes. Unset means "derive from the cgroup limit".
+    # The reserve fraction covers the API and the embedded worker in that cgroup.
     job_memory_budget_bytes: int | None = None
     job_timeout_sec: float = 3600
     soffice_bin: str | None = None
@@ -83,6 +84,7 @@ class Settings(BaseSettings):
         DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_PRESENT_CELL
     )
     job_memory_floor_bytes: int = DEFAULT_MEMORY_FLOOR_BYTES
+    # Share of the cgroup kept for the API and the embedded worker. Slots split the rest.
     job_memory_api_reserve_fraction: float = DEFAULT_API_RESERVE_FRACTION
     job_memory_default_budget_bytes: int = DEFAULT_MEMORY_BUDGET_BYTES
     job_memory_watch_interval_sec: float = DEFAULT_MEMORY_WATCH_INTERVAL_SEC
@@ -137,6 +139,10 @@ class Settings(BaseSettings):
     # The horse stops the spawn child with SIGTERM, then SIGKILL.
     job_terminate_grace_sec: float = 5
     job_kill_grace_sec: float = 5
+    # `finance-context serve` starts the RQ pool as its own child process.
+    embedded_worker: bool = True
+    # Seconds before that child is started again after it exits.
+    embedded_worker_restart_backoff_sec: float = 1.0
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -201,6 +207,7 @@ class Settings(BaseSettings):
         "job_parent_watch_interval_sec",
         "job_terminate_grace_sec",
         "job_kill_grace_sec",
+        "embedded_worker_restart_backoff_sec",
         mode="before",
     )
     @classmethod
@@ -250,6 +257,7 @@ class Settings(BaseSettings):
         "job_malloc_trim",
         "data_dir_allow_network_fs",
         "job_admission_cgroup_check",
+        "embedded_worker",
         mode="before",
     )
     @classmethod
