@@ -169,8 +169,10 @@ async def post_job(
         if not ctx.processes.try_acquire(job_id):
             raise ApiError(429, "too_many_jobs")
         try:
+            stored = _load_meta(dest)
+            disk_generation = _disk_generation(stored)
             clear_downstream_artifacts(
-                dest, stale_from=stale_from_meta(_load_meta(dest)), shared=shared
+                dest, stale_from=stale_from_meta(stored), shared=shared
             )
             log_event(
                 _LOGGER,
@@ -179,7 +181,7 @@ async def post_job(
                 "stale artifacts invalidated",
                 job_id=job_id,
             )
-            started = ctx.bus.enqueue(job_id)
+            started = ctx.bus.enqueue(job_id, minimum_generation=disk_generation)
             launched = ctx.processes.launch(job_id) if started else False
         except Exception:
             ctx.processes.release_reservation(job_id)
@@ -200,6 +202,8 @@ async def post_job(
     )
 
 _READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
+# meta.json wins over the in-memory bus once the job has finished.
+_DISK_TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
 
 
 def _running_body(job_id: str, dest: Path) -> dict[str, object]:
@@ -218,10 +222,34 @@ def _running_body(job_id: str, dest: Path) -> dict[str, object]:
     return {"job_id": job_id, "status": "running", "stage": "running"}
 
 
+def _newer_bus_run(meta: dict, live: object) -> bool:
+    """A higher bus generation is a new run, not a stale queued record."""
+    if live is None or getattr(live, "status", None) not in {"queued", "running"}:
+        return False
+    try:
+        disk_generation = int(meta.get("generation") or 0)
+    except (TypeError, ValueError):
+        disk_generation = 0
+    try:
+        bus_generation = int(getattr(live, "generation", 0) or 0)
+    except (TypeError, ValueError):
+        bus_generation = 0
+    return bus_generation > disk_generation
+
+
 def _orphan_running(meta: dict, *, live: object, alive: bool) -> bool:
     if meta.get("status") not in {"queued", "running"} or alive:
         return False
     return getattr(live, "status", None) not in {"queued", "running"}
+
+
+def _disk_generation(meta: dict | None) -> int:
+    if not isinstance(meta, dict):
+        return 0
+    try:
+        return int(meta.get("generation") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _load_meta(dest: Path) -> dict | None:
@@ -287,8 +315,12 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
         artifacts_ready = (dest / "context.json").exists() and (dest / "context.md").exists() and (
             dest / "graph.json"
         ).exists() and (dest / "graph.md").exists()
+        disk_terminal = meta.get("status") in _DISK_TERMINAL_STATUS and not _newer_bus_run(
+            meta, live
+        )
         if (
-            artifacts_ready
+            not disk_terminal
+            and artifacts_ready
             and meta.get("status") in {"queued", "running", None}
             and live is not None
             and live.status not in {"queued", "running"}
@@ -296,7 +328,12 @@ async def get_job(request: Request, job_id: str) -> JSONResponse:
             meta["status"] = live.status
             meta["stage"] = live.stage
             meta["error"] = live.error
-        elif live is not None and live.status in {"queued", "running"} and not artifacts_ready:
+        elif (
+            not disk_terminal
+            and live is not None
+            and live.status in {"queued", "running"}
+            and not artifacts_ready
+        ):
             if _STAGE_RANK.get(str(live.stage or ""), -1) > _STAGE_RANK.get(
                 str(meta.get("stage") or ""), -1
             ):

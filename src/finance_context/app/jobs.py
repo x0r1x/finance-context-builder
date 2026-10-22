@@ -17,8 +17,15 @@ def list_session_jobs(
         return []
     needle = (q or "").strip().casefold()
     items: list[dict[str, str | None]] = []
+    root = jobs_root.resolve()
     for path in jobs_root.iterdir():
         if not path.is_dir():
+            continue
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved != root.joinpath(path.name):
             continue
         meta = _read_meta(path / "meta.json")
         if meta is None:

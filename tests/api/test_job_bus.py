@@ -24,6 +24,15 @@ def test_stale_generation_cannot_overwrite_a_new_run() -> None:
     assert rec.generation == 2
 
 
+def test_enqueue_seeds_above_a_stored_generation() -> None:
+    bus = MemoryJobBus()
+    assert bus.enqueue("job", minimum_generation=2)
+    assert bus.current_generation("job") == 3
+    assert bus.abandon("job", 3, "process_lost")
+    assert bus.enqueue("job", minimum_generation=2)
+    assert bus.current_generation("job") == 4
+
+
 def test_abandon_records_the_given_error() -> None:
     bus = MemoryJobBus()
     assert bus.enqueue("job")

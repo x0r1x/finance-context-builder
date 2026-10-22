@@ -23,13 +23,20 @@ class MemoryJobBus:
     _live: dict[str, JobRecord] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def enqueue(self, job_id: str) -> bool:
-        """Register a new run. False when this job is already queued or running."""
+    def enqueue(self, job_id: str, *, minimum_generation: int = 0) -> bool:
+        """Register a new run. False when this job is already queued or running.
+
+        ``minimum_generation`` is the generation stored in ``meta.json``. A
+        restarted process has an empty bus, so the next run must still land
+        strictly above that stored value.
+        """
         with self._lock:
             rec = self._live.get(job_id)
             if rec is not None and rec.status in {"queued", "running"}:
                 return False
-            generation = 1 if rec is None else rec.generation + 1
+            nxt = 1 if rec is None else rec.generation + 1
+            floor = minimum_generation + 1 if minimum_generation > 0 else 1
+            generation = nxt if nxt > floor else floor
             self._live[job_id] = JobRecord(job_id=job_id, generation=generation)
         return True
 

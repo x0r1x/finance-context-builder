@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
+from typing import Self
 
-from pydantic import ValidationInfo, field_validator
+from pydantic import ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_DATA_DIR = Path("data")
@@ -33,6 +35,9 @@ DEFAULT_OOM_SCORE_ADJ = 1000
 DEFAULT_PARQUET_ROW_GROUP_ROWS = 65536
 # glibc arenas for a spawned job child. None leaves an inherited value.
 DEFAULT_MALLOC_ARENA_MAX = 2
+# One directory segment. Length is SESSION_ID_MAX_LENGTH, not part of the pattern.
+DEFAULT_SESSION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
+DEFAULT_SESSION_ID_MAX_LENGTH = 64
 
 
 class Settings(BaseSettings):
@@ -43,7 +48,11 @@ class Settings(BaseSettings):
     )
 
     data_dir: Path = DEFAULT_DATA_DIR
+    # Startup refuses a DATA_DIR on nfs, cifs/smb, sshfs, afp, or webdav unless this is set.
+    data_dir_allow_network_fs: bool = False
     session_id: str = "local"
+    session_id_pattern: str = DEFAULT_SESSION_ID_PATTERN
+    session_id_max_length: int = DEFAULT_SESSION_ID_MAX_LENGTH
     max_upload_bytes: int = 50 * 1024 * 1024
     max_concurrent_jobs: int = _DEFAULT_MAX_CONCURRENT_JOBS
     # Per-job RSS cap in bytes. Unset means "derive from the cgroup limit".
@@ -129,6 +138,7 @@ class Settings(BaseSettings):
         "job_memory_floor_bytes",
         "job_memory_default_budget_bytes",
         "range_expand_cap",
+        "session_id_max_length",
         mode="before",
     )
     @classmethod
@@ -194,6 +204,7 @@ class Settings(BaseSettings):
         "graph_stream",
         "layout_columnar_facts",
         "job_malloc_trim",
+        "data_dir_allow_network_fs",
         mode="before",
     )
     @classmethod
@@ -213,6 +224,23 @@ class Settings(BaseSettings):
         if value == 0 or (isinstance(value, str) and value.strip() in {"0", "+0", "-0"}):
             return None
         return _require_whole_int(value, info, minimum=1)
+
+    @model_validator(mode="after")
+    def session_id_matches_pattern(self) -> Self:
+        try:
+            pattern = re.compile(self.session_id_pattern)
+        except re.error as exc:
+            raise ValueError(
+                f"SESSION_ID_PATTERN is not a valid regular expression: {exc}"
+            ) from exc
+        session = self.session_id
+        if pattern.fullmatch(session) is None or len(session) > self.session_id_max_length:
+            raise ValueError(
+                "SESSION_ID must match SESSION_ID_PATTERN "
+                f"({self.session_id_pattern}) and be at most "
+                f"{self.session_id_max_length} characters; refusing {session!r}"
+            )
+        return self
 
 
 def _require_bool(value: object, info: ValidationInfo) -> bool:

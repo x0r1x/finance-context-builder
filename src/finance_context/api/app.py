@@ -19,6 +19,8 @@ from finance_context.errors import ContextError
 from finance_context.memory import budget_for_settings, unusable_cap_detail
 from finance_context.observability import configure_logging, log_event
 from finance_context.settings import Settings
+from finance_context.store.filesystem import ensure_data_dir_local
+from finance_context.store.paths import session_jobs_root
 
 _HTTP_LOGGER = logging.getLogger("finance_context.api.http")
 
@@ -26,6 +28,12 @@ _HTTP_LOGGER = logging.getLogger("finance_context.api.http")
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     configure_logging(level=settings.log_level, json_output=settings.log_json)
+    ensure_data_dir_local(
+        settings.data_dir,
+        allow_network=settings.data_dir_allow_network_fs,
+    )
+    # Reject a SESSION_ID that would leave data/sessions before the server listens.
+    session_jobs_root(settings.data_dir, settings.session_id)
     store = DiskStore(settings.data_dir, session_id=settings.session_id)
     bus = MemoryJobBus()
     pipeline = Pipeline(settings)
@@ -43,7 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        reconcile_orphaned_jobs(settings.data_dir)
+        reconcile_orphaned_jobs(settings.data_dir, settings.session_id)
         yield
         processes.stop_all()
 
@@ -67,17 +75,27 @@ def app_from_env() -> FastAPI:
     return create_app(Settings())
 
 
-def reconcile_orphaned_jobs(data_dir: Path) -> None:
-    """A restart has no live children. Jobs left queued or running did not finish."""
-    sessions = data_dir / "sessions"
-    if not sessions.is_dir():
+def reconcile_orphaned_jobs(data_dir: Path, session_id: str) -> None:
+    """A restart has no live children of this session.
+
+    Jobs left queued or running in this SESSION_ID did not finish. Another
+    session's jobs belong to another process and are left alone, including
+    a directory entry that resolves outside this session.
+    """
+    jobs = session_jobs_root(data_dir, session_id)
+    if not jobs.is_dir():
         return
-    for session in sessions.iterdir():
-        jobs = session / "jobs"
-        if not jobs.is_dir():
+    root = jobs.resolve()
+    for dest in jobs.iterdir():
+        if not dest.is_dir():
             continue
-        for dest in jobs.iterdir():
-            _mark_orphan(dest)
+        try:
+            resolved = dest.resolve()
+        except OSError:
+            continue
+        if not resolved.is_relative_to(root):
+            continue
+        _mark_orphan(dest)
 
 
 def _mark_orphan(dest: Path) -> None:

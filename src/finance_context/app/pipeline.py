@@ -408,15 +408,16 @@ def mark_job_failed(
         ready = all((dest / name).is_file() for name in _READY_ARTIFACTS)
         if ready and current.get("status") in _TERMINAL_STATUS:
             return current
-        failed = {
-            "job_id": job_id,
-            "status": "failed",
-            "stage": "failed",
-            "error": error,
-            "warnings": [],
-            "questions": [],
-            "generation": generation,
-        }
+        failed = dict(current)
+        # A failure that still carries this process's publisher looks finished
+        # to the next POST, so the book is never launched again.
+        failed.pop("publisher", None)
+        failed.pop("stages", None)
+        failed["job_id"] = job_id
+        failed["status"] = "failed"
+        failed["stage"] = "failed"
+        failed["error"] = error
+        failed["generation"] = generation
         if detail:
             failed["detail"] = detail
         return failed
