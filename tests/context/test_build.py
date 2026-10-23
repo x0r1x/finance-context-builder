@@ -500,6 +500,45 @@ def test_many_unparsed_formulas_collapse_and_keep_missing_cached_warning() -> No
     assert doc.schema_version == "1.14.0"
 
 
+def test_unparsed_formula_aggregate_survives_period_header_warnings() -> None:
+    cells = [
+        {
+            "sheet": f"S{index}",
+            "row": 1,
+            "col": 1,
+            "addr": "A1",
+            "cached_value": "Q5 2025",
+        }
+        for index in range(50)
+    ]
+    cells.append(
+        {
+            "sheet": "S0",
+            "row": 2,
+            "col": 1,
+            "addr": "A2",
+            "cached_value": None,
+            "formula_raw": "=???",
+            "unparsed": True,
+        }
+    )
+    doc = build_context(
+        job_id="cap",
+        workbook_meta={"sheets": [{"name": f"S{index}"} for index in range(50)]},
+        cells=cells,
+        layout=Layout(sheets=[]),
+        graph=GraphPointer(dangling=2),
+    )
+    assert doc.warnings[0] == "1 unparsed formula(s) (e.g. S0!A2)"
+    assert len(doc.warnings) == 50
+    assert all(
+        warning.startswith("Unparsed period header ") for warning in doc.warnings[1:]
+    )
+    assert doc.meta.warnings == doc.warnings
+    assert doc.workbook.unparsed_formulas == 1
+    assert doc.workbook.missing_cached_values == 1
+
+
 def test_build_warns_on_missing_graph_targets() -> None:
     cells = [
         {
