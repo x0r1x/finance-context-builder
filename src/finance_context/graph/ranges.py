@@ -25,6 +25,9 @@ from finance_context.graph.refs import parse_node_id
 
 # A node wider than this many columns is indexed once per sheet, not per column.
 _NARROW_COLUMNS = 64
+# Ids of RangeHops segments. A sheet name may start with "#", so only this exact
+# prefix marks a segment.
+SEGMENT_PREFIX = "#seg|"
 
 
 def is_whole_column(node: RangeNode) -> bool:
@@ -156,7 +159,10 @@ def range_nodes(targets: Iterable[str]) -> dict[str, RangeNode]:
 
 
 def is_cell_id(name: str) -> bool:
-    return not name.startswith("#") and parse_node_id(name) is not None and ":" not in name
+    """A cell id, not a range node or a RangeHops segment. ``#Inputs!A1`` is a cell."""
+    return (
+        not name.startswith(SEGMENT_PREFIX) and parse_node_id(name) is not None and ":" not in name
+    )
 
 
 class RangeHops:
@@ -220,7 +226,7 @@ class RangeHops:
     def _name(self, sheet: str, col: int, lo: int, hi: int) -> str:
         if lo == hi:
             return f"{sheet}!{index_to_col(col)}{self.rows[(sheet, col)][lo]}"
-        return f"#seg|{sheet}|{col}|{lo}|{hi}"
+        return f"{SEGMENT_PREFIX}{sheet}|{col}|{lo}|{hi}"
 
     def _tree(self, sheet: str, col: int, lo: int, hi: int) -> Iterator[tuple[str, str]]:
         stack = [(lo, hi)]

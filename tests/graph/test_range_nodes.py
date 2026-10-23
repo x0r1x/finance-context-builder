@@ -344,6 +344,33 @@ def test_range_node_threshold_comes_from_settings(tmp_path: Path) -> None:
     assert "Data!C2" in targets
 
 
+def test_a_new_threshold_recompiles_cached_ir(tmp_path: Path) -> None:
+    # Two jobs on one shared book directory: the second reuses the parse, and
+    # reuses the IR only when it was compiled under the same threshold.
+    book = tmp_path / "book"
+    book.mkdir()
+    (book / "source.xlsx").write_bytes(_book(tmp_path / "shared.xlsx").read_bytes())
+
+    def j3_targets() -> set[str]:
+        edges = read_parquet(book / "ir" / "cell_edges.parquet")
+        return {str(edge["target"]) for edge in edges if edge["source"] == "Calc!J3"}
+
+    for job, threshold in (("first", 64), ("second", 500)):
+        settings = Settings(
+            data_dir=tmp_path / "data", range_node_min_cells=threshold, _env_file=None
+        )
+        Pipeline(settings).run(
+            tmp_path / job, job_id=f"{job}-job", source_filename="shared.xlsx", shared_dir=book
+        )
+        if job == "first":
+            assert "Data!C1:C150" in j3_targets()
+    assert "Data!C1:C150" not in j3_targets()
+    assert "Data!C2" in j3_targets()
+    graph_edges = read_parquet(tmp_path / "second" / "ir" / "graph_edges.parquet")
+    j3_graph = {str(edge["target"]) for edge in graph_edges if edge["source"] == "Calc!J3"}
+    assert len(j3_graph) == 150
+
+
 def test_cover_index_matches_a_scan() -> None:
     rng = random.Random(11)
     nodes = []
@@ -358,6 +385,34 @@ def test_cover_index_matches_a_scan() -> None:
         col, row = rng.randint(1, 220), rng.randint(1, 720)
         expected = {n.node_id for n in nodes if n.c1 <= col <= n.c2 and n.r1 <= row <= n.r2}
         assert {n.node_id for n in index.covering("S", col, row)} == expected
+
+
+@pytest.mark.parametrize("mode", ["nodes", "expanded"])
+def test_cycles_on_a_sheet_named_with_a_hash_are_reported(
+    tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Excel allows "#" in a sheet name; only RangeHops segment ids are not cells.
+    cells = [CellSpec(addr=f"A{row}", value=str(row)) for row in range(2, 101)]
+    cells = [cell for cell in cells if cell.addr != "A50"]
+    cells += [
+        CellSpec(addr="A1", value="1", formula="SUM(A2:A100)"),
+        CellSpec(addr="A50", value="1", formula="A1+1"),
+        CellSpec(addr="C1", value="1", formula="D1+1"),
+        CellSpec(addr="D1", value="1", formula="C1+1"),
+    ]
+    source = build_xlsx(
+        tmp_path / "hash.xlsx", sheets=[SheetSpec(name="#Loop", cells=cells)], iterate=True
+    )
+    dest = tmp_path / "out"
+    dest.mkdir()
+    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    if mode == "expanded":
+        _expanded_mode(monkeypatch)
+    settings = Settings(data_dir=tmp_path / "data", _env_file=None)
+    Pipeline(settings).run(dest, job_id="hash-job", source_filename="hash.xlsx")
+    cycles = {tuple(c["members"]) for c in _json(dest, "graph.json")["cycles"]}
+    assert ("#Loop!A1", "#Loop!A50") in cycles
+    assert ("#Loop!C1", "#Loop!D1") in cycles
 
 
 def test_first_present_cell_matches_a_scan() -> None:

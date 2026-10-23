@@ -241,7 +241,13 @@ async def post_job(
     filename = Path(file.filename or "upload.xlsx").name
     data = await file.read()
     await run_blocking(
-        ctx, _validate_upload, filename, data, ctx.max_upload_bytes, ctx.pipeline.converter
+        ctx,
+        _validate_upload,
+        filename,
+        data,
+        ctx.max_upload_bytes,
+        ctx.pipeline.converter,
+        ctx.settings.parse_streaming,
     )
     digest, job_id = await run_blocking(ctx, _digest_job, data)
     # Fsync, the publisher hash, and the enqueue share one worker thread.
@@ -779,7 +785,9 @@ def _job_body(job_id: str, meta: dict) -> dict:
     return body
 
 
-def _validate_upload(filename: str, data: bytes, max_bytes: int, converter: XlsConverter) -> None:
+def _validate_upload(
+    filename: str, data: bytes, max_bytes: int, converter: XlsConverter, streaming: bool = True
+) -> None:
     suffix = Path(filename).suffix.lower()
     if suffix not in _ALLOWED:
         raise ContextError("unsupported_media_type", suffix or "missing")
@@ -797,5 +805,5 @@ def _validate_upload(filename: str, data: bytes, max_bytes: int, converter: XlsC
             # Converted in the job process; refuse here what cannot be converted.
             check_legacy_workbook(Path(tmp.name), converter)
             return
-        zf = open_xlsx_zip(Path(tmp.name))
+        zf = open_xlsx_zip(Path(tmp.name), streaming=streaming)
         zf.close()

@@ -98,8 +98,8 @@ def test_compression_ratio_limit_depends_on_how_the_part_is_read(
         assert "compression ratio" in str(ei.value)
 
 
-def test_a_sheet_part_past_50x_parses(tmp_path: Path, dest: Path) -> None:
-    """A sheet whose XML deflates past 50x is parsed, not refused."""
+def _padded_sheet_book(tmp_path: Path) -> Path:
+    """A book whose sheet XML deflates past 50x."""
     from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
     built = build_xlsx(
@@ -118,7 +118,48 @@ def test_a_sheet_part_past_50x_parses(tmp_path: Path, dest: Path) -> None:
     with zipfile.ZipFile(source) as zf:
         sheet = next(i for i in zf.infolist() if i.filename.startswith("xl/worksheets/"))
         assert sheet.file_size / sheet.compress_size >= 50
+    return source
+
+
+def test_a_sheet_part_past_50x_parses(tmp_path: Path, dest: Path) -> None:
+    """A sheet whose XML deflates past 50x is parsed, not refused."""
+    source = _padded_sheet_book(tmp_path)
     parse_workbook(source, dest)
+    assert (dest / "raw" / "cells.parquet").is_file()
+
+
+@pytest.mark.parametrize(
+    ("name", "allowed", "refused"),
+    [
+        # PARSE_STREAMING=false: a sheet becomes cell objects, so it keeps 50x.
+        ("xl/worksheets/sheet1.xml", 49.0, 50.0),
+        ("XL/Worksheets/Sheet2.XML", 49.0, 50.0),
+        # The rest does not depend on how sheets are read.
+        ("xl/sharedStrings.xml", 199.0, 200.0),
+        ("xl/vbaProject.bin", 49.0, 50.0),
+    ],
+)
+def test_without_streaming_a_sheet_keeps_the_ratio(
+    name: str, allowed: float, refused: float
+) -> None:
+    from finance_context.excel.zip_guard import check_zip_info
+
+    info = _info(name, allowed)
+    assert check_zip_info(info, running_total=0, streaming=False) == info.file_size
+    with pytest.raises(ContextError) as ei:
+        check_zip_info(_info(name, refused), running_total=0, streaming=False)
+    assert "compression ratio" in str(ei.value)
+
+
+def test_a_sheet_part_past_50x_is_refused_without_streaming(tmp_path: Path, dest: Path) -> None:
+    from finance_context.settings import Settings
+
+    source = _padded_sheet_book(tmp_path)
+    with pytest.raises(ContextError) as ei:
+        parse_workbook(source, dest, settings=Settings(parse_streaming=False, _env_file=None))
+    assert ei.value.code == "zip_rejected"
+    assert "compression ratio" in str(ei.value)
+    parse_workbook(source, dest, settings=Settings(parse_streaming=True, _env_file=None))
     assert (dest / "raw" / "cells.parquet").is_file()
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.formulas.csr import (
     SheetUsage,
+    active_range_node_min_cells,
     expand_cell_edges,
     expand_cell_edges_column_batches,
     expanded_edge_count,
@@ -310,7 +311,10 @@ def compile_schema_id() -> str:
         for columns in (IR_CELL_COLUMNS, IR_EDGE_COLUMNS, IR_CELL_EDGE_COLUMNS)
         for name, _dtype in columns
     ]
-    payload = "\n".join([*names, "name-edges-1", "range-nodes-2"])
+    # RANGE_NODE_MIN_CELLS decides which ranges compile to one node edge, so IR
+    # compiled under another threshold is stale.
+    node_min = f"range-node-min={active_range_node_min_cells()}"
+    payload = "\n".join([*names, "name-edges-1", "range-nodes-2", node_min])
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
