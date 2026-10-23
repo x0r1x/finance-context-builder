@@ -435,7 +435,7 @@ def test_unknown_header_warnings_do_not_crowd_out_formula_warnings() -> None:
         graph=GraphPointer(dangling=3),
     )
     assert len(doc.warnings) == 50
-    assert "Unparsed formula at S!A1" in doc.warnings
+    assert "1 unparsed formula(s) (e.g. S!A1)" in doc.warnings
     assert "1 formula cell(s) missing cached values (e.g. S!A1)" in doc.warnings
     assert "Graph: 3 unresolved formula targets (see graph.json)" in doc.warnings
     assert any("Unrecognized column headers" in warning for warning in doc.warnings)
@@ -463,9 +463,41 @@ def test_hidden_warnings_do_not_crowd_out_formula_warnings() -> None:
     )
     assert len(doc.warnings) == 50
     assert doc.meta.warnings == doc.warnings
-    assert "Unparsed formula at S0!A1" in doc.warnings
+    assert "1 unparsed formula(s) (e.g. S0!A1)" in doc.warnings
     assert "1 formula cell(s) missing cached values (e.g. S0!A1)" in doc.warnings
     assert "Graph: 3 unresolved formula targets (see graph.json)" in doc.warnings
+
+
+def test_many_unparsed_formulas_collapse_and_keep_missing_cached_warning() -> None:
+    addresses = ["Z9", "M4", "B2", *[f"D{index}" for index in range(1, 58)]]
+    cells = [
+        {
+            "sheet": "S",
+            "row": index + 1,
+            "col": 1,
+            "addr": addr,
+            "cached_value": None,
+            "formula_raw": "=???",
+            "unparsed": True,
+        }
+        for index, addr in enumerate(addresses)
+    ]
+    doc = build_context(
+        job_id="cap",
+        workbook_meta={"sheets": [{"name": "S"}]},
+        cells=cells,
+        layout=Layout(sheets=[]),
+        graph=GraphPointer(dangling=2),
+    )
+    unparsed_lines = [warning for warning in doc.warnings if "unparsed formula" in warning]
+    assert unparsed_lines == ["60 unparsed formula(s) (e.g. S!Z9, S!M4, S!B2)"]
+    assert not any(warning.startswith("Unparsed formula at ") for warning in doc.warnings)
+    assert "60 formula cell(s) missing cached values (e.g. S!Z9, S!M4, S!B2)" in doc.warnings
+    assert "Graph: 2 unresolved formula targets (see graph.json)" in doc.warnings
+    assert doc.meta.warnings == doc.warnings
+    assert doc.workbook.unparsed_formulas == 60
+    assert doc.workbook.missing_cached_values == 60
+    assert doc.schema_version == "1.14.0"
 
 
 def test_build_warns_on_missing_graph_targets() -> None:

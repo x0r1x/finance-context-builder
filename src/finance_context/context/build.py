@@ -95,6 +95,7 @@ def build_context(
     missing_cached = 0
     unparsed = 0
     missing_addrs: list[str] = []
+    unparsed_addrs: list[str] = []
     for cell in cells:
         if cell.get("formula_raw"):
             formula_count += 1
@@ -103,7 +104,7 @@ def build_context(
                 missing_addrs.append(f"{cell['sheet']}!{cell['addr']}")
             if cell.get("unparsed"):
                 unparsed += 1
-                warnings.append(f"Unparsed formula at {cell['sheet']}!{cell['addr']}")
+                unparsed_addrs.append(f"{cell['sheet']}!{cell['addr']}")
 
     not_applicable: set[str] = set()
     blocks: list[FinancialBlock] = []
@@ -257,6 +258,9 @@ def build_context(
             f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
         )
     warnings.extend(timeline_warnings)
+    if unparsed_addrs:
+        sample = ", ".join(unparsed_addrs[:3])
+        warnings.append(f"{len(unparsed_addrs)} unparsed formula(s) (e.g. {sample})")
     missing_values = [addr for addr in missing_addrs if addr not in not_applicable]
     if missing_values:
         sample = ", ".join(missing_values[:3])
