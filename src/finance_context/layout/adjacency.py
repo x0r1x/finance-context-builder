@@ -56,6 +56,8 @@ def row_adjacency(
 
     A copied-down SUMIF(A:A, ...) repeats one range thousands of times. Its rows
     are resolved once, and a source row that already took a range is skipped.
+    Rows are kept only for a range seen a second time, so one-off windows such
+    as a copied-down SUM(A1:A1000) are not held for the whole call.
     With a limit, a full list stops taking entries and a range whose rows are
     all full is not walked again. The lists are the first ``limit`` entries of
     one pass per edge, in the same order.
@@ -63,9 +65,10 @@ def row_adjacency(
     precedents: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
     dependents: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
     cap = limit if limit > 0 else None
-    # Rows of each range, and the rows of it whose dependents are not full yet.
+    # Rows of each reused range, and the rows of it whose dependents are not full yet.
     rows_of: dict[tuple[str, bool], list[tuple[str, int]]] = {}
     open_rows: dict[tuple[str, bool], list[tuple[str, int]]] = {}
+    seen_once: set[tuple[str, bool]] = set()
     done: set[tuple[tuple[str, int], str, bool]] = set()
     for raw in edges:
         edge = as_edge(raw)
@@ -83,8 +86,11 @@ def row_adjacency(
             targets = rows_of.get(slot)
             if targets is None:
                 targets = _target_rows(edge, usage)
-                rows_of[slot] = targets
-                open_rows[slot] = targets
+                if slot in seen_once:
+                    rows_of[slot] = targets
+                    open_rows[slot] = targets
+                else:
+                    seen_once.add(slot)
         else:
             targets = _target_rows(edge, usage)
         src_ref = row_key_ref(*source)
@@ -94,14 +100,14 @@ def row_adjacency(
                 break
             if source != target:
                 own.setdefault(row_key_ref(*target), None)
-        waiting = open_rows[slot] if slot is not None else targets
+        waiting = open_rows.get(slot, targets) if slot is not None else targets
         for target in waiting:
             if source == target:
                 continue
             readers = dependents[target]
             if cap is None or len(readers) < cap:
                 readers.setdefault(src_ref, None)
-        if slot is not None and cap is not None:
+        if slot in open_rows and cap is not None:
             open_rows[slot] = [row for row in waiting if len(dependents[row]) < cap]
     return (
         {key: list(values)[:cap] for key, values in precedents.items() if values},

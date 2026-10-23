@@ -219,3 +219,20 @@ def test_row_adjacency_limit_keeps_the_first_entries_in_order(limit: int) -> Non
     assert row_adjacency(edges, limit=limit, usage=usage) == _adjacency_reference(
         edges, limit, usage
     )
+
+
+@pytest.mark.parametrize("limit", [0, 2, 5])
+def test_row_adjacency_one_off_windows_match_the_old_pass(limit: int) -> None:
+    from finance_context.layout.adjacency import row_adjacency
+
+    usage = sheet_usage([f"Data!A{row}" for row in range(1, 121)])
+    # A rolling SUM(A{n}:A{n+19}) is a different range on every row; A:A repeats.
+    edges = [
+        Edge(kind="range", source=f"Calc!B{n}", target=f"Data!A{n}:A{n + 19}")
+        for n in range(1, 101)
+    ]
+    edges += [Edge(kind="range", source=f"Calc!C{n}", target="Data!A:A") for n in range(1, 40)]
+    edges += [Edge(kind="range", source="Calc!D1", target="Data!A3:A22")]
+    assert row_adjacency(edges, limit=limit, usage=usage) == _adjacency_reference(
+        edges, limit, usage
+    )
