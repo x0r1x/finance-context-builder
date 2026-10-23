@@ -20,12 +20,13 @@ _JOB = "ab" * 32
 
 
 def _settings(tmp_path: Path, **overrides: object) -> Settings:
-    return Settings(
-        data_dir=tmp_path / "data",
-        job_events_heartbeat_sec=0.2,
-        _env_file=None,
-        **overrides,  # type: ignore[arg-type]
-    )
+    values: dict[str, object] = {
+        "data_dir": tmp_path / "data",
+        "job_events_heartbeat_sec": 0.2,
+        "_env_file": None,
+    }
+    values.update(overrides)
+    return Settings(**values)  # type: ignore[arg-type]
 
 
 def _meta(settings: Settings, job_id: str = _JOB, **fields: object) -> None:
@@ -87,21 +88,36 @@ def test_last_event_id_resumes_after_that_entry(tmp_path: Path) -> None:
     assert ": heartbeat" not in body
 
 
-def test_heartbeat_comment_while_the_job_is_open(tmp_path: Path) -> None:
-    settings = _settings(tmp_path, job_events_heartbeat_sec=0.2)
+def test_heartbeat_comment_while_the_job_is_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty read is a comment, then a terminal event ends the body.
+
+    TestClient buffers the response until the generator returns, so the
+    stream has to close inside this test.
+    """
+    settings = _settings(tmp_path)
     _meta(settings)
+    calls = 0
+
+    def _wrapped(client: object, key: str, last_id: str, block_ms: int):
+        nonlocal calls
+        del block_ms
+        calls += 1
+        if calls == 1:
+            return []
+        entry = _publish(settings, event="succeeded", status="succeeded", stage="done")
+        assert entry is not None
+        return read_events(client, key, "0-0", 1)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("finance_context.api.routes.events.read_events", _wrapped)
     with TestClient(create_app(settings)) as client:
-        with client.stream("GET", f"/v1/context-jobs/{_JOB}/events") as response:
-            assert response.status_code == 200
-            saw = False
-            deadline = time.monotonic() + 3
-            for line in response.iter_lines():
-                if line.startswith(":"):
-                    saw = True
-                    break
-                if time.monotonic() > deadline:
-                    break
-            assert saw
+        response = client.get(f"/v1/context-jobs/{_JOB}/events")
+    assert response.status_code == 200
+    assert response.text.startswith("event: snapshot\n")
+    assert ": heartbeat" in response.text
+    assert "event: succeeded" in response.text
+    assert calls == 2
 
 
 def test_stream_closes_after_a_terminal_event(
@@ -110,18 +126,21 @@ def test_stream_closes_after_a_terminal_event(
     settings = _settings(tmp_path, job_events_heartbeat_sec=2)
     _meta(settings, status="running", stage="parse")
     entered = threading.Event()
+    deadline = time.monotonic() + 3
 
     def _wrapped(client: object, key: str, last_id: str, block_ms: int):
         entered.set()
-        return read_events(client, key, last_id, block_ms)  # type: ignore[arg-type]
+        if time.monotonic() > deadline:
+            raise RuntimeError("terminal progress event did not arrive")
+        return read_events(client, key, last_id, min(block_ms, 500))  # type: ignore[arg-type]
 
     monkeypatch.setattr("finance_context.api.routes.events.read_events", _wrapped)
     published: list[str | None] = []
 
     def _later() -> None:
-        if not entered.wait(5):
+        if not entered.wait(3):
             return
-        time.sleep(0.2)
+        time.sleep(0.1)
         published.append(
             _publish(
                 settings,
@@ -134,17 +153,10 @@ def test_stream_closes_after_a_terminal_event(
 
     threading.Thread(target=_later, daemon=True).start()
     with TestClient(create_app(settings)) as client:
-        with client.stream("GET", f"/v1/context-jobs/{_JOB}/events") as response:
-            assert response.status_code == 200
-            # A missed event would otherwise heartbeat until the client is closed.
-            deadline = time.monotonic() + 4
-            lines: list[str] = []
-            for line in response.iter_lines():
-                lines.append(line)
-                if line.startswith("event: failed") or time.monotonic() > deadline:
-                    break
-            body = "\n".join(lines)
-    assert body.startswith("event: snapshot")
+        response = client.get(f"/v1/context-jobs/{_JOB}/events")
+    assert response.status_code == 200
+    body = response.text
+    assert body.startswith("event: snapshot\n")
     assert "event: failed" in body
     assert "workbook_too_large" in body
     assert published and published[0] is not None

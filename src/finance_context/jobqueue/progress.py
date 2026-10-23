@@ -81,7 +81,11 @@ class ProgressPublisher:
 
     def _loop(self) -> None:
         while True:
-            self._send(self._pending.get())
+            try:
+                self._send(self._pending.get())
+            except Exception:
+                # One bad payload must not kill the thread. Later sends no-op.
+                self._disable()
 
     def _send(self, fields: Mapping[str, object]) -> str | None:
         if self._warned:
@@ -102,16 +106,21 @@ class ProgressPublisher:
             )
             if str(fields.get("event")) in TERMINAL_EVENTS:
                 client.expire(key, int(self._settings.job_events_ttl_sec))
-        except (RedisError, OSError, TimeoutError):
-            self._warned = True
-            log_event(
-                _LOGGER,
-                logging.WARNING,
-                "job_progress_unavailable",
-                "job progress publish failed; further events are skipped",
-            )
+        except (RedisError, OSError, TimeoutError, ValueError):
+            self._disable()
             return None
         return _text(entry)
+
+    def _disable(self) -> None:
+        if self._warned:
+            return
+        self._warned = True
+        log_event(
+            _LOGGER,
+            logging.WARNING,
+            "job_progress_unavailable",
+            "job progress publish failed; further events are skipped",
+        )
 
     def _redis(self) -> Redis:
         if self._client is None:
