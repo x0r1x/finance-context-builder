@@ -23,7 +23,9 @@ from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.csr import (
     as_cell_edge,
     bind_range_expand_cap,
+    bind_range_node_min_cells,
     reset_range_expand_cap,
+    reset_range_node_min_cells,
 )
 from finance_context.formulas.models import as_edge, as_ir_cell, release_cell_asts
 from finance_context.formulas.stage import EdgeCount, compile_workbook, ir_is_current
@@ -155,6 +157,7 @@ class Pipeline:
         if not has_source(book):
             raise ContextError("empty_file", "source.xlsx missing")
         token = bind_range_expand_cap(self.settings.range_expand_cap)
+        node_token = bind_range_node_min_cells(self.settings.range_node_min_cells)
         try:
             return self._run_loaded(
                 dest_dir,
@@ -166,6 +169,7 @@ class Pipeline:
                 shared_dir=book if book != dest_dir else None,
             )
         finally:
+            reset_range_node_min_cells(node_token)
             reset_range_expand_cap(token)
 
     def _run_loaded(

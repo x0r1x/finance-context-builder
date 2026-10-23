@@ -45,6 +45,8 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("JOB_MEMORY_DEFAULT_BUDGET_BYTES", "job_memory_default_budget_bytes"),
     EnvSpec("JOB_MEMORY_WATCH_INTERVAL_SEC", "job_memory_watch_interval_sec"),
     EnvSpec("RANGE_EXPAND_CAP", "range_expand_cap"),
+    EnvSpec("RANGE_NODE_MIN_CELLS", "range_node_min_cells"),
+    EnvSpec("TRACE_RANGE_MEMBERS", "trace_range_members"),
     EnvSpec("JOB_OOM_SCORE_ADJ", "job_oom_score_adj"),
     EnvSpec("JOB_MEMORY_PREFLIGHT_REFUSAL", "job_memory_preflight_refusal"),
     EnvSpec("PARSE_STREAMING", "parse_streaming"),

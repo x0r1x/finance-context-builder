@@ -27,6 +27,16 @@ _Direction = Annotated[
     Query(description="precedents walks inputs; dependents walks results."),
 ]
 _Depth = Annotated[int, Query(description="How many hops to walk.")]
+_RangeMembers = Annotated[
+    int | None,
+    Query(
+        ge=0,
+        description=(
+            "Cells of one large range a precedents walk follows. 0 follows all. "
+            "Default TRACE_RANGE_MEMBERS. The edge carries members_total and members_shown."
+        ),
+    ),
+]
 
 
 @router.get(
@@ -41,10 +51,13 @@ async def get_graph_trace(
     origin: _From,
     direction: _Direction = "precedents",
     depth: _Depth = 8,
+    range_members: _RangeMembers = None,
 ) -> Response:
     _check_job_id(job_id)
     ctx = _ctx(request)
-    body = await run_blocking(ctx, _trace_json, ctx, job_id, origin, direction, depth)
+    body = await run_blocking(
+        ctx, _trace_json, ctx, job_id, origin, direction, depth, range_members
+    )
     return Response(content=body, media_type="application/json")
 
 
@@ -60,10 +73,13 @@ async def get_graph_trace_md(
     origin: _From,
     direction: _Direction = "precedents",
     depth: _Depth = 8,
+    range_members: _RangeMembers = None,
 ) -> PlainTextResponse:
     _check_job_id(job_id)
     ctx = _ctx(request)
-    body = await run_blocking(ctx, _trace_markdown, ctx, job_id, origin, direction, depth)
+    body = await run_blocking(
+        ctx, _trace_markdown, ctx, job_id, origin, direction, depth, range_members
+    )
     return PlainTextResponse(body, media_type="text/markdown")
 
 
@@ -73,8 +89,9 @@ def _trace_json(
     origin: str,
     direction: str,
     depth: int,
+    range_members: int | None = None,
 ) -> bytes:
-    doc = _trace(ctx, job_id, origin, direction, depth)
+    doc = _trace(ctx, job_id, origin, direction, depth, range_members)
     return json_bytes(doc.model_dump(mode="json"))
 
 
@@ -84,12 +101,20 @@ def _trace_markdown(
     origin: str,
     direction: str,
     depth: int,
+    range_members: int | None = None,
 ) -> str:
-    doc = _trace(ctx, job_id, origin, direction, depth)
+    doc = _trace(ctx, job_id, origin, direction, depth, range_members)
     return render_trace_markdown(doc)
 
 
-def _trace(ctx: AppContext, job_id: str, origin: str, direction: str, depth: int):
+def _trace(
+    ctx: AppContext,
+    job_id: str,
+    origin: str,
+    direction: str,
+    depth: int,
+    range_members: int | None = None,
+):
     dest = ctx.store.dest_dir(job_id)
     if not dest.exists():
         raise ApiError(404, "not_found")
@@ -101,10 +126,13 @@ def _trace(ctx: AppContext, job_id: str, origin: str, direction: str, depth: int
         direction=direction,
         depth=depth,
         book_dir=ctx.store.shared_dir(job_id),
+        range_members=(
+            ctx.settings.trace_range_members if range_members is None else range_members
+        ),
     )
 
 
-def _precedents(dest: Path, book: Path):
+def _precedents(dest: Path, book: Path, range_members: int):
     def lookup(origin: str, depth: int) -> list[ObservationPrecedent]:
         try:
             traced = trace_graph(
@@ -113,6 +141,7 @@ def _precedents(dest: Path, book: Path):
                 direction="precedents",
                 depth=depth,
                 book_dir=book,
+                range_members=range_members,
             )
         except FileNotFoundError as exc:
             raise ApiError(409, "report_not_ready") from exc

@@ -7,10 +7,11 @@ from pathlib import Path
 
 from finance_context.excel.a1 import index_to_col
 from finance_context.formulas.csr import (
-    RANGE_MEMBER_KIND,
     CellEdge,
+    RangeNode,
     as_cell_edge,
     is_range_node,
+    parse_range_node,
 )
 from finance_context.formulas.models import Edge, as_edge
 from finance_context.formulas.stage import IR_CELL_EDGE_COLUMNS, EdgeCount
@@ -26,6 +27,7 @@ from finance_context.graph.models import (
     GraphDocument,
     IdCount,
 )
+from finance_context.graph.ranges import CellGrid, RangeHops, hop_flags, is_cell_id
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
 from finance_context.layout.periods import period_position
@@ -113,7 +115,8 @@ def build_formula_graph(
         )
     else:
         period_of = {row[0]: row[4] for row in index_rows}
-        enriched = [_enrich_edge(edge, period_of) for edge in cell_edges]
+        view = _RangeView(book, cells, period_by_cell)
+        enriched = [_enrich_edge(edge, period_of, view) for edge in cell_edges]
         write_parquet(
             dest_dir / "ir" / "graph_edges.parquet",
             IR_CELL_EDGE_COLUMNS,
@@ -143,13 +146,18 @@ def build_formula_graph(
             row_group_rows=chosen.parquet_row_group_rows,
         )
 
-        cycles = classify_cycles(enriched)
+        users = view.users(enriched)
+        cycles = classify_cycles(
+            enriched,
+            hops=view.hops() if users else None,
+            range_edges=users,
+            period_chain=lambda source, member: _member_chain(source, member, period_of),
+        )
         hints = circularity_hints(layout, index_rows, cycles)
         iterate = _workbook_iterate(book)
         doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
         lags = _lags_by_source(enriched)
-        users, periods = _range_node_uses(enriched, period_of)
-        _add_range_lags(lags, users, periods, period_of)
+        _add_range_lags(lags, users, view, period_of)
         doc.links = _formula_links(cells, edges, row_meta, period_by_cell, lags=lags)
         if chosen.json_stream:
             _stream_graph_files(dest_dir, doc)
@@ -374,7 +382,7 @@ def _lags_by_source(cell_edges: list[CellEdge]) -> dict[str, list[str]]:
     for edge in cell_edges:
         source = str(edge.source or "")
         lag = edge.period_lag
-        if not source or lag is None or is_range_node(source):
+        if not source or lag is None:
             continue
         bucket = grouped.setdefault(source, [])
         text = str(lag)
@@ -432,39 +440,94 @@ def _formula_links(
     return links
 
 
-def _range_node_uses(
-    cell_edges: list[CellEdge], period_of: dict
-) -> tuple[list[tuple[str, str]], dict[str, set[str | None]]]:
-    """Formula -> range node pairs, and the member periods of each node."""
-    users: list[tuple[str, str]] = []
-    periods: dict[str, set[str | None]] = {}
-    for edge in cell_edges:
-        source = str(edge.source or "")
-        target = str(edge.target or "")
-        if edge.kind == RANGE_MEMBER_KIND:
-            periods.setdefault(source, set()).add(period_of.get(target))
-        elif target and is_range_node(target):
-            users.append((source, target))
-    return users, periods
+class _RangeView:
+    """Range nodes as the graph stage sees them, built only when a book has one.
+
+    A node's cells are not in the edge files. Its first member (for the edge's
+    offset and lag), its member columns (for formula_class) and its formula
+    cells (for cycles) come from its bounds and the book's cells.
+    """
+
+    def __init__(self, book: Path, cells: list[dict], period_by_cell: dict) -> None:
+        self._book = book
+        self._cells = cells
+        self._period_by_cell = period_by_cell
+        self._nodes: dict[str, RangeNode | None] = {}
+        self._grid: CellGrid | None = None
+        self._hops: RangeHops | None = None
+        self._periods: dict[str, list[str | None]] = {}
+
+    def node(self, target: str) -> RangeNode | None:
+        if not target or not is_range_node(target):
+            return None
+        if target not in self._nodes:
+            self._nodes[target] = parse_range_node(target)
+        return self._nodes[target]
+
+    def users(self, cell_edges: list[CellEdge]) -> list[tuple[str, RangeNode]]:
+        found: list[tuple[str, RangeNode]] = []
+        for edge in cell_edges:
+            node = self.node(str(edge.target or ""))
+            if node is not None and edge.source:
+                found.append((str(edge.source), node))
+        return found
+
+    def grid(self) -> CellGrid:
+        if self._grid is None:
+            from finance_context.memory import usage_for_book
+
+            self._grid = CellGrid(usage_for_book(self._book))
+        return self._grid
+
+    def hops(self) -> RangeHops:
+        if self._hops is None:
+            self._hops = RangeHops(
+                f"{cell['sheet']}!{cell['addr']}" for cell in self._cells if cell.get("formula_raw")
+            )
+        return self._hops
+
+    def offset_and_lag(
+        self, source: str, node: RangeNode, period_of: dict
+    ) -> tuple[int | None, str]:
+        """Offset and lag to the node's first member, the edge a per-formula
+        expansion would have listed first for this range."""
+        first = self.grid().first(node)
+        if first is None:
+            return None, "unaligned"
+        col, _row = first
+        src = parse_node_id(source)
+        offset = None if src is None else col - src[1]
+        src_period = period_of.get(source)
+        member_period = self._period_by_cell.get((node.sheet, col))
+        if not src_period or not member_period:
+            return offset, "unaligned"
+        return offset, calendar_lag(str(src_period), str(member_period))
+
+    def member_periods(self, node: RangeNode) -> list[str | None]:
+        cached = self._periods.get(node.node_id)
+        if cached is None:
+            periods = {
+                self._period_by_cell.get((node.sheet, col))
+                for col in self.grid().member_columns(node)
+            }
+            cached = sorted(periods, key=lambda value: (value is None, value or ""))
+            self._periods[node.node_id] = cached
+        return cached
 
 
 def _add_range_lags(
     lags: dict[str, list[str]],
-    users: list[tuple[str, str]],
-    periods: dict[str, set[str | None]],
+    users: list[tuple[str, RangeNode]],
+    view: _RangeView,
     period_of: dict,
 ) -> None:
     """Give a formula the lags it would have had with one edge per range member.
 
-    ``formula_class`` reads these. The edge into the range node itself stays
-    ``unaligned`` in graph_edges.parquet.
+    ``formula_class`` reads these. A member's period is its column's period, so
+    the lags come from the columns the range covers.
     """
-    ordered = {
-        node: sorted(values, key=lambda value: (value is None, value or ""))
-        for node, values in periods.items()
-    }
     for source, node in users:
-        member_periods = ordered.get(node)
+        member_periods = view.member_periods(node)
         if not member_periods:
             continue
         bucket = lags.setdefault(source, [])
@@ -478,11 +541,20 @@ def _add_range_lags(
                 bucket.append(lag)
 
 
-def _enrich_edge(edge: CellEdge, period_of: dict[str, str | None]) -> CellEdge:
+def _member_chain(source: str, member: str, period_of: dict) -> bool:
+    offset, lag = _offset_and_lag(source, member, period_of)
+    return _period_chain(source, member, lag, offset)
+
+
+def _enrich_edge(
+    edge: CellEdge, period_of: dict[str, str | None], view: _RangeView | None = None
+) -> CellEdge:
     source = str(edge.source or "")
     target = str(edge.target or "")
-    if is_range_node(source) or is_range_node(target):
-        return edge._replace(col_offset=None, period_lag="unaligned")
+    node = view.node(target) if view is not None else None
+    if node is not None:
+        offset, lag = view.offset_and_lag(source, node, period_of)  # type: ignore[union-attr]
+        return edge._replace(col_offset=offset, period_lag=lag)
     src = parse_node_id(source)
     tgt = parse_node_id(target)
     col_offset = None
@@ -557,7 +629,9 @@ def _summary(
 
 
 _LINKS_SLOT = "__FC_LINKS_SLOT__"
-_USABLE_KINDS = {"ref", "cross_sheet", "range", RANGE_MEMBER_KIND}
+_USABLE_KINDS = {"ref", "cross_sheet", "range"}
+# Flag of an edge that only connects a range node to its cells for the SCC pass.
+_STRUCTURAL = 2
 _BOOL_COLUMNS = {"unresolved", "truncated", "dangling", "named"}
 _ABS_COLUMNS = {"abs_col", "abs_row", "abs_col_end", "abs_row_end"}
 
@@ -587,8 +661,6 @@ def _empty_nodes_from_parquet(path: Path, existing: set[str]) -> list[str]:
 
 
 def _offset_and_lag(source: str, target: str, period_of: dict) -> tuple[int | None, str]:
-    if is_range_node(source) or is_range_node(target):
-        return None, "unaligned"
     src = parse_node_id(source)
     tgt = parse_node_id(target)
     col_offset = None
@@ -630,8 +702,16 @@ class _NodeIds:
         return slot
 
 
-def _cycles_packed(id_of: dict[str, int], src_ids, tgt_ids, flags) -> list[CycleRecord]:
-    """Same records as classify_cycles, from integer endpoints and a period-chain bit."""
+def _cycles_packed(
+    id_of: dict[str, int], src_ids, tgt_ids, flags, extra=None
+) -> list[CycleRecord]:
+    """Same records as classify_cycles, from integer endpoints and a period-chain bit.
+
+    An edge flagged ``_STRUCTURAL`` links a range node to its cells. It joins
+    components but is not a formula edge, so it does not vote on the class.
+    ``extra(label_of)`` yields (component, bit, self loop) for the formula ->
+    member edges a per-formula expansion would have had inside a component.
+    """
     import numpy as np
     from scipy import sparse
     from scipy.sparse.csgraph import connected_components
@@ -666,21 +746,36 @@ def _cycles_packed(id_of: dict[str, int], src_ids, tgt_ids, flags) -> list[Cycle
         label = int(labels[rows[pos]])
         if sizes[label] < 2 and int(rows[pos]) != int(cols[pos]):
             continue
+        if flags[pos] == _STRUCTURAL:
+            continue
         saw.add(label)
         if int(rows[pos]) == int(cols[pos]):
             self_loop.add(label)
         bit = bool(flags[pos])
         previous = all_period.get(label)
         all_period[label] = bit if previous is None else previous and bit
+    if extra is not None:
+
+        def label_of(name: str) -> int | None:
+            slot = id_of.get(name)
+            return None if slot is None else int(labels[rank[slot]])
+
+        for label, bit, is_self in extra(label_of):
+            saw.add(label)
+            if is_self:
+                self_loop.add(label)
+            previous = all_period.get(label)
+            all_period[label] = bit if previous is None else previous and bit
     cycles: list[CycleRecord] = []
     seq = 1
     for label in order:
         group = members[label]
         if len(group) < 2 and label not in self_loop:
             continue
-        # A range node is a hop, not a cell: A100 = SUM(A:A) is the cycle [A100].
-        cells_only = [name for name in group if not is_range_node(name)]
-        if not cells_only:
+        # A range node and its tree segments are hops, not cells:
+        # A100 = SUM(A:A) is the cycle [A100].
+        cells_only = [name for name in group if is_cell_id(name)]
+        if not cells_only or (len(cells_only) < 2 and label not in self_loop):
             continue
         cls = "iterative_ok" if label in saw and all_period.get(label, False) else "unexpected"
         cycles.append(
@@ -733,8 +828,8 @@ def _graph_from_parquet(
     truncated_seen: set[str] = set()
     lag_groups: dict[str, list[str]] = {}
     lag_pool: dict[str, str] = {}
-    range_users: list[tuple[str, str]] = []
-    range_periods: dict[str, set[str | None]] = {}
+    view = _RangeView(book, cells, period_by_cell)
+    range_users: list[tuple[str, RangeNode]] = []
     ids = _NodeIds()
     src_ids = array.array("i")
     tgt_ids = array.array("i")
@@ -757,7 +852,11 @@ def _graph_from_parquet(
             for index in range(width):
                 source = str(data["source"][index] or "")
                 target = str(data["target"][index] or "")
-                offset, lag = _offset_and_lag(source, target, period_of)
+                node = view.node(target)
+                if node is not None:
+                    offset, lag = view.offset_and_lag(source, node, period_of)
+                else:
+                    offset, lag = _offset_and_lag(source, target, period_of)
                 lag = lag_pool.setdefault(lag, lag)
                 offsets[index] = offset
                 lag_col[index] = lag
@@ -774,11 +873,9 @@ def _graph_from_parquet(
                 if data["truncated"][index] and source and source not in truncated_seen:
                     truncated_seen.add(source)
                     truncated_ids.append(source)
-                if kind == RANGE_MEMBER_KIND:
-                    range_periods.setdefault(source, set()).add(period_of.get(target))
-                elif source:
-                    if target and is_range_node(target):
-                        range_users.append((source, target))
+                if source:
+                    if node is not None:
+                        range_users.append((source, node))
                     bucket = lag_groups.setdefault(source, [])
                     if lag not in bucket:
                         bucket.append(lag)
@@ -791,7 +888,10 @@ def _graph_from_parquet(
                 ):
                     src_ids.append(ids.nid(source))
                     tgt_ids.append(ids.nid(target))
-                    flags.append(1 if _period_chain(source, target, lag, offset) else 0)
+                    if node is not None:
+                        flags.append(_STRUCTURAL)
+                    else:
+                        flags.append(1 if _period_chain(source, target, lag, offset) else 0)
             out_cols = []
             for name in names:
                 if name == "col_offset":
@@ -806,9 +906,25 @@ def _graph_from_parquet(
                     out_cols.append(data[name])
             writer.write_lists(out_cols)
             del data, offsets, lag_col, out_cols
-    _add_range_lags(lag_groups, range_users, range_periods, period_of)
-    del period_of, range_users, range_periods
-    cycles = _cycles_packed(ids.map, src_ids, tgt_ids, flags)
+    _add_range_lags(lag_groups, range_users, view, period_of)
+    extra = None
+    if range_users:
+        hops = view.hops()
+        for node in {node.node_id: node for _source, node in range_users}.values():
+            for parent, child in hops.edges(node):
+                src_ids.append(ids.nid(parent))
+                tgt_ids.append(ids.nid(child))
+                flags.append(_STRUCTURAL)
+
+        def extra(label_of):
+            return hop_flags(
+                label_of,
+                range_users,
+                hops,
+                lambda source, member: _member_chain(source, member, period_of),
+            )
+
+    cycles = _cycles_packed(ids.map, src_ids, tgt_ids, flags, extra)
     del ids, src_ids, tgt_ids, flags
     hints = circularity_hints(layout, index_rows, cycles)
     iterate = _workbook_iterate(book)

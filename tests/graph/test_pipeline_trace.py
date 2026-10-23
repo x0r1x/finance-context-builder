@@ -97,7 +97,7 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert "formula_ast" not in payload
     assert "precedents_rows" not in payload
     graph = json.loads(payload)
-    assert graph["schema_version"] == "1.7.1"
+    assert graph["schema_version"] == "1.7.0"
     assert graph["iterate"] is False
     assert "edges_json" not in graph["artifacts"]
     assert "formula_ast" not in json.dumps(graph)
@@ -292,7 +292,7 @@ def test_pipeline_publishes_iterate_and_cycles(tmp_path: Path) -> None:
     assert doc.workbook.iterate is True
     assert doc.graph.iterate is True
     graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
-    assert graph["schema_version"] == "1.7.1"
+    assert graph["schema_version"] == "1.7.0"
     assert graph["iterate"] is True
     assert graph["cycles"]
     members = {m for cycle in graph["cycles"] for m in cycle["members"]}

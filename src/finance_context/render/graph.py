@@ -124,6 +124,28 @@ def render_trace_markdown(doc: TraceDocument) -> str:
             )
             + " |"
         )
+    cut = [
+        edge
+        for edge in doc.edges
+        if edge.members_total is not None
+        and edge.members_shown is not None
+        and edge.members_shown < edge.members_total
+    ]
+    if cut:
+        lines.extend(
+            [
+                "",
+                "## Ranges not followed in full",
+                "",
+                "| Source | Range | Cells | Followed |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for edge in cut:
+            lines.append(
+                f"| {_cell(edge.source)} | {_cell(edge.target)} | "
+                f"{edge.members_total} | {edge.members_shown} |"
+            )
     lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

@@ -17,7 +17,7 @@ from finance_context.context.series import (
 from finance_context.context.timeline import build_axes
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.formulas.csr import SheetUsage
-from finance_context.layout.adjacency import row_adjacency
+from finance_context.layout.adjacency import RangeReads, row_adjacency
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
 from finance_context.layout.params import selector_rows
 from finance_context.layout.periods import (
@@ -35,6 +35,7 @@ from finance_context.models.context import (
     BlockRow,
     ContextAxis,
     ContextDocument,
+    ContextRange,
     FinancialBlock,
     GraphPointer,
     NumericSummary,
@@ -43,10 +44,6 @@ from finance_context.models.context import (
     WorkbookRaw,
 )
 from finance_context.vocab import ValueStatus
-
-# Row neighbors kept per side. One SUMIF(A:A) copied down 20k rows makes every
-# row of A a neighbor of every formula row; past this many the list is cut.
-ROW_NEIGHBOR_LIMIT = 256
 
 
 def _without_name_scope(items: list) -> list:
@@ -90,7 +87,8 @@ def build_context(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
     axes_by_id = {axis.id: axis for axis in axes}
-    precedents, dependents = row_adjacency(edges or [], limit=ROW_NEIGHBOR_LIMIT, usage=usage)
+    reads = RangeReads()
+    precedents, dependents = row_adjacency(edges or [], limit=0, usage=usage, ranges=reads)
     hidden_warnings = _hidden_warnings(workbook_meta, cells)
     warnings: list[str] = []
     formula_count = 0
@@ -222,6 +220,7 @@ def build_context(
                     date1904=bool(workbook_meta.get("date1904")),
                     label_path=label_path,
                     neighbors=neighbors,
+                    neighbor_ranges=reads.for_row(sheet.name, layout_row.row),
                     formula=first.formula if first else None,
                     formula_exceptions=list(first.formula_exceptions) if first else [],
                     numeric_summary=first.numeric_summary if first else None,
@@ -305,6 +304,7 @@ def build_context(
         workbook=workbook,
         axes=axes,
         blocks=blocks,
+        ranges=[ContextRange.model_validate(item) for item in reads.records(usage)],
         graph=graph or GraphPointer(),
         warnings=warnings[:50],
     )

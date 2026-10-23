@@ -2,7 +2,7 @@
 
 [Русский](../ru/slices.md) · **English**
 
-The job canon is `context.json` / `context.md` (schema `1.14.0`) and `graph.json` / `graph.md` (schema `1.7.1`). The slice below is a projection of those files. A route returns it in the response and does not write a second JSON. It does not replace `blocks[].rows`. Cells, AST, and edges are not copied into the slice.
+The job canon is `context.json` / `context.md` (schema `1.14.0`) and `graph.json` / `graph.md` (schema `1.7.0`). The slice below is a projection of those files. A route returns it in the response and does not write a second JSON. It does not replace `blocks[].rows`. Cells, AST, and edges are not copied into the slice.
 
 Related documents: [overview](overview.md), [architecture](architecture.md), [graph](graph.md).
 

@@ -2,7 +2,7 @@
 
 [Русский](../ru/graph.md) · **English**
 
-The public graph is two files with the same facts: `graph.json` and `graph.md` (schema `1.7.1`). Cell-level edges and AST stay in `ir/*.parquet`. The model is `context.json` / `context.md`. Walking one cell is `GET .../graph/trace` and `GET .../graph/trace.md`, not a catalog of every cell. The graph is not merged into context.
+The public graph is two files with the same facts: `graph.json` and `graph.md` (schema `1.7.0`). Cell-level edges and AST stay in `ir/*.parquet`. The model is `context.json` / `context.md`. Walking one cell is `GET .../graph/trace` and `GET .../graph/trace.md`, not a catalog of every cell. The graph is not merged into context.
 
 Code: `src/finance_context/graph/` (`stage.py`, `cycles.py`, `trace.py`), render in `src/finance_context/render/graph.py`, range expansion in `formulas/csr.py`. Pipeline: `parse → compile → layout → graph → build → render`.
 
@@ -19,7 +19,7 @@ One fact, one place.
 | Cell→cell after expand: `dangling` / `dangling_reason` / `status` / `reason` / `evidence` / `range_ref` / `truncated`. `col_offset` and `period_lag` are empty here | `ir/cell_edges.parquet` |
 | `col_offset` and `period_lag` after graph. Graph does not rewrite `cell_edges` | `ir/graph_edges.parquet` |
 | `row_key`, `period_id`, `node_type` (including `empty` for verified blank cells) | `ir/graph_index.parquet`; a formula also has `links[].row_key` and `links[].period_id` |
-| Counts (`nodes` / `edges` are cell-level parquet sizes), `iterate`, cycles, `circularity_hints`, `dangling_classes`, and `links[]` with `formula_class` | `graph.json` and the same in `graph.md` (schema `1.7.1`, Class column) |
+| Counts (`nodes` / `edges` are cell-level parquet sizes), `iterate`, cycles, `circularity_hints`, `dangling_classes`, and `links[]` with `formula_class` | `graph.json` and the same in `graph.md` (schema `1.7.0`, Class column) |
 | Every `<c>` on a sheet: `populated` or `styled_blank` | `raw/cell_presence.parquet` |
 | Report row: label, one row formula, cached series per axis, value status, scale factor, normalized values | `context.json` / `context.md` (schema `1.14.0`, axes in `axes`) |
 
@@ -29,9 +29,13 @@ One fact, one place.
 
 ## Range nodes
 
-A whole column or row (`A:A`, `1:1`) and a rectangle over 64 cells (`RANGE_NODE_MIN_CELLS`) are not expanded per formula. In `ir/cell_edges.parquet` the formula gets one `kind=range` edge to a range node: `target` is the node id (`Data!A:A`, `Data!C1:C2500`; a cell id has no colon), `range_ref` is the text from the formula. The node lists its present cells once per book as `kind=range_member` edges (`source` is the node, `target` the cell, `range_ref` the node). A node has no blank holes and no `RANGE_EXPAND_CAP` cut, so `truncated=false`. A copied-down `SUMIF(A:A, ...)` costs formulas + cells of A, not formulas × cells of A. A range of up to 64 cells expands as before, blank members included.
+A whole column or row (`A:A`, `1:1`) and a rectangle over `RANGE_NODE_MIN_CELLS` cells (default 64) are range nodes. In `ir/cell_edges.parquet` and `ir/graph_edges.parquet` the formula has one `kind=range` edge whose `target` is the node id (`Data!A:A`, `Data!B2:B5000`, `Data!3:3`; a cell id has no colon) and whose `range_ref` is the text from the formula. Nothing else is written for the node: its cells come from its bounds and the book's cells when a reader needs them. A copied-down `SUMIF(A:A, ...)` or a running total `SUM($B$2:B{n})` costs one edge per formula, so edges grow with formulas, not with formulas times cells. A range on a missing sheet, or on a sheet with no cells, and a range of up to `RANGE_NODE_MIN_CELLS` cells expand per formula as before, blank members and the `RANGE_EXPAND_CAP` cut included.
 
-Trace passes through the node: a formula's precedents are the node's members, and a cell's dependents are the formulas that read the node. The node is not in `nodes`, the reported edge is the formula's edge with `target` = `range_ref`, and depth does not grow. The edge into the node has `period_lag=unaligned` and `col_offset=null`; `formula_class` takes lags from the members' periods, as with expansion. A cycle through a node is published without the node in `members`. `edges` and `kinds` in `graph.json` count parquet edges, so a book with whole columns shows fewer, plus `kinds.range_member`. The pre-compile memory estimate counts a node the same way: one edge per formula plus its members once.
+What stays the same as per-formula expansion, and is tested against it: `links[]` (`formula_class`, `refs`), `cycles` (members and class), `dangling`, and trace nodes and edges. The edge into a node carries the `col_offset` and `period_lag` of the node's first cell (its corner, or the first present cell of a whole column or row), the edge an expansion listed first. `formula_class` takes the lags of every column the node covers. Cycles are found through the node to the formula cells inside it, and only the formula-to-cell edges an expansion would have had vote on `iterative_ok`.
+
+What changes: `edges` and `kinds.range` count one edge per formula and node; blank cells inside a node are not `node_type=empty` rows of `ir/graph_index.parquet` and are not counted in `dangling_classes.empty_range_member` (an expansion counted them only within its first 2000 cells); `truncated` no longer lists formulas with a node, since a node is never cut.
+
+Trace walks through a node and never lists it as a node. Precedents of a formula are the filled cells inside the node, row then column. At most `TRACE_RANGE_MEMBERS` of them (default 200, 0 for all; the trace endpoints also take `range_members`) are followed; the edge then has `members_total` and `members_shown`, and `trace.md` lists such ranges under "Ranges not followed in full". Dependents of a cell include every formula that reads a node containing the cell, found through an index of node bounds. A blank cell inside a node can be a trace origin.
 
 There are no separate `graph-edges.json`, `graph-dangling.json`, or `formulas.json`. Cell-graph completeness does not live in `context.blocks[].relations` (those are formula-shape alias, aggregate, difference, and roll_forward).
 

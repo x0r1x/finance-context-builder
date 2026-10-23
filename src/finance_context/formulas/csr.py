@@ -9,18 +9,17 @@ from typing import Any, NamedTuple
 
 from finance_context.excel.a1 import col_to_index, format_addr, index_to_col
 from finance_context.formulas.models import Edge
-from finance_context.settings import DEFAULT_RANGE_EXPAND_CAP
+from finance_context.settings import DEFAULT_RANGE_EXPAND_CAP, DEFAULT_RANGE_NODE_MIN_CELLS
 
 _RANGE_CAP: ContextVar[int | None] = ContextVar("finance_range_expand_cap", default=None)
+# A whole column or row, or a rectangle over this many cells, is one range node.
+# The formula gets one edge to the node and nothing else is written for it: its
+# cells come from the node's bounds and the sheet's present cells when a reader
+# needs them. A copied-down SUMIF(A:A, ...) or a running total SUM($B$2:B{n})
+# then costs one edge per formula.
+_NODE_MIN: ContextVar[int | None] = ContextVar("finance_range_node_min_cells", default=None)
 _EXCEL_MAX_ROW = 1_048_576
 _EXCEL_MAX_COL = 16_384
-
-# A range larger than this, or a whole column or row, becomes one range node.
-# The formula gets one edge to the node, and the node lists its present cells
-# once for the whole book. A copied-down SUMIF(A:A, ...) then costs
-# formulas + cells of A instead of formulas x cells of A.
-RANGE_NODE_MIN_CELLS = 64
-RANGE_MEMBER_KIND = "range_member"
 
 _CELL = re.compile(r"^\$?([A-Za-z]+)\$?(\d+)$", re.I)
 _COLS = re.compile(r"^\$?([A-Za-z]+):\$?([A-Za-z]+)$", re.I)
@@ -100,6 +99,20 @@ def reset_range_expand_cap(token: Token[int | None]) -> None:
 def active_range_cap() -> int:
     bound = _RANGE_CAP.get()
     return DEFAULT_RANGE_EXPAND_CAP if bound is None else bound
+
+
+def bind_range_node_min_cells(cells: int) -> Token[int | None]:
+    """Use this job's ``RANGE_NODE_MIN_CELLS`` until the token is reset."""
+    return _NODE_MIN.set(cells)
+
+
+def reset_range_node_min_cells(token: Token[int | None]) -> None:
+    _NODE_MIN.reset(token)
+
+
+def active_range_node_min_cells() -> int:
+    bound = _NODE_MIN.get()
+    return DEFAULT_RANGE_NODE_MIN_CELLS if bound is None else bound
 
 
 def present_cell_count(usage: SheetUsage) -> int:
@@ -185,6 +198,35 @@ def _present_count(
     )
 
 
+def _first_present(
+    sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
+) -> tuple[int, int] | None:
+    """The first present cell of the rectangle, row then column, as (row, col).
+
+    Same as ``_present_pairs(...)[0]`` without listing the cells: one bisect
+    per column, or one per row for a rectangle wider than it is tall.
+    """
+    sheet = usage.sheet_name(sheet)
+    best: tuple[int, int] | None = None
+    width = c2 - c1 + 1
+    height = r2 - r1 + 1
+    if width <= height:
+        columns = usage.rows_by_col.get(sheet, {})
+        for col in range(c1, c2 + 1):
+            rows = columns.get(col, ())
+            slot = bisect.bisect_left(rows, r1)
+            if slot < len(rows) and rows[slot] <= r2 and (best is None or rows[slot] < best[0]):
+                best = (rows[slot], col)
+        return best
+    for row, cols in usage.cols_by_row.get(sheet, {}).items():
+        if not r1 <= row <= r2 or (best is not None and row >= best[0]):
+            continue
+        slot = bisect.bisect_left(cols, c1)
+        if slot < len(cols) and cols[slot] <= c2:
+            best = (row, cols[slot])
+    return best
+
+
 def _present_pairs(
     sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
 ) -> list[tuple[int, int]]:
@@ -215,6 +257,10 @@ def is_range_node(node: str | None) -> bool:
     return ":" in node.rsplit("!", 1)[1]
 
 
+def whole_axis(c1: int, c2: int, r1: int, r2: int) -> bool:
+    return _whole_axis(c1, c2, r1, r2)
+
+
 def _range_node_id(sheet: str, c1: int, c2: int, r1: int, r2: int) -> str:
     if r1 == 1 and r2 == _EXCEL_MAX_ROW:
         return f"{sheet}!{index_to_col(c1)}:{index_to_col(c2)}"
@@ -236,7 +282,9 @@ def range_node_for(target: str, usage: SheetUsage | None) -> RangeNode | None:
     """The range node a range edge goes through, or None when it expands per formula.
 
     Only a whole column or row, or a rectangle over ``RANGE_NODE_MIN_CELLS``,
-    becomes a node, and only when ``usage`` knows the present cells.
+    becomes a node, and only on a sheet ``usage`` knows. A range on a sheet with
+    no present cells, or on a missing sheet, still expands per formula so its
+    members keep their empty or dangling class.
     """
     if usage is None:
         return None
@@ -244,22 +292,44 @@ def range_node_for(target: str, usage: SheetUsage | None) -> RangeNode | None:
         sheet, body = split_sheet_ref(target)
     except ValueError:
         return None
+    if sheet.casefold() not in usage.canonical:
+        return None
     rect = _rectangle(body)
     if rect is None:
         return None
     c1, c2, r1, r2 = rect
-    if not _whole_axis(c1, c2, r1, r2) and _area(c1, c2, r1, r2) <= RANGE_NODE_MIN_CELLS:
+    small = _area(c1, c2, r1, r2) <= active_range_node_min_cells()
+    if not _whole_axis(c1, c2, r1, r2) and small:
         return None
     sheet = usage.sheet_name(sheet)
     return RangeNode(_range_node_id(sheet, c1, c2, r1, r2), sheet, c1, c2, r1, r2)
 
 
-def range_node_members(node: RangeNode, usage: SheetUsage) -> list[str]:
-    """Present cells of the node, row then column. Holes are not members."""
-    return [
-        f"{node.sheet}!{index_to_col(col)}{row}"
-        for row, col in _present_pairs(node.sheet, node.c1, node.c2, node.r1, node.r2, usage)
-    ]
+def parse_range_node(node_id: str) -> RangeNode | None:
+    """Bounds of a range node id written by ``range_node_for``."""
+    if not is_range_node(node_id):
+        return None
+    sheet, body = node_id.rsplit("!", 1)
+    rect = _rectangle(body)
+    if rect is None:
+        return None
+    c1, c2, r1, r2 = rect
+    return RangeNode(node_id, sheet, c1, c2, r1, r2)
+
+
+def present_count(node: RangeNode, usage: SheetUsage) -> int:
+    """Present cells inside a node, counted without listing them."""
+    return _present_count(node.sheet, node.c1, node.c2, node.r1, node.r2, usage)
+
+
+def first_present(node: RangeNode, usage: SheetUsage) -> tuple[int, int] | None:
+    """First present (row, col) inside a node, row then column; None when it has none."""
+    return _first_present(node.sheet, node.c1, node.c2, node.r1, node.r2, usage)
+
+
+def present_pairs(node: RangeNode, usage: SheetUsage) -> list[tuple[int, int]]:
+    """Present (row, col) pairs inside a node, row then column."""
+    return _present_pairs(node.sheet, node.c1, node.c2, node.r1, node.r2, usage)
 
 
 def expansion_count(
@@ -285,28 +355,18 @@ def expansion_count(
     return area if area <= cap else cap
 
 
-def expanded_edge_count(
-    edges: list[Edge],
-    usage: SheetUsage | None = None,
-    seen_ranges: set[str] | None = None,
-) -> int:
+def expanded_edge_count(edges: list[Edge], usage: SheetUsage | None = None) -> int:
     """Cell targets expand_cell_edges would walk, before de-duplication.
 
-    A range node costs one edge per formula plus its members once. Pass the same
-    ``seen_ranges`` across calls so a node shared by many formulas is counted once.
+    A range node is one edge: its cells are not written per formula or per node.
     """
-    seen = set() if seen_ranges is None else seen_ranges
     total = 0
     for edge in edges:
         if not edge.target:
             continue
         if edge.kind == "range" and not edge.unresolved and "!" in edge.target:
-            node = range_node_for(edge.target, usage)
-            if node is not None and usage is not None:
+            if range_node_for(edge.target, usage) is not None:
                 total += 1
-                if node.node_id not in seen:
-                    seen.add(node.node_id)
-                    total += _present_count(node.sheet, node.c1, node.c2, node.r1, node.r2, usage)
                 continue
             try:
                 total += expansion_count(edge.target, usage=usage)
@@ -451,9 +511,8 @@ def expand_cell_edges(
     seen_cells = presence or {}
     rows: list[CellEdge] = []
     seen: set[tuple[str, str, str]] = set()
-    done: set[str] = set()
     for edge in edges:
-        for row in _edge_rows(edge, usage, done):
+        for row in _edge_rows(edge, usage):
             target = _share(pool, row.target)
             source = _share(pool, row.source)
             key = (source, target, row.kind)
@@ -557,9 +616,8 @@ def expand_cell_edges_column_batches(
         for values in columns.values():
             values.clear()
 
-    done: set[str] = set()
     for edge in edges:
-        for row in _edge_rows(edge, usage, done):
+        for row in _edge_rows(edge, usage):
             target = _share(pool, row.target)
             source = _share(pool, row.source)
             key = (node_id(source) << 40) | (node_id(target) << 8) | kind_id(row.kind)
@@ -591,7 +649,6 @@ def expand_cell_edges_column_batches(
     seen.clear()
     ids.clear()
     id_box.clear()
-    done.clear()
     return count
 
 
@@ -692,13 +749,8 @@ def _classified(
     )
 
 
-def _edge_rows(edge: Edge, usage: SheetUsage | None, done: set[str]) -> Iterable[_EdgeRow]:
-    """Cell-edge rows for one formula edge.
-
-    A large range yields one row to its range node. The first formula that uses
-    the node also yields the node's member rows, ``range_member`` with the node
-    as source. ``done`` holds the nodes already listed.
-    """
+def _edge_rows(edge: Edge, usage: SheetUsage | None) -> Iterable[_EdgeRow]:
+    """Cell-edge rows for one formula edge. A large range is one row to its node."""
     if (
         edge.kind == "range"
         and edge.target
@@ -722,23 +774,6 @@ def _edge_rows(edge: Edge, usage: SheetUsage | None, done: set[str]) -> Iterable
                 edge.named,
                 None,
             )
-            if node.node_id not in done:
-                done.add(node.node_id)
-                for member in range_node_members(node, usage):
-                    yield _EdgeRow(
-                        node.node_id,
-                        member,
-                        RANGE_MEMBER_KIND,
-                        False,
-                        False,
-                        node.node_id,
-                        None,
-                        None,
-                        None,
-                        None,
-                        False,
-                        "range",
-                    )
             return
     for target, unresolved, truncated in _expanded_targets(edge, usage):
         yield _EdgeRow(

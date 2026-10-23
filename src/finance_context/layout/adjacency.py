@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from finance_context.excel.a1 import parse_addr
-from finance_context.formulas.csr import SheetUsage, expand_range
+from finance_context.excel.a1 import index_to_col, parse_addr
+from finance_context.formulas.csr import (
+    RangeNode,
+    SheetUsage,
+    expand_range,
+    present_count,
+    range_node_for,
+)
 from finance_context.formulas.models import Edge, as_edge
 
 
@@ -41,9 +47,47 @@ def _targets(edge: Edge, usage: SheetUsage | None = None) -> list[str]:
     return [target]
 
 
-def _target_rows(edge: Edge, usage: SheetUsage | None) -> list[tuple[str, int]]:
-    rows = (cell_ref_row(ref) for ref in _targets(edge, usage))
-    return list(dict.fromkeys(row for row in rows if row is not None))
+class RangeReads:
+    """Large ranges read by formula rows, once per range.
+
+    A range that is a range node in the graph (a whole column or row, or a
+    rectangle over RANGE_NODE_MIN_CELLS) is not expanded into member rows. The
+    reading row names the range, and the range lists its bounds and its reading
+    rows. Rows inside the range get no back-reference: one SUMIF(A:A) copied
+    down N rows, or a running total SUM($B$2:B{n}), stays linear in N.
+    """
+
+    def __init__(self) -> None:
+        self.by_row: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
+        self.nodes: dict[str, RangeNode] = {}
+        self.readers: dict[str, dict[str, None]] = defaultdict(dict)
+
+    def add(self, source: tuple[str, int], node: RangeNode) -> None:
+        self.nodes.setdefault(node.node_id, node)
+        self.by_row[source].setdefault(node.node_id, None)
+        self.readers[node.node_id].setdefault(row_key_ref(*source), None)
+
+    def for_row(self, sheet: str, row: int) -> list[str]:
+        return list(self.by_row.get((sheet, row), {}))
+
+    def records(self, usage: SheetUsage | None) -> list[dict]:
+        out: list[dict] = []
+        for node_id, node in self.nodes.items():
+            whole_rows = node.c1 == 1 and node.c2 == 16_384
+            whole_cols = node.r1 == 1 and node.r2 == 1_048_576
+            out.append(
+                {
+                    "id": node_id,
+                    "sheet": node.sheet,
+                    "col_start": None if whole_rows else index_to_col(node.c1),
+                    "col_end": None if whole_rows else index_to_col(node.c2),
+                    "row_start": None if whole_cols else node.r1,
+                    "row_end": None if whole_cols else node.r2,
+                    "cells": present_count(node, usage) if usage is not None else 0,
+                    "readers": list(self.readers.get(node_id, {})),
+                }
+            )
+        return out
 
 
 def row_adjacency(
@@ -51,25 +95,11 @@ def row_adjacency(
     *,
     limit: int = 8,
     usage: SheetUsage | None = None,
+    ranges: RangeReads | None = None,
 ) -> tuple[dict[tuple[str, int], list[str]], dict[tuple[str, int], list[str]]]:
-    """Row precedents and dependents, at most ``limit`` each (0 keeps all).
-
-    A copied-down SUMIF(A:A, ...) repeats one range thousands of times. Its rows
-    are resolved once, and a source row that already took a range is skipped.
-    Rows are kept only for a range seen a second time, so one-off windows such
-    as a copied-down SUM(A1:A1000) are not held for the whole call.
-    With a limit, a full list stops taking entries and a range whose rows are
-    all full is not walked again. The lists are the first ``limit`` entries of
-    one pass per edge, in the same order.
-    """
+    """Row precedents and dependents. With ``ranges``, large ranges go there instead."""
     precedents: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
     dependents: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
-    cap = limit if limit > 0 else None
-    # Rows of each reused range, and the rows of it whose dependents are not full yet.
-    rows_of: dict[tuple[str, bool], list[tuple[str, int]]] = {}
-    open_rows: dict[tuple[str, bool], list[tuple[str, int]]] = {}
-    seen_once: set[tuple[str, bool]] = set()
-    done: set[tuple[tuple[str, int], str, bool]] = set()
     for raw in edges:
         edge = as_edge(raw)
         if edge.named:
@@ -77,39 +107,21 @@ def row_adjacency(
         source = cell_ref_row(str(edge.source or ""))
         if source is None:
             continue
-        slot: tuple[str, bool] | None = None
-        if edge.kind == "range":
-            slot = (str(edge.target or ""), bool(edge.unresolved))
-            if (source, *slot) in done:
+        if ranges is not None and edge.kind == "range" and not edge.unresolved:
+            node = range_node_for(str(edge.target or ""), usage)
+            if node is not None:
+                ranges.add(source, node)
                 continue
-            done.add((source, *slot))
-            targets = rows_of.get(slot)
-            if targets is None:
-                targets = _target_rows(edge, usage)
-                if slot in seen_once:
-                    rows_of[slot] = targets
-                    open_rows[slot] = targets
-                else:
-                    seen_once.add(slot)
-        else:
-            targets = _target_rows(edge, usage)
-        src_ref = row_key_ref(*source)
-        own = precedents[source]
-        for target in targets:
-            if cap is not None and len(own) >= cap:
-                break
-            if source != target:
-                own.setdefault(row_key_ref(*target), None)
-        waiting = open_rows.get(slot, targets) if slot is not None else targets
-        for target in waiting:
-            if source == target:
+        for target_ref in _targets(edge, usage):
+            target = cell_ref_row(target_ref)
+            if target is None or source == target:
                 continue
-            readers = dependents[target]
-            if cap is None or len(readers) < cap:
-                readers.setdefault(src_ref, None)
-        if slot in open_rows and cap is not None:
-            open_rows[slot] = [row for row in waiting if len(dependents[row]) < cap]
+            src_ref = row_key_ref(*source)
+            tgt_ref = row_key_ref(*target)
+            precedents[source].setdefault(tgt_ref, None)
+            dependents[target].setdefault(src_ref, None)
+    cut = limit if limit > 0 else None
     return (
-        {key: list(values)[:cap] for key, values in precedents.items() if values},
-        {key: list(values)[:cap] for key, values in dependents.items() if values},
+        {key: list(values)[:cut] for key, values in precedents.items()},
+        {key: list(values)[:cut] for key, values in dependents.items()},
     )

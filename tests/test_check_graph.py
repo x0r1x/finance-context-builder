@@ -133,6 +133,22 @@ def test_range_member_edge_count_is_allowed_but_member_records_are_not(tmp_path:
     assert "kinds must map" in result.stderr
 
 
+def test_kinds_must_be_a_map_of_plain_ints(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    for name, kinds in (
+        ("null", None),
+        ("list", [1]),
+        ("bool", {"ref": True}),
+        ("str", {"ref": "3"}),
+    ):
+        graph = _write(tmp_path / f"{name}.json", _ok_graph(kinds=kinds))
+        result = _run(str(context), str(graph))
+        assert result.returncode == 1, name
+        assert "kinds must map" in result.stderr, name
+    graph = _write(tmp_path / "ok.json", _ok_graph(kinds={"ref": 3, "range": 0}))
+    assert _run(str(context), str(graph)).returncode == 0
+
+
 def test_rejects_second_catalog_and_cell_objects(tmp_path: Path) -> None:
     context = _write(
         tmp_path / "context.json",

@@ -229,11 +229,11 @@ def check_graph(graph: dict[str, Any]) -> list[str]:
             errors.append(f"graph.json {key} must be an int count, not a list")
     if "iterate" in graph and not isinstance(graph["iterate"], bool):
         errors.append("graph.json iterate must be a boolean")
-    # kinds maps an edge kind to its count. ``range_member`` there is the count
-    # of range-node edges, not an embedded member list.
+    # kinds maps an edge kind to its count. Its keys are kind names, not embedded
+    # fields, so the forbidden-key walk skips it.
     kinds = graph.get("kinds")
-    if kinds is not None and (
-        not isinstance(kinds, dict) or not all(isinstance(n, int) for n in kinds.values())
+    if "kinds" in graph and (
+        not isinstance(kinds, dict) or not all(type(n) is int for n in kinds.values())
     ):
         errors.append("graph.json kinds must map an edge kind to an int count")
     walked = {key: value for key, value in graph.items() if key != "kinds"}
