@@ -57,6 +57,15 @@ def test_upload_and_download(client: TestClient, tmp_path: Path) -> None:
     )
     assert traced_md.status_code == 200
     assert "P&L!C2" in traced_md.text
+    for path in ("graph/trace", "graph/trace.md"):
+        every = client.get(
+            f"/v1/context-jobs/{job_id}/{path}", params={"from": "P&L!C2", "range_members": 0}
+        )
+        assert every.status_code == 200
+        negative = client.get(
+            f"/v1/context-jobs/{job_id}/{path}", params={"from": "P&L!C2", "range_members": -1}
+        )
+        assert negative.status_code == 422
     assert md_doc.status_code == 200
     assert "Financial context" in md_doc.text
     assert json_doc.json()["schema_version"] == "1.14.0"
