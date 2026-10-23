@@ -390,7 +390,7 @@ def test_sheet_qualified_ref_error_is_the_same_exception_as_bare() -> None:
         == bare_doc.blocks[0].rows[0].formula_exceptions
     )
     assert qualified_doc.blocks[0].rows[0].formula == bare_doc.blocks[0].rows[0].formula
-    assert all("Unparsed formula" not in warning for warning in qualified_doc.warnings)
+    assert all("unparsed formula" not in warning.lower() for warning in qualified_doc.warnings)
     assert qualified_doc.workbook.unparsed_formulas == 0
 
 
