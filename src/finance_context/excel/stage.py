@@ -25,7 +25,7 @@ def parse_workbook(
     source: Path, dest_dir: Path, settings: Settings | None = None
 ) -> WorkbookMeta:
     chosen = settings if isinstance(settings, Settings) else Settings()
-    zf = open_xlsx_zip(source)
+    zf = open_xlsx_zip(source, streaming=chosen.parse_streaming)
     if chosen.parse_streaming:
         try:
             columns, meta, presence = parse_ooxml_columns(zf)

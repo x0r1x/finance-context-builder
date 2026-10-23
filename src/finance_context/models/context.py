@@ -85,6 +85,9 @@ class BlockRow(BaseModel):
     hidden: bool = False
     check_row: bool = False
     neighbors: list[str] = Field(default_factory=list)
+    # Large ranges (ids in ContextDocument.ranges) this row's formula reads.
+    # Their member rows are not repeated in ``neighbors``.
+    neighbor_ranges: list[str] = Field(default_factory=list)
     numeric_summary: NumericSummary | None = None
     hints: RowHints = Field(default_factory=RowHints)
     cells: list[RoleCell] = Field(default_factory=list)
@@ -93,6 +96,31 @@ class BlockRow(BaseModel):
     value_statuses: list[ValueStatus] = Field(default_factory=list)
     normalized_values: list[str | None] = Field(default_factory=list)
     series: list[RowSeries] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("neighbor_ranges"):
+            data.pop("neighbor_ranges", None)
+        return data
+
+
+class ContextRange(BaseModel):
+    """A large range read by formula rows, listed once instead of per member row.
+
+    ``col_start``/``col_end`` are None for whole rows, ``row_start``/``row_end``
+    for whole columns. ``cells`` counts present cells inside. ``readers`` are
+    the rows (``Sheet!12``) whose formula reads it.
+    """
+
+    id: str
+    sheet: str
+    col_start: str | None = None
+    col_end: str | None = None
+    row_start: int | None = None
+    row_end: int | None = None
+    cells: int = 0
+    readers: list[str] = Field(default_factory=list)
 
 
 class ModelPeriod(BaseModel):
@@ -209,5 +237,13 @@ class ContextDocument(BaseModel):
     workbook: WorkbookRaw
     axes: list[ContextAxis] = Field(default_factory=list)
     blocks: list[FinancialBlock] = Field(default_factory=list)
+    ranges: list[ContextRange] = Field(default_factory=list)
     graph: GraphPointer = Field(default_factory=GraphPointer)
     warnings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("ranges"):
+            data.pop("ranges", None)
+        return data

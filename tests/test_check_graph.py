@@ -110,6 +110,45 @@ def test_accepts_flat_values_and_prints_formula_cell(tmp_path: Path) -> None:
     assert result.stdout.strip() == "P&L!C13"
 
 
+def test_range_member_edge_count_is_allowed_but_member_records_are_not(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    counted = _write(
+        tmp_path / "graph.json",
+        _ok_graph(kinds={"ref": 12, "range": 5, "range_member": 3}),
+    )
+    result = _run(str(context), str(counted))
+    assert result.returncode == 0, result.stderr
+
+    embedded = _write(
+        tmp_path / "embedded.json",
+        _ok_graph(kinds={"range": 5}, cycles=[{"range_member": ["P&L!C9"]}]),
+    )
+    result = _run(str(context), str(embedded))
+    assert result.returncode == 1
+    assert "range_member" in result.stderr
+
+    broken = _write(tmp_path / "broken.json", _ok_graph(kinds={"range_member": ["P&L!C9"]}))
+    result = _run(str(context), str(broken))
+    assert result.returncode == 1
+    assert "kinds must map" in result.stderr
+
+
+def test_kinds_must_be_a_map_of_plain_ints(tmp_path: Path) -> None:
+    context = _write(tmp_path / "context.json", _ok_context())
+    for name, kinds in (
+        ("null", None),
+        ("list", [1]),
+        ("bool", {"ref": True}),
+        ("str", {"ref": "3"}),
+    ):
+        graph = _write(tmp_path / f"{name}.json", _ok_graph(kinds=kinds))
+        result = _run(str(context), str(graph))
+        assert result.returncode == 1, name
+        assert "kinds must map" in result.stderr, name
+    graph = _write(tmp_path / "ok.json", _ok_graph(kinds={"ref": 3, "range": 0}))
+    assert _run(str(context), str(graph)).returncode == 0
+
+
 def test_rejects_second_catalog_and_cell_objects(tmp_path: Path) -> None:
     context = _write(
         tmp_path / "context.json",

@@ -11,6 +11,29 @@ MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 50.0
 # Tiny members routinely compress >50x; zip bombs are large.
 RATIO_MIN_UNCOMPRESSED = 4 * 1024
+# Sheet XML (xl/worksheets/*.xml) is exempt from the ratio when sheets are read
+# as a stream (PARSE_STREAMING, the default). A real model's sheet compresses
+# well past 50x (thousands of identical styled or shared-formula cells); the
+# stream stops at MAX_PART_BYTES and keeps compact column lists, so the size caps
+# bound it. With PARSE_STREAMING=false a sheet becomes a list of cell objects,
+# so it keeps MAX_COMPRESSION_RATIO, as before the exemption. Other workbook XML
+# (sharedStrings, styles, workbook, comments) is read whole and parsed into a
+# tree, so it keeps a ratio check at XML_MAX_COMPRESSION_RATIO. Everything else
+# keeps MAX_COMPRESSION_RATIO.
+XML_MAX_COMPRESSION_RATIO = 200.0
+
+
+def max_ratio(name: str, *, streaming: bool = True) -> float | None:
+    """Compression ratio a part may reach, or None when only the size caps apply.
+
+    ``streaming`` is ``PARSE_STREAMING``: whether sheets are read as a stream.
+    """
+    normalized = name.replace("\\", "/").lower()
+    if normalized.startswith("xl/worksheets/") and normalized.endswith(".xml"):
+        return None if streaming else MAX_COMPRESSION_RATIO
+    if normalized.startswith("xl/") and normalized.endswith(".xml"):
+        return XML_MAX_COMPRESSION_RATIO
+    return MAX_COMPRESSION_RATIO
 
 
 def check_zip_name(name: str) -> None:
@@ -21,16 +44,17 @@ def check_zip_name(name: str) -> None:
         raise ContextError("zip_rejected", "zip-slip")
 
 
-def check_zip_info(info: zipfile.ZipInfo, running_total: int) -> int:
+def check_zip_info(info: zipfile.ZipInfo, running_total: int, *, streaming: bool = True) -> int:
     check_zip_name(info.filename)
     if info.file_size > MAX_PART_BYTES:
         raise ContextError("zip_rejected", "part too large")
     total = running_total + info.file_size
     if total > MAX_TOTAL_BYTES:
         raise ContextError("zip_rejected", "archive too large")
-    if info.file_size >= RATIO_MIN_UNCOMPRESSED:
+    limit = max_ratio(info.filename, streaming=streaming)
+    if info.file_size >= RATIO_MIN_UNCOMPRESSED and limit is not None:
         compressed = info.compress_size
-        if compressed <= 0 or info.file_size / compressed >= MAX_COMPRESSION_RATIO:
+        if compressed <= 0 or info.file_size / compressed >= limit:
             raise ContextError("zip_rejected", "compression ratio")
     return total
 
@@ -47,7 +71,7 @@ def reject_ole2(path: Path) -> None:
     raise ContextError("unsupported_media_type", "OLE2 file is not an Excel workbook")
 
 
-def open_xlsx_zip(path: Path) -> zipfile.ZipFile:
+def open_xlsx_zip(path: Path, *, streaming: bool = True) -> zipfile.ZipFile:
     if not path.exists() or path.stat().st_size == 0:
         raise ContextError("empty_file")
     reject_ole2(path)
@@ -62,7 +86,7 @@ def open_xlsx_zip(path: Path) -> zipfile.ZipFile:
     try:
         total = 0
         for info in zf.infolist():
-            total = check_zip_info(info, total)
+            total = check_zip_info(info, total, streaming=streaming)
     except ContextError:
         zf.close()
         raise

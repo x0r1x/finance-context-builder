@@ -398,11 +398,11 @@ def test_preflight_follows_parsed_edges(tmp_path: Path, dest: Path) -> None:
     )
     parse_workbook(source, dest)
     estimate = assess_raw(dest)
-    # External column is one edge. The Cyrillic column is its 3 present cells.
-    # DEC2HEX and LOG10 are the real A1 only. SUM(1:10) and the spaced range
-    # do not parse, so they add no cells.
+    # External column is one edge. The Cyrillic column is a range node, which is
+    # one edge whatever its size. DEC2HEX and LOG10 are the real A1 only.
+    # SUM(1:10) and the spaced range do not parse, so they add no cells.
     assert estimate.formulas == 6
-    assert estimate.expanded_cells == 6
+    assert estimate.expanded_cells == 4
 
 
 def test_assess_raw_reads_formula_columns_only(tmp_path: Path, monkeypatch) -> None:

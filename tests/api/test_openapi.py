@@ -125,7 +125,7 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
 
     trace = spec["paths"]["/v1/context-jobs/{job_id}/graph/trace"]["get"]
     assert _schema_ref(trace, "200").endswith("/TraceDocument")
-    assert _query_names(trace) == {"from", "direction", "depth"}
+    assert _query_names(trace) == {"from", "direction", "depth", "range_members"}
     direction = next(item for item in trace["parameters"] if item["name"] == "direction")
     assert direction["schema"]["enum"] == ["precedents", "dependents"]
 
@@ -144,6 +144,17 @@ def test_openapi_lists_routes_and_document_models(tmp_path: Path) -> None:
     trace_described = {item["name"]: item.get("description") for item in trace["parameters"]}
     assert trace_described["from"]
     assert "label_path" not in trace_described["from"]
+    for path in (
+        "/v1/context-jobs/{job_id}/graph/trace",
+        "/v1/context-jobs/{job_id}/graph/trace.md",
+    ):
+        params = spec["paths"][path]["get"]["parameters"]
+        members = next(item for item in params if item["name"] == "range_members")
+        assert members["in"] == "query"
+        assert not members.get("required", False)
+        assert "TRACE_RANGE_MEMBERS" in members["description"]
+        bounded = [members["schema"], *members["schema"].get("anyOf", [])]
+        assert any(part.get("minimum") == 0 for part in bounded)
 
     summary = spec["paths"]["/v1/context-jobs/{job_id}/summary"]["get"]
     assert _schema_ref(summary, "200").endswith("/SummaryDocument")

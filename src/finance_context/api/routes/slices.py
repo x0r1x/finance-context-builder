@@ -229,7 +229,8 @@ def _observations(
         for item in raw_links
         if isinstance(raw_links, list) and isinstance(item, dict)
     ]
-    lookup = _precedents(dest, _ctx(request).store.shared_dir(job_id))
+    ctx = _ctx(request)
+    lookup = _precedents(dest, ctx.store.shared_dir(job_id), ctx.settings.trace_range_members)
     doc = build_observations(
         context,
         links,

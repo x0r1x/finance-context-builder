@@ -31,6 +31,10 @@ DEFAULT_API_RESERVE_FRACTION = 0.25
 DEFAULT_MEMORY_BUDGET_BYTES = 1536 * 1024 * 1024
 DEFAULT_MEMORY_WATCH_INTERVAL_SEC = 0.2
 DEFAULT_RANGE_EXPAND_CAP = 2000
+# A whole column or row, or a rectangle over this many cells, is one range node.
+DEFAULT_RANGE_NODE_MIN_CELLS = 64
+# Members of one range node listed by a trace. 0 lists all of them.
+DEFAULT_TRACE_RANGE_MEMBERS = 200
 DEFAULT_OOM_SCORE_ADJ = 1000
 # One parquet row group of this many rows. 0 keeps a single row group.
 DEFAULT_PARQUET_ROW_GROUP_ROWS = 65536
@@ -102,6 +106,8 @@ class Settings(BaseSettings):
     job_memory_default_budget_bytes: int = DEFAULT_MEMORY_BUDGET_BYTES
     job_memory_watch_interval_sec: float = DEFAULT_MEMORY_WATCH_INTERVAL_SEC
     range_expand_cap: int = DEFAULT_RANGE_EXPAND_CAP
+    range_node_min_cells: int = DEFAULT_RANGE_NODE_MIN_CELLS
+    trace_range_members: int = DEFAULT_TRACE_RANGE_MEMBERS
     job_oom_score_adj: int = DEFAULT_OOM_SCORE_ADJ
     job_memory_preflight_refusal: bool = True
     # lxml iterparse into column lists. Raw parquet stays one row group.
@@ -211,6 +217,7 @@ class Settings(BaseSettings):
         "job_memory_floor_bytes",
         "job_memory_default_budget_bytes",
         "range_expand_cap",
+        "range_node_min_cells",
         "session_id_max_length",
         mode="before",
     )
@@ -225,6 +232,7 @@ class Settings(BaseSettings):
         "job_estimate_unstreamed_bytes_per_formula",
         "job_estimate_unstreamed_bytes_per_expanded_cell",
         "job_estimate_unstreamed_bytes_per_present_cell",
+        "trace_range_members",
         mode="before",
     )
     @classmethod

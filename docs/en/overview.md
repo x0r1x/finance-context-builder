@@ -42,7 +42,7 @@ POST enqueues the book on the shared RQ queue. `finance-context serve` starts th
 
 If the detector built neither a timeline nor params (prose / navigation) or found no article labels, there are no fact rows: the status can be `succeeded` with an empty context. That is layout. Details: [layout.md](layout.md).
 
-Section headers (`abstract`) and counters (`index`) are **not dropped**: they are rows of their block. Values along an axis are an array on a `fact` / `flag` / `helper` row; params rows have column roles and values only in value columns. A row has one formula. Cell-level adjacency and AST live in IR / [graph.md](graph.md). Downstream sees the label, `label_path`, neighbors from formula row refs, the formula, hints, and the cache.
+Section headers (`abstract`) and counters (`index`) are **not dropped**: they are rows of their block. Values along an axis are an array on a `fact` / `flag` / `helper` row; params rows have column roles and values only in value columns. A row has one formula. Cell-level adjacency and AST live in IR / [graph.md](graph.md). Downstream sees the label, `label_path`, neighbors from formula row refs (a large range read by the row is one id in `neighbor_ranges`, described once in the top-level `ranges` block with its bounds, cell count and reading rows; rows inside it get no back-reference), the formula, hints, and the cache.
 
 Markdown reports **content completeness** as `1.00 (rows/rows layout rows)`: every layout row of a published block is in the document.
 

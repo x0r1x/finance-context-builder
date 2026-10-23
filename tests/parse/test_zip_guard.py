@@ -53,12 +53,129 @@ def test_zip_bomb_ratio_rejected(tmp_path: Path, dest: Path) -> None:
         source,
         {
             "[Content_Types].xml": "<Types/>",
-            "xl/workbook.xml": zeros.decode("latin1"),
+            "xl/media/image1.bin": zeros.decode("latin1"),
         },
     )
     with pytest.raises(ContextError) as ei:
         parse_workbook(source, dest)
     assert ei.value.code == "zip_rejected"
+    assert "compression ratio" in str(ei.value)
+
+
+def _info(name: str, ratio: float) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name)
+    info.compress_size = 1024 * 1024
+    info.file_size = int(info.compress_size * ratio)
+    return info
+
+
+@pytest.mark.parametrize(
+    ("name", "allowed", "refused"),
+    [
+        # Streamed sheets: only the size caps apply.
+        ("xl/worksheets/sheet1.xml", 400.0, None),
+        ("XL/Worksheets/Sheet2.XML", 400.0, None),
+        # Workbook XML parsed whole: 200x.
+        ("xl/sharedStrings.xml", 199.0, 200.0),
+        ("xl/styles.xml", 199.0, 200.0),
+        ("xl/comments1.xml", 199.0, 200.0),
+        # Anything else: 50x, as before.
+        ("xl/vbaProject.bin", 49.0, 50.0),
+        ("xl/media/image1.png", 49.0, 50.0),
+        ("docProps/app.xml", 49.0, 50.0),
+    ],
+)
+def test_compression_ratio_limit_depends_on_how_the_part_is_read(
+    name: str, allowed: float, refused: float | None
+) -> None:
+    from finance_context.excel.zip_guard import check_zip_info
+
+    info = _info(name, allowed)
+    assert check_zip_info(info, running_total=0) == info.file_size
+    if refused is not None:
+        with pytest.raises(ContextError) as ei:
+            check_zip_info(_info(name, refused), running_total=0)
+        assert "compression ratio" in str(ei.value)
+
+
+def _padded_sheet_book(tmp_path: Path) -> Path:
+    """A book whose sheet XML deflates past 50x."""
+    from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
+
+    built = build_xlsx(
+        tmp_path / "built.xlsx",
+        sheets=[SheetSpec(name="Sheet1", cells=[CellSpec(addr="A1", value="1")])],
+    )
+    source = tmp_path / "padded.xlsx"
+    with zipfile.ZipFile(built) as src, zipfile.ZipFile(source, "w", zipfile.ZIP_DEFLATED) as out:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            if info.filename.startswith("xl/worksheets/"):
+                # Whitespace between elements is what long runs of identical
+                # styled cells look like to deflate: almost free to store.
+                data = data.replace(b"</sheetData>", b" " * (2 * 1024 * 1024) + b"</sheetData>")
+            out.writestr(info.filename, data)
+    with zipfile.ZipFile(source) as zf:
+        sheet = next(i for i in zf.infolist() if i.filename.startswith("xl/worksheets/"))
+        assert sheet.file_size / sheet.compress_size >= 50
+    return source
+
+
+def test_a_sheet_part_past_50x_parses(tmp_path: Path, dest: Path) -> None:
+    """A sheet whose XML deflates past 50x is parsed, not refused."""
+    source = _padded_sheet_book(tmp_path)
+    parse_workbook(source, dest)
+    assert (dest / "raw" / "cells.parquet").is_file()
+
+
+@pytest.mark.parametrize(
+    ("name", "allowed", "refused"),
+    [
+        # PARSE_STREAMING=false: a sheet becomes cell objects, so it keeps 50x.
+        ("xl/worksheets/sheet1.xml", 49.0, 50.0),
+        ("XL/Worksheets/Sheet2.XML", 49.0, 50.0),
+        # The rest does not depend on how sheets are read.
+        ("xl/sharedStrings.xml", 199.0, 200.0),
+        ("xl/vbaProject.bin", 49.0, 50.0),
+    ],
+)
+def test_without_streaming_a_sheet_keeps_the_ratio(
+    name: str, allowed: float, refused: float
+) -> None:
+    from finance_context.excel.zip_guard import check_zip_info
+
+    info = _info(name, allowed)
+    assert check_zip_info(info, running_total=0, streaming=False) == info.file_size
+    with pytest.raises(ContextError) as ei:
+        check_zip_info(_info(name, refused), running_total=0, streaming=False)
+    assert "compression ratio" in str(ei.value)
+
+
+def test_a_sheet_part_past_50x_is_refused_without_streaming(tmp_path: Path, dest: Path) -> None:
+    from finance_context.settings import Settings
+
+    source = _padded_sheet_book(tmp_path)
+    with pytest.raises(ContextError) as ei:
+        parse_workbook(source, dest, settings=Settings(parse_streaming=False, _env_file=None))
+    assert ei.value.code == "zip_rejected"
+    assert "compression ratio" in str(ei.value)
+    parse_workbook(source, dest, settings=Settings(parse_streaming=True, _env_file=None))
+    assert (dest / "raw" / "cells.parquet").is_file()
+
+
+def test_sheet_xml_still_has_the_size_caps() -> None:
+    from finance_context.excel.zip_guard import check_zip_info
+
+    info = zipfile.ZipInfo("xl/worksheets/sheet1.xml")
+    info.file_size = 512 * 1024 * 1024 + 1
+    info.compress_size = 1024
+    with pytest.raises(ContextError) as ei:
+        check_zip_info(info, running_total=0)
+    assert "part too large" in str(ei.value)
+    info.file_size = 400 * 1024 * 1024
+    with pytest.raises(ContextError) as ei:
+        check_zip_info(info, running_total=1800 * 1024 * 1024)
+    assert "archive too large" in str(ei.value)
 
 
 def test_member_size_cap() -> None:

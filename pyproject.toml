@@ -48,6 +48,7 @@ pythonpath = ["."]
 addopts = "-q"
 markers = [
     "e2e_models: runs against local real Excel workbooks",
+    "slow: takes minutes; deselect with -m 'not slow'",
 ]
 
 [tool.ruff]

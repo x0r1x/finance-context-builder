@@ -100,6 +100,11 @@ class TraceEdge(BaseModel):
     kind: str | None = None
     period_lag: str | None = None
     col_offset: int | None = None
+    # Set on a precedents edge into a large range: filled cells in the range and
+    # how many of them the walk followed. Shown < total means the rest were left
+    # out on purpose (TRACE_RANGE_MEMBERS or the range_members query).
+    members_total: int | None = None
+    members_shown: int | None = None
 
 
 class TraceDocument(BaseModel):

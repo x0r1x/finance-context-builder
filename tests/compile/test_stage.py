@@ -118,7 +118,8 @@ def test_open_column_range_is_truncated_in_edges(tmp_path: Path, dest: Path) -> 
     # Column B has no cells, so the whole-column sum keeps no empty members.
     assert all(edge["truncated"] is False for edge in range_edges)
     cell_edges = load_parquet(dest / "ir" / "cell_edges.parquet")
-    assert not any(str(edge["target"]).startswith("Sheet1!B") for edge in cell_edges)
+    # One edge to the empty range node, and no member edges.
+    assert [str(edge["target"]) for edge in cell_edges] == ["Sheet1!B:B"]
 
 
 def test_array_constant_keeps_en_argument_separator(tmp_path: Path, dest: Path) -> None:
