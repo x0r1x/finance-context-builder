@@ -77,4 +77,10 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("JOB_KILL_GRACE_SEC", "job_kill_grace_sec"),
     EnvSpec("API_THREAD_LIMIT", "api_thread_limit"),
     EnvSpec("READYZ_CACHE_TTL_SEC", "readyz_cache_ttl_sec"),
+    EnvSpec("EMBEDDED_WORKER", "embedded_worker"),
+    EnvSpec("EMBEDDED_WORKER_RESTART_BACKOFF_SEC", "embedded_worker_restart_backoff_sec"),
+    EnvSpec("JOB_EVENTS_MAXLEN", "job_events_maxlen"),
+    EnvSpec("JOB_EVENTS_TTL_SEC", "job_events_ttl_sec"),
+    EnvSpec("JOB_EVENTS_HEARTBEAT_SEC", "job_events_heartbeat_sec"),
+    EnvSpec("JOB_EVENTS_MAX_CONNECTIONS", "job_events_max_connections"),
 )

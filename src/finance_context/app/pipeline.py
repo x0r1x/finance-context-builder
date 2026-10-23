@@ -28,6 +28,12 @@ from finance_context.formulas.csr import (
 from finance_context.formulas.models import as_edge, as_ir_cell, release_cell_asts
 from finance_context.formulas.stage import EdgeCount, compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
+from finance_context.jobqueue.progress import (
+    emit_progress,
+    enable_progress,
+    progress_enabled,
+    reset_progress,
+)
 from finance_context.layout.models import Layout
 from finance_context.layout.relations import formula_relations
 from finance_context.layout.stage import layout_workbook
@@ -181,7 +187,10 @@ class Pipeline:
         source_filename = source_filename or owner.get("source_filename")
         content_sha256 = content_sha256 or owner.get("content_sha256")
 
+        open_stage: str | None = None
+
         def set_stage(stage: str, status: str = "running") -> None:
+            nonlocal open_stage
             _raise_if_cancelled(progress)
             _write_meta(
                 dest_dir,
@@ -196,6 +205,13 @@ class Pipeline:
                 fn = getattr(progress, "progress", None)
                 if callable(fn):
                     fn(stage)
+            open_stage = _emit_stage(
+                self.settings,
+                job_id=job_id,
+                generation=generation,
+                stage=stage,
+                open_stage=open_stage,
+            )
 
         set_stage("parse")
         estimate = None
@@ -382,6 +398,26 @@ class Pipeline:
             generation=generation,
             stream=self.settings.json_stream,
         )
+        if progress_enabled():
+            if open_stage is not None:
+                emit_progress(
+                    self.settings,
+                    session_id=self.settings.session_id,
+                    job_id=job_id,
+                    event="stage_done",
+                    status=status,
+                    stage=open_stage,
+                    generation=generation,
+                )
+            emit_progress(
+                self.settings,
+                session_id=self.settings.session_id,
+                job_id=job_id,
+                event="succeeded",
+                status=status,
+                stage="done",
+                generation=generation,
+            )
         return doc
 
 
@@ -406,7 +442,11 @@ def run_queued_job(
     ``rq.Retry``. Other errors are recorded the same way as
     :func:`run_job_process`.
     """
-    _run_pipeline_child(data_dir, job_id, generation, session_id, wait_on_busy=False)
+    token = enable_progress()
+    try:
+        _run_pipeline_child(data_dir, job_id, generation, session_id, wait_on_busy=False)
+    finally:
+        reset_progress(token)
 
 
 def _run_pipeline_child(
@@ -594,6 +634,81 @@ def mark_job_failed(
         return failed
 
     update_json(dest / "meta.json", mutate)
+    _emit_failure(dest, job_id, error, generation)
+
+
+def _emit_failure(dest: Path, job_id: str, error: str, generation: int) -> None:
+    session_id = _session_of(dest)
+    if session_id is None:
+        return
+    event = "queue_lost" if error == "queue_lost" else "failed"
+    emit_progress(
+        Settings(),
+        session_id=session_id,
+        job_id=job_id,
+        event=event,
+        status="failed",
+        stage="failed",
+        generation=generation,
+        error=error,
+    )
+
+
+def _emit_stage(
+    settings: Settings,
+    *,
+    job_id: str,
+    generation: int,
+    stage: str,
+    open_stage: str | None,
+) -> str | None:
+    """Publish compile, layout, graph, and publish start/done. Return the open stage."""
+    if not progress_enabled():
+        return open_stage
+    if stage == "parse":
+        emit_progress(
+            settings,
+            session_id=settings.session_id,
+            job_id=job_id,
+            event="running",
+            status="running",
+            stage="parse",
+            generation=generation,
+        )
+        return open_stage
+    mapped = {"compile": "compile", "layout": "layout", "graph": "graph"}.get(stage)
+    if stage in {"build", "render"}:
+        mapped = "publish"
+    if mapped is None or mapped == open_stage:
+        return open_stage
+    if open_stage is not None:
+        emit_progress(
+            settings,
+            session_id=settings.session_id,
+            job_id=job_id,
+            event="stage_done",
+            status="running",
+            stage=open_stage,
+            generation=generation,
+        )
+    emit_progress(
+        settings,
+        session_id=settings.session_id,
+        job_id=job_id,
+        event="stage_start",
+        status="running",
+        stage=mapped,
+        generation=generation,
+    )
+    return mapped
+
+
+def _session_of(dest: Path) -> str | None:
+    # data/sessions/{session}/jobs/{job_id}
+    if dest.parent.name != "jobs":
+        return None
+    session_id = dest.parent.parent.name
+    return session_id or None
 
 
 def _pause_layout_reuse() -> None:

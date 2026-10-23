@@ -48,6 +48,29 @@ def arm_child_death(interval_sec: float) -> None:
     _start_parent_watch(interval_sec)
 
 
+def arm_embedded_parent(interval_sec: float) -> None:
+    """Ask the embedded pool to exit when ``finance-context serve`` dies.
+
+    ``PR_SET_PDEATHSIG`` is cleared on fork, so only this pool process is
+    armed. SIGTERM lets the pool stop its workers. ``os._exit`` would leave
+    those workers behind.
+    """
+    _arm_pdeathsig(signal.SIGTERM)
+    parent = os.getppid()
+    if parent <= 1:
+        return
+    interval = interval_sec if interval_sec > 0 else 0.05
+
+    def _watch() -> None:
+        while True:
+            time.sleep(interval)
+            if os.getppid() != parent:
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+
+    threading.Thread(target=_watch, name="finance-embedded-parent", daemon=True).start()
+
+
 def _arm_pdeathsig(sig: int) -> None:
     """Ask Linux to signal this process when its parent dies.
 

@@ -1,4 +1,7 @@
-"""The worker pool. ``finance-context worker`` starts it; ``--check`` only pings."""
+"""The worker pool. ``finance-context worker`` starts it.
+
+``finance-context serve`` starts that same command as a child process.
+"""
 
 from __future__ import annotations
 

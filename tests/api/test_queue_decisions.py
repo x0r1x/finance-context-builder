@@ -6,6 +6,8 @@ import fcntl
 import json
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -17,7 +19,7 @@ from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline
 from finance_context.jobqueue.spawn import HORSE_FILE, HORSE_LOCK, horse_owner_alive
 from finance_context.settings import Settings
-from finance_context.store.fs import write_json
+from finance_context.store.fs import file_lock, write_json
 from finance_context.store.paths import session_job_dir
 
 _JOB = "ab" * 32
@@ -101,22 +103,35 @@ def _hold(path: Path):
     return handle
 
 
-def test_busy_pipeline_lock_returns_the_running_job_without_waiting(tmp_path: Path) -> None:
+def test_busy_pipeline_lock_returns_the_running_job_without_waiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held pipeline lock must not block. Sleep or a blocking flock fails the test."""
+    monkeypatch.setattr("finance_context.api.routes.jobs.time.sleep", _no_sleep)
+    seen: list[tuple[str, bool]] = []
+
+    @contextmanager
+    def _spy(path: Path, *, blocking: bool = True) -> Iterator[bool]:
+        seen.append((path.name, blocking))
+        if path.name == ".lock" and blocking:
+            raise AssertionError("pipeline lock acquired blocking")
+        with file_lock(path, blocking=blocking) as locked:
+            yield locked
+
+    monkeypatch.setattr("finance_context.api.routes.jobs.file_lock", _spy)
     queue = _Queue("started")
     ctx = _ctx(tmp_path, queue)
     dest = _meta(ctx)
     run_lock = _hold(dest / ".run.lock")
     pipeline_lock = _hold(dest / ".lock")
     try:
-        started = time.monotonic()
         body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
-        elapsed = time.monotonic() - started
     finally:
         fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
         run_lock.close()
         fcntl.flock(pipeline_lock.fileno(), fcntl.LOCK_UN)
         pipeline_lock.close()
-    assert elapsed < 0.4
+    assert all(not blocking for name, blocking in seen if name == ".lock")
     assert body["status"] == "running"
     assert queue.stopped == 0
     assert queue.deleted == 0

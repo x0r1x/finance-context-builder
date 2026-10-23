@@ -19,6 +19,7 @@ _PATHS = (
     "/v1/context-jobs/{job_id}/catalog",
     "/v1/context-jobs/{job_id}/summary",
     "/v1/context-jobs/{job_id}/observations",
+    "/v1/context-jobs/{job_id}/events",
 )
 _HTTP = {"get", "post", "put", "delete", "patch", "head", "options", "trace"}
 _METHODS = {
@@ -35,6 +36,7 @@ _METHODS = {
     "/v1/context-jobs/{job_id}/catalog": {"get"},
     "/v1/context-jobs/{job_id}/summary": {"get"},
     "/v1/context-jobs/{job_id}/observations": {"get"},
+    "/v1/context-jobs/{job_id}/events": {"get"},
 }
 
 
@@ -69,10 +71,7 @@ def _schema_ref(operation: dict, status: str) -> str:
 
 def test_openapi_paths_and_methods_are_exact(tmp_path: Path) -> None:
     spec = _spec(tmp_path)
-    found = {
-        path: {key for key in item if key in _HTTP}
-        for path, item in spec["paths"].items()
-    }
+    found = {path: {key for key in item if key in _HTTP} for path, item in spec["paths"].items()}
     assert found == _METHODS
 
 

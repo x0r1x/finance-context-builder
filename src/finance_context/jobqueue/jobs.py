@@ -13,6 +13,7 @@ from rq.job import Job
 
 from finance_context.app.pipeline import mark_job_failed
 from finance_context.jobqueue.parents import HORSE_ENV, arm_horse_death
+from finance_context.jobqueue.progress import emit_progress
 from finance_context.jobqueue.spawn import (
     ChildResult,
     hold_horse_lock,
@@ -82,6 +83,15 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
         queue=settings.queue_name,
         generation=generation,
         rq_job_id=None if current is None else current.id,
+    )
+    emit_progress(
+        settings,
+        session_id=session_id,
+        job_id=job_id,
+        event="running",
+        status="running",
+        stage="running",
+        generation=generation,
     )
     dest = session_job_dir(Path(data_dir), job_id, session_id)
     # The API lives in another container, so a PID check cannot see this horse.
@@ -182,6 +192,16 @@ def _requeue_shared_cache(
         return updated
 
     update_json(dest / "meta.json", stamp)
+    emit_progress(
+        settings,
+        session_id=session_id,
+        job_id=job_id,
+        event="retry",
+        status="queued",
+        stage="queued",
+        generation=generation,
+        error="shared_cache_busy",
+    )
     log_event(
         _PIPELINE,
         logging.INFO,

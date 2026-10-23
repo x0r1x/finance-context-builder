@@ -50,6 +50,14 @@ DEFAULT_SHARED_CACHE_BUSY_MAX_RETRIES = 120
 DEFAULT_API_THREAD_LIMIT = 40
 # How long one /readyz disk and Redis probe is reused.
 DEFAULT_READYZ_CACHE_TTL_SEC = 10.0
+# Redis stream of progress events for one job. Approximate cap.
+DEFAULT_JOB_EVENTS_MAXLEN = 256
+# Seconds the stream key lives after a terminal event.
+DEFAULT_JOB_EVENTS_TTL_SEC = 3600
+# SSE comment interval while the stream is quiet.
+DEFAULT_JOB_EVENTS_HEARTBEAT_SEC = 15.0
+# Open GET .../events responses at once.
+DEFAULT_JOB_EVENTS_MAX_CONNECTIONS = 32
 
 
 class Settings(BaseSettings):
@@ -68,6 +76,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 50 * 1024 * 1024
     max_concurrent_jobs: int = _DEFAULT_MAX_CONCURRENT_JOBS
     # Per-job RSS cap in bytes. Unset means "derive from the cgroup limit".
+    # The reserve fraction covers the API and the embedded worker in that cgroup.
     job_memory_budget_bytes: int | None = None
     job_timeout_sec: float = 3600
     soffice_bin: str | None = None
@@ -88,6 +97,7 @@ class Settings(BaseSettings):
         DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_PRESENT_CELL
     )
     job_memory_floor_bytes: int = DEFAULT_MEMORY_FLOOR_BYTES
+    # Share of the cgroup kept for the API and the embedded worker. Slots split the rest.
     job_memory_api_reserve_fraction: float = DEFAULT_API_RESERVE_FRACTION
     job_memory_default_budget_bytes: int = DEFAULT_MEMORY_BUDGET_BYTES
     job_memory_watch_interval_sec: float = DEFAULT_MEMORY_WATCH_INTERVAL_SEC
@@ -152,7 +162,20 @@ class Settings(BaseSettings):
     # /readyz reuses one writability check and Redis ping for this long.
     # The usual probe uses an unnamed inode. Without O_TMPFILE the probe
     # creates a short-lived .ready- file and unlinks it. /healthz does no I/O.
+    # A dead embedded worker is not part of this cache.
     readyz_cache_ttl_sec: float = DEFAULT_READYZ_CACHE_TTL_SEC
+    # `finance-context serve` starts the RQ pool as its own child process.
+    embedded_worker: bool = True
+    # Seconds before that child is started again after it exits.
+    embedded_worker_restart_backoff_sec: float = 1.0
+    # Approximate MAXLEN for one job's progress stream.
+    job_events_maxlen: int = DEFAULT_JOB_EVENTS_MAXLEN
+    # EXPIRE the stream key this many seconds after succeeded, failed, or queue_lost.
+    job_events_ttl_sec: int = DEFAULT_JOB_EVENTS_TTL_SEC
+    # How often GET .../events writes an SSE comment while Redis is quiet.
+    job_events_heartbeat_sec: float = DEFAULT_JOB_EVENTS_HEARTBEAT_SEC
+    # Concurrent SSE responses. Above this, the route is 503.
+    job_events_max_connections: int = DEFAULT_JOB_EVENTS_MAX_CONNECTIONS
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -218,6 +241,8 @@ class Settings(BaseSettings):
         "job_terminate_grace_sec",
         "job_kill_grace_sec",
         "readyz_cache_ttl_sec",
+        "embedded_worker_restart_backoff_sec",
+        "job_events_heartbeat_sec",
         mode="before",
     )
     @classmethod
@@ -267,6 +292,7 @@ class Settings(BaseSettings):
         "job_malloc_trim",
         "data_dir_allow_network_fs",
         "job_admission_cgroup_check",
+        "embedded_worker",
         mode="before",
     )
     @classmethod
@@ -322,7 +348,14 @@ class Settings(BaseSettings):
             raise ValueError("QUEUE_NAME must be a single token")
         return token
 
-    @field_validator("job_queue_max_per_session", "api_thread_limit", mode="before")
+    @field_validator(
+        "job_queue_max_per_session",
+        "api_thread_limit",
+        "job_events_maxlen",
+        "job_events_ttl_sec",
+        "job_events_max_connections",
+        mode="before",
+    )
     @classmethod
     def require_session_cap(cls, value: object, info: ValidationInfo) -> int:
         return _require_whole_int(value, info, minimum=1)

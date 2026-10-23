@@ -34,6 +34,8 @@ from finance_context.errors import ContextError
 from finance_context.excel.legacy import XlsConverter, check_legacy_workbook, source_name
 from finance_context.excel.ole2 import is_ole2
 from finance_context.excel.zip_guard import open_xlsx_zip
+from finance_context.jobqueue.embedded import embedded_worker_ready
+from finance_context.jobqueue.progress import emit_progress
 from finance_context.jobqueue.queue import (
     INFLIGHT_STATUSES,
     LOST_STATUSES,
@@ -70,12 +72,18 @@ async def readyz(request: Request) -> JSONResponse:
         ready, jobs = await run_blocking(ctx, _probe_ready, ctx)
         cached = _ReadyCache(at=time.monotonic(), ready=ready, jobs=jobs)
         request.app.state.ready_cache = cached
+    # None: this process is not supervising a worker (tests, or EMBEDDED_WORKER=false).
+    # False: the child is down, including the restart backoff. The poll is not
+    # part of the Redis and disk cache, so a dead child is not ready for the
+    # rest of READYZ_CACHE_TTL_SEC.
+    worker_up = embedded_worker_ready()
+    ready = cached.ready and worker_up is not False
     body = {
-        "status": "ready" if cached.ready else "unavailable",
+        "status": "ready" if ready else "unavailable",
         "queue": settings.queue_name,
         "jobs": cached.jobs,
     }
-    return JSONResponse(body, status_code=200 if cached.ready else 503)
+    return JSONResponse(body, status_code=200 if ready else 503)
 
 
 _JobStatusQuery = Annotated[
@@ -238,6 +246,9 @@ async def post_job(
     digest, job_id = await run_blocking(ctx, _digest_job, data)
     # Fsync, the publisher hash, and the enqueue share one worker thread.
     body = await run_blocking(ctx, _accept_upload, ctx, filename, data, digest, job_id)
+    if isinstance(body, dict) and isinstance(body.get("job_id"), str):
+        body = dict(body)
+        body["events_url"] = f"/v1/context-jobs/{body['job_id']}/events"
     return JSONResponse(body, status_code=202)
 
 
@@ -579,6 +590,15 @@ def _enqueue_or_reuse(
             rq_job_id=rq_id,
         )
         return _running_body(job_id, dest)
+    emit_progress(
+        settings,
+        session_id=settings.session_id,
+        job_id=job_id,
+        event="queued",
+        status="queued",
+        stage="queued",
+        generation=generation,
+    )
     return {"job_id": job_id, "status": "queued", "stage": "queued"}
 
 
