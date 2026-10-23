@@ -25,8 +25,9 @@ from finance_context.graph.refs import parse_node_id
 
 # A node wider than this many columns is indexed once per sheet, not per column.
 _NARROW_COLUMNS = 64
-# Ids of RangeHops segments. A sheet name may start with "#", so only this exact
-# prefix marks a segment.
+# Ids of RangeHops segments: "#seg|sheet|col|lo|hi". Such an id never parses as
+# a cell (it ends in "|lo|hi", not an address), so ``is_cell_id`` needs no prefix
+# test, and a sheet named "#seg|..." keeps its cells.
 SEGMENT_PREFIX = "#seg|"
 
 
@@ -159,10 +160,8 @@ def range_nodes(targets: Iterable[str]) -> dict[str, RangeNode]:
 
 
 def is_cell_id(name: str) -> bool:
-    """A cell id, not a range node or a RangeHops segment. ``#Inputs!A1`` is a cell."""
-    return (
-        not name.startswith(SEGMENT_PREFIX) and parse_node_id(name) is not None and ":" not in name
-    )
+    """A cell id, not a range node or a RangeHops segment. ``#seg|Inputs!A1`` is a cell."""
+    return parse_node_id(name) is not None and ":" not in name
 
 
 class RangeHops:

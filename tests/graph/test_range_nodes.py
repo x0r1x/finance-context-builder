@@ -28,7 +28,13 @@ from finance_context.formulas.csr import (
 )
 from finance_context.formulas.models import Edge
 from finance_context.graph import trace as trace_module
-from finance_context.graph.ranges import CellGrid, CoverIndex, RangeHops
+from finance_context.graph.ranges import (
+    SEGMENT_PREFIX,
+    CellGrid,
+    CoverIndex,
+    RangeHops,
+    is_cell_id,
+)
 from finance_context.graph.refs import parse_node_id
 from finance_context.graph.trace import trace_graph
 from finance_context.layout import adjacency
@@ -387,11 +393,13 @@ def test_cover_index_matches_a_scan() -> None:
         assert {n.node_id for n in index.covering("S", col, row)} == expected
 
 
+@pytest.mark.parametrize("sheet", ["#Loop", "#seg|Loop"])
 @pytest.mark.parametrize("mode", ["nodes", "expanded"])
 def test_cycles_on_a_sheet_named_with_a_hash_are_reported(
-    tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, mode: str, sheet: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Excel allows "#" in a sheet name; only RangeHops segment ids are not cells.
+    # Excel allows "#" and "|" in a sheet name, even the segment prefix
+    # "#seg|"; only RangeHops segment ids are not cells.
     cells = [CellSpec(addr=f"A{row}", value=str(row)) for row in range(2, 101)]
     cells = [cell for cell in cells if cell.addr != "A50"]
     cells += [
@@ -401,7 +409,7 @@ def test_cycles_on_a_sheet_named_with_a_hash_are_reported(
         CellSpec(addr="D1", value="1", formula="C1+1"),
     ]
     source = build_xlsx(
-        tmp_path / "hash.xlsx", sheets=[SheetSpec(name="#Loop", cells=cells)], iterate=True
+        tmp_path / "hash.xlsx", sheets=[SheetSpec(name=sheet, cells=cells)], iterate=True
     )
     dest = tmp_path / "out"
     dest.mkdir()
@@ -411,8 +419,8 @@ def test_cycles_on_a_sheet_named_with_a_hash_are_reported(
     settings = Settings(data_dir=tmp_path / "data", _env_file=None)
     Pipeline(settings).run(dest, job_id="hash-job", source_filename="hash.xlsx")
     cycles = {tuple(c["members"]) for c in _json(dest, "graph.json")["cycles"]}
-    assert ("#Loop!A1", "#Loop!A50") in cycles
-    assert ("#Loop!C1", "#Loop!D1") in cycles
+    assert (f"{sheet}!A1", f"{sheet}!A50") in cycles
+    assert (f"{sheet}!C1", f"{sheet}!D1") in cycles
 
 
 def test_first_present_cell_matches_a_scan() -> None:
@@ -465,6 +473,25 @@ def test_range_hops_reach_exactly_the_formula_cells_inside() -> None:
         }
         assert reached == inside
         assert set(hops.members(node)) == inside
+
+
+@pytest.mark.parametrize("sheet", ["S", "#seg|S", "x!A1", "#seg|x!A1|3"])
+def test_segments_are_never_cells_and_leaves_always_are(sheet: str) -> None:
+    rng = random.Random(7)
+    cells = {f"{sheet}!{index_to_col(rng.randint(1, 3))}{rng.randint(1, 80)}" for _ in range(120)}
+    hops = RangeHops(cells)
+    names: set[str] = set()
+    for n in range(20):
+        r1 = rng.randint(1, 80)
+        node = csr.RangeNode(f"{sheet}!r{n}", sheet, 1, 3, r1, rng.randint(r1, 80))
+        for parent, child in hops.edges(node):
+            names.update((parent, child))
+    segments = {name for name in names if name.startswith(SEGMENT_PREFIX + sheet + "|")}
+    assert segments
+    assert not any(is_cell_id(name) for name in segments)
+    leaves = names - segments - {f"{sheet}!r{n}" for n in range(20)}
+    assert leaves and leaves <= cells
+    assert all(is_cell_id(name) for name in leaves)
 
 
 def test_estimate_counts_a_node_as_one_edge() -> None:
