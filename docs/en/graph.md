@@ -2,7 +2,7 @@
 
 [Русский](../ru/graph.md) · **English**
 
-The public graph is two files with the same facts: `graph.json` and `graph.md` (schema `1.7.0`). Cell-level edges and AST stay in `ir/*.parquet`. The model is `context.json` / `context.md`. Walking one cell is `GET .../graph/trace` and `GET .../graph/trace.md`, not a catalog of every cell. The graph is not merged into context.
+The public graph is two files with the same facts: `graph.json` and `graph.md` (schema `1.7.1`). Cell-level edges and AST stay in `ir/*.parquet`. The model is `context.json` / `context.md`. Walking one cell is `GET .../graph/trace` and `GET .../graph/trace.md`, not a catalog of every cell. The graph is not merged into context.
 
 Code: `src/finance_context/graph/` (`stage.py`, `cycles.py`, `trace.py`), render in `src/finance_context/render/graph.py`, range expansion in `formulas/csr.py`. Pipeline: `parse → compile → layout → graph → build → render`.
 
@@ -19,13 +19,19 @@ One fact, one place.
 | Cell→cell after expand: `dangling` / `dangling_reason` / `status` / `reason` / `evidence` / `range_ref` / `truncated`. `col_offset` and `period_lag` are empty here | `ir/cell_edges.parquet` |
 | `col_offset` and `period_lag` after graph. Graph does not rewrite `cell_edges` | `ir/graph_edges.parquet` |
 | `row_key`, `period_id`, `node_type` (including `empty` for verified blank cells) | `ir/graph_index.parquet`; a formula also has `links[].row_key` and `links[].period_id` |
-| Counts (`nodes` / `edges` are cell-level parquet sizes), `iterate`, cycles, `circularity_hints`, `dangling_classes`, and `links[]` with `formula_class` | `graph.json` and the same in `graph.md` (schema `1.7.0`, Class column) |
+| Counts (`nodes` / `edges` are cell-level parquet sizes), `iterate`, cycles, `circularity_hints`, `dangling_classes`, and `links[]` with `formula_class` | `graph.json` and the same in `graph.md` (schema `1.7.1`, Class column) |
 | Every `<c>` on a sheet: `populated` or `styled_blank` | `raw/cell_presence.parquet` |
 | Report row: label, one row formula, cached series per axis, value status, scale factor, normalized values | `context.json` / `context.md` (schema `1.14.0`, axes in `axes`) |
 
 `links[]` is one record per formula cell: `cell`, the A1 text once, `formula_class` (`same_period`, `cross_period`, `aggregation`, `rollforward`, `conditional`, `hardcoded`), `refs`, the context row's `row_key`, and the axis column's `period_id`. Both keys are `null` when the cell is outside layout. A `total` or `stub` column is not a period, so its link has `period_id=null` even when the row sits in a timeline block. `SUM(J9:J12)` stays one range, not dozens of `range_member`. Empty range members are not in `links`. `nodes` and `edges` are not `len(links)`. `context.md` prints `[Sheet!A1]` in the period value, the same key as `links[].cell`; the formula stays on the link. The period header still carries the column letter (`Y23 (AA)`).
 
 `context.json` stores a `graph` pointer (counts and paths). It has no `precedents_rows`, `dependents_rows`, `precedent_cells`, `formula_ast`, and no second row catalog. A row formula is one fingerprint. Values of a one-axis block are a flat cache array or `null`; with several axes the numbers live in `rows[].series` by `axis_id`, and flat `values` repeat the first series. Beside them, `value_statuses` and `normalized_values` have the same length, plus `scale_factor`. `flags` and `group_key` live in `axes`, not in a `timeline` field. This is not a cell catalog. Precedents in the observation slice come from `links` / trace (`row_key`, `period_id`); AST is not copied into the slice.
+
+## Range nodes
+
+A whole column or row (`A:A`, `1:1`) and a rectangle over 64 cells (`RANGE_NODE_MIN_CELLS`) are not expanded per formula. In `ir/cell_edges.parquet` the formula gets one `kind=range` edge to a range node: `target` is the node id (`Data!A:A`, `Data!C1:C2500`; a cell id has no colon), `range_ref` is the text from the formula. The node lists its present cells once per book as `kind=range_member` edges (`source` is the node, `target` the cell, `range_ref` the node). A node has no blank holes and no `RANGE_EXPAND_CAP` cut, so `truncated=false`. A copied-down `SUMIF(A:A, ...)` costs formulas + cells of A, not formulas × cells of A. A range of up to 64 cells expands as before, blank members included.
+
+Trace passes through the node: a formula's precedents are the node's members, and a cell's dependents are the formulas that read the node. The node is not in `nodes`, the reported edge is the formula's edge with `target` = `range_ref`, and depth does not grow. The edge into the node has `period_lag=unaligned` and `col_offset=null`; `formula_class` takes lags from the members' periods, as with expansion. A cycle through a node is published without the node in `members`. `edges` and `kinds` in `graph.json` count parquet edges, so a book with whole columns shows fewer, plus `kinds.range_member`. The pre-compile memory estimate counts a node the same way: one edge per formula plus its members once.
 
 There are no separate `graph-edges.json`, `graph-dangling.json`, or `formulas.json`. Cell-graph completeness does not live in `context.blocks[].relations` (those are formula-shape alias, aggregate, difference, and roll_forward).
 

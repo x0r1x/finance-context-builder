@@ -310,7 +310,7 @@ def compile_schema_id() -> str:
         for columns in (IR_CELL_COLUMNS, IR_EDGE_COLUMNS, IR_CELL_EDGE_COLUMNS)
         for name, _dtype in columns
     ]
-    payload = "\n".join([*names, "name-edges-1"])
+    payload = "\n".join([*names, "name-edges-1", "range-nodes-1"])
     return hashlib.sha256(payload.encode()).hexdigest()
 
 

@@ -26,7 +26,7 @@ def test_summary_keeps_counters_and_drops_links_and_caches() -> None:
     payload = document.model_dump(mode="json", by_alias=True)
     assert document.schema_version == "summary-2"
     assert document.context_schema_version == "1.14.0"
-    assert document.graph_schema_version == "1.7.0"
+    assert document.graph_schema_version == "1.7.1"
     assert document.missing_cached_values == 17
     assert document.unresolved.count == 2
     assert document.defined_name_count == 1

@@ -11,6 +11,15 @@ MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 50.0
 # Tiny members routinely compress >50x; zip bombs are large.
 RATIO_MIN_UNCOMPRESSED = 4 * 1024
+# Workbook XML under xl/ is exempt from the ratio. A real model's sheet XML
+# (thousands of identical styled or shared-formula cells) compresses well past
+# 50x. MAX_PART_BYTES and MAX_TOTAL_BYTES still bound what it can inflate to,
+# and read_part stops at MAX_PART_BYTES whatever the header claims.
+
+
+def ratio_applies(name: str) -> bool:
+    normalized = name.replace("\\", "/").lower()
+    return not (normalized.startswith("xl/") and normalized.endswith(".xml"))
 
 
 def check_zip_name(name: str) -> None:
@@ -28,7 +37,7 @@ def check_zip_info(info: zipfile.ZipInfo, running_total: int) -> int:
     total = running_total + info.file_size
     if total > MAX_TOTAL_BYTES:
         raise ContextError("zip_rejected", "archive too large")
-    if info.file_size >= RATIO_MIN_UNCOMPRESSED:
+    if info.file_size >= RATIO_MIN_UNCOMPRESSED and ratio_applies(info.filename):
         compressed = info.compress_size
         if compressed <= 0 or info.file_size / compressed >= MAX_COMPRESSION_RATIO:
             raise ContextError("zip_rejected", "compression ratio")

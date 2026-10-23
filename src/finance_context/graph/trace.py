@@ -4,6 +4,7 @@ import json
 from collections import defaultdict, deque
 from pathlib import Path
 
+from finance_context.formulas.csr import RANGE_MEMBER_KIND, is_range_node
 from finance_context.graph.models import TraceDocument, TraceEdge, TraceNode
 from finance_context.labels import own_label_contains
 from finance_context.store.fs import read_parquet
@@ -80,24 +81,7 @@ def trace_graph(
                 hit_depth = True
             continue
         emitted: set[tuple[str, str]] = set()
-        for edge in outgoing:
-            nxt = str(edge["target"] if direction == "precedents" else edge["source"])
-            if index.get(nxt, {}).get("node_type") == "empty":
-                range_ref = edge.get("range_ref")
-                target = str(range_ref) if range_ref else nxt
-                key = (str(edge["source"]), target)
-                if key not in emitted:
-                    emitted.add(key)
-                    used_edges.append(
-                        TraceEdge(
-                            source=str(edge["source"]),
-                            target=target,
-                            kind=edge.get("kind"),
-                            period_lag=edge.get("period_lag"),
-                            col_offset=edge.get("col_offset"),
-                        )
-                    )
-                continue
+        for edge, nxt in _steps(outgoing, direction, fwd, rev):
             range_ref = edge.get("range_ref")
             target = str(range_ref) if range_ref else str(edge["target"])
             key = (str(edge["source"]), target)
@@ -112,6 +96,8 @@ def trace_graph(
                         col_offset=edge.get("col_offset"),
                     )
                 )
+            if index.get(nxt, {}).get("node_type") == "empty":
+                continue
             if nxt in seen:
                 stopped = "cycle"
                 continue
@@ -127,6 +113,34 @@ def trace_graph(
         nodes=nodes,
         edges=_unique_edges(used_edges),
     )
+
+
+def _steps(
+    outgoing: list[dict],
+    direction: str,
+    fwd: dict[str, list[dict]],
+    rev: dict[str, list[dict]],
+):
+    """(formula edge, next cell) pairs. A range node is passed through, not visited.
+
+    Precedents go formula -> range node -> each member. Dependents go member ->
+    range node -> each formula that reads the node. The edge reported is the
+    formula's own edge, so the trace looks the same as with one edge per member.
+    """
+    for edge in outgoing:
+        if direction == "precedents":
+            target = str(edge["target"])
+            if is_range_node(target):
+                for member in fwd.get(target, ()):
+                    yield edge, str(member["target"])
+                continue
+            yield edge, target
+            continue
+        if edge.get("kind") == RANGE_MEMBER_KIND:
+            for reader in rev.get(str(edge["source"]), ()):
+                yield reader, str(reader["source"])
+            continue
+        yield edge, str(edge["source"])
 
 
 def _resolve_origin(origin: str, index: dict[str, dict], *, context_path: Path) -> list[str]:

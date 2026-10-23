@@ -15,6 +15,13 @@ _RANGE_CAP: ContextVar[int | None] = ContextVar("finance_range_expand_cap", defa
 _EXCEL_MAX_ROW = 1_048_576
 _EXCEL_MAX_COL = 16_384
 
+# A range larger than this, or a whole column or row, becomes one range node.
+# The formula gets one edge to the node, and the node lists its present cells
+# once for the whole book. A copied-down SUMIF(A:A, ...) then costs
+# formulas + cells of A instead of formulas x cells of A.
+RANGE_NODE_MIN_CELLS = 64
+RANGE_MEMBER_KIND = "range_member"
+
 _CELL = re.compile(r"^\$?([A-Za-z]+)\$?(\d+)$", re.I)
 _COLS = re.compile(r"^\$?([A-Za-z]+):\$?([A-Za-z]+)$", re.I)
 _ROWS = re.compile(r"^\$?(\d+):\$?(\d+)$")
@@ -201,6 +208,60 @@ def _present_pairs(
     return found
 
 
+def is_range_node(node: str | None) -> bool:
+    """A range node id such as ``Data!A:A`` or ``Data!C1:C2500``. Cell ids have no colon."""
+    if not node or "!" not in node:
+        return False
+    return ":" in node.rsplit("!", 1)[1]
+
+
+def _range_node_id(sheet: str, c1: int, c2: int, r1: int, r2: int) -> str:
+    if r1 == 1 and r2 == _EXCEL_MAX_ROW:
+        return f"{sheet}!{index_to_col(c1)}:{index_to_col(c2)}"
+    if c1 == 1 and c2 == _EXCEL_MAX_COL:
+        return f"{sheet}!{r1}:{r2}"
+    return f"{sheet}!{index_to_col(c1)}{r1}:{index_to_col(c2)}{r2}"
+
+
+class RangeNode(NamedTuple):
+    node_id: str
+    sheet: str
+    c1: int
+    c2: int
+    r1: int
+    r2: int
+
+
+def range_node_for(target: str, usage: SheetUsage | None) -> RangeNode | None:
+    """The range node a range edge goes through, or None when it expands per formula.
+
+    Only a whole column or row, or a rectangle over ``RANGE_NODE_MIN_CELLS``,
+    becomes a node, and only when ``usage`` knows the present cells.
+    """
+    if usage is None:
+        return None
+    try:
+        sheet, body = split_sheet_ref(target)
+    except ValueError:
+        return None
+    rect = _rectangle(body)
+    if rect is None:
+        return None
+    c1, c2, r1, r2 = rect
+    if not _whole_axis(c1, c2, r1, r2) and _area(c1, c2, r1, r2) <= RANGE_NODE_MIN_CELLS:
+        return None
+    sheet = usage.sheet_name(sheet)
+    return RangeNode(_range_node_id(sheet, c1, c2, r1, r2), sheet, c1, c2, r1, r2)
+
+
+def range_node_members(node: RangeNode, usage: SheetUsage) -> list[str]:
+    """Present cells of the node, row then column. Holes are not members."""
+    return [
+        f"{node.sheet}!{index_to_col(col)}{row}"
+        for row, col in _present_pairs(node.sheet, node.c1, node.c2, node.r1, node.r2, usage)
+    ]
+
+
 def expansion_count(
     target: str, cap: int | None = None, usage: SheetUsage | None = None
 ) -> int:
@@ -224,13 +285,29 @@ def expansion_count(
     return area if area <= cap else cap
 
 
-def expanded_edge_count(edges: list[Edge], usage: SheetUsage | None = None) -> int:
-    """Cell targets expand_cell_edges would walk, before de-duplication."""
+def expanded_edge_count(
+    edges: list[Edge],
+    usage: SheetUsage | None = None,
+    seen_ranges: set[str] | None = None,
+) -> int:
+    """Cell targets expand_cell_edges would walk, before de-duplication.
+
+    A range node costs one edge per formula plus its members once. Pass the same
+    ``seen_ranges`` across calls so a node shared by many formulas is counted once.
+    """
+    seen = set() if seen_ranges is None else seen_ranges
     total = 0
     for edge in edges:
         if not edge.target:
             continue
         if edge.kind == "range" and not edge.unresolved and "!" in edge.target:
+            node = range_node_for(edge.target, usage)
+            if node is not None and usage is not None:
+                total += 1
+                if node.node_id not in seen:
+                    seen.add(node.node_id)
+                    total += _present_count(node.sheet, node.c1, node.c2, node.r1, node.r2, usage)
+                continue
             try:
                 total += expansion_count(edge.target, usage=usage)
             except ValueError:
@@ -374,39 +451,34 @@ def expand_cell_edges(
     seen_cells = presence or {}
     rows: list[CellEdge] = []
     seen: set[tuple[str, str, str]] = set()
+    done: set[str] = set()
     for edge in edges:
-        for target, unresolved, truncated in _expanded_targets(edge, usage):
-            target = _share(pool, target)
-            classified = classify_member(
-                target,
-                kind=edge.kind,
-                known=known,
-                sheets=sheets,
-                unresolved=unresolved,
-                presence=seen_cells,
-            )
-            key = (edge.source, target, edge.kind)
+        for row in _edge_rows(edge, usage, done):
+            target = _share(pool, row.target)
+            source = _share(pool, row.source)
+            key = (source, target, row.kind)
             if key in seen:
                 continue
             seen.add(key)
+            classified = _classified(row, target, known, sheets, seen_cells)
             rows.append(
                 CellEdge(
-                    edge.source,
+                    source,
                     target,
-                    edge.kind,
-                    unresolved,
-                    truncated,
+                    row.kind,
+                    row.unresolved,
+                    row.truncated,
                     classified.dangling,
                     classified.dangling_reason,
                     classified.status,
                     classified.reason,
                     classified.evidence,
-                    edge.target,
-                    edge.abs_col,
-                    edge.abs_row,
-                    edge.abs_col_end,
-                    edge.abs_row_end,
-                    edge.named,
+                    row.range_ref,
+                    row.abs_col,
+                    row.abs_row,
+                    row.abs_col_end,
+                    row.abs_row_end,
+                    row.named,
                 )
             )
     return rows
@@ -485,26 +557,21 @@ def expand_cell_edges_column_batches(
         for values in columns.values():
             values.clear()
 
+    done: set[str] = set()
     for edge in edges:
-        for target, unresolved, truncated in _expanded_targets(edge, usage):
-            target = _share(pool, target)
-            classified = classify_member(
-                target,
-                kind=edge.kind,
-                known=known,
-                sheets=sheets,
-                unresolved=unresolved,
-                presence=seen_cells,
-            )
-            key = (node_id(edge.source) << 40) | (node_id(target) << 8) | kind_id(edge.kind)
+        for row in _edge_rows(edge, usage, done):
+            target = _share(pool, row.target)
+            source = _share(pool, row.source)
+            key = (node_id(source) << 40) | (node_id(target) << 8) | kind_id(row.kind)
             if key in seen:
                 continue
             seen.add(key)
-            columns["source"].append(edge.source)
+            classified = _classified(row, target, known, sheets, seen_cells)
+            columns["source"].append(source)
             columns["target"].append(target)
-            columns["kind"].append(edge.kind)
-            columns["unresolved"].append(unresolved)
-            columns["truncated"].append(truncated)
+            columns["kind"].append(row.kind)
+            columns["unresolved"].append(row.unresolved)
+            columns["truncated"].append(row.truncated)
             columns["dangling"].append(classified.dangling)
             columns["col_offset"].append(None)
             columns["period_lag"].append(None)
@@ -512,18 +579,19 @@ def expand_cell_edges_column_batches(
             columns["status"].append(classified.status)
             columns["reason"].append(classified.reason)
             columns["evidence"].append(classified.evidence)
-            columns["range_ref"].append(edge.target)
-            columns["abs_col"].append(edge.abs_col)
-            columns["abs_row"].append(edge.abs_row)
-            columns["abs_col_end"].append(edge.abs_col_end)
-            columns["abs_row_end"].append(edge.abs_row_end)
-            columns["named"].append(edge.named)
+            columns["range_ref"].append(row.range_ref)
+            columns["abs_col"].append(row.abs_col)
+            columns["abs_row"].append(row.abs_row)
+            columns["abs_col_end"].append(row.abs_col_end)
+            columns["abs_row_end"].append(row.abs_row_end)
+            columns["named"].append(row.named)
             if limit and len(columns["source"]) >= limit:
                 flush()
     flush()
     seen.clear()
     ids.clear()
     id_box.clear()
+    done.clear()
     return count
 
 
@@ -584,6 +652,109 @@ def classify_member(
 
 def _blank(klass: str, evidence: str) -> MemberStatus:
     return MemberStatus(klass, False, "empty", "actual_blank_cell", evidence)
+
+
+class _EdgeRow(NamedTuple):
+    source: str
+    target: str
+    kind: str
+    unresolved: bool
+    truncated: bool
+    range_ref: str | None
+    abs_col: bool | None
+    abs_row: bool | None
+    abs_col_end: bool | None
+    abs_row_end: bool | None
+    named: bool
+    # Kind classify_member sees, or None for an edge into a range node.
+    member_kind: str | None
+
+
+_UNCLASSIFIED = MemberStatus(None, False, None, None, None)
+
+
+def _classified(
+    row: _EdgeRow,
+    target: str,
+    known: set[str],
+    sheets: set[str],
+    presence: dict[str, str],
+) -> MemberStatus:
+    if row.member_kind is None:
+        return _UNCLASSIFIED
+    return classify_member(
+        target,
+        kind=row.member_kind,
+        known=known,
+        sheets=sheets,
+        unresolved=row.unresolved,
+        presence=presence,
+    )
+
+
+def _edge_rows(edge: Edge, usage: SheetUsage | None, done: set[str]) -> Iterable[_EdgeRow]:
+    """Cell-edge rows for one formula edge.
+
+    A large range yields one row to its range node. The first formula that uses
+    the node also yields the node's member rows, ``range_member`` with the node
+    as source. ``done`` holds the nodes already listed.
+    """
+    if (
+        edge.kind == "range"
+        and edge.target
+        and not edge.unresolved
+        and "!" in edge.target
+        and usage is not None
+    ):
+        node = range_node_for(edge.target, usage)
+        if node is not None:
+            yield _EdgeRow(
+                edge.source,
+                node.node_id,
+                edge.kind,
+                False,
+                False,
+                edge.target,
+                edge.abs_col,
+                edge.abs_row,
+                edge.abs_col_end,
+                edge.abs_row_end,
+                edge.named,
+                None,
+            )
+            if node.node_id not in done:
+                done.add(node.node_id)
+                for member in range_node_members(node, usage):
+                    yield _EdgeRow(
+                        node.node_id,
+                        member,
+                        RANGE_MEMBER_KIND,
+                        False,
+                        False,
+                        node.node_id,
+                        None,
+                        None,
+                        None,
+                        None,
+                        False,
+                        "range",
+                    )
+            return
+    for target, unresolved, truncated in _expanded_targets(edge, usage):
+        yield _EdgeRow(
+            edge.source,
+            target,
+            edge.kind,
+            unresolved,
+            truncated,
+            edge.target,
+            edge.abs_col,
+            edge.abs_row,
+            edge.abs_col_end,
+            edge.abs_row_end,
+            edge.named,
+            edge.kind,
+        )
 
 
 def _expanded_targets(

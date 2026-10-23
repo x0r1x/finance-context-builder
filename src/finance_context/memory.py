@@ -548,12 +548,17 @@ def assess_raw(
     engine = FormulaEngine(locale_hint=locale if isinstance(locale, str) else None)
     formulas = 0
     expanded = 0
+    seen_ranges: set[str] = set()
     for sheet, addr, formula in rows:
         if not formula:
             continue
         formulas += 1
         parsed = engine.parse(str(formula), sheet=str(sheet or ""), addr=str(addr or "A1"))
-        expanded += expanded_edge_count(parsed.edges, usage=usage)  # type: ignore[arg-type]
+        expanded += expanded_edge_count(
+            parsed.edges,
+            usage=usage,  # type: ignore[arg-type]
+            seen_ranges=seen_ranges,
+        )
     present = present_cell_count(usage) if isinstance(usage, SheetUsage) else 0
     return WorkbookEstimate(
         cells=len(rows),

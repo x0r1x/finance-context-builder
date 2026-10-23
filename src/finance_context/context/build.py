@@ -44,6 +44,10 @@ from finance_context.models.context import (
 )
 from finance_context.vocab import ValueStatus
 
+# Row neighbors kept per side. One SUMIF(A:A) copied down 20k rows makes every
+# row of A a neighbor of every formula row; past this many the list is cut.
+ROW_NEIGHBOR_LIMIT = 256
+
 
 def _without_name_scope(items: list) -> list:
     """Drop the sheet a name is local to. Context keeps the name and its formula."""
@@ -86,7 +90,7 @@ def build_context(
         layout, cells, date1904=bool(workbook_meta.get("date1904"))
     )
     axes_by_id = {axis.id: axis for axis in axes}
-    precedents, dependents = row_adjacency(edges or [], limit=0, usage=usage)
+    precedents, dependents = row_adjacency(edges or [], limit=ROW_NEIGHBOR_LIMIT, usage=usage)
     hidden_warnings = _hidden_warnings(workbook_meta, cells)
     warnings: list[str] = []
     formula_count = 0

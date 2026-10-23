@@ -100,23 +100,22 @@ def test_whole_column_sumif_edge_count_follows_used_rows(tmp_path: Path, dest: P
     )
     parse_workbook(source, dest)
     estimate = assess_raw(dest)
-    # Two whole columns, only the populated rows. The old cap would count 2000 each.
-    assert estimate.expanded_cells == used_rows * 2 + 1
+    # Two whole columns are two range nodes: one edge each plus the populated
+    # rows once. A1 is one more edge. The old cap would count 2000 each.
+    assert estimate.expanded_cells == 2 + used_rows * 2 + 1
     assert estimate.expanded_cells < RANGE_EXPAND_CAP
     compile_workbook(dest)
-    cell_edges = [
-        edge
-        for edge in load_parquet(dest / "ir" / "cell_edges.parquet")
-        if edge["source"] == "Report!C1"
-    ]
-    assert len(cell_edges) == used_rows * 2 + 1
+    all_edges = load_parquet(dest / "ir" / "cell_edges.parquet")
+    cell_edges = [edge for edge in all_edges if edge["source"] == "Report!C1"]
+    assert {edge["target"] for edge in cell_edges} == {"Data!A:A", "Report!A1", "Data!C:C"}
     assert all(edge["truncated"] is False for edge in cell_edges)
-    targets = {edge["target"] for edge in cell_edges}
-    assert "Data!A1" in targets
-    assert "Data!A40" in targets
-    assert "Data!C40" in targets
-    assert "Data!A41" not in targets
-    assert "Data!C2000" not in targets
+    by_node = {
+        node: {edge["target"] for edge in all_edges if edge["source"] == node}
+        for node in ("Data!A:A", "Data!C:C")
+    }
+    assert all(edge["kind"] == "range_member" for edge in all_edges if edge["source"] in by_node)
+    assert by_node["Data!A:A"] == {f"Data!A{row}" for row in range(1, used_rows + 1)}
+    assert by_node["Data!C:C"] == {f"Data!C{row}" for row in range(1, used_rows + 1)}
 
     formula_edges = [
         edge
@@ -166,12 +165,11 @@ def test_lowercase_sheet_sum_keeps_canonical_precedents(tmp_path: Path, dest: Pa
     )
     parse_workbook(source, dest)
     compile_workbook(dest)
-    targets = {
-        edge["target"]
-        for edge in load_parquet(dest / "ir" / "cell_edges.parquet")
-        if edge["source"] == "Report!C1"
-    }
-    assert targets == {f"Data!A{row}" for row in range(1, 6)}
+    edges = load_parquet(dest / "ir" / "cell_edges.parquet")
+    targets = {edge["target"] for edge in edges if edge["source"] == "Report!C1"}
+    assert targets == {"Data!A:A"}
+    members = {edge["target"] for edge in edges if edge["source"] == "Data!A:A"}
+    assert members == {f"Data!A{row}" for row in range(1, 6)}
 
 
 def test_row_adjacency_dedupes_without_repeating_a_target() -> None:

@@ -6,7 +6,7 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse.csgraph import connected_components
 
-from finance_context.formulas.csr import CellEdge, as_cell_edge
+from finance_context.formulas.csr import RANGE_MEMBER_KIND, CellEdge, as_cell_edge, is_range_node
 from finance_context.graph.models import CycleRecord
 from finance_context.graph.refs import parse_node_id
 
@@ -19,7 +19,7 @@ def classify_cycles(edges: list) -> list[CycleRecord]:
         and edge.target
         and not edge.unresolved
         and not edge.dangling
-        and edge.kind in {"ref", "cross_sheet", "range"}
+        and edge.kind in {"ref", "cross_sheet", "range", RANGE_MEMBER_KIND}
     ]
     nodes = sorted({str(edge.source) for edge in usable} | {str(edge.target) for edge in usable})
     if not nodes:
@@ -63,10 +63,14 @@ def classify_cycles(edges: list) -> list[CycleRecord]:
         self_loop = any(edge.source == edge.target for edge in intra)
         if len(group) < 2 and not self_loop:
             continue
+        # A range node is a hop, not a cell: A100 = SUM(A:A) is the cycle [A100].
+        cells_only = [name for name in group if not is_range_node(name)]
+        if not cells_only:
+            continue
         cls = _classify(intra)
         cycles.append(
             CycleRecord.model_validate(
-                {"id": f"c{seq}", "members": sorted(group), "class": cls}
+                {"id": f"c{seq}", "members": sorted(cells_only), "class": cls}
             )
         )
         seq += 1

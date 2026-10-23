@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from finance_context.vocab import FormulaClass
 
-GRAPH_SCHEMA_VERSION = "1.7.0"
+GRAPH_SCHEMA_VERSION = "1.7.1"
 CycleClass = Literal["iterative_ok", "unexpected"]
 ID_CAP = 32
 

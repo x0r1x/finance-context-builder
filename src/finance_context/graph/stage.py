@@ -6,7 +6,12 @@ from collections import Counter
 from pathlib import Path
 
 from finance_context.excel.a1 import index_to_col
-from finance_context.formulas.csr import CellEdge, as_cell_edge
+from finance_context.formulas.csr import (
+    RANGE_MEMBER_KIND,
+    CellEdge,
+    as_cell_edge,
+    is_range_node,
+)
 from finance_context.formulas.models import Edge, as_edge
 from finance_context.formulas.stage import IR_CELL_EDGE_COLUMNS, EdgeCount
 from finance_context.graph.cycles import classify_cycles
@@ -142,7 +147,10 @@ def build_formula_graph(
         hints = circularity_hints(layout, index_rows, cycles)
         iterate = _workbook_iterate(book)
         doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
-        doc.links = _formula_links(cells, edges, row_meta, period_by_cell, enriched)
+        lags = _lags_by_source(enriched)
+        users, periods = _range_node_uses(enriched, period_of)
+        _add_range_lags(lags, users, periods, period_of)
+        doc.links = _formula_links(cells, edges, row_meta, period_by_cell, lags=lags)
         if chosen.json_stream:
             _stream_graph_files(dest_dir, doc)
         else:
@@ -366,7 +374,7 @@ def _lags_by_source(cell_edges: list[CellEdge]) -> dict[str, list[str]]:
     for edge in cell_edges:
         source = str(edge.source or "")
         lag = edge.period_lag
-        if not source or lag is None:
+        if not source or lag is None or is_range_node(source):
             continue
         bucket = grouped.setdefault(source, [])
         text = str(lag)
@@ -424,9 +432,57 @@ def _formula_links(
     return links
 
 
+def _range_node_uses(
+    cell_edges: list[CellEdge], period_of: dict
+) -> tuple[list[tuple[str, str]], dict[str, set[str | None]]]:
+    """Formula -> range node pairs, and the member periods of each node."""
+    users: list[tuple[str, str]] = []
+    periods: dict[str, set[str | None]] = {}
+    for edge in cell_edges:
+        source = str(edge.source or "")
+        target = str(edge.target or "")
+        if edge.kind == RANGE_MEMBER_KIND:
+            periods.setdefault(source, set()).add(period_of.get(target))
+        elif target and is_range_node(target):
+            users.append((source, target))
+    return users, periods
+
+
+def _add_range_lags(
+    lags: dict[str, list[str]],
+    users: list[tuple[str, str]],
+    periods: dict[str, set[str | None]],
+    period_of: dict,
+) -> None:
+    """Give a formula the lags it would have had with one edge per range member.
+
+    ``formula_class`` reads these. The edge into the range node itself stays
+    ``unaligned`` in graph_edges.parquet.
+    """
+    ordered = {
+        node: sorted(values, key=lambda value: (value is None, value or ""))
+        for node, values in periods.items()
+    }
+    for source, node in users:
+        member_periods = ordered.get(node)
+        if not member_periods:
+            continue
+        bucket = lags.setdefault(source, [])
+        src_period = period_of.get(source)
+        for member_period in member_periods:
+            if not src_period or not member_period:
+                lag = "unaligned"
+            else:
+                lag = calendar_lag(str(src_period), str(member_period))
+            if lag not in bucket:
+                bucket.append(lag)
+
+
 def _enrich_edge(edge: CellEdge, period_of: dict[str, str | None]) -> CellEdge:
     source = str(edge.source or "")
     target = str(edge.target or "")
+    if is_range_node(source) or is_range_node(target):
+        return edge._replace(col_offset=None, period_lag="unaligned")
     src = parse_node_id(source)
     tgt = parse_node_id(target)
     col_offset = None
@@ -501,7 +557,7 @@ def _summary(
 
 
 _LINKS_SLOT = "__FC_LINKS_SLOT__"
-_USABLE_KINDS = {"ref", "cross_sheet", "range"}
+_USABLE_KINDS = {"ref", "cross_sheet", "range", RANGE_MEMBER_KIND}
 _BOOL_COLUMNS = {"unresolved", "truncated", "dangling", "named"}
 _ABS_COLUMNS = {"abs_col", "abs_row", "abs_col_end", "abs_row_end"}
 
@@ -531,6 +587,8 @@ def _empty_nodes_from_parquet(path: Path, existing: set[str]) -> list[str]:
 
 
 def _offset_and_lag(source: str, target: str, period_of: dict) -> tuple[int | None, str]:
+    if is_range_node(source) or is_range_node(target):
+        return None, "unaligned"
     src = parse_node_id(source)
     tgt = parse_node_id(target)
     col_offset = None
@@ -620,9 +678,15 @@ def _cycles_packed(id_of: dict[str, int], src_ids, tgt_ids, flags) -> list[Cycle
         group = members[label]
         if len(group) < 2 and label not in self_loop:
             continue
+        # A range node is a hop, not a cell: A100 = SUM(A:A) is the cycle [A100].
+        cells_only = [name for name in group if not is_range_node(name)]
+        if not cells_only:
+            continue
         cls = "iterative_ok" if label in saw and all_period.get(label, False) else "unexpected"
         cycles.append(
-            CycleRecord.model_validate({"id": f"c{seq}", "members": sorted(group), "class": cls})
+            CycleRecord.model_validate(
+                {"id": f"c{seq}", "members": sorted(cells_only), "class": cls}
+            )
         )
         seq += 1
     return cycles
@@ -669,6 +733,8 @@ def _graph_from_parquet(
     truncated_seen: set[str] = set()
     lag_groups: dict[str, list[str]] = {}
     lag_pool: dict[str, str] = {}
+    range_users: list[tuple[str, str]] = []
+    range_periods: dict[str, set[str | None]] = {}
     ids = _NodeIds()
     src_ids = array.array("i")
     tgt_ids = array.array("i")
@@ -708,7 +774,11 @@ def _graph_from_parquet(
                 if data["truncated"][index] and source and source not in truncated_seen:
                     truncated_seen.add(source)
                     truncated_ids.append(source)
-                if source:
+                if kind == RANGE_MEMBER_KIND:
+                    range_periods.setdefault(source, set()).add(period_of.get(target))
+                elif source:
+                    if target and is_range_node(target):
+                        range_users.append((source, target))
                     bucket = lag_groups.setdefault(source, [])
                     if lag not in bucket:
                         bucket.append(lag)
@@ -736,7 +806,8 @@ def _graph_from_parquet(
                     out_cols.append(data[name])
             writer.write_lists(out_cols)
             del data, offsets, lag_col, out_cols
-    del period_of
+    _add_range_lags(lag_groups, range_users, range_periods, period_of)
+    del period_of, range_users, range_periods
     cycles = _cycles_packed(ids.map, src_ids, tgt_ids, flags)
     del ids, src_ids, tgt_ids, flags
     hints = circularity_hints(layout, index_rows, cycles)
