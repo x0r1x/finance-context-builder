@@ -19,6 +19,7 @@ _LABELS = ["Выручка", "Операционные расходы", "Кап�
 
 
 def _book(path: Path, header: list[str], *, unit_col: bool = False) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     book = xlsxwriter.Workbook(str(path))
     sheet = book.add_worksheet("Ввод")
     for col, text in enumerate(header):
@@ -37,7 +38,7 @@ def _book(path: Path, header: list[str], *, unit_col: bool = False) -> Path:
 def _run(tmp_path: Path, header: list[str], *, unit_col: bool = False) -> ContextDocument:
     dest = tmp_path / "job"
     dest.mkdir()
-    _book(dest / "source.xlsx", header, unit_col=unit_col)
+    _book(dest / "source" / "source.xlsx", header, unit_col=unit_col)
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     return pipeline.run(dest, job_id="job", source_filename="book.xlsx")
 

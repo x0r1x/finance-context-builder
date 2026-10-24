@@ -163,7 +163,7 @@ def _requeue_shared_cache(
     is spent, then ``shared_cache_busy`` is written here.
     """
     cap = int(settings.shared_cache_busy_max_retries)
-    seen = _busy_seen(read_meta(dest / "meta.json"))
+    seen = _busy_seen(read_meta(dest / "meta" / "meta.json"))
     if seen >= cap:
         mark_job_failed(dest, job_id, "shared_cache_busy", generation, detail=_BUSY_DETAIL)
         log_event(
@@ -191,7 +191,7 @@ def _requeue_shared_cache(
         updated[_BUSY_RETRIES] = attempt
         return updated
 
-    update_json(dest / "meta.json", stamp)
+    update_json(dest / "meta" / "meta.json", stamp)
     emit_progress(
         settings,
         session_id=session_id,
@@ -390,7 +390,7 @@ def _finish(
     if result.timed_out:
         mark_job_failed(dest, job_id, "TimeoutError", generation)
         return
-    meta = read_meta(dest / "meta.json")
+    meta = read_meta(dest / "meta" / "meta.json")
     status = meta.get("status")
     if status not in _TERMINAL:
         mark_job_failed(

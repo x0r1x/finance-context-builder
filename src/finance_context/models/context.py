@@ -220,7 +220,7 @@ class ArtifactMeta(BaseModel):
 class GraphPointer(BaseModel):
     artifact: str = "graph.json"
     cell_edges: str = "ir/cell_edges.parquet"
-    index: str = "ir/graph_index.parquet"
+    index: str = "graph/index.parquet"
     nodes: int = 0
     edges: int = 0
     cycles_unexpected: int = 0

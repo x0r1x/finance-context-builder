@@ -71,7 +71,7 @@
     "dangling": 0,
     "edges": 0,
     "empty_range_members": 0,
-    "index": "ir/graph_index.parquet",
+    "index": "graph/index.parquet",
     "iterate": false,
     "nodes": 0,
     "unresolved": 0

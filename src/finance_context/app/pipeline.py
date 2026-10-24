@@ -54,6 +54,7 @@ from finance_context.models.context import ArtifactMeta, ContextDocument, GraphP
 from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
 from finance_context.render.markdown import refresh_context_markdown, write_context_markdown
 from finance_context.settings import Settings
+from finance_context.store.duckdb_io import export_succeeded_book
 from finance_context.store.fs import file_lock, read_parquet, update_json
 from finance_context.store.paths import session_job_dir, shared_book_dir
 
@@ -62,7 +63,12 @@ _TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
 # Interpreter startup sits between proc.start() and process_mono_start, and
 # mark_job_failed still has to hit disk. Both fit in this margin.
 _BUSY_TIMEOUT_MARGIN_SEC = 2.0
-_READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
+_READY_ARTIFACTS = (
+    "context/context.json",
+    "context/context.md",
+    "graph/graph.json",
+    "graph/graph.md",
+)
 # Set only in the spawned child. In-process callers measure from execute_job.
 _child_watchdog_deadline: float | None = None
 # sysexits.h EX_TEMPFAIL. The RQ horse maps this to Retry and does not sleep.
@@ -149,10 +155,10 @@ class Pipeline:
         book = shared_dir or dest_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
         book.mkdir(parents=True, exist_ok=True)
-        context_path = dest_dir / "context.json"
-        markdown_path = dest_dir / "context.md"
+        context_path = dest_dir / "context" / "context.json"
+        markdown_path = dest_dir / "context" / "context.md"
         if context_path.is_file() and markdown_path.is_file():
-            refresh_context_markdown(dest_dir)
+            refresh_context_markdown(dest_dir / "context")
             return ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
         if not has_source(book):
             raise ContextError("empty_file", "source.xlsx missing")
@@ -284,7 +290,7 @@ class Pipeline:
                 book, count_cell_edges=self.settings.graph_stream
             )
         set_stage("layout")
-        if not (book / "layout.json").is_file():
+        if not (book / "layout" / "layout.json").is_file():
             layout_profile = {"cells": len(ir_cells), "edges": len(ir_edges)}
             layout = _timed(
                 "layout",
@@ -296,7 +302,9 @@ class Pipeline:
             )
         else:
             _pause_layout_reuse()
-            layout = Layout.model_validate_json((book / "layout.json").read_text(encoding="utf-8"))
+            layout = Layout.model_validate_json(
+                (book / "layout" / "layout.json").read_text(encoding="utf-8")
+            )
         cells = ir_cells
         edges = ir_edges
         relations = formula_relations(layout, ir_cells)
@@ -304,11 +312,11 @@ class Pipeline:
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status()
         set_stage("graph", status="running")
-        # graph.json can outlive ir/graph_edges.parquet (a publisher change drops the parquet).
+        # graph.json can outlive graph/edges.parquet (a publisher change drops the parquet).
         # Trace walks that file, so a missing parquet has to be rebuilt.
         if (
-            not (dest_dir / "graph.json").is_file()
-            or not (dest_dir / "ir" / "graph_edges.parquet").is_file()
+            not (dest_dir / "graph" / "graph.json").is_file()
+            or not (dest_dir / "graph" / "edges.parquet").is_file()
         ):
             graph_profile = {
                 "cells": len(ir_cells),
@@ -332,7 +340,7 @@ class Pipeline:
                 settings=self.settings,
             )
         else:
-            payload = json.loads((dest_dir / "graph.json").read_text(encoding="utf-8"))
+            payload = json.loads((dest_dir / "graph" / "graph.json").read_text(encoding="utf-8"))
             unexpected = sum(
                 1 for c in payload.get("cycles") or [] if c.get("class") == "unexpected"
             )
@@ -342,7 +350,7 @@ class Pipeline:
             graph = GraphPointer(
                 artifact="graph.json",
                 cell_edges="ir/cell_edges.parquet",
-                index="ir/graph_index.parquet",
+                index="graph/index.parquet",
                 nodes=int(payload.get("nodes") or 0),
                 edges=int(payload.get("edges") or 0),
                 cycles_unexpected=unexpected,
@@ -379,14 +387,14 @@ class Pipeline:
         doc = _timed("build", build_and_count, build_profile, settings=self.settings)
         cells = edges = ir_cells = ir_edges = relations = None
         _write_sorted_json(
-            dest_dir / "context.json",
+            dest_dir / "context" / "context.json",
             doc.model_dump(mode="json"),
             stream=self.settings.json_stream,
         )
         set_stage("render", status="running")
         _timed(
             "render",
-            lambda: write_context_markdown(dest_dir, doc),
+            lambda: write_context_markdown(dest_dir / "context", doc),
             settings=self.settings,
         )
         _raise_if_cancelled(progress)
@@ -402,6 +410,22 @@ class Pipeline:
             generation=generation,
             stream=self.settings.json_stream,
         )
+        export_warning = export_succeeded_book(
+            self.settings,
+            job_id=job_id,
+            book=book,
+            dest=dest_dir,
+        )
+        if export_warning:
+            update_json(
+                dest_dir / "meta" / "meta.json",
+                lambda stored: _append_export_warning(
+                    stored,
+                    generation=generation,
+                    warning=export_warning,
+                ),
+                stream=self.settings.json_stream,
+            )
         if progress_enabled():
             if open_stage is not None:
                 emit_progress(
@@ -637,7 +661,7 @@ def mark_job_failed(
             failed["detail"] = detail
         return failed
 
-    update_json(dest / "meta.json", mutate)
+    update_json(dest / "meta" / "meta.json", mutate)
     _emit_failure(dest, job_id, error, generation)
 
 
@@ -852,6 +876,18 @@ def _stored_generation(payload: dict) -> int | None:
         return None
 
 
+def _append_export_warning(stored: dict, *, generation: int, warning: str) -> dict:
+    """Add the export warning. A newer generation, or the same warning, is left as-is."""
+    seen = _stored_generation(stored)
+    if seen is not None and seen > generation:
+        return stored
+    warnings = stored.get("warnings")
+    items = list(warnings) if isinstance(warnings, list) else []
+    if warning in items:
+        return stored
+    return {**stored, "warnings": [*items, warning]}
+
+
 def _write_meta(dest_dir: Path, **fields: object) -> None:
     generation = int(fields.get("generation") or 0)
     meta = ArtifactMeta(
@@ -876,7 +912,7 @@ def _write_meta(dest_dir: Path, **fields: object) -> None:
 
     stream = fields.get("stream")
     update_json(
-        dest_dir / "meta.json",
+        dest_dir / "meta" / "meta.json",
         mutate,
         stream=stream if isinstance(stream, bool) else None,
     )

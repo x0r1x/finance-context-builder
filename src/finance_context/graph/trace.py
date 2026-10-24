@@ -38,12 +38,12 @@ def trace_graph(
     depth = max(1, min(int(depth), 32))
     book = book_dir or dest_dir
     cells = {f"{c['sheet']}!{c['addr']}": c for c in read_parquet(book / "ir" / "cells.parquet")}
-    index_path = dest_dir / "ir" / "graph_index.parquet"
+    index_path = dest_dir / "graph" / "index.parquet"
     if index_path.is_file():
         index = {row["node_id"]: row for row in read_parquet(index_path)}
     else:
         index = {}
-    edges_path = dest_dir / "ir" / "graph_edges.parquet"
+    edges_path = dest_dir / "graph" / "edges.parquet"
     if not edges_path.is_file():
         # Enriched edges are written with the graph. A job that only kept the
         # formula cell edges still has the precedents (PF Model!AA172 → Z172).
@@ -61,7 +61,7 @@ def trace_graph(
     nodes_by_id = range_nodes(rev)
     ranges = _Ranges(nodes_by_id, index, book) if nodes_by_id else None
 
-    starts = _resolve_origin(origin, index, context_path=dest_dir / "context.json")
+    starts = _resolve_origin(origin, index, context_path=dest_dir / "context" / "context.json")
     if not starts and origin.strip() in cells:
         starts = [origin.strip()]
     if not starts and ranges is not None and ranges.covers(origin.strip()):

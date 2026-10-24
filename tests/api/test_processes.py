@@ -97,9 +97,10 @@ def test_mark_job_failed_keeps_a_newer_generation(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
     original = {"job_id": "job", "status": "running", "stage": "layout", "generation": 2}
-    (dest / "meta.json").write_text(json.dumps(original), encoding="utf-8")
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(json.dumps(original), encoding="utf-8")
     mark_job_failed(dest, "job", "TimeoutError", 1)
-    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert stored["status"] == "running"
     assert stored["stage"] == "layout"
     assert stored["generation"] == 2
@@ -118,7 +119,8 @@ def _running_meta(tmp_path: Path) -> tuple[str, int, Path]:
     generation = 1
     dest = session_job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps(
             {
                 "job_id": job_id,
@@ -133,7 +135,7 @@ def _running_meta(tmp_path: Path) -> tuple[str, int, Path]:
 
 
 def _stored(dest: Path) -> dict:
-    return json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    return json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
 
 
 def test_watch_does_not_time_out_a_child_another_thread_already_reaped(tmp_path: Path) -> None:
@@ -303,11 +305,19 @@ def test_watch_kills_a_child_whose_real_rss_exceeds_the_budget(tmp_path: Path) -
 def test_mark_job_failed_keeps_a_terminal_snapshot(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
-    for name in ("context.json", "context.md", "graph.json", "graph.md"):
-        (dest / name).write_text("{}\n", encoding="utf-8")
+    for name in (
+        "context/context.json",
+        "context/context.md",
+        "graph/graph.json",
+        "graph/graph.md",
+    ):
+        path = dest / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
     original = {"job_id": "job", "status": "succeeded", "stage": "done", "generation": 3}
-    (dest / "meta.json").write_text(json.dumps(original), encoding="utf-8")
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(json.dumps(original), encoding="utf-8")
     mark_job_failed(dest, "job", "TimeoutError", 3)
-    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert stored["status"] == "succeeded"
     assert stored["generation"] == 3

@@ -266,7 +266,7 @@ def _book_dir(tmp_path: Path, job_id: str) -> Path:
 
 
 def _disk_stage(tmp_path: Path, job_id: str) -> str | None:
-    path = _job_dir(tmp_path, job_id) / "meta.json"
+    path = _job_dir(tmp_path, job_id) / "meta" / "meta.json"
     try:
         meta = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):

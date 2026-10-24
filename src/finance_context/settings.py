@@ -182,6 +182,15 @@ class Settings(BaseSettings):
     job_events_heartbeat_sec: float = DEFAULT_JOB_EVENTS_HEARTBEAT_SEC
     # Concurrent SSE responses. Above this, the route is 503.
     job_events_max_connections: int = DEFAULT_JOB_EVENTS_MAX_CONNECTIONS
+    # Empty quartet: DuckDB reads and writes DATA_DIR only. All four together:
+    # the same bytes are also copied to the bucket. A partial quartet fails startup.
+    minio_endpoint: str = ""
+    minio_bucket: str = ""
+    minio_access_key: str = ""
+    minio_secret_key: SecretStr | None = None
+    # Optional key prefix inside the bucket. Empty is books/{job_id}/...
+    minio_prefix: str = ""
+    minio_region: str = "us-east-1"
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -345,6 +354,57 @@ class Settings(BaseSettings):
             return None if value == "" else value
         raise ValueError("REDIS_PASSWORD must be a string")
 
+    @field_validator("minio_endpoint", "minio_bucket", "minio_access_key", mode="before")
+    @classmethod
+    def empty_minio_text(cls, value: object, info: ValidationInfo) -> str:
+        name = info.field_name.upper()
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be a string")
+        return value.strip()
+
+    @field_validator("minio_secret_key", mode="before")
+    @classmethod
+    def empty_minio_secret(cls, value: object, info: ValidationInfo) -> object:
+        del info
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            return None if value.get_secret_value() == "" else value
+        if isinstance(value, str):
+            return None if value.strip() == "" else value.strip()
+        raise ValueError("MINIO_SECRET_KEY must be a string")
+
+    @field_validator("minio_prefix", mode="before")
+    @classmethod
+    def clean_minio_prefix(cls, value: object, info: ValidationInfo) -> str:
+        del info
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError("MINIO_PREFIX must be a string")
+        token = value.strip().strip("/")
+        if "\\" in token or any(char.isspace() for char in token):
+            raise ValueError("MINIO_PREFIX must not contain spaces or backslashes")
+        parts = [part for part in token.split("/") if part]
+        if any(part in {".", ".."} for part in parts):
+            raise ValueError("MINIO_PREFIX must be a relative path")
+        return "/".join(parts)
+
+    @field_validator("minio_region", mode="before")
+    @classmethod
+    def default_minio_region(cls, value: object, info: ValidationInfo) -> str:
+        del info
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "us-east-1"
+        if not isinstance(value, str):
+            raise ValueError("MINIO_REGION must be a string")
+        token = value.strip()
+        if any(char.isspace() for char in token):
+            raise ValueError("MINIO_REGION must be a single token")
+        return token
+
     @field_validator("queue_name", mode="before")
     @classmethod
     def require_queue_name(cls, value: object, info: ValidationInfo) -> str:
@@ -412,6 +472,31 @@ class Settings(BaseSettings):
         # Raises when a username, from the env or the URL, has no password.
         self.redis_from_url_args()
         return self
+
+    @model_validator(mode="after")
+    def minio_quartet_is_complete(self) -> Self:
+        secret = ""
+        if self.minio_secret_key is not None:
+            secret = self.minio_secret_key.get_secret_value()
+        filled = (
+            bool(self.minio_endpoint),
+            bool(self.minio_bucket),
+            bool(self.minio_access_key),
+            bool(secret),
+        )
+        if any(filled) and not all(filled):
+            raise ValueError(
+                "MINIO_ENDPOINT, MINIO_BUCKET, MINIO_ACCESS_KEY, and "
+                "MINIO_SECRET_KEY must all be set or all be empty"
+            )
+        return self
+
+    def minio_configured(self) -> bool:
+        """True when the four connection fields are set. The bucket is a second copy."""
+        secret = ""
+        if self.minio_secret_key is not None:
+            secret = self.minio_secret_key.get_secret_value()
+        return bool(self.minio_endpoint and self.minio_bucket and self.minio_access_key and secret)
 
     def redis_from_url_args(self) -> tuple[str, dict[str, str]]:
         """URL and credential kwargs for ``Redis.from_url``.

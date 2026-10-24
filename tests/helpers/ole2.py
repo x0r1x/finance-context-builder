@@ -36,6 +36,7 @@ def write_ole2(path: Path, streams: tuple[str, ...] | list[str]) -> Path:
     difat = [0] + [_FREE] * 108
     struct.pack_into("<109I", header, 76, *difat)
     body = struct.pack(f"<{_SECTOR // 4}I", *fat) + b"".join(entries)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(bytes(header) + body)
     return path
 

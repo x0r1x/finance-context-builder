@@ -76,7 +76,7 @@ def test_xls_job_converts_and_succeeds(tmp_path: Path, monkeypatch) -> None:
     assert body["status"] == "succeeded", body
     book = _book_dir(tmp_path, job_id)
     assert (book / "source.xls").is_file()
-    assert (book / "source.xlsx").is_file()
+    assert (book / "source" / "source.xlsx").is_file()
 
 
 def test_failed_conversion_fails_the_job_with_its_code(tmp_path: Path, monkeypatch) -> None:

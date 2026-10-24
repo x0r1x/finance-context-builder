@@ -18,6 +18,7 @@ dependencies = [
     "uvicorn>=0.32",
     "xlrd>=2.0.2",
     "rq>=2.12,<3",
+    "duckdb>=2.0.0",
 ]
 
 [dependency-groups]

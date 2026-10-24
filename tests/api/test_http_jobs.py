@@ -104,8 +104,9 @@ def test_repeated_upload_reuses_parse_and_compile(client: TestClient, tmp_path: 
     book_dir = _book_dir(tmp_path, job_id)
     sentinel = book_dir / "raw" / "keep-on-publisher-change"
     sentinel.write_text("keep", encoding="utf-8")
-    (book_dir / "layout.json").write_text("{}", encoding="utf-8")
-    meta_path = job_dir / "meta.json"
+    (book_dir / "layout" / "layout.json").parent.mkdir(parents=True, exist_ok=True)
+    (book_dir / "layout" / "layout.json").write_text("{}", encoding="utf-8")
+    meta_path = job_dir / "meta" / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["publisher"] = "stale"
     meta_path.write_text(json.dumps(meta), encoding="utf-8")
@@ -119,22 +120,23 @@ def test_repeated_upload_reuses_parse_and_compile(client: TestClient, tmp_path: 
         for name in ("cells.parquet", "edges.parquet", "cell_edges.parquet")
     }
 
-    (job_dir / "ir" / "graph_edges.parquet").write_bytes(b"stale-graph-edges")
+    (job_dir / "graph" / "edges.parquet").parent.mkdir(parents=True, exist_ok=True)
+    (job_dir / "graph" / "edges.parquet").write_bytes(b"stale-graph-edges")
     repeated = client.post("/v1/context-jobs", files=files)
     assert repeated.status_code == 202
     assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
 
     assert sentinel.read_text(encoding="utf-8") == "keep"
-    assert (book_dir / "source.xlsx").is_file()
+    assert (book_dir / "source" / "source.xlsx").is_file()
     assert (book_dir / "raw" / "workbook.json").is_file()
     for name, payload in ir_bytes.items():
         assert (book_dir / "ir" / name).read_bytes() == payload
-    layout = json.loads((book_dir / "layout.json").read_text(encoding="utf-8"))
+    layout = json.loads((book_dir / "layout" / "layout.json").read_text(encoding="utf-8"))
     assert "sheets" in layout
-    assert (job_dir / "context.json").is_file()
-    assert (job_dir / "context.md").is_file()
-    assert (job_dir / "ir" / "graph_edges.parquet").is_file()
-    assert (job_dir / "ir" / "graph_edges.parquet").read_bytes() != b"stale-graph-edges"
+    assert (job_dir / "context" / "context.json").is_file()
+    assert (job_dir / "context" / "context.md").is_file()
+    assert (job_dir / "graph" / "edges.parquet").is_file()
+    assert (job_dir / "graph" / "edges.parquet").read_bytes() != b"stale-graph-edges"
 
 
 def test_repeat_post_keeps_ready_snapshot(client: TestClient, tmp_path: Path) -> None:
@@ -143,13 +145,13 @@ def test_repeat_post_keeps_ready_snapshot(client: TestClient, tmp_path: Path) ->
     job_id = created.json()["job_id"]
     assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
     job_dir = _job_dir(tmp_path, job_id)
-    context = (job_dir / "context.json").read_bytes()
+    context = (job_dir / "context" / "context.json").read_bytes()
     sentinel = job_dir / "graph-edges.json"
     sentinel.write_text("keep", encoding="utf-8")
     repeated = _upload(client, source)
     assert repeated.status_code == 202
     assert repeated.json()["status"] not in {"queued", "running"}
-    assert (job_dir / "context.json").read_bytes() == context
+    assert (job_dir / "context" / "context.json").read_bytes() == context
     assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
@@ -159,9 +161,17 @@ def test_ready_post_logs_job_reuse_and_does_not_launch(tmp_path: Path, caplog) -
     job_id = job_id_for(sha256_bytes(data))
     dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
-    for name in ("context.json", "context.md", "graph.json", "graph.md"):
-        (dest / name).write_text("{}\n", encoding="utf-8")
-    (dest / "meta.json").write_text(
+    for name in (
+        "context/context.json",
+        "context/context.md",
+        "graph/graph.json",
+        "graph/graph.md",
+    ):
+        path = dest / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps(
             {
                 "status": "succeeded",
@@ -293,7 +303,8 @@ def test_get_job_vanished_meta_uses_the_live_run(tmp_path: Path, monkeypatch) ->
     with _app(tmp_path) as client:
         dest = client.app.state.ctx.store.dest_dir(job_id)
         dest.mkdir(parents=True)
-        (dest / "meta.json").write_text(
+        (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+        (dest / "meta" / "meta.json").write_text(
             '{"status":"running","stage":"layout"}\n', encoding="utf-8"
         )
         ctx = client.app.state.ctx
@@ -367,7 +378,8 @@ def test_dead_queued_job_relaunches(client: TestClient, tmp_path: Path) -> None:
     job_id = job_id_for(sha256_bytes(data))
     dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps(
             {
                 "job_id": job_id,
@@ -384,7 +396,7 @@ def test_dead_queued_job_relaunches(client: TestClient, tmp_path: Path) -> None:
     body = response.json()
     assert body["job_id"] == job_id
     assert body["status"] == "queued"
-    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert stored["generation"] == 2
 
 
@@ -417,26 +429,28 @@ def test_startup_leaves_a_running_job_on_disk(tmp_path: Path) -> None:
     job_id = "ab" * 32
     dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps(
             {"job_id": job_id, "status": "running", "stage": "parse", "generation": 2}
         ),
         encoding="utf-8",
     )
     with _app(tmp_path):
-        stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+        stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert stored["status"] == "running"
     assert stored["stage"] == "parse"
     assert "error" not in stored
     assert stored["generation"] == 2
-    assert not (dest / "context.json").exists()
+    assert not (dest / "context" / "context.json").exists()
 
 
 def test_get_marks_orphaned_running_job(client: TestClient, tmp_path: Path) -> None:
     job_id = "cd" * 32
     dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps(
             {
                 "job_id": job_id,
@@ -452,4 +466,4 @@ def test_get_marks_orphaned_running_job(client: TestClient, tmp_path: Path) -> N
     body = response.json()
     assert body["status"] == "failed"
     assert body["error"] == "queue_lost"
-    assert not (dest / "context.json").exists()
+    assert not (dest / "context" / "context.json").exists()

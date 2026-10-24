@@ -28,12 +28,13 @@ def _run(
     )
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None)).run(
         dest, job_id="variant-lag", source_filename="model.xlsx"
     )
-    graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
-    edges = read_parquet(dest / "ir" / "graph_edges.parquet")
+    graph = json.loads((dest / "graph" / "graph.json").read_text(encoding="utf-8"))
+    edges = read_parquet(dest / "graph" / "edges.parquet")
     return graph, edges
 
 

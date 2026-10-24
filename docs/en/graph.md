@@ -17,8 +17,8 @@ One fact, one place.
 | Formula, AST, cell cache | `ir/cells.parquet` |
 | References as written in the formula (a range is one target, named ranges) | `ir/edges.parquet` |
 | Cell→cell after expand: `dangling` / `dangling_reason` / `status` / `reason` / `evidence` / `range_ref` / `truncated`. `col_offset` and `period_lag` are empty here | `ir/cell_edges.parquet` |
-| `col_offset` and `period_lag` after graph. Graph does not rewrite `cell_edges` | `ir/graph_edges.parquet` |
-| `row_key`, `period_id`, `node_type` (including `empty` for verified blank cells) | `ir/graph_index.parquet`; a formula also has `links[].row_key` and `links[].period_id` |
+| `col_offset` and `period_lag` after graph. Graph does not rewrite `cell_edges` | `graph/edges.parquet` |
+| `row_key`, `period_id`, `node_type` (including `empty` for verified blank cells) | `graph/index.parquet`; a formula also has `links[].row_key` and `links[].period_id` |
 | Counts (`nodes` / `edges` are cell-level parquet sizes), `iterate`, cycles, `circularity_hints`, `dangling_classes`, and `links[]` with `formula_class` | `graph.json` and the same in `graph.md` (schema `1.7.0`, Class column) |
 | Every `<c>` on a sheet: `populated` or `styled_blank` | `raw/cell_presence.parquet` |
 | Report row: label, one row formula, cached series per axis, value status, scale factor, normalized values | `context.json` / `context.md` (schema `1.14.0`, axes in `axes`) |
@@ -29,11 +29,11 @@ One fact, one place.
 
 ## Range nodes
 
-A whole column or row (`A:A`, `1:1`) and a rectangle over `RANGE_NODE_MIN_CELLS` cells (default 64) are range nodes. In `ir/cell_edges.parquet` and `ir/graph_edges.parquet` the formula has one `kind=range` edge whose `target` is the node id (`Data!A:A`, `Data!B2:B5000`, `Data!3:3`; a cell id has no colon) and whose `range_ref` is the text from the formula. Nothing else is written for the node: its cells come from its bounds and the book's cells when a reader needs them. A copied-down `SUMIF(A:A, ...)` or a running total `SUM($B$2:B{n})` costs one edge per formula, so edges grow with formulas, not with formulas times cells. A range on a missing sheet, or on a sheet with no cells, and a range of up to `RANGE_NODE_MIN_CELLS` cells expand per formula as before, blank members and the `RANGE_EXPAND_CAP` cut included.
+A whole column or row (`A:A`, `1:1`) and a rectangle over `RANGE_NODE_MIN_CELLS` cells (default 64) are range nodes. In `ir/cell_edges.parquet` and `graph/edges.parquet` the formula has one `kind=range` edge whose `target` is the node id (`Data!A:A`, `Data!B2:B5000`, `Data!3:3`; a cell id has no colon) and whose `range_ref` is the text from the formula. Nothing else is written for the node: its cells come from its bounds and the book's cells when a reader needs them. A copied-down `SUMIF(A:A, ...)` or a running total `SUM($B$2:B{n})` costs one edge per formula, so edges grow with formulas, not with formulas times cells. A range on a missing sheet, or on a sheet with no cells, and a range of up to `RANGE_NODE_MIN_CELLS` cells expand per formula as before, blank members and the `RANGE_EXPAND_CAP` cut included.
 
 What stays the same as per-formula expansion, and is tested against it: `links[]` (`formula_class`, `refs`), `cycles` (members and class), `dangling`, and trace nodes and edges. The edge into a node carries the `col_offset` and `period_lag` of the node's first cell (its corner, or the first present cell of a whole column or row), the edge an expansion listed first. `formula_class` takes the lags of every column the node covers. Cycles are found through the node to the formula cells inside it, and only the formula-to-cell edges an expansion would have had vote on `iterative_ok`.
 
-What changes: `edges` and `kinds.range` count one edge per formula and node; blank cells inside a node are not `node_type=empty` rows of `ir/graph_index.parquet` and are not counted in `dangling_classes.empty_range_member` (an expansion counted them only within its first 2000 cells); `truncated` no longer lists formulas with a node, since a node is never cut.
+What changes: `edges` and `kinds.range` count one edge per formula and node; blank cells inside a node are not `node_type=empty` rows of `graph/index.parquet` and are not counted in `dangling_classes.empty_range_member` (an expansion counted them only within its first 2000 cells); `truncated` no longer lists formulas with a node, since a node is never cut.
 
 Trace walks through a node and never lists it as a node. Precedents of a formula are the filled cells inside the node, row then column. At most `TRACE_RANGE_MEMBERS` of them (default 200, 0 for all; the trace endpoints also take `range_members`) are followed; the edge then has `members_total` and `members_shown`, and `trace.md` lists such ranges under "Ranges not followed in full". Dependents of a cell include every formula that reads a node containing the cell, found through an index of node bounds. A blank cell inside a node can be a trace origin.
 
@@ -102,5 +102,5 @@ Expanded ranges stay in IR. The public link keeps one range ref.
 
 - EBITDA `=SUM(J9:J12)` in `links` is one ref to the range. The cell expansion stays in `ir/cell_edges.parquet`.
 - Blank cells inside `INDEX(J8:O8)` are `empty` / `actual_blank_cell` in parquet and a `dangling_classes` counter, not a parser error and not a ref in `links`. A single reference to the same blank cell is `empty_ref`. Trace does not show those blank addresses.
-- `P&L` Gross revenues `=Operation!…` with `C[-1]` gets `period_lag` ≠ `same` in `ir/graph_edges.parquet`. In `ir/cell_edges.parquet` the lag stays empty.
+- `P&L` Gross revenues `=Operation!…` with `C[-1]` gets `period_lag` ≠ `same` in `graph/edges.parquet`. In `ir/cell_edges.parquet` the lag stays empty.
 - From the labels `EBITDA` / `CFADS`, trace reaches Input Assumptions (traffic, inflation, rates) when the formulas are linked that way.

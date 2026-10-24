@@ -5,18 +5,18 @@ from pathlib import Path
 from finance_context.app.publisher import STAGE_ORDER
 
 _PUBLISHED = (
-    "context.json",
-    "context.md",
-    "context.md.renderer",
+    "context/context.json",
+    "context/context.md",
+    "context/context.md.renderer",
 )
 _GRAPH = (
-    "graph.json",
-    "graph.md",
+    "graph/graph.json",
+    "graph/graph.md",
     "graph-edges.json",
     "graph-dangling.json",
     "formulas.json",
 )
-_GRAPH_IR = ("graph_index.parquet", "graph_edges.parquet")
+_GRAPH_IR = ("graph/index.parquet", "graph/edges.parquet")
 _FORMULA_IR = ("cells.parquet", "edges.parquet", "cell_edges.parquet", "compile.json")
 _RAW = ("cells.parquet", "cell_presence.parquet", "workbook.json")
 
@@ -51,12 +51,11 @@ def clear_downstream_artifacts(
     if reached("graph"):
         for name in _GRAPH:
             (dest / name).unlink(missing_ok=True)
-        ir = dest / "ir"
         for name in _GRAPH_IR:
-            (ir / name).unlink(missing_ok=True)
+            (dest / name).unlink(missing_ok=True)
     clear_shared_artifacts(book, normalized)
     if drop_meta:
-        (dest / "meta.json").unlink(missing_ok=True)
+        (dest / "meta" / "meta.json").unlink(missing_ok=True)
 
 
 def clear_shared_artifacts(book: Path, stale_from: str | None) -> bool:
@@ -77,9 +76,9 @@ def clear_shared_artifacts(book: Path, stale_from: str | None) -> bool:
 
     removed = False
     if reached("layout"):
-        removed |= _unlink(book / "layout.json")
+        removed |= _unlink(book / "layout" / "layout.json")
     ir = book / "ir"
-    drop_formula = reached("compile") or not (book / "source.xlsx").is_file()
+    drop_formula = reached("compile") or not (book / "source" / "source.xlsx").is_file()
     if drop_formula:
         for name in _FORMULA_IR:
             removed |= _unlink(ir / name)

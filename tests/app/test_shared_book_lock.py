@@ -40,9 +40,11 @@ def _hold(path: Path, started: threading.Event, release: threading.Event) -> Non
 def test_busy_lock_returns_retry_signal_without_deleting(tmp_path: Path) -> None:
     book = tmp_path / "book"
     book.mkdir()
-    layout = book / "layout.json"
+    layout = book / "layout" / "layout.json"
+    layout.parent.mkdir(parents=True, exist_ok=True)
     layout.write_text('{"sheets": []}\n', encoding="utf-8")
-    (book / "source.xlsx").write_bytes(b"PK\x03\x04")
+    (book / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (book / "source" / "source.xlsx").write_bytes(b"PK\x03\x04")
     write_shared_stamp(book)
     stamp = json.loads((book / "stages.json").read_text(encoding="utf-8"))
     stamp["publisher"] = "stale"
@@ -74,9 +76,11 @@ def test_concurrent_invalidation_leaves_the_readers_file(tmp_path: Path) -> None
     book = tmp_path / "book"
     ir = book / "ir"
     ir.mkdir(parents=True)
-    layout = book / "layout.json"
+    layout = book / "layout" / "layout.json"
+    layout.parent.mkdir(parents=True, exist_ok=True)
     layout.write_text('{"sheets": [{"name": "P&L"}]}\n', encoding="utf-8")
-    (book / "source.xlsx").write_bytes(b"PK\x03\x04")
+    (book / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (book / "source" / "source.xlsx").write_bytes(b"PK\x03\x04")
     (ir / "cells.parquet").write_bytes(b"ir-bytes")
     write_shared_stamp(book)
     stamp = json.loads((book / "stages.json").read_text(encoding="utf-8"))
@@ -167,22 +171,25 @@ def test_recorded_publish_is_not_widened_to_layout(tmp_path: Path) -> None:
     """
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "graph.json").write_text("keep-graph", encoding="utf-8")
-    (dest / "context.json").write_text("drop-context", encoding="utf-8")
+    (dest / "graph" / "graph.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "graph" / "graph.json").write_text("keep-graph", encoding="utf-8")
+    (dest / "context" / "context.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "context" / "context.json").write_text("drop-context", encoding="utf-8")
     record_rebuild_stage(dest, "publish")
-    assert session_stale_stage(json.loads((dest / "meta.json").read_text(encoding="utf-8"))) == (
-        "publish"
-    )
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
+    assert session_stale_stage(stored) == "publish"
     book = tmp_path / "book"
     book.mkdir()
-    (book / "layout.json").write_text('{"sheets": []}\n', encoding="utf-8")
-    (book / "source.xlsx").write_bytes(b"PK\x03\x04")
+    (book / "layout" / "layout.json").parent.mkdir(parents=True, exist_ok=True)
+    (book / "layout" / "layout.json").write_text('{"sheets": []}\n', encoding="utf-8")
+    (book / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (book / "source" / "source.xlsx").write_bytes(b"PK\x03\x04")
     write_shared_stamp(book)
     with shared_book_lock(book, job_id="job-pub", retry_after_sec=1, max_retries=0):
         invalidate_for_run(dest, book, shared=True, job_id="job-pub")
-    assert (dest / "graph.json").read_text(encoding="utf-8") == "keep-graph"
-    assert not (dest / "context.json").exists()
-    assert (book / "layout.json").is_file()
+    assert (dest / "graph" / "graph.json").read_text(encoding="utf-8") == "keep-graph"
+    assert not (dest / "context" / "context.json").exists()
+    assert (book / "layout" / "layout.json").is_file()
 
 
 def _book_with_body(tmp_path: Path) -> Path:
@@ -191,8 +198,10 @@ def _book_with_body(tmp_path: Path) -> Path:
     raw = book / "raw"
     ir.mkdir(parents=True)
     raw.mkdir()
-    (book / "source.xlsx").write_bytes(b"PK\x03\x04")
-    (book / "layout.json").write_text('{"sheets": []}\n', encoding="utf-8")
+    (book / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (book / "source" / "source.xlsx").write_bytes(b"PK\x03\x04")
+    (book / "layout" / "layout.json").parent.mkdir(parents=True, exist_ok=True)
+    (book / "layout" / "layout.json").write_text('{"sheets": []}\n', encoding="utf-8")
     (raw / "workbook.json").write_text("{}\n", encoding="utf-8")
     (ir / "cells.parquet").write_bytes(b"old-ir")
     (ir / "compile.json").write_text('{"schema_id":"old"}\n', encoding="utf-8")
@@ -208,8 +217,8 @@ def test_missing_sidecar_compile_rebuild_drops_formula_ir(tmp_path: Path) -> Non
         invalidate_for_run(dest, book, shared=True, job_id="job-c")
     assert not (book / "ir" / "cells.parquet").exists()
     assert not (book / "raw" / "workbook.json").exists()
-    assert not (book / "layout.json").exists()
-    assert (book / "source.xlsx").is_file()
+    assert not (book / "layout" / "layout.json").exists()
+    assert (book / "source" / "source.xlsx").is_file()
 
 
 def test_stamp_leaves_an_unrebuilt_compile_unverified(tmp_path: Path) -> None:
@@ -236,9 +245,12 @@ def test_stamp_keeps_a_compile_hash_that_already_matched(tmp_path: Path) -> None
 def test_queued_meta_keeps_generation_and_stage_map(tmp_path: Path) -> None:
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "context.json").write_text("{}", encoding="utf-8")
-    (dest / "graph.json").write_text("keep", encoding="utf-8")
-    (dest / "meta.json").write_text(
+    (dest / "context" / "context.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "context" / "context.json").write_text("{}", encoding="utf-8")
+    (dest / "graph" / "graph.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "graph" / "graph.json").write_text("keep", encoding="utf-8")
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps(
             {
                 "generation": 5,
@@ -254,7 +266,7 @@ def test_queued_meta_keeps_generation_and_stage_map(tmp_path: Path) -> None:
     )
     clear_downstream_artifacts(dest, "publish", drop_meta=False)
     record_rebuild_stage(dest, "publish", generation=6)
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["generation"] == 6
     assert meta["rebuild_from"] == "publish"
     assert meta["status"] == "queued"
@@ -262,8 +274,8 @@ def test_queued_meta_keeps_generation_and_stage_map(tmp_path: Path) -> None:
     assert meta["stages"]["compile"] == "abc"
     assert meta["source_filename"] == "model.xlsx"
     assert meta["warnings"] == ["w"]
-    assert not (dest / "context.json").exists()
-    assert (dest / "graph.json").read_text(encoding="utf-8") == "keep"
+    assert not (dest / "context" / "context.json").exists()
+    assert (dest / "graph" / "graph.json").read_text(encoding="utf-8") == "keep"
     assert session_stale_stage(meta) == "publish"
 
 

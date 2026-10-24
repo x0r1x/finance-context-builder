@@ -29,7 +29,7 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 
 def _read_meta(dest: Path) -> dict | None:
-    meta_path = dest / "meta.json"
+    meta_path = dest / "meta" / "meta.json"
     if not meta_path.is_file():
         return None
     try:
@@ -87,7 +87,7 @@ def build(
     source_changed = previous_sha != digest
     if source_changed:
         # `build -o` reuses the directory. Drop the other source name so a previous
-        # `source.xlsx` is not parsed in place of this `source.xls`. A repeat of the
+        # `source/source.xlsx` is not parsed in place of this `source.xls`. A repeat of the
         # same `.xls` keeps the converted sibling.
         sibling = LEGACY_SOURCE if kept == SOURCE else SOURCE
         (book / sibling).unlink(missing_ok=True)
@@ -96,10 +96,10 @@ def build(
         {"content_sha256": digest, "source_filename": source.name},
     )
     published = (
-        dest / "context.json",
-        dest / "context.md",
-        dest / "graph.json",
-        dest / "graph.md",
+        dest / "context" / "context.json",
+        dest / "context" / "context.md",
+        dest / "graph" / "graph.json",
+        dest / "graph" / "graph.md",
     )
     if not source_changed and all(path.is_file() for path in published) and _same_publisher(dest):
         for path in published:

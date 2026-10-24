@@ -138,7 +138,8 @@ def _run(root: Path, name: str, **settings: object) -> Path:
     source = _book(root / f"{name}.xlsx")
     dest = root / name
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     chosen = Settings(data_dir=root / f"data-{name}", _env_file=None, **settings)
     Pipeline(chosen).run(dest, job_id=f"{name}-job", source_filename=f"{name}.xlsx")
     return dest
@@ -190,7 +191,7 @@ def test_large_ranges_are_one_edge_with_no_member_rows(runs: tuple[Path, Path]) 
 
 def test_graph_links_and_cycles_match_expansion(runs: tuple[Path, Path]) -> None:
     nodes, expanded = runs
-    new, old = _json(nodes, "graph.json"), _json(expanded, "graph.json")
+    new, old = _json(nodes, "graph/graph.json"), _json(expanded, "graph/graph.json")
 
     def links(doc: dict) -> dict:
         return {link["cell"]: (link["formula_class"], link["refs"]) for link in doc["links"]}
@@ -232,7 +233,7 @@ def _member_rows(item: dict, present: dict[str, dict[int, set[int]]]) -> set[int
 
 def test_context_rows_match_expansion_and_nothing_is_cut(runs: tuple[Path, Path]) -> None:
     nodes, expanded = runs
-    new, old = _json(nodes, "context.json"), _json(expanded, "context.json")
+    new, old = _json(nodes, "context/context.json"), _json(expanded, "context/context.json")
     assert "ranges" not in old
     ranges = {item["id"]: item for item in new["ranges"]}
     present = _present_rows(nodes)
@@ -355,7 +356,8 @@ def test_a_new_threshold_recompiles_cached_ir(tmp_path: Path) -> None:
     # reuses the IR only when it was compiled under the same threshold.
     book = tmp_path / "book"
     book.mkdir()
-    (book / "source.xlsx").write_bytes(_book(tmp_path / "shared.xlsx").read_bytes())
+    (book / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (book / "source" / "source.xlsx").write_bytes(_book(tmp_path / "shared.xlsx").read_bytes())
 
     def j3_targets() -> set[str]:
         edges = read_parquet(book / "ir" / "cell_edges.parquet")
@@ -372,7 +374,7 @@ def test_a_new_threshold_recompiles_cached_ir(tmp_path: Path) -> None:
             assert "Data!C1:C150" in j3_targets()
     assert "Data!C1:C150" not in j3_targets()
     assert "Data!C2" in j3_targets()
-    graph_edges = read_parquet(tmp_path / "second" / "ir" / "graph_edges.parquet")
+    graph_edges = read_parquet(tmp_path / "second" / "graph" / "edges.parquet")
     j3_graph = {str(edge["target"]) for edge in graph_edges if edge["source"] == "Calc!J3"}
     assert len(j3_graph) == 150
 
@@ -413,12 +415,13 @@ def test_cycles_on_a_sheet_named_with_a_hash_are_reported(
     )
     dest = tmp_path / "out"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     if mode == "expanded":
         _expanded_mode(monkeypatch)
     settings = Settings(data_dir=tmp_path / "data", _env_file=None)
     Pipeline(settings).run(dest, job_id="hash-job", source_filename="hash.xlsx")
-    cycles = {tuple(c["members"]) for c in _json(dest, "graph.json")["cycles"]}
+    cycles = {tuple(c["members"]) for c in _json(dest, "graph/graph.json")["cycles"]}
     assert (f"{sheet}!A1", f"{sheet}!A50") in cycles
     assert (f"{sheet}!C1", f"{sheet}!D1") in cycles
 

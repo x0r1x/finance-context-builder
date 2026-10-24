@@ -34,24 +34,25 @@ def _model(path: Path) -> Path:
 def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     source = _model(tmp_path / "model.xlsx")
     parse_workbook(source, dest)
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     doc = pipeline.run(dest, job_id="job-test", source_filename="model.xlsx")
-    assert (dest / "context.json").is_file()
-    assert (dest / "graph.json").is_file()
-    assert (dest / "graph.md").is_file()
+    assert (dest / "context" / "context.json").is_file()
+    assert (dest / "graph" / "graph.json").is_file()
+    assert (dest / "graph" / "graph.md").is_file()
     assert not (dest / "graph-edges.json").exists()
     assert not (dest / "graph-dangling.json").exists()
     assert not (dest / "formulas.json").exists()
-    assert (dest / "context.md").is_file()
+    assert (dest / "context" / "context.md").is_file()
     assert doc.workbook.cell_count >= 1
     sheets = {row.sheet for block in doc.blocks for row in block.rows}
     assert "P&L" in sheets
     again = pipeline.run(dest, job_id="job-test")
     assert again.meta.job_id == doc.meta.job_id
-    document = json.loads((dest / "context.json").read_text(encoding="utf-8"))
+    document = json.loads((dest / "context" / "context.json").read_text(encoding="utf-8"))
     assert "generation" not in document["meta"]
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["generation"] == 0
     assert set(meta["stages"]) == {"compile", "layout", "graph", "publish"}
 

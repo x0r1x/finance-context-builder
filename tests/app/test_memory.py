@@ -141,6 +141,7 @@ def test_cgroup_v2_uses_the_tightest_memory_max(tmp_path: Path) -> None:
     pod = sysfs / "kubepods" / "pod"
     pod.mkdir(parents=True)
     (sysfs / "memory.max").write_text("max\n", encoding="utf-8")
+    (sysfs / "kubepods" / "memory.max").parent.mkdir(parents=True, exist_ok=True)
     (sysfs / "kubepods" / "memory.max").write_text("9000\n", encoding="utf-8")
     (pod / "memory.max").write_text("max\n", encoding="utf-8")
     proc = tmp_path / "cgroup"
@@ -153,6 +154,7 @@ def test_cgroup_v1_ignores_the_unlimited_sentinel(tmp_path: Path) -> None:
     slot = sysfs / "memory" / "docker" / "abc"
     slot.mkdir(parents=True)
     (slot / "memory.limit_in_bytes").write_text(str(1 << 62), encoding="utf-8")
+    (sysfs / "memory" / "memory.limit_in_bytes").parent.mkdir(parents=True, exist_ok=True)
     (sysfs / "memory" / "memory.limit_in_bytes").write_text("4000\n", encoding="utf-8")
     proc = tmp_path / "cgroup"
     proc.write_text("4:memory:/docker/abc\n", encoding="utf-8")
@@ -290,7 +292,7 @@ def test_run_job_process_refuses_over_budget_without_a_traceback(
     job_id = "job"
     shared = shared_book_dir(tmp_path, job_id)
     shared.mkdir(parents=True)
-    _book(shared / "source.xlsx")
+    _book(shared / "source" / "source.xlsx")
     # run_job_process is in-process here, so put the agent's score back afterwards.
     previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
     try:
@@ -299,7 +301,9 @@ def test_run_job_process_refuses_over_budget_without_a_traceback(
         Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
     captured = capsys.readouterr()
     text = captured.out + captured.err
-    meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads(
+        (session_job_dir(tmp_path, job_id) / "meta" / "meta.json").read_text(encoding="utf-8")
+    )
     assert meta["status"] == "failed"
     assert meta["error"] == "workbook_too_large"
     assert "too large" in meta["detail"]
@@ -322,7 +326,7 @@ def test_memory_error_in_the_child_is_workbook_too_large(
     job_id = "job"
     shared = shared_book_dir(tmp_path, job_id)
     shared.mkdir(parents=True)
-    _book(shared / "source.xlsx")
+    _book(shared / "source" / "source.xlsx")
     previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
     try:
         run_job_process(str(tmp_path), job_id)
@@ -330,7 +334,9 @@ def test_memory_error_in_the_child_is_workbook_too_large(
         Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
     captured = capsys.readouterr()
     text = captured.out + captured.err
-    meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads(
+        (session_job_dir(tmp_path, job_id) / "meta" / "meta.json").read_text(encoding="utf-8")
+    )
     assert meta["error"] == "workbook_too_large"
     assert "ran out of memory" in meta["detail"]
     assert "Traceback" not in text
@@ -363,13 +369,15 @@ def test_configured_cap_below_the_baseline_refuses_before_parse(
     job_id = "job"
     shared = shared_book_dir(tmp_path, job_id)
     shared.mkdir(parents=True)
-    _book(shared / "source.xlsx")
+    _book(shared / "source" / "source.xlsx")
     previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
     try:
         run_job_process(str(tmp_path), job_id)
     finally:
         Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
-    meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads(
+        (session_job_dir(tmp_path, job_id) / "meta" / "meta.json").read_text(encoding="utf-8")
+    )
     assert meta["error"] == "workbook_too_large"
     assert "below" in meta["detail"]
     assert not (shared / "raw" / "workbook.json").is_file()
@@ -638,13 +646,15 @@ def test_preflight_switch_off_lets_the_child_finish(tmp_path: Path, monkeypatch)
     job_id = "job"
     shared = shared_book_dir(tmp_path, job_id)
     shared.mkdir(parents=True)
-    _book(shared / "source.xlsx")
+    _book(shared / "source" / "source.xlsx")
     previous = Path("/proc/self/oom_score_adj").read_text(encoding="utf-8")
     try:
         run_job_process(str(tmp_path), job_id)
     finally:
         Path("/proc/self/oom_score_adj").write_text(previous, encoding="utf-8")
-    meta = json.loads((session_job_dir(tmp_path, job_id) / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads(
+        (session_job_dir(tmp_path, job_id) / "meta" / "meta.json").read_text(encoding="utf-8")
+    )
     assert meta["status"] == "succeeded"
 
 
@@ -657,7 +667,7 @@ def test_range_cap_env_truncates_in_the_child(tmp_path: Path, monkeypatch) -> No
     shared = shared_book_dir(tmp_path, job_id)
     shared.mkdir(parents=True)
     build_xlsx(
-        shared / "source.xlsx",
+        shared / "source" / "source.xlsx",
         sheets=[
             SheetSpec(
                 name="Data",

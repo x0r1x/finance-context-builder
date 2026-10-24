@@ -40,7 +40,7 @@ def test_build_reuses_a_snapshot_until_the_publisher_changes(
     dest = tmp_path / "out"
     data_dir = tmp_path / "data"
     build(source, output=dest, data_dir=data_dir)
-    context = dest / "context.json"
+    context = dest / "context" / "context.json"
     cells = dest / "ir" / "cells.parquet"
     raw = dest / "raw" / "workbook.json"
     assert context.is_file()
@@ -57,7 +57,7 @@ def test_build_reuses_a_snapshot_until_the_publisher_changes(
     assert context.stat().st_mtime_ns == stamped
     assert cells.read_bytes() == cell_bytes
 
-    meta_path = dest / "meta.json"
+    meta_path = dest / "meta" / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["publisher"] = "stale"
     meta_path.write_text(json.dumps(meta), encoding="utf-8")

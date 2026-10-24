@@ -34,7 +34,8 @@ def _meta(settings: Settings, job_id: str = _JOB, **fields: object) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     body = {"job_id": job_id, "status": "running", "stage": "parse", "generation": 1}
     body.update(fields)
-    (dest / "meta.json").write_text(json.dumps(body), encoding="utf-8")
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(json.dumps(body), encoding="utf-8")
 
 
 def _publish(settings: Settings, **fields: object) -> str | None:
@@ -188,7 +189,8 @@ def test_events_stay_inside_the_session(tmp_path: Path) -> None:
     root = tmp_path / "data"
     dest = root / "sessions" / "alpha" / "jobs" / _JOB
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps({"job_id": _JOB, "status": "succeeded", "stage": "done"}),
         encoding="utf-8",
     )

@@ -212,7 +212,7 @@ def test_stop_during_a_job_waits_out_the_grace_then_reports_lost(
             created = _upload(client, source)
             assert created.status_code == 202
             job_id = created.json()["job_id"]
-            meta = tmp_path / "data" / "sessions" / "embed" / "jobs" / job_id / "meta.json"
+            meta = tmp_path / "data" / "sessions" / "embed" / "jobs" / job_id / "meta" / "meta.json"
             assert _wait_until(lambda: _stage(meta) == "parse", timeout=30)
             started = time.monotonic()
             stop_for_serve(worker)

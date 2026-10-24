@@ -31,7 +31,8 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
     tmp_path: Path, dest: Path, monkeypatch
 ) -> None:
     source = _model(tmp_path / "model.xlsx")
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     reads: list[str] = []
     real = read_parquet
 
@@ -64,7 +65,7 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
     assert compiles == [1]
     assert not any(path.endswith("ir/cells.parquet") for path in reads)
 
-    for name in ("context.json", "context.md"):
+    for name in ("context/context.json", "context/context.md"):
         (dest / name).unlink()
     reads.clear()
     compiles.clear()

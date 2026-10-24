@@ -17,7 +17,8 @@ def _meta(path: Path, **fields: str) -> None:
         "schema_version": "1.13.0",
     }
     body.update(fields)
-    (path / "meta.json").write_text(json.dumps(body), encoding="utf-8")
+    (path / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (path / "meta" / "meta.json").write_text(json.dumps(body), encoding="utf-8")
 
 
 def test_list_finds_a_book_by_filename_without_reading_context(tmp_path: Path) -> None:
@@ -26,10 +27,12 @@ def test_list_finds_a_book_by_filename_without_reading_context(tmp_path: Path) -
     second = "a" * 64
     _meta(jobs / first, source_filename="notes.xlsx")
     _meta(jobs / second, source_filename="RVI-Project-Finance.xlsx", status="needs_input")
-    (jobs / second / "context.json").write_text("{not json", encoding="utf-8")
+    (jobs / second / "context" / "context.json").parent.mkdir(parents=True, exist_ok=True)
+    (jobs / second / "context" / "context.json").write_text("{not json", encoding="utf-8")
     (jobs / ("c" * 64)).mkdir()
     (jobs / ("d" * 64)).mkdir()
-    (jobs / ("d" * 64) / "meta.json").write_text("not-json", encoding="utf-8")
+    (jobs / ("d" * 64) / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (jobs / ("d" * 64) / "meta" / "meta.json").write_text("not-json", encoding="utf-8")
 
     listed = list_session_jobs(jobs, q="rvi")
     assert [item["job_id"] for item in listed] == [second]

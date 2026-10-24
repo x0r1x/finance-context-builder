@@ -36,10 +36,12 @@ def test_etag_match_is_strong(tmp_path: Path) -> None:
 def test_list_finds_a_book_by_filename(tmp_path: Path) -> None:
     write_slice_job(tmp_path / "data", _JOB)
     other = write_slice_job(tmp_path / "data", _OTHER)
-    meta = json.loads((other / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((other / "meta" / "meta.json").read_text(encoding="utf-8"))
     meta["source_filename"] = "notes.xlsx"
-    (other / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-    (other / "context.json").write_text("{not json", encoding="utf-8")
+    (other / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (other / "meta" / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    (other / "context" / "context.json").parent.mkdir(parents=True, exist_ok=True)
+    (other / "context" / "context.json").write_text("{not json", encoding="utf-8")
     with _client(tmp_path) as client:
         response = client.get("/v1/context-jobs", params={"q": "RVI"})
     assert response.status_code == 200
@@ -69,9 +71,10 @@ def test_catalog_etag_head_and_rewrite(tmp_path: Path) -> None:
         assert cached.status_code == 304
         assert cached.content == b""
         assert cached.headers["etag"] == etag
-        context = json.loads((dest / "context.json").read_text(encoding="utf-8"))
+        context = json.loads((dest / "context" / "context.json").read_text(encoding="utf-8"))
         context["warnings"] = ["rewritten catalog stamp for the etag test"]
-        (dest / "context.json").write_text(json.dumps(context), encoding="utf-8")
+        (dest / "context" / "context.json").parent.mkdir(parents=True, exist_ok=True)
+        (dest / "context" / "context.json").write_text(json.dumps(context), encoding="utf-8")
         second = client.get(f"/v1/context-jobs/{_JOB}/catalog")
         assert second.status_code == 200
         assert second.headers["etag"] != etag
@@ -138,7 +141,7 @@ def test_summary_has_counters_without_links(tmp_path: Path) -> None:
 
 def test_missing_graph_and_unknown_job(tmp_path: Path) -> None:
     dest = write_slice_job(tmp_path / "data", _JOB)
-    (dest / "graph.json").unlink()
+    (dest / "graph" / "graph.json").unlink()
     with _client(tmp_path) as client:
         not_ready = client.get(
             f"/v1/context-jobs/{_JOB}/observations",

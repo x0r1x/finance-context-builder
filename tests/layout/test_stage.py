@@ -56,7 +56,7 @@ def test_layout_writes_json_registers_axes_and_no_findings(
     parse_workbook(source, dest)
     compile_workbook(dest)
     layout = layout_workbook(dest)
-    assert (dest / "layout.json").is_file()
+    assert (dest / "layout" / "layout.json").is_file()
     assert not (dest / "candidates.json").exists()
     assert not (dest / "report.json").exists()
     assert len(layout.sheets[0].blocks) == 2
@@ -173,7 +173,7 @@ def test_layout_workbook_logs_cells_read_detect_and_write(tmp_path: Path) -> Non
 
     revenue = next(row for row in layout.sheets[0].blocks[0].rows if row.label == "Revenue")
     assert revenue.indent == 2
-    written = json.loads((dest / "layout.json").read_text(encoding="utf-8"))
+    written = json.loads((dest / "layout" / "layout.json").read_text(encoding="utf-8"))
     written_rows = written["sheets"][0]["blocks"][0]["rows"]
     assert next(row for row in written_rows if row["label"] == "Revenue")["indent"] == 2
 

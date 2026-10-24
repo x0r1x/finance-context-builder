@@ -28,12 +28,13 @@ from finance_context.settings import Settings
 def _write_meta(dest: Path, **fields: object) -> dict:
     dest.mkdir(parents=True, exist_ok=True)
     payload = dict(fields)
-    (dest / "meta.json").write_text(json.dumps(payload), encoding="utf-8")
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(json.dumps(payload), encoding="utf-8")
     return payload
 
 
 def _read_meta(dest: Path) -> dict:
-    return json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    return json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
 
 
 def _job(root: Path, session: str, job_id: str) -> Path:
@@ -338,8 +339,15 @@ def test_generation_two_failure_with_artifacts_relaunches(
     job_id = job_id_for(digest)
     dest = _job_dir(tmp_path, job_id)
     dest.mkdir(parents=True)
-    for name in ("context.json", "context.md", "graph.json", "graph.md"):
-        (dest / name).write_text("stale-artifact\n", encoding="utf-8")
+    for name in (
+        "context/context.json",
+        "context/context.md",
+        "graph/graph.json",
+        "graph/graph.md",
+    ):
+        path = dest / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("stale-artifact\n", encoding="utf-8")
     _write_meta(
         dest,
         job_id=job_id,
@@ -375,7 +383,7 @@ def test_generation_two_failure_with_artifacts_relaunches(
             stored = _read_meta(dest)
             assert stored["generation"] == 3
             assert stored["status"] == "running"
-            context = dest / "context.json"
+            context = dest / "context" / "context.json"
             stale = context.read_text(encoding="utf-8") if context.is_file() else ""
             assert stale != "stale-artifact\n"
     finally:
@@ -387,7 +395,7 @@ def _wait_meta_stage(dest: Path, stage: str) -> bool:
 
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        path = dest / "meta.json"
+        path = dest / "meta" / "meta.json"
         if path.is_file():
             try:
                 meta = json.loads(path.read_text(encoding="utf-8"))

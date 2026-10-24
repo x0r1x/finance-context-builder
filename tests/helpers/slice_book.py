@@ -242,15 +242,15 @@ def write_slice_job(data_dir: Path, job_id: str) -> Path:
     dest.mkdir(parents=True)
     context = sample_context(job_id=job_id)
     graph = sample_graph(job_id)
-    dest.joinpath("context.json").write_text(context.model_dump_json(), encoding="utf-8")
-    dest.joinpath("graph.json").write_text(
-        graph.model_dump_json(by_alias=True),
-        encoding="utf-8",
+    written = (
+        ("context", "context.json", context.model_dump_json()),
+        ("graph", "graph.json", graph.model_dump_json(by_alias=True)),
+        ("meta", "meta.json", json.dumps(context.meta.model_dump(mode="json"))),
     )
-    dest.joinpath("meta.json").write_text(
-        json.dumps(context.meta.model_dump(mode="json")),
-        encoding="utf-8",
-    )
+    for folder, name, text in written:
+        path = dest / folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
     return dest
 
 

@@ -53,10 +53,10 @@ def test_post_under_held_shared_lock_keeps_layout(tmp_path: Path) -> None:
         job_id = created.json()["job_id"]
         assert _wait_for_terminal(alpha, job_id)["status"] == "succeeded"
         book = root / "shared" / "books" / job_id
-        layout = book / "layout.json"
+        layout = book / "layout" / "layout.json"
         layout_bytes = layout.read_bytes()
         alpha_context = (
-            root / "sessions" / "alpha" / "jobs" / job_id / "context.json"
+            root / "sessions" / "alpha" / "jobs" / job_id / "context" / "context.json"
         ).read_bytes()
         held = threading.Event()
         release = threading.Event()
@@ -81,7 +81,7 @@ def test_post_under_held_shared_lock_keeps_layout(tmp_path: Path) -> None:
         assert not worker.is_alive()
         assert layout.read_bytes() == layout_bytes
         assert (
-            root / "sessions" / "alpha" / "jobs" / job_id / "context.json"
+            root / "sessions" / "alpha" / "jobs" / job_id / "context" / "context.json"
         ).read_bytes() == alpha_context
         body = alpha.get(f"/v1/context-jobs/{job_id}").json()
         assert body["status"] == "succeeded"
@@ -91,7 +91,7 @@ def test_post_under_held_shared_lock_keeps_layout(tmp_path: Path) -> None:
 def _wait_stage(dest: Path, stage: str) -> bool:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        path = dest / "meta.json"
+        path = dest / "meta" / "meta.json"
         if path.is_file():
             try:
                 meta = json.loads(path.read_text(encoding="utf-8"))
@@ -131,9 +131,14 @@ def test_post_other_session_keeps_shared_layout(
         _stop_workers(alpha)
         alpha.app.state.test_workers.clear()
         book = root / "shared" / "books" / job_id
-        layout = book / "layout.json"
+        layout = book / "layout" / "layout.json"
         layout_bytes = layout.read_bytes()
-        for name in ("context.json", "context.md", "graph.json", "graph.md"):
+        for name in (
+            "context/context.json",
+            "context/context.md",
+            "graph/graph.json",
+            "graph/graph.md",
+        ):
             (dest / name).unlink()
         pause.write_text("hold", encoding="utf-8")
         monkeypatch.setenv("FINANCE_CONTEXT_PAUSE_STAGE", "layout_reuse")
@@ -150,4 +155,4 @@ def test_post_other_session_keeps_shared_layout(
         assert _wait_for_terminal(alpha, job_id)["status"] == "succeeded"
         assert _wait_for_terminal(beta, job_id)["status"] == "succeeded"
         assert layout.read_bytes() == layout_bytes
-        assert (dest / "context.json").is_file()
+        assert (dest / "context" / "context.json").is_file()

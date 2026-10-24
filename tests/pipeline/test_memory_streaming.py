@@ -1,10 +1,11 @@
-"""Streaming memory switches stay byte-identical on JSON and content-equal on parquet."""
+"""Streaming switches keep JSON bytes and parquet values. Raw bytes may differ."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pydantic import ValidationError
@@ -16,11 +17,11 @@ from finance_context.memory import trim_process_heap
 from finance_context.settings import Settings
 
 _JSON = (
-    "context.json",
-    "context.md",
-    "graph.json",
-    "graph.md",
-    "layout.json",
+    "context/context.json",
+    "context/context.md",
+    "graph/graph.json",
+    "graph/graph.md",
+    "layout/layout.json",
     "raw/workbook.json",
 )
 _PARQUET = (
@@ -29,8 +30,8 @@ _PARQUET = (
     "ir/cells.parquet",
     "ir/edges.parquet",
     "ir/cell_edges.parquet",
-    "ir/graph_edges.parquet",
-    "ir/graph_index.parquet",
+    "graph/edges.parquet",
+    "graph/index.parquet",
 )
 
 
@@ -64,7 +65,7 @@ def _settings(tmp_path: Path, **overrides: object) -> Settings:
 def _run(tmp_path: Path, name: str, **overrides: object) -> Path:
     dest = tmp_path / name
     dest.mkdir()
-    source = dest / "source.xlsx"
+    source = dest / "source" / "source.xlsx"
     _model(source)
     Pipeline(_settings(tmp_path, **overrides)).run(
         dest, job_id="job", source_filename="model.xlsx"
@@ -73,7 +74,14 @@ def _run(tmp_path: Path, name: str, **overrides: object) -> Path:
 
 
 def _same_table(left: Path, right: Path) -> bool:
-    return pq.read_table(left).equals(pq.read_table(right))
+    """Compare parquet values. DuckDB marks filled columns not-null; Arrow does not."""
+    return _nullable(pq.read_table(left)).equals(_nullable(pq.read_table(right)))
+
+
+def _nullable(table: pa.Table) -> pa.Table:
+    schema = table.schema
+    fields = [field.with_nullable(True) for field in schema]
+    return table.cast(pa.schema(fields))
 
 
 def test_defaults_match_every_switch_off(tmp_path: Path) -> None:
@@ -93,9 +101,11 @@ def test_defaults_match_every_switch_off(tmp_path: Path) -> None:
     )
     for name in _JSON:
         assert (on / name).read_bytes() == (off / name).read_bytes(), name
+    value_only = {"raw/cells.parquet", "raw/cell_presence.parquet", "ir/cells.parquet"}
     for name in _PARQUET:
         assert _same_table(on / name, off / name), name
-        assert (on / name).read_bytes() == (off / name).read_bytes(), name
+        if name not in value_only:
+            assert (on / name).read_bytes() == (off / name).read_bytes(), name
 
 
 def test_streaming_parse_matches_dom_bytes(tmp_path: Path) -> None:
@@ -107,8 +117,11 @@ def test_streaming_parse_matches_dom_bytes(tmp_path: Path) -> None:
     dom.mkdir()
     parse_workbook(source, streamed, settings=_settings(tmp_path, parse_streaming=True))
     parse_workbook(source, dom, settings=_settings(tmp_path, parse_streaming=False))
-    for name in ("raw/cells.parquet", "raw/cell_presence.parquet", "raw/workbook.json"):
-        assert (streamed / name).read_bytes() == (dom / name).read_bytes()
+    for name in ("raw/cells.parquet", "raw/cell_presence.parquet"):
+        assert _same_table(streamed / name, dom / name), name
+    assert (streamed / "raw" / "workbook.json").read_bytes() == (
+        dom / "raw" / "workbook.json"
+    ).read_bytes()
 
 
 def test_row_group_of_one_keeps_values(tmp_path: Path) -> None:
@@ -118,6 +131,7 @@ def test_row_group_of_one_keeps_values(tmp_path: Path) -> None:
         assert (wide / name).read_bytes() == (split / name).read_bytes(), name
     for name in ("raw/cells.parquet", "raw/cell_presence.parquet"):
         assert (wide / name).read_bytes() == (split / name).read_bytes(), name
+    assert _same_table(wide / "ir" / "cells.parquet", split / "ir" / "cells.parquet")
     edges = split / "ir" / "cell_edges.parquet"
     assert pq.ParquetFile(edges).num_row_groups > 1
     assert _same_table(wide / "ir" / "cell_edges.parquet", edges)
@@ -125,7 +139,7 @@ def test_row_group_of_one_keeps_values(tmp_path: Path) -> None:
     materialized = _run(
         tmp_path, "materialized", parquet_row_group_rows=1, graph_stream=False
     )
-    for name in ("ir/graph_edges.parquet", "ir/graph_index.parquet"):
+    for name in ("graph/edges.parquet", "graph/index.parquet"):
         assert _same_table(split / name, materialized / name), name
 
 

@@ -85,4 +85,10 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("JOB_EVENTS_TTL_SEC", "job_events_ttl_sec"),
     EnvSpec("JOB_EVENTS_HEARTBEAT_SEC", "job_events_heartbeat_sec"),
     EnvSpec("JOB_EVENTS_MAX_CONNECTIONS", "job_events_max_connections"),
+    EnvSpec("MINIO_ENDPOINT", "minio_endpoint"),
+    EnvSpec("MINIO_BUCKET", "minio_bucket"),
+    EnvSpec("MINIO_ACCESS_KEY", "minio_access_key"),
+    EnvSpec("MINIO_SECRET_KEY", "minio_secret_key"),
+    EnvSpec("MINIO_PREFIX", "minio_prefix"),
+    EnvSpec("MINIO_REGION", "minio_region"),
 )

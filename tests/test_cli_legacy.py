@@ -59,7 +59,7 @@ def _build(tmp_path: Path, source: Path):
         app,
         ["build", str(source), "-o", str(dest), "--data-dir", str(tmp_path / "data")],
     )
-    meta_path = dest / "meta.json"
+    meta_path = dest / "meta" / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
     return result, dest, meta
 
@@ -74,7 +74,7 @@ def test_xls_without_libreoffice_fails_with_a_code(tmp_path: Path) -> None:
     assert meta["status"] == "failed"
     assert meta["error"] == "unsupported_media_type"
     assert (dest / "source.xls").is_file()
-    assert not (dest / "source.xlsx").exists()
+    assert not (dest / "source" / "source.xlsx").exists()
 
 
 def _labeled(path: Path, label: str) -> Path:
@@ -101,7 +101,7 @@ def test_stale_xlsx_is_not_reused_for_a_new_xls(tmp_path: Path, monkeypatch) -> 
     first = _labeled(tmp_path / "first.xlsx", "Revenue")
     result, dest, _meta = _build(tmp_path, first)
     assert result.exit_code == 0, result.output
-    assert "Revenue" in (dest / "context.json").read_text(encoding="utf-8")
+    assert "Revenue" in (dest / "context" / "context.json").read_text(encoding="utf-8")
     tariff = _labeled(tmp_path / "tariff.xlsx", "Tariff")
     monkeypatch.setenv("SOFFICE_BIN", str(_fake_soffice(tmp_path, tariff)))
     source = write_ole2(tmp_path / "model.xls", XLS_STREAMS)
@@ -109,7 +109,7 @@ def test_stale_xlsx_is_not_reused_for_a_new_xls(tmp_path: Path, monkeypatch) -> 
     assert result.exit_code == 0, result.output
     assert result.output.strip().splitlines()[-1] == "succeeded"
     assert meta["status"] == "succeeded"
-    labels = (dest / "context.json").read_text(encoding="utf-8")
+    labels = (dest / "context" / "context.json").read_text(encoding="utf-8")
     assert "Tariff" in labels
     assert "Revenue" not in labels
 
@@ -131,7 +131,7 @@ def test_missing_owner_digest_does_not_keep_a_stale_xlsx(
     assert result.exit_code == 0, result.output
     assert result.output.strip().splitlines()[-1] == "succeeded"
     assert meta["status"] == "succeeded"
-    labels = (dest / "context.json").read_text(encoding="utf-8")
+    labels = (dest / "context" / "context.json").read_text(encoding="utf-8")
     assert "Tariff" in labels
     assert "Revenue" not in labels
 
@@ -144,12 +144,12 @@ def test_xls_is_converted_by_soffice(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert result.output.strip().splitlines()[-1] == "succeeded"
     assert meta["status"] == "succeeded"
-    assert (dest / "source.xlsx").is_file()
-    assert (dest / "context.json").is_file()
+    assert (dest / "source" / "source.xlsx").is_file()
+    assert (dest / "context" / "context.json").is_file()
     again, dest, _meta = _build(tmp_path, source)
     assert again.exit_code == 0, again.output
     assert again.output.strip().splitlines()[-1] == "reused"
-    assert (dest / "source.xlsx").is_file()
+    assert (dest / "source" / "source.xlsx").is_file()
     assert (dest / "source.xls").is_file()
 
 

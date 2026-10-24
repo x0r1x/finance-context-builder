@@ -118,7 +118,7 @@ def _trace(
     dest = ctx.store.dest_dir(job_id)
     if not dest.exists():
         raise ApiError(404, "not_found")
-    if not (dest / "graph.json").is_file():
+    if not (dest / "graph" / "graph.json").is_file():
         raise ApiError(409, "report_not_ready")
     return trace_graph(
         dest,

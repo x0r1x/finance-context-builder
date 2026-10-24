@@ -1,6 +1,6 @@
 """Legacy `.xls` books: the port to an external converter and the shared-book source swap.
 
-The upload is kept as `source.xls`. Parse converts it once into `source.xlsx`
+The upload is kept as `source.xls`. Parse converts it once into `source/source.xlsx`
 and every later stage reads that file.
 """
 
@@ -16,7 +16,7 @@ from finance_context.excel.xls_cache import overlay_xls_cache
 from finance_context.excel.zip_guard import open_xlsx_zip
 from finance_context.store.fs import atomic_replace
 
-SOURCE = "source.xlsx"
+SOURCE = "source/source.xlsx"
 LEGACY_SOURCE = "source.xls"
 NO_CONVERTER = (
     "legacy .xls needs LibreOffice (soffice) to convert it to .xlsx; "
@@ -58,7 +58,7 @@ def ensure_xlsx(book: Path, converter: XlsConverter) -> Path:
     target = book / SOURCE
     legacy = book / LEGACY_SOURCE
     if target.is_file() and not is_ole2_file(target):
-        # A converted book keeps both names, with source.xlsx written last.
+        # A converted book keeps both names, with source/source.xlsx written last.
         # A newer source.xls beside an older zip is a different workbook
         # (`build -o` used to leave the previous xlsx in place).
         if not legacy.is_file() or legacy.stat().st_mtime_ns <= target.stat().st_mtime_ns:
@@ -74,5 +74,6 @@ def ensure_xlsx(book: Path, converter: XlsConverter) -> Path:
         open_xlsx_zip(converted).close()
         # LibreOffice recalculates. Put Excel's cached values back before parse.
         overlay_xls_cache(legacy, converted)
+        target.parent.mkdir(parents=True, exist_ok=True)
         atomic_replace(converted, target)
     return target

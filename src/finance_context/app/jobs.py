@@ -27,7 +27,7 @@ def list_session_jobs(
             continue
         if resolved != root.joinpath(path.name):
             continue
-        meta = _read_meta(path / "meta.json")
+        meta = _read_meta(path / "meta" / "meta.json")
         if meta is None:
             continue
         if status is not None and meta.get("status") != status:

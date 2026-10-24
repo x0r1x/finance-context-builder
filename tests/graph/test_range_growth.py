@@ -45,13 +45,14 @@ def _measure(root: Path, rows: int) -> tuple[int, int, int]:
     source = _book(root / f"book{rows}.xlsx", rows)
     dest = root / f"job{rows}"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     Pipeline(Settings(data_dir=root / f"data{rows}", _env_file=None)).run(
         dest, job_id=f"g{rows}", source_filename="book.xlsx"
     )
     cell_edges = len(read_parquet(dest / "ir" / "cell_edges.parquet"))
-    graph_edges = len(read_parquet(dest / "ir" / "graph_edges.parquet"))
-    context_bytes = (dest / "context.json").stat().st_size
+    graph_edges = len(read_parquet(dest / "graph" / "edges.parquet"))
+    context_bytes = (dest / "context" / "context.json").stat().st_size
     return cell_edges, graph_edges, context_bytes
 
 

@@ -100,7 +100,7 @@ def record_rebuild_stage(
     document. ``generation`` is the bus generation for this launch; startup
     reads it if the process dies during the busy wait.
     """
-    meta_path = dest / "meta.json"
+    meta_path = dest / "meta" / "meta.json"
     if stale_from is None and generation is None and not meta_path.is_file():
         return
 
@@ -285,14 +285,14 @@ def _read_json_object(path: Path) -> dict | None:
 
 def _cache_has_body(book: Path) -> bool:
     return (
-        (book / "layout.json").is_file()
+        (book / "layout" / "layout.json").is_file()
         or (book / "raw" / "workbook.json").is_file()
         or (book / "ir" / "cells.parquet").is_file()
     )
 
 
 def _read_meta(dest: Path) -> dict | None:
-    path = dest / "meta.json"
+    path = dest / "meta" / "meta.json"
     if not path.is_file():
         return None
     try:

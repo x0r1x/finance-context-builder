@@ -24,14 +24,15 @@ def test_real_models_produce_context(tmp_path: Path, workbook: Path) -> None:
         pytest.skip(f"missing {workbook}")
     dest = tmp_path / workbook.stem
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(workbook.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(workbook.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     doc = pipeline.run(dest, job_id=workbook.stem, source_filename=workbook.name)
     assert (dest / "raw" / "workbook.json").is_file()
-    assert (dest / "context.json").is_file()
-    assert (dest / "context.md").is_file()
-    assert (dest / "graph.json").is_file()
-    assert (dest / "graph.md").is_file()
+    assert (dest / "context" / "context.json").is_file()
+    assert (dest / "context" / "context.md").is_file()
+    assert (dest / "graph" / "graph.json").is_file()
+    assert (dest / "graph" / "graph.md").is_file()
     assert doc.workbook.cell_count > 0
     assert doc.meta.status == "succeeded"
     assert doc.meta.questions == []
