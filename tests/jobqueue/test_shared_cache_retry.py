@@ -63,7 +63,7 @@ def _prepare(tmp_path: Path, *, generation: int = 1, retries: int = 0) -> Path:
 def _busy_horse(monkeypatch: pytest.MonkeyPatch, job: _Job | None) -> None:
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs._admission_waiting",
-        lambda _settings, _budget: False,
+        lambda _settings: False,
     )
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs.spawn_child",
@@ -136,7 +136,7 @@ def test_requeue_does_not_create_a_second_job(
     # Leave get_current_job alone so SimpleWorker runs the real job object.
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs._admission_waiting",
-        lambda _settings, _budget: False,
+        lambda _settings: False,
     )
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs.spawn_child",

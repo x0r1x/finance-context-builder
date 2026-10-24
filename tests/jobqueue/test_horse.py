@@ -131,7 +131,7 @@ def test_sigterm_with_a_retry_does_not_fail_when_another_slot_was_oom_killed(
 def test_admission_returns_retry_on_the_same_call(monkeypatch) -> None:
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs._admission_waiting",
-        lambda _settings, _budget: True,
+        lambda _settings: True,
     )
     monkeypatch.setattr("finance_context.jobqueue.jobs.get_current_job", lambda: None)
     monkeypatch.setenv("JOB_ADMISSION_RETRY_SEC", "30")
