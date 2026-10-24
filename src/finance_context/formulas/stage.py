@@ -7,12 +7,9 @@ from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.formulas.csr import (
-    SheetUsage,
     active_range_node_min_cells,
     expand_cell_edges,
     expand_cell_edges_column_batches,
-    expanded_edge_count,
-    present_cell_count,
 )
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
 from finance_context.formulas.models import (
@@ -24,7 +21,7 @@ from finance_context.formulas.models import (
     cell_parquet_row,
 )
 from finance_context.formulas.names import resolve_defined_name_edges
-from finance_context.memory import check_budget, usage_for_book
+from finance_context.memory import usage_for_book
 from finance_context.settings import Settings
 from finance_context.store.fs import (
     ColumnRows,
@@ -93,7 +90,6 @@ def canonical_node_id(sheet: str, addr: str) -> str:
 def compile_workbook(
     dest_dir: Path,
     *,
-    memory_budget: int | None = None,
     usage: object | None = None,
     settings: object | None = None,
 ) -> CompileResult:
@@ -117,15 +113,6 @@ def compile_workbook(
     presence = _presence_index(dest_dir, columnar=chosen.parse_streaming, pool=pool)
     if usage is None:
         usage = usage_for_book(dest_dir)
-    present = present_cell_count(usage) if isinstance(usage, SheetUsage) else 0
-    check_budget(
-        formulas=formula_count,
-        expanded_cells=expanded_edge_count(edges, usage=usage),
-        present_cells=present,
-        budget=memory_budget,
-        source="compile",
-        settings=chosen,
-    )
     if chosen.graph_stream:
         cell_edges: list | EdgeCount = _write_cell_edge_batches(
             dest_dir,
@@ -197,13 +184,10 @@ def _compile_cells_streaming(
     chosen: Settings,
 ) -> tuple[list[IrCell], list[Edge], list[str], int, dict[str, str] | None]:
     """Read raw cells in chunks and publish ``ir/cells.parquet`` from the batch."""
-    import duckdb
-
-    from finance_context.store.duckdb_io import DuckDBBatch
+    from finance_context.store.duckdb_io import DuckDBBatch, limited_connection
 
     cells_path = dest_dir / "ir" / "cells.parquet"
     batch = DuckDBBatch(Path(str(cells_path) + ".build.duckdb"), IR_CELL_COLUMNS)
-    reader = duckdb.connect()
     cells: list[IrCell] = []
     edges: list[Edge] = []
     extra_nodes: list[str] = []
@@ -211,40 +195,38 @@ def _compile_cells_streaming(
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
     defined_names = meta.get("defined_names")
     try:
-        reader.execute("SET threads=1")
-        cursor = reader.execute("SELECT * FROM read_parquet(?)", [str(raw_path)])
-        names = [item[0] for item in cursor.description]
-        while True:
-            fetched = cursor.fetchmany(2048)
-            if not fetched:
-                break
-            raw_rows = [dict(zip(names, record, strict=True)) for record in fetched]
-            edge_at = len(edges)
-            chunk: list[tuple[object, ...]] = []
-            for row, (parsed, release) in zip(
-                raw_rows, _iter_parsed(engine, raw_rows), strict=True
-            ):
-                cell, added = _take_cell(
-                    row,
-                    parsed,
-                    release,
-                    pool=pool,
-                    edges=edges,
-                    extra_nodes=extra_nodes,
-                    chosen=chosen,
-                )
-                if added:
-                    formula_count += 1
-                cells.append(cell)
-                chunk.append(cell_parquet_row(cell))
-            _intern_resolved_edges(edges[edge_at:], defined_names, pool)
-            batch.add_rows(chunk)
-        batch.finish(cells_path, chosen.parquet_row_group_rows)
+        with limited_connection() as reader:
+            cursor = reader.execute("SELECT * FROM read_parquet(?)", [str(raw_path)])
+            names = [item[0] for item in cursor.description]
+            while True:
+                fetched = cursor.fetchmany(2048)
+                if not fetched:
+                    break
+                raw_rows = [dict(zip(names, record, strict=True)) for record in fetched]
+                edge_at = len(edges)
+                chunk: list[tuple[object, ...]] = []
+                for row, (parsed, release) in zip(
+                    raw_rows, _iter_parsed(engine, raw_rows), strict=True
+                ):
+                    cell, added = _take_cell(
+                        row,
+                        parsed,
+                        release,
+                        pool=pool,
+                        edges=edges,
+                        extra_nodes=extra_nodes,
+                        chosen=chosen,
+                    )
+                    if added:
+                        formula_count += 1
+                    cells.append(cell)
+                    chunk.append(cell_parquet_row(cell))
+                _intern_resolved_edges(edges[edge_at:], defined_names, pool)
+                batch.add_rows(chunk)
+            batch.finish(cells_path, chosen.parquet_row_group_rows)
     except Exception:
         batch.abort()
         raise
-    finally:
-        reader.close()
     return cells, edges, extra_nodes, formula_count, pool
 
 

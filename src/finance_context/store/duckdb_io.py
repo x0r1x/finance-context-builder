@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import shutil
-from collections.abc import Sequence
+import tempfile
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -212,12 +214,10 @@ class DuckDBBatch:
 
 def copy_blob(src: Path, dest: Path) -> None:
     """Publish the bytes of ``src`` as ``dest``. The file is not re-encoded."""
-    import duckdb
-
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         dest.unlink()
-    with duckdb.connect() as con:
+    with limited_connection() as con:
         con.execute(
             "COPY (SELECT content FROM read_blob(?)) TO ? "
             "(FORMAT BLOB, COMPRESSION 'none', USE_TMP_FILE false)",
@@ -226,9 +226,7 @@ def copy_blob(src: Path, dest: Path) -> None:
 
 
 def read_parquet_table(path: Path) -> pa.Table:
-    import duckdb
-
-    with duckdb.connect() as con:
+    with limited_connection() as con:
         # Relation.to_arrow_table avoids the DB-API copy warning in DuckDB 2.0.
         return con.sql("SELECT * FROM read_parquet(?)", params=[str(path)]).to_arrow_table()
 
@@ -238,10 +236,8 @@ def read_parquet_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def read_parquet_column_tuples(path: Path, columns: list[str]) -> list[tuple[Any, ...]]:
-    import duckdb
-
     selected = ", ".join(_quote_ident(name) for name in columns)
-    with duckdb.connect() as con:
+    with limited_connection() as con:
         rows = con.execute(
             f"SELECT {selected} FROM read_parquet(?)",
             [str(path)],
@@ -250,9 +246,7 @@ def read_parquet_column_tuples(path: Path, columns: list[str]) -> list[tuple[Any
 
 
 def read_blob_bytes(uri: str, settings: Settings | None = None) -> bytes:
-    import duckdb
-
-    with duckdb.connect() as con:
+    with limited_connection() as con:
         if uri.startswith("s3://"):
             _configure_s3(con, settings)
         row = con.execute("SELECT content FROM read_blob(?)", [uri]).fetchone()
@@ -324,9 +318,7 @@ class DuckDBObjectStore:
         self._settings = settings
 
     def put(self, local: Path, url: str) -> None:
-        import duckdb
-
-        with duckdb.connect() as con:
+        with limited_connection() as con:
             _configure_s3(con, self._settings)
             con.execute(
                 "COPY (SELECT content FROM read_blob(?)) TO ? "
@@ -335,9 +327,7 @@ class DuckDBObjectStore:
             )
 
     def size(self, url: str) -> int:
-        import duckdb
-
-        with duckdb.connect() as con:
+        with limited_connection() as con:
             _configure_s3(con, self._settings)
             row = con.execute(
                 "SELECT octet_length(content) FROM read_blob(?)",
@@ -408,6 +398,30 @@ def _endpoint(value: str) -> tuple[str, bool]:
 
     parts = urlsplit(token)
     return parts.netloc, parts.scheme == "https"
+
+
+@contextmanager
+def limited_connection() -> Iterator[Any]:
+    """One short DuckDB scan with a private temp directory.
+
+    ``memory_limit`` is the buffer-manager ceiling, the same 256MB the writer
+    already uses. It is not the process RSS.
+    """
+    import duckdb
+
+    tmp = tempfile.mkdtemp(prefix="duckdb-scan-")
+    con = None
+    try:
+        con = duckdb.connect()
+        con.execute("SET memory_limit='256MB'")
+        con.execute("SET threads=1")
+        con.execute(f"SET temp_directory={_sql_literal(tmp)}")
+        con.execute("SET max_temp_directory_size='1GB'")
+        yield con
+    finally:
+        if con is not None:
+            con.close()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _quote_ident(name: str) -> str:

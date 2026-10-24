@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 from tests.api.conftest import _kill_worker_group
 
 from finance_context.app.pipeline import mark_job_failed
@@ -280,6 +281,8 @@ def test_watch_marks_sigkill_with_an_oom_counter_as_kernel_oom(monkeypatch) -> N
 
 
 def test_watch_kills_a_child_whose_real_rss_exceeds_the_budget(tmp_path: Path) -> None:
+    if not Path("/proc/self/statm").is_file():
+        pytest.skip("/proc/self/statm is absent")
     proc = multiprocessing.get_context("spawn").Process(target=_allocate_and_sleep)
     proc.start()
     try:

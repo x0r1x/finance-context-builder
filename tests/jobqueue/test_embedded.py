@@ -271,6 +271,8 @@ def test_serve_with_embedded_worker_disabled_does_not_supervise(
 
 
 def test_serve_alone_completes_a_job(tmp_path: Path) -> None:
+    if not Path("/proc").is_dir():
+        pytest.skip("/proc is absent")
     port = _free_port()
     data_dir = tmp_path / "data"
     env = os.environ.copy()

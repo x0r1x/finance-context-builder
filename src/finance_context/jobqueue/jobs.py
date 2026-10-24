@@ -1,4 +1,4 @@
-"""The RQ job. The horse preflights, then spawns the existing pipeline child."""
+"""The RQ job. The horse checks admission, then spawns the pipeline child."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ from finance_context.memory import (
     cgroup_oom_kill_count,
     over_rss_detail,
     prefer_oom_kill,
-    unusable_cap_detail,
 )
 from finance_context.observability import log_event
 from finance_context.settings import Settings
@@ -100,7 +99,7 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
     with hold_horse_lock(dest):
         write_horse_owner(dest, generation)
         budget = budget_for_settings(settings)
-        if _admission_waiting(settings, budget):
+        if _admission_waiting(settings):
             release_horse_record(dest)
             interval = max(1, int(settings.job_admission_retry_sec))
             seen = 0
@@ -122,10 +121,6 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
             # max grows with each deferral. Admission has no product cap.
             # interval > 0 schedules this same job (rq#2499: enqueue_in drops unique).
             return Retry(max=seen + 1, interval=interval)
-        detail = unusable_cap_detail(settings)
-        if detail:
-            mark_job_failed(dest, job_id, "workbook_too_large", generation, detail=detail)
-            return None
         proc = spawn_child(
             run_child,
             (data_dir, job_id, generation, session_id, os.getpid()),
@@ -338,14 +333,25 @@ def _sigkill_wait_status(ret_val: object) -> bool:
         return False
 
 
-def _admission_waiting(settings: Settings, budget: int) -> bool:
+def _admission_waiting(settings: Settings) -> bool:
+    """Block when anonymous memory leaves less than the API reserve.
+
+    The reserve is ``memory.max`` times ``JOB_MEMORY_API_RESERVE_FRACTION``.
+    File cache is not anonymous and does not block. A missing limit or anon
+    count, or ``JOB_ADMISSION_CGROUP_CHECK`` off, lets the job run. The
+    per-job RSS cap is applied later by ``watch_child``.
+    """
     if not settings.job_admission_cgroup_check:
         return False
+    limit = cgroup_memory_limit_bytes()
+    reserve = None
+    if limit is not None and limit > 0:
+        reserve = max(1, int(limit * settings.job_memory_api_reserve_fraction))
     return admission_blocked(
         enabled=True,
-        limit_bytes=cgroup_memory_limit_bytes(),
+        limit_bytes=limit,
         anon_bytes=cgroup_memory_anon_bytes(),
-        budget_bytes=budget,
+        budget_bytes=reserve,
     )
 
 

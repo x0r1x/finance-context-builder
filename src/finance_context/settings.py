@@ -10,24 +10,12 @@ from pydantic import SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_DATA_DIR = Path("data")
-_DEFAULT_MAX_CONCURRENT_JOBS = 2
-# Fitted to ru_maxrss of the default streaming pipeline: 166 MiB plus 128 bytes
-# per formula, 220 per expanded cell, and 1120 per present cell. On Packt, RVI,
-# the private .xlsx and .xls books, and the 384k-formula synthetic book the
-# estimate is 1.08–1.20 of that peak, and the synthetic book stays under the
-# 1536 MiB default budget. If PARSE_STREAMING, GRAPH_STREAM, or
-# COMPILE_AST_ZLIB is off, preflight uses the unstreamed coefficients below
-# (the previous fit, about 1.04–1.16 of the switches-off peak).
-DEFAULT_ESTIMATE_BASE_BYTES = 166 * 1024 * 1024
-DEFAULT_ESTIMATE_BYTES_PER_FORMULA = 128
-DEFAULT_ESTIMATE_BYTES_PER_EXPANDED_CELL = 220
-DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL = 1120
-DEFAULT_ESTIMATE_UNSTREAMED_BASE_BYTES = 132 * 1024 * 1024
-DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA = 3840
-DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_EXPANDED_CELL = 960
-DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_PRESENT_CELL = 960
-DEFAULT_MEMORY_FLOOR_BYTES = 128 * 1024 * 1024
+# How many books run at once. The per-job RSS cap does not depend on this number.
+_DEFAULT_MAX_CONCURRENT_JOBS = 4
 DEFAULT_API_RESERVE_FRACTION = 0.25
+# No-cgroup fallback, and the ceiling when a cgroup limit is known.
+# With a known cgroup the per-job cap is the lesser of (limit minus the API
+# reserve) and these 1536 MiB. Slots do not divide it.
 DEFAULT_MEMORY_BUDGET_BYTES = 1536 * 1024 * 1024
 DEFAULT_MEMORY_WATCH_INTERVAL_SEC = 0.2
 DEFAULT_RANGE_EXPAND_CAP = 2000
@@ -81,27 +69,15 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = _DEFAULT_MAX_CONCURRENT_JOBS
     # Per-job RSS cap in bytes. Unset means "derive from the cgroup limit".
     # The reserve fraction covers the API and the embedded worker in that cgroup.
+    # An explicit value wins and is not clipped by the 1536 MiB ceiling.
     job_memory_budget_bytes: int | None = None
     job_timeout_sec: float = 3600
     soffice_bin: str | None = None
     xls_convert_timeout_sec: float = 300
     log_level: str = "INFO"
     log_json: bool = True
-    job_estimate_base_bytes: int = DEFAULT_ESTIMATE_BASE_BYTES
-    job_estimate_bytes_per_formula: int = DEFAULT_ESTIMATE_BYTES_PER_FORMULA
-    job_estimate_bytes_per_expanded_cell: int = DEFAULT_ESTIMATE_BYTES_PER_EXPANDED_CELL
-    job_estimate_bytes_per_present_cell: int = DEFAULT_ESTIMATE_BYTES_PER_PRESENT_CELL
-    # Previous fit. Used when parse, graph streaming, or AST compression is off.
-    job_estimate_unstreamed_base_bytes: int = DEFAULT_ESTIMATE_UNSTREAMED_BASE_BYTES
-    job_estimate_unstreamed_bytes_per_formula: int = DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_FORMULA
-    job_estimate_unstreamed_bytes_per_expanded_cell: int = (
-        DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_EXPANDED_CELL
-    )
-    job_estimate_unstreamed_bytes_per_present_cell: int = (
-        DEFAULT_ESTIMATE_UNSTREAMED_BYTES_PER_PRESENT_CELL
-    )
-    job_memory_floor_bytes: int = DEFAULT_MEMORY_FLOOR_BYTES
-    # Share of the cgroup kept for the API and the embedded worker. Slots split the rest.
+    # Share of the cgroup kept for the API and the embedded worker.
+    # Slots do not divide the remainder.
     job_memory_api_reserve_fraction: float = DEFAULT_API_RESERVE_FRACTION
     job_memory_default_budget_bytes: int = DEFAULT_MEMORY_BUDGET_BYTES
     job_memory_watch_interval_sec: float = DEFAULT_MEMORY_WATCH_INTERVAL_SEC
@@ -109,7 +85,6 @@ class Settings(BaseSettings):
     range_node_min_cells: int = DEFAULT_RANGE_NODE_MIN_CELLS
     trace_range_members: int = DEFAULT_TRACE_RANGE_MEMBERS
     job_oom_score_adj: int = DEFAULT_OOM_SCORE_ADJ
-    job_memory_preflight_refusal: bool = True
     # lxml iterparse into column lists. Raw parquet stays one row group.
     parse_streaming: bool = True
     # json.dump instead of json.dumps for context.json and other job JSON.
@@ -221,9 +196,6 @@ class Settings(BaseSettings):
         return number
 
     @field_validator(
-        "job_estimate_base_bytes",
-        "job_estimate_unstreamed_base_bytes",
-        "job_memory_floor_bytes",
         "job_memory_default_budget_bytes",
         "range_expand_cap",
         "range_node_min_cells",
@@ -235,12 +207,6 @@ class Settings(BaseSettings):
         return _require_int(value, info, minimum=1)
 
     @field_validator(
-        "job_estimate_bytes_per_formula",
-        "job_estimate_bytes_per_expanded_cell",
-        "job_estimate_bytes_per_present_cell",
-        "job_estimate_unstreamed_bytes_per_formula",
-        "job_estimate_unstreamed_bytes_per_expanded_cell",
-        "job_estimate_unstreamed_bytes_per_present_cell",
         "trace_range_members",
         mode="before",
     )

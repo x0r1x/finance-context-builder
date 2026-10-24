@@ -41,13 +41,9 @@ from finance_context.layout.relations import formula_relations
 from finance_context.layout.stage import layout_workbook
 from finance_context.memory import (
     MEMORY_ERROR_DETAIL,
-    assess_raw,
-    budget_for_settings,
-    check_budget,
     prefer_oom_kill,
     rss_bytes,
     trim_process_heap,
-    unusable_cap_detail,
     usage_for_book,
 )
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
@@ -190,9 +186,6 @@ class Pipeline:
         shared_dir: Path | None = None,
     ) -> ContextDocument:
         book = shared_dir or dest_dir
-        blocked = unusable_cap_detail(self.settings)
-        if blocked:
-            raise ContextError("workbook_too_large", blocked)
         owner = _load_owner(dest_dir)
         source_filename = source_filename or owner.get("source_filename")
         content_sha256 = content_sha256 or owner.get("content_sha256")
@@ -224,7 +217,6 @@ class Pipeline:
             )
 
         set_stage("parse")
-        estimate = None
         usage_box: list[object | None] = [None]
 
         def book_usage():
@@ -233,45 +225,18 @@ class Pipeline:
             return usage_box[0]
 
         if not (book / "raw" / "workbook.json").is_file():
-            parse_profile: dict[str, int] = {}
 
-            def parse_and_count():
+            def parse_book() -> None:
                 parse_workbook(ensure_xlsx(book, self.converter), book, settings=self.settings)
-                counted = assess_raw(book, usage_box[0] or book_usage(), settings=self.settings)
-                parse_profile["cells"] = counted.cells
-                parse_profile["formulas"] = counted.formulas
-                parse_profile["estimate_bytes"] = counted.estimate_bytes
-                job_budget = budget_for_settings(self.settings)
-                if job_budget is not None:
-                    parse_profile["budget_bytes"] = job_budget
-                return counted
 
-            estimate = _timed("parse", parse_and_count, parse_profile, settings=self.settings)
+            _timed("parse", parse_book, settings=self.settings)
         set_stage("compile")
         if not ir_is_current(book):
-            budget = budget_for_settings(self.settings)
-            if estimate is None:
-                estimate = assess_raw(book, book_usage(), settings=self.settings)
-            check_budget(
-                formulas=estimate.formulas,
-                expanded_cells=estimate.expanded_cells,
-                present_cells=estimate.present_cells,
-                budget=budget,
-                source="preflight",
-                settings=self.settings,
-            )
-            profile: dict[str, int] = {
-                "cells": estimate.cells,
-                "formulas": estimate.formulas,
-                "estimate_bytes": estimate.estimate_bytes,
-            }
-            if budget is not None:
-                profile["budget_bytes"] = budget
+            profile: dict[str, int] = {}
 
             def compile_and_count():
                 compiled_book = compile_workbook(
                     book,
-                    memory_budget=budget,
                     usage=book_usage(),
                     settings=self.settings,
                 )
@@ -852,8 +817,6 @@ def _timed(
             "formulas",
             "edges",
             "cell_edges",
-            "estimate_bytes",
-            "budget_bytes",
         ):
             if counts and key in counts:
                 fields[key] = counts[key]

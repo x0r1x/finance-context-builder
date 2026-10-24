@@ -1,4 +1,4 @@
-"""Per-job RSS budget. The parent kills a child that exceeds it; compile refuses first."""
+"""Per-job RSS budget. The parent kills a child that exceeds it."""
 
 from __future__ import annotations
 
@@ -7,11 +7,9 @@ import json
 import logging
 import os
 import re
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from finance_context.errors import ContextError
 from finance_context.observability import log_event
 from finance_context.settings import Settings
 from finance_context.store.fs import read_parquet_columns
@@ -21,12 +19,6 @@ _LOGGER = logging.getLogger("finance_context.pipeline")
 
 # Above this, cgroup v1 is reporting "no limit" (page_counter max).
 _UNLIMITED_BYTES = 1 << 60
-
-# Coefficients live on Settings (JOB_ESTIMATE_*). With parse streaming, graph
-# streaming, and AST compression on: 166 MiB + 128 bytes/formula + 220/expanded
-# cell + 1120/present cell (1.08–1.20 of that peak). If any of those three is
-# off, the unstreamed coefficients apply: 132 MiB + 3840/formula + 960/expanded
-# cell + 960/present cell, the previous fit for that higher resident set.
 
 _budget_warnings: set[str] = set()
 _logged_effective = False
@@ -66,7 +58,6 @@ class WorkbookEstimate:
     formulas: int
     expanded_cells: int
     present_cells: int
-    estimate_bytes: int
 
 
 _trim_fn: object | None = None
@@ -270,13 +261,16 @@ def resolve_job_budget_bytes(
     override: int | None = None,
     limit_bytes: int | None = None,
     read_cgroup: bool = True,
+    ceiling: int | None = None,
 ) -> int | None:
-    """RSS cap for one job. An explicit override wins; otherwise derive from the cgroup.
+    """RSS cap for one job.
 
-    ``reserve_fraction`` is the share kept for the API process and the embedded
-    worker in that same cgroup. Job children split the remainder. The estimate
-    coefficients are not part of this split.
+    An explicit override wins and is not clipped by ``ceiling``. When the cgroup
+    limit is known, the cap is that limit minus the API reserve. A positive
+    ``ceiling`` then keeps the lesser of that remainder and ``ceiling``.
+    ``slots`` does not divide the remainder.
     """
+    del slots
     if override is not None and override > 0:
         return override
     limit = limit_bytes
@@ -286,8 +280,9 @@ def resolve_job_budget_bytes(
         return None
     reserve = int(limit * reserve_fraction)
     usable = max(1, limit - reserve)
-    slots = max(1, int(slots))
-    return max(1, usable // slots)
+    if ceiling is not None and ceiling > 0:
+        return min(usable, ceiling)
+    return usable
 
 
 def admission_blocked(
@@ -314,6 +309,7 @@ def budget_for_settings(settings: Settings) -> int:
         slots=settings.max_concurrent_jobs,
         reserve_fraction=settings.job_memory_api_reserve_fraction,
         override=settings.job_memory_budget_bytes,
+        ceiling=settings.job_memory_default_budget_bytes,
     )
     if budget is None:
         budget = settings.job_memory_default_budget_bytes
@@ -325,70 +321,12 @@ def budget_for_settings(settings: Settings) -> int:
                 "memory_budget_default",
                 (
                     "cgroup memory limit is unset and JOB_MEMORY_BUDGET_BYTES is unset; "
-                    f"using the default {_mib(budget)} MiB job budget. "
-                    "JOB_MEMORY_API_RESERVE_FRACTION covers the API and the embedded "
-                    "worker in that cgroup; job children split the remainder"
+                    f"using the default {_mib(budget)} MiB job budget"
                 ),
                 budget_bytes=budget,
             )
-    floor = settings.job_memory_floor_bytes
-    if budget < floor and "floor" not in _budget_warnings:
-        _budget_warnings.add("floor")
-        configured = settings.job_memory_budget_bytes
-        if configured is not None and configured > 0:
-            message = (
-                "JOB_MEMORY_BUDGET_BYTES is below the child baseline; "
-                "the job is refused and the cap is not raised"
-            )
-        else:
-            message = (
-                "derived job memory budget is below the child baseline; "
-                "the cgroup share is kept and the cap is not raised"
-            )
-        log_event(
-            _LOGGER,
-            logging.WARNING,
-            "memory_budget_floor",
-            message,
-            budget_bytes=budget,
-            configured=configured,
-        )
     _log_effective_memory(settings, budget)
     return budget
-
-
-def unusable_cap_detail(settings: Settings) -> str | None:
-    """A configured cap under the child baseline cannot run a job."""
-    configured = settings.job_memory_budget_bytes
-    floor = settings.job_memory_floor_bytes
-    if configured is None or configured <= 0 or configured >= floor:
-        return None
-    return (
-        "JOB_MEMORY_BUDGET_BYTES is "
-        f"{_mib(configured)} MiB, below the {_mib(floor)} MiB "
-        "this process needs before it reads a workbook."
-    )
-
-
-def streaming_estimate(settings: Settings) -> bool:
-    """The lower fit applies only while parse, graph, and AST compression are on."""
-    return bool(settings.parse_streaming and settings.graph_stream and settings.compile_ast_zlib)
-
-
-def _estimate_coefficients(settings: Settings) -> tuple[int, int, int, int]:
-    if streaming_estimate(settings):
-        return (
-            settings.job_estimate_base_bytes,
-            settings.job_estimate_bytes_per_formula,
-            settings.job_estimate_bytes_per_expanded_cell,
-            settings.job_estimate_bytes_per_present_cell,
-        )
-    return (
-        settings.job_estimate_unstreamed_base_bytes,
-        settings.job_estimate_unstreamed_bytes_per_formula,
-        settings.job_estimate_unstreamed_bytes_per_expanded_cell,
-        settings.job_estimate_unstreamed_bytes_per_present_cell,
-    )
 
 
 def _log_effective_memory(settings: Settings, budget: int) -> None:
@@ -397,7 +335,6 @@ def _log_effective_memory(settings: Settings, budget: int) -> None:
     if _logged_effective:
         return
     _logged_effective = True
-    base, per_formula, per_expanded, per_present = _estimate_coefficients(settings)
     # 0 is the disabled arena. JsonFormatter drops None, which would hide the knob.
     arena = settings.job_malloc_arena_max if settings.job_malloc_arena_max is not None else 0
     log_event(
@@ -405,17 +342,11 @@ def _log_effective_memory(settings: Settings, budget: int) -> None:
         logging.DEBUG,
         "memory_budget",
         "effective memory settings",
-        estimate_base_bytes=base,
-        bytes_per_formula=per_formula,
-        bytes_per_expanded_cell=per_expanded,
-        bytes_per_present_cell=per_present,
-        floor_bytes=settings.job_memory_floor_bytes,
         api_reserve_fraction=settings.job_memory_api_reserve_fraction,
         default_budget_bytes=settings.job_memory_default_budget_bytes,
         watch_interval_sec=settings.job_memory_watch_interval_sec,
         range_expand_cap=settings.range_expand_cap,
         oom_score_adj=settings.job_oom_score_adj,
-        preflight_refusal=settings.job_memory_preflight_refusal,
         budget_bytes=budget,
         parse_streaming=settings.parse_streaming,
         json_stream=settings.json_stream,
@@ -426,33 +357,8 @@ def _log_effective_memory(settings: Settings, budget: int) -> None:
         layout_columnar_facts=settings.layout_columnar_facts,
         malloc_arena_max=arena,
         malloc_trim=settings.job_malloc_trim,
-        estimate_streaming=streaming_estimate(settings),
         retry_after_sec=settings.shared_cache_busy_retry_sec,
         max_retries=settings.shared_cache_busy_max_retries,
-    )
-
-
-def estimate_bytes(
-    *,
-    formulas: int,
-    expanded_cells: int,
-    present_cells: int,
-    settings: Settings | None = None,
-) -> int:
-    chosen = settings if settings is not None else Settings()
-    base, per_formula, per_expanded, per_present = _estimate_coefficients(chosen)
-    return (
-        base
-        + formulas * per_formula
-        + expanded_cells * per_expanded
-        + present_cells * per_present
-    )
-
-
-def too_large_detail(estimate: int, budget: int) -> str:
-    return (
-        "This workbook is too large for one job "
-        f"(about {_mib(estimate)} MiB, limit {_mib(budget)} MiB)."
     )
 
 
@@ -522,10 +428,8 @@ def usage_for_book(dest_dir: Path):
     return sheet_usage(nodes)
 
 
-def assess_raw(
-    dest_dir: Path, usage: object | None = None, settings: Settings | None = None
-) -> WorkbookEstimate:
-    """Size check from the same parsed edges compile expands, before that expansion."""
+def assess_raw(dest_dir: Path, usage: object | None = None) -> WorkbookEstimate:
+    """Edge counts from the same parsed edges compile expands, before that expansion."""
     # Imported lazily: formulas/__init__ pulls compile, which imports this module.
     from finance_context.formulas.csr import (
         SheetUsage,
@@ -534,10 +438,9 @@ def assess_raw(
     )
     from finance_context.formulas.engine import FormulaEngine
 
-    chosen = settings if settings is not None else Settings()
     path = dest_dir / "raw" / "cells.parquet"
     if not path.is_file():
-        return WorkbookEstimate(0, 0, 0, 0, 0)
+        return WorkbookEstimate(0, 0, 0, 0)
     rows = read_parquet_columns(path, ("sheet", "addr", "formula_raw"))
     if usage is None:
         usage = usage_for_book(dest_dir)
@@ -560,61 +463,4 @@ def assess_raw(
         formulas=formulas,
         expanded_cells=expanded,
         present_cells=present,
-        estimate_bytes=estimate_bytes(
-            formulas=formulas,
-            expanded_cells=expanded,
-            present_cells=present,
-            settings=chosen,
-        ),
     )
-
-
-def check_budget(
-    *,
-    formulas: int,
-    expanded_cells: int,
-    present_cells: int,
-    budget: int | None,
-    source: str,
-    settings: Settings | None = None,
-) -> int:
-    """Log the estimate and refuse when it is already over the job budget."""
-    chosen = settings if settings is not None else Settings()
-    started = time.monotonic()
-    estimate = estimate_bytes(
-        formulas=formulas,
-        expanded_cells=expanded_cells,
-        present_cells=present_cells,
-        settings=chosen,
-    )
-    duration_ms = int((time.monotonic() - started) * 1000)
-    log_event(
-        _LOGGER,
-        logging.DEBUG,
-        "memory_budget",
-        "workbook estimate",
-        duration_ms=duration_ms,
-        stage=source,
-        formulas=formulas,
-        cell_edges=expanded_cells,
-        estimate_bytes=estimate,
-        budget_bytes=budget,
-    )
-    if chosen.job_memory_preflight_refusal and budget is not None and estimate > budget:
-        detail = too_large_detail(estimate, budget)
-        log_event(
-            _LOGGER,
-            logging.DEBUG,
-            "memory_refused",
-            detail,
-            duration_ms=duration_ms,
-            stage=source,
-            reason=detail,
-            error_code="workbook_too_large",
-            formulas=formulas,
-            cell_edges=expanded_cells,
-            estimate_bytes=estimate,
-            budget_bytes=budget,
-        )
-        raise ContextError("workbook_too_large", detail)
-    return estimate

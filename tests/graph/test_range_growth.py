@@ -80,4 +80,3 @@ def test_estimate_is_not_above_per_formula_expansion(
     # total B2:B{n} is one node once it is over 64 cells and n cells before that.
     running = sum(n if n <= 64 else 1 for n in range(1, rows + 1))
     assert with_nodes.expanded_cells == 3 * rows + running
-    assert with_nodes.estimate_bytes <= expanded.estimate_bytes

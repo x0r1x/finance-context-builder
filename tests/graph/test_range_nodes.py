@@ -314,7 +314,6 @@ def test_estimate_is_not_above_expansion(tmp_path: Path, monkeypatch: pytest.Mon
     without = assess_raw(dest)
     assert with_nodes.formulas == without.formulas
     assert with_nodes.expanded_cells < without.expanded_cells
-    assert with_nodes.estimate_bytes <= without.estimate_bytes
 
 
 def test_trace_says_how_many_members_it_left_out(runs: tuple[Path, Path]) -> None:
