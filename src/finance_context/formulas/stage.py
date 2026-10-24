@@ -7,12 +7,9 @@ from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, parse_addr
 from finance_context.formulas.csr import (
-    SheetUsage,
     active_range_node_min_cells,
     expand_cell_edges,
     expand_cell_edges_column_batches,
-    expanded_edge_count,
-    present_cell_count,
 )
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
 from finance_context.formulas.models import (
@@ -24,7 +21,7 @@ from finance_context.formulas.models import (
     cell_parquet_row,
 )
 from finance_context.formulas.names import resolve_defined_name_edges
-from finance_context.memory import check_budget, usage_for_book
+from finance_context.memory import usage_for_book
 from finance_context.settings import Settings
 from finance_context.store.fs import (
     ColumnRows,
@@ -93,7 +90,6 @@ def canonical_node_id(sheet: str, addr: str) -> str:
 def compile_workbook(
     dest_dir: Path,
     *,
-    memory_budget: int | None = None,
     usage: object | None = None,
     settings: object | None = None,
 ) -> CompileResult:
@@ -101,60 +97,14 @@ def compile_workbook(
     meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
     raw_path = dest_dir / "raw" / "cells.parquet"
-    raw_rows = ColumnRows(raw_path) if chosen.parse_streaming else read_parquet(raw_path)
-    cells: list[IrCell] = []
-    edges: list[Edge] = []
-    extra_nodes: list[str] = []
-    formula_count = 0
-    pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
-    for row, (parsed, release) in zip(raw_rows, _iter_parsed(engine, raw_rows), strict=True):
-        if row.get("formula_raw"):
-            formula_count += 1
-        node_id = canonical_node_id(str(row["sheet"]), str(row["addr"]))
-        if pool is not None:
-            node_id = pool.setdefault(node_id, node_id)
-            if parsed is not None:
-                for edge in parsed.edges:
-                    edge.source = pool.setdefault(edge.source, edge.source)
-                    if edge.target:
-                        edge.target = pool.setdefault(edge.target, edge.target)
-        extra_nodes.append(node_id)
-        template = None
-        unparsed = False
-        ast_json = None
-        if parsed is not None:
-            template = parsed.template
-            unparsed = parsed.unparsed
-            if parsed.ast is not None:
-                ast_json = json.dumps(parsed.ast, ensure_ascii=False)
-                if chosen.compile_ast_zlib:
-                    ast_json = zlib.compress(ast_json.encode("utf-8"), 1)
-            edges.extend(parsed.edges)
-        release()
-        sheet = row["sheet"]
-        addr = row["addr"]
-        cells.append(
-            IrCell(
-                sheet=sheet if isinstance(sheet, str) else str(sheet),
-                row=int(row["row"]),
-                col=int(row["col"]),
-                addr=addr if isinstance(addr, str) else str(addr),
-                formula_raw=row.get("formula_raw"),
-                formula_template=template,
-                unparsed=unparsed,
-                cached_value=row.get("cached_value"),
-                hidden=row.get("hidden"),
-                number_format=row.get("number_format"),
-                comment=row.get("comment"),
-                ast_json=ast_json,
-            )
+    if chosen.parse_streaming:
+        cells, edges, extra_nodes, formula_count, pool = _compile_cells_streaming(
+            dest_dir, raw_path, engine, meta, chosen
         )
-    resolve_defined_name_edges(edges, meta.get("defined_names"))
-    if pool is not None:
-        for edge in edges:
-            edge.source = pool.setdefault(edge.source, edge.source)
-            if edge.target:
-                edge.target = pool.setdefault(edge.target, edge.target)
+    else:
+        cells, edges, extra_nodes, formula_count, pool = _compile_cells_loaded(
+            raw_path, engine, meta, chosen
+        )
     known = set(extra_nodes)
     sheets = {
         str(item["name"] if isinstance(item, dict) else item.name)
@@ -163,15 +113,6 @@ def compile_workbook(
     presence = _presence_index(dest_dir, columnar=chosen.parse_streaming, pool=pool)
     if usage is None:
         usage = usage_for_book(dest_dir)
-    present = present_cell_count(usage) if isinstance(usage, SheetUsage) else 0
-    check_budget(
-        formulas=formula_count,
-        expanded_cells=expanded_edge_count(edges, usage=usage),
-        present_cells=present,
-        budget=memory_budget,
-        source="compile",
-        settings=chosen,
-    )
     if chosen.graph_stream:
         cell_edges: list | EdgeCount = _write_cell_edge_batches(
             dest_dir,
@@ -194,8 +135,10 @@ def compile_workbook(
         )
     if pool is not None:
         pool.clear()
-    del raw_rows
-    _write_cells_and_edges(dest_dir, cells, edges, settings=chosen)
+    if chosen.parse_streaming:
+        _write_edges(dest_dir, edges, settings=chosen)
+    else:
+        _write_cells_and_edges(dest_dir, cells, edges, settings=chosen)
     if not chosen.graph_stream:
         _write_cell_edge_rows(
             dest_dir,
@@ -208,6 +151,148 @@ def compile_workbook(
         stream=chosen.json_stream,
     )
     return CompileResult(cells=cells, edges=edges, cell_edges=cell_edges)
+
+
+def _compile_cells_loaded(
+    raw_path: Path,
+    engine: FormulaEngine,
+    meta: dict,
+    chosen: Settings,
+) -> tuple[list[IrCell], list[Edge], list[str], int, dict[str, str] | None]:
+    raw_rows = read_parquet(raw_path)
+    cells: list[IrCell] = []
+    edges: list[Edge] = []
+    extra_nodes: list[str] = []
+    formula_count = 0
+    pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
+    for row, (parsed, release) in zip(raw_rows, _iter_parsed(engine, raw_rows), strict=True):
+        cell, added = _take_cell(
+            row, parsed, release, pool=pool, edges=edges, extra_nodes=extra_nodes, chosen=chosen
+        )
+        if added:
+            formula_count += 1
+        cells.append(cell)
+    _intern_resolved_edges(edges, meta.get("defined_names"), pool)
+    return cells, edges, extra_nodes, formula_count, pool
+
+
+def _compile_cells_streaming(
+    dest_dir: Path,
+    raw_path: Path,
+    engine: FormulaEngine,
+    meta: dict,
+    chosen: Settings,
+) -> tuple[list[IrCell], list[Edge], list[str], int, dict[str, str] | None]:
+    """Read raw cells in chunks and publish ``ir/cells.parquet`` from the batch."""
+    from finance_context.store.duckdb_io import DuckDBBatch, limited_connection
+
+    cells_path = dest_dir / "ir" / "cells.parquet"
+    batch = DuckDBBatch(Path(str(cells_path) + ".build.duckdb"), IR_CELL_COLUMNS)
+    cells: list[IrCell] = []
+    edges: list[Edge] = []
+    extra_nodes: list[str] = []
+    formula_count = 0
+    pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
+    defined_names = meta.get("defined_names")
+    try:
+        with limited_connection() as reader:
+            cursor = reader.execute("SELECT * FROM read_parquet(?)", [str(raw_path)])
+            names = [item[0] for item in cursor.description]
+            while True:
+                fetched = cursor.fetchmany(2048)
+                if not fetched:
+                    break
+                raw_rows = [dict(zip(names, record, strict=True)) for record in fetched]
+                edge_at = len(edges)
+                chunk: list[tuple[object, ...]] = []
+                for row, (parsed, release) in zip(
+                    raw_rows, _iter_parsed(engine, raw_rows), strict=True
+                ):
+                    cell, added = _take_cell(
+                        row,
+                        parsed,
+                        release,
+                        pool=pool,
+                        edges=edges,
+                        extra_nodes=extra_nodes,
+                        chosen=chosen,
+                    )
+                    if added:
+                        formula_count += 1
+                    cells.append(cell)
+                    chunk.append(cell_parquet_row(cell))
+                _intern_resolved_edges(edges[edge_at:], defined_names, pool)
+                batch.add_rows(chunk)
+            batch.finish(cells_path, chosen.parquet_row_group_rows)
+    except Exception:
+        batch.abort()
+        raise
+    return cells, edges, extra_nodes, formula_count, pool
+
+
+def _take_cell(
+    row: dict,
+    parsed: ParsedFormula | None,
+    release,
+    *,
+    pool: dict[str, str] | None,
+    edges: list[Edge],
+    extra_nodes: list[str],
+    chosen: Settings,
+) -> tuple[IrCell, bool]:
+    added = bool(row.get("formula_raw"))
+    node_id = canonical_node_id(str(row["sheet"]), str(row["addr"]))
+    if pool is not None:
+        node_id = pool.setdefault(node_id, node_id)
+        if parsed is not None:
+            for edge in parsed.edges:
+                edge.source = pool.setdefault(edge.source, edge.source)
+                if edge.target:
+                    edge.target = pool.setdefault(edge.target, edge.target)
+    extra_nodes.append(node_id)
+    template = None
+    unparsed = False
+    ast_json = None
+    if parsed is not None:
+        template = parsed.template
+        unparsed = parsed.unparsed
+        if parsed.ast is not None:
+            ast_json = json.dumps(parsed.ast, ensure_ascii=False)
+            if chosen.compile_ast_zlib:
+                ast_json = zlib.compress(ast_json.encode("utf-8"), 1)
+        edges.extend(parsed.edges)
+    release()
+    sheet = row["sheet"]
+    addr = row["addr"]
+    return (
+        IrCell(
+            sheet=sheet if isinstance(sheet, str) else str(sheet),
+            row=int(row["row"]),
+            col=int(row["col"]),
+            addr=addr if isinstance(addr, str) else str(addr),
+            formula_raw=row.get("formula_raw"),
+            formula_template=template,
+            unparsed=unparsed,
+            cached_value=row.get("cached_value"),
+            hidden=row.get("hidden"),
+            number_format=row.get("number_format"),
+            comment=row.get("comment"),
+            ast_json=ast_json,
+        ),
+        added,
+    )
+
+
+def _intern_resolved_edges(
+    edges: list[Edge], defined_names: list | None, pool: dict[str, str] | None
+) -> None:
+    resolve_defined_name_edges(edges, defined_names)
+    if pool is None:
+        return
+    for edge in edges:
+        edge.source = pool.setdefault(edge.source, edge.source)
+        if edge.target:
+            edge.target = pool.setdefault(edge.target, edge.target)
 
 
 def _iter_parsed(engine: FormulaEngine, raw_rows: list[dict]):
@@ -433,6 +518,11 @@ def _write_cells_and_edges(
             [cell_parquet_row(cell) for cell in cells],
             row_group_rows=0,
         )
+    _write_edges(dest_dir, edges, settings=settings)
+
+
+def _write_edges(dest_dir: Path, edges: list[Edge], *, settings: Settings) -> None:
+    row_group_rows = settings.parquet_row_group_rows
     if row_group_rows > 0 and len(edges) > row_group_rows:
         _write_object_batches(
             dest_dir / "ir" / "edges.parquet",

@@ -64,7 +64,8 @@ def test_lifespan_shutdown_nonblocking(tmp_path: Path) -> None:
 def test_load_meta_does_not_flock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dest = session_job_dir(tmp_path / "data", _JOB, "local")
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps({"job_id": _JOB, "status": "succeeded", "stage": "done"}),
         encoding="utf-8",
     )
@@ -87,11 +88,12 @@ def test_get_job_does_not_block_loop(tmp_path: Path, monkeypatch: pytest.MonkeyP
     """
     dest = session_job_dir(tmp_path / "data", _JOB, "local")
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps({"job_id": _JOB, "status": "queued", "stage": "queued", "generation": 1}),
         encoding="utf-8",
     )
-    lock_path = dest / "meta.json.lock"
+    lock_path = dest / "meta" / "meta.json.lock"
     handle = lock_path.open("a+")
     fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
     release = threading.Event()

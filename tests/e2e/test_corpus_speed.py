@@ -33,7 +33,8 @@ def test_corpus_book_builds_within_limit(tmp_path: Path, name: str, limit: float
         pytest.skip(f"missing {workbook}; run scripts/fetch-corpus.py")
     dest = tmp_path / workbook.stem
     dest.mkdir()
-    (dest / "source.xlsx").symlink_to(workbook.resolve())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").symlink_to(workbook.resolve())
     periods._classify.cache_clear()
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     start = time.perf_counter()

@@ -40,6 +40,9 @@ ENV HOME=/app
 ENV LANG=C.UTF-8
 ENV DATA_DIR=/app/data
 ENV PYTHONUNBUFFERED=1
+# httpfs matches this image's DuckDB and lives under HOME=/app. LOAD stays
+# in the process, and only when MinIO settings are present.
+RUN python -c "import duckdb; duckdb.connect().execute('INSTALL httpfs')"
 # mimalloc reserves address space the RSS watchdog cannot see. Use the system pool.
 ENV ARROW_DEFAULT_MEMORY_POOL=system
 

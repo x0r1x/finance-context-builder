@@ -16,6 +16,8 @@ import threading
 import time
 from pathlib import Path
 
+from pydantic import SecretStr
+
 from finance_context.observability import log_event
 from finance_context.settings import Settings, write_redis_env
 from finance_context.settings_env import ENV_SPECS
@@ -199,7 +201,10 @@ def _child_env(settings: Settings) -> dict[str, str]:
             else:
                 env.pop(spec.env_name, None)
             continue
-        if isinstance(value, bool):
+        if isinstance(value, SecretStr):
+            # str(SecretStr) is the mask. The worker loads Settings from this env.
+            env[spec.env_name] = value.get_secret_value()
+        elif isinstance(value, bool):
             env[spec.env_name] = "true" if value else "false"
         else:
             env[spec.env_name] = str(value)

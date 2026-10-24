@@ -92,7 +92,7 @@ def layout_workbook(
         "layout_write",
         "layout.json write done",
         lambda: write_json(
-            dest_dir / "layout.json",
+            dest_dir / "layout" / "layout.json",
             layout.model_dump(mode="json"),
             stream=chosen.json_stream,
         ),

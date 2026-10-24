@@ -55,14 +55,15 @@ def _prepare(tmp_path: Path, *, generation: int = 1, retries: int = 0) -> Path:
     }
     if retries:
         body["shared_cache_busy_retries"] = retries
-    (dest / "meta.json").write_text(json.dumps(body), encoding="utf-8")
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(json.dumps(body), encoding="utf-8")
     return dest
 
 
 def _busy_horse(monkeypatch: pytest.MonkeyPatch, job: _Job | None) -> None:
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs._admission_waiting",
-        lambda _settings, _budget: False,
+        lambda _settings: False,
     )
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs.spawn_child",
@@ -91,7 +92,7 @@ def test_busy_requeues_with_the_configured_interval(
     assert isinstance(result, Retry)
     assert result.intervals == [17]
     assert result.max == 1
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "queued"
     assert meta["stage"] == "queued"
     assert meta["shared_cache_busy_retries"] == 1
@@ -103,7 +104,7 @@ def test_busy_requeues_with_the_configured_interval(
     assert isinstance(again, Retry)
     assert again.intervals == [17]
     assert again.max == 4
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "queued"
     assert meta["shared_cache_busy_retries"] == 2
     assert "error" not in meta
@@ -119,7 +120,7 @@ def test_busy_exhausted_fails(
     dest = _prepare(tmp_path, generation=2, retries=seen)
     result = execute_job(_payload(tmp_path, generation=2))
     assert result is None
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "failed"
     assert meta["error"] == "shared_cache_busy"
     assert meta["detail"] == "shared book cache stayed busy"
@@ -135,7 +136,7 @@ def test_requeue_does_not_create_a_second_job(
     # Leave get_current_job alone so SimpleWorker runs the real job object.
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs._admission_waiting",
-        lambda _settings, _budget: False,
+        lambda _settings: False,
     )
     monkeypatch.setattr(
         "finance_context.jobqueue.jobs.spawn_child",
@@ -173,7 +174,7 @@ def test_requeue_does_not_create_a_second_job(
     assert job.get_status() == JobStatus.SCHEDULED
     keys = sorted(client.scan_iter("rq:job:*"))
     assert keys == [f"rq:job:{rq_id}".encode()]
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "queued"
     assert "error" not in meta
     assert meta["shared_cache_busy_retries"] == 1
@@ -190,7 +191,7 @@ def test_requeue_does_not_create_a_second_job(
     assert loaded is not None
     assert loaded["status"] == "queued"
     assert loaded.get("error") is None
-    disk = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    disk = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert disk["status"] == "queued"
     assert "error" not in disk
     client.close()
@@ -220,7 +221,8 @@ def test_get_during_busy_wait_does_not_report_lost(tmp_path: Path, status: str) 
     )
     dest = session_job_dir(settings.data_dir, _BOOK, settings.session_id)
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(
         json.dumps(
             {
                 "job_id": _BOOK,
@@ -236,7 +238,7 @@ def test_get_during_busy_wait_does_not_report_lost(tmp_path: Path, status: str) 
     assert loaded is not None
     assert loaded["status"] == "queued"
     assert loaded.get("error") is None
-    disk = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    disk = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert disk["status"] == "queued"
     assert "error" not in disk
 
@@ -272,6 +274,6 @@ def test_queued_child_exits_tempfail_without_failing_meta(
     with pytest.raises(SystemExit) as caught:
         run_queued_job(str(tmp_path), _BOOK, 1, "local")
     assert caught.value.code == SHARED_CACHE_BUSY_EXIT
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "queued"
     assert "error" not in meta

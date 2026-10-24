@@ -85,15 +85,16 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     source = _finance_book(tmp_path / "model.xlsx")
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     doc = pipeline.run(dest, job_id="graph-job", source_filename="model.xlsx")
-    assert (dest / "graph.json").is_file()
+    assert (dest / "graph" / "graph.json").is_file()
     assert (dest / "ir" / "cell_edges.parquet").is_file()
-    assert (dest / "ir" / "graph_index.parquet").is_file()
-    assert "precedents_rows" not in (dest / "context.json").read_text(encoding="utf-8")
+    assert (dest / "graph" / "index.parquet").is_file()
+    assert "precedents_rows" not in (dest / "context" / "context.json").read_text(encoding="utf-8")
     assert doc.graph.edges > 0
-    payload = (dest / "graph.json").read_text(encoding="utf-8")
+    payload = (dest / "graph" / "graph.json").read_text(encoding="utf-8")
     assert "formula_ast" not in payload
     assert "precedents_rows" not in payload
     graph = json.loads(payload)
@@ -103,7 +104,7 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert "formula_ast" not in json.dumps(graph)
     assert not (dest / "graph-edges.json").exists()
     assert not (dest / "formulas.json").exists()
-    assert (dest / "graph.md").is_file()
+    assert (dest / "graph" / "graph.md").is_file()
     ebitda = next(link for link in graph["links"] if link["cell"] == "P&L!C13")
     assert ebitda["formula"] == "=SUM(C9:C12)"
     assert ebitda["formula_class"] == "aggregation"
@@ -115,9 +116,9 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert direct["formula"] == "=Operation!C14"
     assert direct["formula_class"] == "cross_period"
     assert any(ref.endswith("Operation!C14") for ref in direct["refs"])
-    assert "P&L!C13" in (dest / "graph.md").read_text(encoding="utf-8")
+    assert "P&L!C13" in (dest / "graph" / "graph.md").read_text(encoding="utf-8")
 
-    context = json.loads((dest / "context.json").read_text(encoding="utf-8"))
+    context = json.loads((dest / "context" / "context.json").read_text(encoding="utf-8"))
     ebitda_row = next(
         row
         for block in context["blocks"]
@@ -138,13 +139,13 @@ def test_pipeline_graph_trace_sum_and_period_lag(tmp_path: Path) -> None:
     assert formula_lag
     assert formula_lag[0]["period_lag"] is None
 
-    graph_edges = read_parquet(dest / "ir" / "graph_edges.parquet")
+    graph_edges = read_parquet(dest / "graph" / "edges.parquet")
     lag_edges = [
         e for e in graph_edges if e["source"] == "P&L!B9" and e["target"] == "Operation!C14"
     ]
     assert lag_edges
     assert lag_edges[0]["period_lag"] not in {None, "same"}
-    assert graph["artifacts"]["graph_edges"] == "ir/graph_edges.parquet"
+    assert graph["artifacts"]["graph_edges"] == "graph/edges.parquet"
 
     traced = trace_graph(dest, origin="P&L!C13", direction="precedents", depth=6)
     node_ids = {n.node_id for n in traced.nodes}
@@ -173,7 +174,8 @@ def test_pipeline_classifies_index_range_holes(tmp_path: Path) -> None:
     )
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     doc = pipeline.run(dest, job_id="index-job", source_filename="index.xlsx")
     edges = read_parquet(dest / "ir" / "cell_edges.parquet")
@@ -188,10 +190,10 @@ def test_pipeline_classifies_index_range_holes(tmp_path: Path) -> None:
     assert all(e["status"] == "empty" and e["reason"] == "actual_blank_cell" for e in holes)
     assert all(e["evidence"] == "omitted_by_excel" for e in holes)
     assert all(not e["dangling"] for e in holes)
-    index = {row["node_id"]: row for row in read_parquet(dest / "ir" / "graph_index.parquet")}
+    index = {row["node_id"]: row for row in read_parquet(dest / "graph" / "index.parquet")}
     assert index["Input Assumptions!K8"]["node_type"] == "empty"
     assert all("empty range" not in warning for warning in doc.warnings)
-    graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
+    graph = json.loads((dest / "graph" / "graph.json").read_text(encoding="utf-8"))
     assert graph["dangling"]["count"] == 0
     assert graph["dangling_classes"].get("empty_range_member", 0) >= len(holes)
     link = next(item for item in graph["links"] if item["cell"] == "Input Assumptions!C8")
@@ -261,7 +263,8 @@ def test_pipeline_traces_blank_ref_and_styled_blank(tmp_path: Path) -> None:
     )
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     doc = pipeline.run(dest, job_id="blank-job", source_filename="blanks.xlsx")
     edges = read_parquet(dest / "ir" / "cell_edges.parquet")
@@ -275,7 +278,7 @@ def test_pipeline_traces_blank_ref_and_styled_blank(tmp_path: Path) -> None:
     assert by_target["Ghost!A1"]["status"] == "unresolved"
     assert by_target["Ghost!A1"]["reason"] == "missing_sheet"
     assert doc.graph.dangling == 1
-    graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
+    graph = json.loads((dest / "graph" / "graph.json").read_text(encoding="utf-8"))
     assert graph["dangling_classes"].get("empty_ref", 0) >= 1
     assert "Ghost!A1" not in {link["cell"] for link in graph["links"]}
     assert any("unresolved formula targets" in warning for warning in doc.warnings)
@@ -286,12 +289,13 @@ def test_pipeline_publishes_iterate_and_cycles(tmp_path: Path) -> None:
     source = _circular_book(tmp_path / "circular.xlsx")
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     doc = pipeline.run(dest, job_id="cycle-job", source_filename="circular.xlsx")
     assert doc.workbook.iterate is True
     assert doc.graph.iterate is True
-    graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
+    graph = json.loads((dest / "graph" / "graph.json").read_text(encoding="utf-8"))
     assert graph["schema_version"] == "1.7.0"
     assert graph["iterate"] is True
     assert graph["cycles"]
@@ -314,7 +318,8 @@ def test_graph_does_not_rewrite_cell_edges(tmp_path: Path, monkeypatch) -> None:
     source = _finance_book(tmp_path / "model.xlsx")
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None)).run(
         dest, job_id="bytes-job", source_filename="model.xlsx"
     )
@@ -325,9 +330,11 @@ def test_bad_schema_id_recompiles(tmp_path: Path) -> None:
     source = _finance_book(tmp_path / "model.xlsx")
     dest = tmp_path / "job"
     dest.mkdir()
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     pipeline.run(dest, job_id="stamp-job", source_filename="model.xlsx")
+    (dest / "ir" / "cells.parquet").parent.mkdir(parents=True, exist_ok=True)
     (dest / "ir" / "cells.parquet").write_bytes(b"broken")
     write_json(
         dest / "ir" / "compile.json",
@@ -336,8 +343,8 @@ def test_bad_schema_id_recompiles(tmp_path: Path) -> None:
             "files": ["cells.parquet", "edges.parquet", "cell_edges.parquet"],
         },
     )
-    (dest / "context.json").unlink()
-    (dest / "context.md").unlink()
+    (dest / "context" / "context.json").unlink()
+    (dest / "context" / "context.md").unlink()
     pipeline.run(dest, job_id="stamp-job", source_filename="model.xlsx")
     assert (dest / "ir" / "cells.parquet").read_bytes() != b"broken"
     stamp = json.loads((dest / "ir" / "compile.json").read_text(encoding="utf-8"))

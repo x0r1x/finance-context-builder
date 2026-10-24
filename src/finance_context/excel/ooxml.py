@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import posixpath
 import zipfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from lxml import etree
 
@@ -641,24 +642,6 @@ def _cached_value(cell_el: etree._Element, sst: list[str]) -> str | None:
     return raw
 
 
-RAW_COLUMN_NAMES = (
-    "sheet",
-    "row",
-    "col",
-    "addr",
-    "formula_raw",
-    "cached_value",
-    "hidden",
-    "number_format",
-    "comment",
-    "shared_si",
-    "shared_master",
-    "style_indent",
-    "outline_level",
-    "col_outline_level",
-)
-
-
 class _CappedReader:
     """File-like wrapper that enforces the part-size cap while streaming."""
 
@@ -676,10 +659,23 @@ class _CappedReader:
         return data
 
 
+class _CellBatch(Protocol):
+    def add_rows(self, rows: Sequence[Sequence[Any]]) -> None: ...
+
+    def set_formulas(
+        self, sheet: str, addrs: Sequence[str], formulas: Sequence[str | None]
+    ) -> None: ...
+
+
+_FLUSH_ROWS = 2048
+
+
 def parse_ooxml_columns(
     zf: zipfile.ZipFile,
-) -> tuple[dict[str, list[Any]], WorkbookMeta, tuple[list[Any], list[Any], list[Any]]]:
-    """Same cells as parse_ooxml, as column lists. Each sheet row is cleared as it is read."""
+    cells: _CellBatch,
+    presence: _CellBatch,
+) -> WorkbookMeta:
+    """Same cells as parse_ooxml. Each sheet is flushed to ``cells`` and ``presence``."""
     root_rels = parse_rels(zf, "_rels/.rels")
     wb_part = next(
         (rel.target for rel in root_rels.values() if rel.type.endswith("/officeDocument")),
@@ -722,11 +718,9 @@ def parse_ooxml_columns(
                 )
             )
     has_xlm = has_xlm or any("/macrosheets/" in path for path in nameset)
-    cols: dict[str, list[Any]] = {name: [] for name in RAW_COLUMN_NAMES}
-    presence: tuple[list[Any], list[Any], list[Any]] = ([], [], [])
     for sheet in sheets:
-        _parse_sheet_stream(zf, sheet, sst, formats, indents, cols, presence)
-    meta = WorkbookMeta(
+        _parse_sheet_stream(zf, sheet, sst, formats, indents, cells, presence)
+    return WorkbookMeta(
         sheets=[sheet.info for sheet in sheets],
         has_vba=has_vba,
         has_xlm=has_xlm,
@@ -736,7 +730,6 @@ def parse_ooxml_columns(
         date1904=date1904,
         defined_names=names,
     )
-    return cols, meta, presence
 
 
 def _parse_sheet_stream(
@@ -745,8 +738,8 @@ def _parse_sheet_stream(
     sst: list[str],
     formats: list[str | None],
     indents: list[int],
-    cols: dict[str, list[Any]],
-    presence: tuple[list[Any], list[Any], list[Any]],
+    cells: _CellBatch,
+    presence: _CellBatch,
 ) -> None:
     from finance_context.excel.zip_guard import MAX_PART_BYTES
 
@@ -756,17 +749,32 @@ def _parse_sheet_stream(
     comments = _load_comments(zf, sheet.part)
     name = sheet.info.name
     hidden_rows: list[int] = []
-    p_sheet, p_addr, p_kind = presence
-    start = len(cols["addr"])
+    batch: list[tuple[Any, ...]] = []
+    presence_batch: list[tuple[str, str, str]] = []
+    # si -> indexes still in ``batch``, and rows already handed to ``cells``.
+    unresolved: dict[int, list[int]] = {}
+    pending_flushed: dict[int, list[tuple[str, str, int, int]]] = {}
     masters: dict[int, tuple[int, int, str]] = {}
     hidden_cols: set[int] | None = None
     col_outline: list[tuple[int, int, int]] = []
     root: etree._Element | None = None
-    c_sheet, c_row, c_col, c_addr = cols["sheet"], cols["row"], cols["col"], cols["addr"]
-    c_formula, c_value, c_hidden = cols["formula_raw"], cols["cached_value"], cols["hidden"]
-    c_format, c_comment, c_si = cols["number_format"], cols["comment"], cols["shared_si"]
-    c_master, c_indent = cols["shared_master"], cols["style_indent"]
-    c_outline, c_col_outline = cols["outline_level"], cols["col_outline_level"]
+
+    def flush_cells() -> None:
+        for si, indexes in unresolved.items():
+            held = pending_flushed.setdefault(si, [])
+            for index in indexes:
+                row = batch[index]
+                held.append((row[0], row[3], row[2], row[1]))
+        unresolved.clear()
+        if batch:
+            cells.add_rows(batch)
+            batch.clear()
+
+    def flush_presence() -> None:
+        if presence_batch:
+            presence.add_rows(presence_batch)
+            presence_batch.clear()
+
     with zf.open(member) as raw_handle:
         handle = _CappedReader(raw_handle, MAX_PART_BYTES)
         context = etree.iterparse(
@@ -809,27 +817,65 @@ def _parse_sheet_stream(
                         col_outline=col_outline,
                     )
                     if cell_presence is not None:
-                        p_sheet.append(name)
-                        p_addr.append(cell_presence[0])
-                        p_kind.append(cell_presence[1])
+                        presence_batch.append((name, cell_presence[0], cell_presence[1]))
+                        if len(presence_batch) >= _FLUSH_ROWS:
+                            flush_presence()
                     if built is None:
                         continue
-                    c_sheet.append(name)
-                    c_row.append(built.row)
-                    c_col.append(built.col)
-                    c_addr.append(built.addr)
-                    c_formula.append(built.formula)
-                    c_value.append(built.cached)
-                    c_hidden.append(built.hidden)
-                    c_format.append(built.number_format)
-                    c_comment.append(built.comment)
-                    c_si.append(built.shared_si)
-                    c_master.append(built.shared_si is not None and built.formula is not None)
-                    c_indent.append(built.style_indent)
-                    c_outline.append(built.outline_level)
-                    c_col_outline.append(built.col_outline_level)
-                    if built.shared_si is not None and built.formula:
-                        masters[built.shared_si] = (built.col, built.row, built.formula)
+                    own = built.formula or None
+                    formula = own
+                    si = built.shared_si
+                    if si is not None and own is None and si in masters:
+                        master_col, master_row, master_formula = masters[si]
+                        formula = (
+                            shift_formula(
+                                master_formula, master_col, master_row, built.col, built.row
+                            )
+                            or None
+                        )
+                    is_master = si is not None and own is not None
+                    batch.append(
+                        (
+                            name,
+                            built.row,
+                            built.col,
+                            built.addr,
+                            formula,
+                            built.cached,
+                            built.hidden,
+                            built.number_format,
+                            built.comment,
+                            si,
+                            is_master,
+                            built.style_indent,
+                            built.outline_level,
+                            built.col_outline_level,
+                        )
+                    )
+                    if si is not None and own is None and si not in masters:
+                        unresolved.setdefault(si, []).append(len(batch) - 1)
+                    if is_master and formula is not None:
+                        masters[si] = (built.col, built.row, formula)
+                        for index in unresolved.pop(si, []):
+                            old = batch[index]
+                            shifted = (
+                                shift_formula(formula, built.col, built.row, old[2], old[1])
+                                or None
+                            )
+                            batch[index] = (*old[:4], shifted, *old[5:])
+                        flushed = pending_flushed.pop(si, [])
+                        if flushed:
+                            cells.set_formulas(
+                                name,
+                                [item[1] for item in flushed],
+                                [
+                                    shift_formula(formula, built.col, built.row, item[2], item[3])
+                                    or None
+                                    for item in flushed
+                                ],
+                            )
+                    if len(batch) >= _FLUSH_ROWS:
+                        flush_cells()
                 el.clear()
                 while el.getprevious() is not None:
                     del parent[0]
@@ -839,15 +885,8 @@ def _parse_sheet_stream(
         raise ContextError("zip_rejected", "invalid xml")
     if hidden_cols is None:
         hidden_cols = _hidden_cols(root)
-    for index in range(start, len(c_addr)):
-        si = c_si[index]
-        formula = c_formula[index]
-        if si is not None and not formula and si in masters:
-            master_col, master_row, master_formula = masters[si]
-            formula = shift_formula(
-                master_formula, master_col, master_row, c_col[index], c_row[index]
-            )
-        c_formula[index] = formula or None
+    flush_cells()
+    flush_presence()
     sheet.info.summary_below = _summary_below(root)
     sheet.info.hidden_rows = hidden_rows
     sheet.info.hidden_cols = sorted(hidden_cols)

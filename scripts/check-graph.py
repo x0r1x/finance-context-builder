@@ -494,7 +494,11 @@ def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:
         if not isinstance(cell, dict) or cell.get("role") == "unit":
             continue
         value = cell.get("cached_value")
-        if value not in (None, "") and not _in_markdown(str(value), markdown):
+        if value in (None, ""):
+            continue
+        # The renderer strips the cell, so trailing spaces in the cache are gone.
+        folded = _markdown_cell(str(value))
+        if folded and not _in_markdown(folded, markdown):
             return [f"context.md missing {cell.get('role')} cell {cell.get('addr')}"]
     return []
 

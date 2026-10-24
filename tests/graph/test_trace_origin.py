@@ -28,7 +28,7 @@ def _index_row(
 def _write_index(dest: Path) -> None:
     write_cells_parquet(dest / "ir" / "cells.parquet", [])
     write_parquet(
-        dest / "ir" / "graph_index.parquet",
+        dest / "graph" / "index.parquet",
         INDEX_COLUMNS,
         [
             _index_row("Ratios!F6", "Ratios", "F6", _PROJECT),
@@ -60,7 +60,9 @@ def _write_context(dest: Path, payload: object | None = None) -> None:
                 }
             ]
         }
-    (dest / "context.json").write_text(json.dumps(payload), encoding="utf-8")
+    path = dest / "context" / "context.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _ids(dest: Path, origin: str) -> set[str]:
@@ -94,7 +96,9 @@ def test_bad_context_keeps_address_and_row_key(tmp_path: Path) -> None:
     _write_index(tmp_path)
     assert _ids(tmp_path, "IRR") == set()
     for payload in ("not json", "[]", "{}", '{"blocks": "nope"}'):
-        (tmp_path / "context.json").write_text(payload, encoding="utf-8")
+        path = tmp_path / "context" / "context.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload, encoding="utf-8")
         assert _ids(tmp_path, "IRR") == set()
         assert _ids(tmp_path, "PF Model!Z1") == {"PF Model!Z1"}
         assert _ids(tmp_path, _PROJECT) == {"Ratios!F6", "Ratios!G6"}

@@ -17,8 +17,8 @@
 | Формула, AST, кэш ячейки | `ir/cells.parquet` |
 | Ссылки как в формуле (диапазон — одна цель, named ranges) | `ir/edges.parquet` |
 | Cell→cell после expand: `dangling` / `dangling_reason` / `status` / `reason` / `evidence` / `range_ref` / `truncated`. `col_offset` и `period_lag` здесь пустые | `ir/cell_edges.parquet` |
-| `col_offset` и `period_lag` после graph. `cell_edges` graph не переписывает | `ir/graph_edges.parquet` |
-| `row_key`, `period_id`, `node_type` (включая `empty` для проверенных пустых ячеек) | `ir/graph_index.parquet`; у формулы ещё `links[].row_key` и `links[].period_id` |
+| `col_offset` и `period_lag` после graph. `cell_edges` graph не переписывает | `graph/edges.parquet` |
+| `row_key`, `period_id`, `node_type` (включая `empty` для проверенных пустых ячеек) | `graph/index.parquet`; у формулы ещё `links[].row_key` и `links[].period_id` |
 | Counts (`nodes` / `edges` — размеры cell-level parquet), `iterate`, циклы, `circularity_hints`, `dangling_classes` и `links[]` с `formula_class` | `graph.json` и то же в `graph.md` (schema `1.7.0`, колонка Class) |
 | Каждый `<c>` листа: `populated` или `styled_blank` | `raw/cell_presence.parquet` |
 | Строка отчёта: лейбл, одна формула строки, серии кэша по осям, статус значения, scale factor, нормализованные значения | `context.json` / `context.md` (schema `1.14.0`, оси в `axes`) |
@@ -29,11 +29,11 @@
 
 ## Узлы-диапазоны
 
-Целый столбец или строка (`A:A`, `1:1`) и прямоугольник больше `RANGE_NODE_MIN_CELLS` ячеек (по умолчанию 64) — узлы-диапазоны. В `ir/cell_edges.parquet` и `ir/graph_edges.parquet` у формулы одно ребро `kind=range`: `target` — id узла (`Data!A:A`, `Data!B2:B5000`, `Data!3:3`; в id ячейки двоеточия нет), `range_ref` — текст из формулы. Больше для узла ничего не пишется: его ячейки берутся из границ и ячеек книги, когда они нужны читателю. Скопированный вниз `SUMIF(A:A, ...)` или нарастающий итог `SUM($B$2:B{n})` стоят одно ребро на формулу, поэтому рёбер столько же, сколько формул, а не формулы × ячейки. Диапазон на отсутствующем листе или на листе без ячеек и диапазон до `RANGE_NODE_MIN_CELLS` ячеек раскрываются в каждой формуле, как раньше, с пустыми членами и обрезкой `RANGE_EXPAND_CAP`.
+Целый столбец или строка (`A:A`, `1:1`) и прямоугольник больше `RANGE_NODE_MIN_CELLS` ячеек (по умолчанию 64) — узлы-диапазоны. В `ir/cell_edges.parquet` и `graph/edges.parquet` у формулы одно ребро `kind=range`: `target` — id узла (`Data!A:A`, `Data!B2:B5000`, `Data!3:3`; в id ячейки двоеточия нет), `range_ref` — текст из формулы. Больше для узла ничего не пишется: его ячейки берутся из границ и ячеек книги, когда они нужны читателю. Скопированный вниз `SUMIF(A:A, ...)` или нарастающий итог `SUM($B$2:B{n})` стоят одно ребро на формулу, поэтому рёбер столько же, сколько формул, а не формулы × ячейки. Диапазон на отсутствующем листе или на листе без ячеек и диапазон до `RANGE_NODE_MIN_CELLS` ячеек раскрываются в каждой формуле, как раньше, с пустыми членами и обрезкой `RANGE_EXPAND_CAP`.
 
 Что совпадает с раскрытием в каждой формуле и проверено тестами: `links[]` (`formula_class`, `refs`), `cycles` (состав и класс), `dangling`, узлы и рёбра trace. У ребра в узел `col_offset` и `period_lag` первой ячейки узла (угол прямоугольника или первая заполненная ячейка целого столбца или строки) — того ребра, которое раскрытие давало первым. `formula_class` берёт лаги всех колонок узла. Циклы ищутся через узел к формульным ячейкам внутри него, и в класс `iterative_ok` голосуют только рёбра формула → ячейка, которые были бы при раскрытии.
 
-Что меняется: `edges` и `kinds.range` считают одно ребро на формулу и узел; пустые ячейки внутри узла не становятся строками `node_type=empty` в `ir/graph_index.parquet` и не входят в `dangling_classes.empty_range_member` (раскрытие считало их только в первых 2000 ячейках); `truncated` не перечисляет формулы с узлом — узел не обрезается.
+Что меняется: `edges` и `kinds.range` считают одно ребро на формулу и узел; пустые ячейки внутри узла не становятся строками `node_type=empty` в `graph/index.parquet` и не входят в `dangling_classes.empty_range_member` (раскрытие считало их только в первых 2000 ячейках); `truncated` не перечисляет формулы с узлом — узел не обрезается.
 
 Trace проходит узел насквозь и не показывает его как узел. Прецеденты формулы — заполненные ячейки внутри узла, по строкам, затем по колонкам. Обход идёт не дальше `TRACE_RANGE_MEMBERS` из них (по умолчанию 200, 0 — все; эндпоинты trace принимают и `range_members`), и тогда у ребра есть `members_total` и `members_shown`, а `trace.md` перечисляет такие диапазоны в разделе «Ranges not followed in full». Зависимые ячейки — все формулы, читающие узел, в границы которого попадает ячейка; их находит индекс границ узлов. Пустая ячейка внутри узла может быть началом trace.
 
@@ -102,5 +102,5 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph/trace.md?from=P%26L!C1
 
 - EBITDA `=SUM(J9:J12)` в `links` — один ref на диапазон. Развёртка по ячейкам остаётся в `ir/cell_edges.parquet`.
 - Пустые клетки внутри `INDEX(J8:O8)` — `empty` / `actual_blank_cell` в parquet и счётчик `dangling_classes`, не ошибка парсера и не ref в `links`. Одиночная ссылка на такую же пустую ячейку — `empty_ref`. Trace эти пустые адреса не показывает.
-- `P&L` Gross revenues `=Operation!…` с `C[-1]` получает `period_lag` ≠ `same` в `ir/graph_edges.parquet`. В `ir/cell_edges.parquet` лаг остаётся пустым.
+- `P&L` Gross revenues `=Operation!…` с `C[-1]` получает `period_lag` ≠ `same` в `graph/edges.parquet`. В `ir/cell_edges.parquet` лаг остаётся пустым.
 - От подписей `EBITDA` / `CFADS` trace доходит до Input Assumptions (traffic, inflation, rates), если формулы так связаны.

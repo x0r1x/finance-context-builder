@@ -258,11 +258,16 @@ async def post_job(
     return JSONResponse(body, status_code=202)
 
 
-_READY_ARTIFACTS = ("context.json", "context.md", "graph.json", "graph.md")
+_READY_ARTIFACTS = (
+    "context/context.json",
+    "context/context.md",
+    "graph/graph.json",
+    "graph/graph.md",
+)
 
 
 def _running_body(job_id: str, dest: Path) -> dict[str, object]:
-    meta_path = dest / "meta.json"
+    meta_path = dest / "meta" / "meta.json"
     if meta_path.is_file():
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -293,7 +298,7 @@ def _digest_job(data: bytes) -> tuple[str, str]:
 
 def _load_meta(dest: Path) -> dict | None:
     # meta.json is published with os.replace, so a reader does not take a flock.
-    meta_path = dest / "meta.json"
+    meta_path = dest / "meta" / "meta.json"
     if not meta_path.is_file():
         return None
     try:
@@ -575,7 +580,7 @@ def _enqueue_or_reuse(
         updated.pop("detail", None)
         return updated
 
-    update_json(dest / "meta.json", stamp)
+    update_json(dest / "meta" / "meta.json", stamp)
     payload = {
         "session_id": settings.session_id,
         "job_id": job_id,
@@ -643,7 +648,7 @@ def _queue_lost(ctx: AppContext, job_id: str, dest: Path, meta: dict) -> bool:
 def _ready_meta(dest: Path) -> dict | None:
     if not all((dest / name).is_file() for name in _READY_ARTIFACTS):
         return None
-    meta_path = dest / "meta.json"
+    meta_path = dest / "meta" / "meta.json"
     if not meta_path.is_file():
         return None
     try:

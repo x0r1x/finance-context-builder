@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from finance_context.jobqueue.embedded import _child_env
 from finance_context.settings import Settings
 from finance_context.settings_env import ENV_SPECS
 
@@ -10,6 +11,20 @@ from finance_context.settings_env import ENV_SPECS
 def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
     for spec in ENV_SPECS:
         monkeypatch.delenv(spec.env_name, raising=False)
+
+
+def test_child_env_exports_the_minio_secret_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear(monkeypatch)
+    settings = Settings(
+        _env_file=None,
+        minio_endpoint="http://minio:9000",
+        minio_bucket="finance-context",
+        minio_access_key="minioadmin",
+        minio_secret_key="minioadmin",
+    )
+    env = _child_env(settings)
+    assert env["MINIO_SECRET_KEY"] == "minioadmin"
+    assert env["MINIO_ENDPOINT"] == "http://minio:9000"
 
 
 def test_queue_defaults(monkeypatch: pytest.MonkeyPatch) -> None:

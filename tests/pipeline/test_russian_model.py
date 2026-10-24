@@ -73,7 +73,8 @@ def test_russian_model_keeps_cross_sheet_formulas_and_ruble_scale(
 ) -> None:
     source = _russian_model(tmp_path / "model.xlsx")
     parse_workbook(source, dest)
-    (dest / "source.xlsx").write_bytes(source.read_bytes())
+    (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     doc = pipeline.run(dest, job_id="ru-model", source_filename="model.xlsx")
 
@@ -84,7 +85,7 @@ def test_russian_model_keeps_cross_sheet_formulas_and_ruble_scale(
     cross = {(e["source"], e["target"]) for e in edges if e["kind"] == "cross_sheet"}
     assert ("Модель!C5", "Допущения!C3") in cross
     assert ("Модель!N6", "Допущения!C4") in cross
-    graph = json.loads((dest / "graph.json").read_text(encoding="utf-8"))
+    graph = json.loads((dest / "graph" / "graph.json").read_text(encoding="utf-8"))
     # Revenue and opex read one input each per year.
     assert graph["kinds"]["cross_sheet"] == 2 * len(YEARS)
 

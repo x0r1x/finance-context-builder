@@ -91,7 +91,7 @@ def _catalog(
     offset: int,
     head: bool,
 ) -> Response:
-    path = _require_artifact(request, job_id, "context.json")
+    path = _require_artifact(request, job_id, "context/context.json")
     etag = strong_etag(_schema_id(CatalogDocument), _content_sha256(path.parent), path)
     cached = _not_modified_or_none(request, etag)
     if cached is not None:
@@ -131,8 +131,8 @@ async def get_summary(request: Request, job_id: str) -> Response:
 
 
 def _summary(request: Request, job_id: str, head: bool) -> Response:
-    context_path = _require_artifact(request, job_id, "context.json")
-    graph_path = _require_artifact(request, job_id, "graph.json")
+    context_path = _require_artifact(request, job_id, "context/context.json")
+    graph_path = _require_artifact(request, job_id, "graph/graph.json")
     dest = context_path.parent
     etag = strong_etag(
         _schema_id(SummaryDocument),
@@ -204,8 +204,8 @@ def _observations(
     limit: int,
     head: bool,
 ) -> Response:
-    context_path = _require_artifact(request, job_id, "context.json")
-    graph_path = _require_artifact(request, job_id, "graph.json")
+    context_path = _require_artifact(request, job_id, "context/context.json")
+    graph_path = _require_artifact(request, job_id, "graph/graph.json")
     if not (row_key or (q and q.strip())):
         raise ApiError(400, "selector_required")
     dest = context_path.parent

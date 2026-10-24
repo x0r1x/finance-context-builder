@@ -212,7 +212,7 @@ def test_stop_during_a_job_waits_out_the_grace_then_reports_lost(
             created = _upload(client, source)
             assert created.status_code == 202
             job_id = created.json()["job_id"]
-            meta = tmp_path / "data" / "sessions" / "embed" / "jobs" / job_id / "meta.json"
+            meta = tmp_path / "data" / "sessions" / "embed" / "jobs" / job_id / "meta" / "meta.json"
             assert _wait_until(lambda: _stage(meta) == "parse", timeout=30)
             started = time.monotonic()
             stop_for_serve(worker)
@@ -271,6 +271,8 @@ def test_serve_with_embedded_worker_disabled_does_not_supervise(
 
 
 def test_serve_alone_completes_a_job(tmp_path: Path) -> None:
+    if not Path("/proc").is_dir():
+        pytest.skip("/proc is absent")
     port = _free_port()
     data_dir = tmp_path / "data"
     env = os.environ.copy()

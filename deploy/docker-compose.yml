@@ -12,10 +12,15 @@ services:
     # The image has `soffice` on PATH. Keep the conversion timeout below
     # JOB_TIMEOUT_SEC (defaults 300 and 3600) so a hung soffice fails the job
     # before the server stops the process.
+    # Optional MinIO copy: MINIO_ENDPOINT, MINIO_BUCKET, MINIO_ACCESS_KEY,
+    # MINIO_SECRET_KEY, MINIO_PREFIX, and MINIO_REGION. Leave the first four
+    # unset and DuckDB stays on DATA_DIR. Set all four together in the env
+    # file. This file does not start MinIO and does not interpolate MINIO_*.
+    # The healthcheck only calls /healthz.
     environment:
       DATA_DIR: /app/data
-    # 4 GiB container. Two job slots derive a 1536 MiB RSS cap
-    # (three quarters of this limit, split across MAX_CONCURRENT_JOBS).
+    # 4 GiB container. One job stops at 1536 MiB RSS.
+    # The slot count does not divide that cap.
     mem_limit: 4g
     volumes:
       - ../data:/app/data

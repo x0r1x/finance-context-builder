@@ -73,7 +73,8 @@ def _meta(ctx: AppContext, **fields: object) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     body = {"job_id": _JOB, "status": "running", "stage": "parse", "generation": 1}
     body.update(fields)
-    (dest / "meta.json").write_text(json.dumps(body), encoding="utf-8")
+    (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "meta" / "meta.json").write_text(json.dumps(body), encoding="utf-8")
     return dest
 
 
@@ -180,7 +181,7 @@ def test_started_without_a_run_lock_is_enqueued_again(tmp_path: Path, monkeypatc
     assert queue.deleted == 1
     assert queue.enqueued == 1
     stored = json.loads(
-        (session_job_dir(ctx.settings.data_dir, _JOB, "local") / "meta.json").read_text()
+        (session_job_dir(ctx.settings.data_dir, _JOB, "local") / "meta" / "meta.json").read_text()
     )
     assert stored["generation"] == 2
 
@@ -198,7 +199,7 @@ def test_get_does_not_mark_lost_while_post_holds_the_enqueue_lock(tmp_path: Path
     assert body is not None
     assert body["status"] == "queued"
     assert "error" not in body
-    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert stored["status"] == "queued"
 
 
@@ -210,7 +211,7 @@ def test_get_marks_lost_when_the_enqueue_lock_is_free(tmp_path: Path) -> None:
     assert body is not None
     assert body["status"] == "failed"
     assert body["error"] == "queue_lost"
-    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert stored["error"] == "queue_lost"
 
 
@@ -229,10 +230,10 @@ def test_unreadable_horse_lock_is_not_lost(tmp_path: Path, monkeypatch) -> None:
         return real_open(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", _open)
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert horse_owner_alive(dest, 1) is None
     assert _queue_lost(ctx, _JOB, dest, meta) is False
-    disk = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    disk = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert disk.get("error") != "queue_lost"
 
 
@@ -241,7 +242,7 @@ def test_get_marks_a_started_job_with_a_free_run_lock_lost(tmp_path: Path) -> No
     ctx = _ctx(tmp_path, queue)
     dest = _meta(ctx)
     _horse(dest, _dead_pid())
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert _queue_lost(ctx, _JOB, dest, meta) is True
 
 
@@ -283,7 +284,7 @@ def test_stale_queue_lost_relaunches(tmp_path: Path, rq_status: str) -> None:
     assert body["stage"] == "queued"
     assert queue.deleted == 1
     assert queue.enqueued == 1
-    stored = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert stored["status"] == "queued"
     assert stored["generation"] == 2
     assert "error" not in stored
@@ -354,11 +355,12 @@ def test_get_keeps_a_job_that_finishes_during_the_recheck(tmp_path: Path) -> Non
     ctx = _ctx(tmp_path, queue)
     dest = _meta(ctx)
     _horse(dest, _dead_pid())
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     original = queue.status
 
     def _finish(_rq_id: str) -> str | None:
-        (dest / "meta.json").write_text(
+        (dest / "meta" / "meta.json").parent.mkdir(parents=True, exist_ok=True)
+        (dest / "meta" / "meta.json").write_text(
             json.dumps({"job_id": _JOB, "status": "succeeded", "generation": 1}),
             encoding="utf-8",
         )

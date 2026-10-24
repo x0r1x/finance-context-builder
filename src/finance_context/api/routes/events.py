@@ -104,7 +104,7 @@ async def job_events(request: Request, job_id: str) -> StreamingResponse:
 def _read_meta(dest: Path) -> dict | None:
     if not dest.exists():
         return None
-    path = dest / "meta.json"
+    path = dest / "meta" / "meta.json"
     if not path.is_file():
         return None
     try:

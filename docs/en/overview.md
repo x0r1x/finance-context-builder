@@ -18,19 +18,20 @@ How to run, Docker, and the API: [README](../../README.md). The layer snapshot i
 
 The input is a workbook whose formulas are already calculated. `.xlsb` and encrypted files are rejected. A legacy `.xls` book is accepted when LibreOffice can convert it.
 
-A job writes two trees. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`), and `layout.json` live in `shared/books/{job_id}/` and are the same for every session. Context, graph, `meta.json`, `ir/graph_edges.parquet`, and `ir/graph_index.parquet` live in `sessions/{session}/jobs/{job_id}/`. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash.
+A job writes two trees. `raw/`, formula IR (`ir/cells.parquet`, `ir/edges.parquet`, `ir/cell_edges.parquet`, `ir/compile.json`), and `layout/layout.json` live in `shared/books/{job_id}/` and are the same for every session. `context/`, `graph/` (`graph.json`, `graph.md`, `edges.parquet`, `index.parquet`), and `meta/meta.json` live in `sessions/{session}/jobs/{job_id}/`. `job_id` is the SHA-256 of the string `context:` plus the workbook `content_sha256`, so the directory name is not the file hash.
 
 | Artifact | Contents |
 | --- | --- |
 | `raw/` | Cells, formulas, cache, formats, `cell_presence.parquet` (`populated` / `styled_blank`) |
-| `ir/` | Templates, AST, `edges.parquet` (as written in the formula), `cell_edges.parquet` (formula expansion, lag empty), `graph_edges.parquet` (`col_offset` / `period_lag`), and `compile.json` (IR schema stamp) |
-| `layout.json` | Report blocks, period axes, row kinds |
+| `ir/` | Templates, AST, `edges.parquet` (as written in the formula), `cell_edges.parquet` (formula expansion, lag empty), and `compile.json` (IR schema stamp) |
+| `layout/layout.json` | Report blocks, period axes, row kinds |
+| `graph/` | `graph.json`, `graph.md`, `edges.parquet` (`col_offset` / `period_lag`), `index.parquet` |
 | `graph.json` / `graph.md` | Schema `1.7.0`: cell-level parquet counts, `iterate`, cycles (`breakers`) / `circularity_hints`, `dangling_classes`, and `links[]` (cell, A1 formula, `formula_class`, `row_key`, `period_id`, inputs; a range is not expanded). Markdown links have a Class column. AST and cell-edges stay in `ir/` |
 | `context.json` / `context.md` | Schema `1.14.0`: passport, `axes` (the only place for flags and `group_key`), every block and every row (`row_key`, one formula, cached series per `axis_ids`, `value_statuses`, `scale_factor`, `normalized_values`). A year repeated over months is `group_key`, not a second axis. A year and a month in one header band are one table. The same header repeated in the next section points at the same axis. Markdown `## Axes` prints each axis once, periods as columns: the header is the axis id and the period keys (`\| PF Model!r9 \| 2021 \| 2022 \| 2032 \|`), and under it `Start` / `End` (ISO dates when the book has a Start/End ruler), `Group` / `Calendar` / `Flags`. A block table adds `Path` (`label_path`) and `Cells` (`L total: -86400`, `G Start: 01.01.2024`). A role cell has `header`. A `total` / `stub` column is not part of the axis. Empty attribute rows are hidden: a year with no dates, group, or flags is the header alone. A regular month grid collapses to one column per year (`\| Output!r6 \| 2020 \| 2021 \|` and a row `\| Periods \| 2020-01 .. 2020-12 \| ... \|`). JSON omits empty `flags` and a `calendar_year` that repeats the period key. The block table has `Axes: ...` and one grid per series. An empty cell is `empty`, a non-applicable cell is `n/a`, thousands render as `k£ ×1000` and `1.5 (1500)`. A period header is `period_key` plus the column letter (`Y23 (AA)`). A period value shows the cache and `[Sheet!A1]`. Under the block, `relations` use the same `row_key`. There is no second row catalog and no cell registry. The header line is content completeness. `graph` is a pointer |
 
 Catalog, summary, and observations are HTTP projections, not files. Schemas: `catalog-2`, `summary-2`, `observation-2`. Details: [slices.md](slices.md).
 
-Formula IR and layout for the same workbook are shared: `$DATA_DIR/shared/books/{job_id}/`. A POST does not delete that directory. The job child invalidates a stale `layout.json`, `raw/`, or formula IR under `shared/books/{job_id}/.lock`, and publishes each file by writing a temp file, fsyncing it, `os.replace`, and fsyncing the directory.
+Formula IR and layout for the same workbook are shared: `$DATA_DIR/shared/books/{job_id}/`. A POST does not delete that directory. The job child invalidates a stale `layout/layout.json`, `raw/`, or formula IR under `shared/books/{job_id}/.lock`, and publishes each file by writing a temp file, fsyncing it, `os.replace`, and fsyncing the directory.
 
 ## Pipeline
 

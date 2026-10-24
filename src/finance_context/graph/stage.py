@@ -35,6 +35,7 @@ from finance_context.layout.resolve import period_headers
 from finance_context.models.context import GraphPointer
 from finance_context.settings import Settings
 from finance_context.store.fs import (
+    _publish_blob,
     atomic_write_bytes,
     read_parquet,
     temporary_path,
@@ -93,7 +94,7 @@ def build_formula_graph(
         _empty_index_row(node_id, row_meta, period_by_cell) for node_id in empty_nodes
     )
     write_parquet(
-        dest_dir / "ir" / "graph_index.parquet",
+        dest_dir / "graph" / "index.parquet",
         INDEX_COLUMNS,
         index_rows,
         row_group_rows=chosen.parquet_row_group_rows,
@@ -118,7 +119,7 @@ def build_formula_graph(
         view = _RangeView(book, cells, period_by_cell)
         enriched = [_enrich_edge(edge, period_of, view) for edge in cell_edges]
         write_parquet(
-            dest_dir / "ir" / "graph_edges.parquet",
+            dest_dir / "graph" / "edges.parquet",
             IR_CELL_EDGE_COLUMNS,
             [
                 (
@@ -163,21 +164,21 @@ def build_formula_graph(
             _stream_graph_files(dest_dir, doc)
         else:
             write_json(
-                dest_dir / "graph.json",
+                dest_dir / "graph" / "graph.json",
                 doc.model_dump(mode="json", by_alias=True),
                 stream=False,
             )
             from finance_context.render.graph import render_graph_markdown
 
             markdown = render_graph_markdown(doc)
-            atomic_write_bytes(dest_dir / "graph.md", markdown.encode("utf-8"))
+            atomic_write_bytes(dest_dir / "graph" / "graph.md", markdown.encode("utf-8"))
     unexpected = sum(1 for c in cycles if c.class_ == "unexpected")
     iterative = sum(1 for c in cycles if c.class_ == "iterative_ok")
     classes = doc.dangling_classes
     return GraphPointer(
         artifact="graph.json",
         cell_edges="ir/cell_edges.parquet",
-        index="ir/graph_index.parquet",
+        index="graph/index.parquet",
         nodes=doc.nodes,
         edges=doc.edges,
         cycles_unexpected=unexpected,
@@ -836,7 +837,7 @@ def _graph_from_parquet(
     flags = array.array("B")
     n_edges = 0
     names = [name for name, _dtype in IR_CELL_EDGE_COLUMNS]
-    with RowGroupWriter(dest_dir / "ir" / "graph_edges.parquet", IR_CELL_EDGE_COLUMNS, 0) as writer:
+    with RowGroupWriter(dest_dir / "graph" / "edges.parquet", IR_CELL_EDGE_COLUMNS, 0) as writer:
         # One output group per source group. A single source group stays write_table.
         parquet = pq.ParquetFile(path)
         multi = parquet.num_row_groups > 1
@@ -953,14 +954,14 @@ def _graph_from_parquet(
     else:
         doc.links = _formula_links(cells, edges, row_meta, period_by_cell, lags=lag_groups)
         write_json(
-            dest_dir / "graph.json",
+            dest_dir / "graph" / "graph.json",
             doc.model_dump(mode="json", by_alias=True),
             stream=False,
         )
         from finance_context.render.graph import render_graph_markdown
 
         markdown = render_graph_markdown(doc)
-        atomic_write_bytes(dest_dir / "graph.md", markdown.encode("utf-8"))
+        atomic_write_bytes(dest_dir / "graph" / "graph.md", markdown.encode("utf-8"))
     return cycles, doc, iterate
 
 
@@ -1003,9 +1004,9 @@ def _stream_graph_files(
 
     if grouped is None:
         payload = doc.model_dump(mode="json", by_alias=True)
-        write_json(dest_dir / "graph.json", payload, stream=True)
+        write_json(dest_dir / "graph" / "graph.json", payload, stream=True)
         markdown = render_graph_markdown(doc)
-        atomic_write_bytes(dest_dir / "graph.md", markdown.encode("utf-8"))
+        atomic_write_bytes(dest_dir / "graph" / "graph.md", markdown.encode("utf-8"))
         return
     identity = identity or {}
     formula_by_node = formula_by_node or {}
@@ -1018,8 +1019,8 @@ def _stream_graph_files(
     prefix, suffix = text.split(slot, 1)
     md_head = render_graph_markdown(doc)
     md_head = md_head.replace("- Links: 0\n", f"- Links: {n_links}\n", 1)
-    json_tmp = temporary_path(dest_dir / "graph.json")
-    md_tmp = temporary_path(dest_dir / "graph.md")
+    json_tmp = temporary_path(dest_dir / "graph" / "graph.json")
+    md_tmp = temporary_path(dest_dir / "graph" / "graph.md")
     try:
         with (
             json_tmp.open("w", encoding="utf-8", newline="\n") as json_file,
@@ -1066,10 +1067,14 @@ def _stream_graph_files(
             json_file.write(suffix + "\n")
             json_file.flush()
             os.fsync(json_file.fileno())
-        json_tmp.replace(dest_dir / "graph.json")
-        md_tmp.replace(dest_dir / "graph.md")
+            md_file.flush()
+            os.fsync(md_file.fileno())
+        _publish_blob(json_tmp, dest_dir / "graph" / "graph.json")
+        _publish_blob(md_tmp, dest_dir / "graph" / "graph.md")
     except BaseException:
         json_tmp.unlink(missing_ok=True)
         md_tmp.unlink(missing_ok=True)
         raise
+    json_tmp.unlink(missing_ok=True)
+    md_tmp.unlink(missing_ok=True)
     doc.links = []

@@ -12,6 +12,14 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from finance_context.store.duckdb_io import (
+    copy_arrow_parquet,
+    copy_blob,
+    read_parquet_column_tuples,
+    read_parquet_rows,
+    read_parquet_table,
+)
+
 _CELL_COLUMNS = (
     "sheet",
     "row",
@@ -41,12 +49,25 @@ def temporary_path(path: Path) -> Path:
 def atomic_write_bytes(path: Path, data: bytes) -> None:
     """Publish ``data`` as ``path``. Concurrent writers use distinct temp names."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = temporary_path(path)
+    src = temporary_path(path)
     try:
-        tmp.write_bytes(data)
-        atomic_replace(tmp, path)
+        src.write_bytes(data)
+        _publish_blob(src, path)
     except BaseException:
-        tmp.unlink(missing_ok=True)
+        src.unlink(missing_ok=True)
+        raise
+    src.unlink(missing_ok=True)
+
+
+def _publish_blob(src: Path, path: Path) -> None:
+    """DuckDB copies ``src`` onto a temp file, then ``atomic_replace`` publishes it."""
+    published = temporary_path(path)
+    published.unlink()
+    try:
+        copy_blob(src, published)
+        atomic_replace(published, path)
+    except BaseException:
+        published.unlink(missing_ok=True)
         raise
 
 
@@ -149,17 +170,18 @@ def write_json(
 def stream_json(path: Path, data: Any, *, sort_keys: bool = False) -> None:
     """json.dump writes the document in chunks. No whole-document str or bytes."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = temporary_path(path)
+    src = temporary_path(path)
     try:
-        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+        with src.open("w", encoding="utf-8", newline="\n") as handle:
             json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=sort_keys)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        atomic_replace(tmp, path)
+        _publish_blob(src, path)
     except BaseException:
-        tmp.unlink(missing_ok=True)
+        src.unlink(missing_ok=True)
         raise
+    src.unlink(missing_ok=True)
 
 
 _ARROW_TYPES = {
@@ -207,8 +229,9 @@ def _write_row_table(
 def _write_table_file(path: Path, table: pa.Table) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = temporary_path(path)
+    tmp.unlink()
     try:
-        pq.write_table(table, tmp)
+        copy_arrow_parquet(table, tmp)
         atomic_replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -216,14 +239,12 @@ def _write_table_file(path: Path, table: pa.Table) -> None:
 
 
 def read_parquet(path: Path) -> list[dict[str, Any]]:
-    return pq.read_table(path).to_pylist()
+    return read_parquet_rows(path)
 
 
 def read_parquet_columns(path: Path, columns: Sequence[str]) -> list[tuple[Any, ...]]:
     """Read named columns only. The rest of the row stays on disk."""
-    table = pq.read_table(path, columns=list(columns))
-    arrays = [table.column(name).to_pylist() for name in columns]
-    return list(zip(*arrays, strict=True))
+    return read_parquet_column_tuples(path, list(columns))
 
 
 RAW_CELL_TYPES = (
@@ -254,26 +275,13 @@ def write_cells_parquet(path: Path, rows: list[dict[str, Any]]) -> None:
     )
 
 
-def write_columns_parquet(
-    path: Path,
-    columns: Sequence[tuple[str, str]],
-    data: dict[str, list[Any] | None],
-) -> None:
-    """One row group from column lists. Each list is dropped after Arrow copies it."""
-    arrays = []
-    for name, dtype in columns:
-        arrays.append(pa.array(data[name], type=_ARROW_TYPES[dtype]))
-        data[name] = None
-    table = pa.Table.from_arrays(arrays, names=[name for name, _dtype in columns])
-    del arrays
-    _write_table_file(path, table)
-
-
 class RowGroupWriter:
-    """ParquetWriter row groups. A table that fits in one group uses write_table.
+    """One DuckDB parquet file per requested row group.
 
-    ``write_table`` bytes match the historical single-group files. Bytes differ
-    only when a row group is smaller than the table.
+    DuckDB 2.0 flushes a parquet file on 2048-row vectors, so one ``COPY`` cannot
+    honor ``parquet_row_group_rows``. A file that stays in one group is one DuckDB
+    ``COPY``. Each requested group is its own DuckDB file. Several files are
+    appended with PyArrow so each part stays one row group.
     """
 
     def __init__(
@@ -288,8 +296,8 @@ class RowGroupWriter:
         self.row_group_rows = row_group_rows
         self._buffered = 0
         self._chunks: list[list[list[Any]]] = []
-        self._writer: pq.ParquetWriter | None = None
-        self._tmp: Path | None = None
+        self._parts: list[Path] = []
+        self._streaming = False
         self._closed = False
 
     def write_lists(self, columns_data: Sequence[Sequence[Any]]) -> None:
@@ -298,7 +306,7 @@ class RowGroupWriter:
         if not columns_data or len(columns_data[0]) == 0:
             return
         count = len(columns_data[0])
-        if self._writer is None and (
+        if not self._streaming and (
             self.row_group_rows <= 0 or self._buffered + count <= self.row_group_rows
         ):
             self._chunks.append([list(column) for column in columns_data])
@@ -311,47 +319,79 @@ class RowGroupWriter:
         if self._closed:
             return
         self._closed = True
-        if self._writer is not None:
-            self._writer.close()
-            assert self._tmp is not None
-            atomic_replace(self._tmp, self.path)
+        try:
+            self._finish()
+        except BaseException:
+            self._drop_parts()
+            raise
+
+    def _finish(self) -> None:
+        if not self._streaming:
+            merged: list[list[Any]] = [[] for _ in self.names]
+            for chunk in self._chunks:
+                for index, values in enumerate(chunk):
+                    merged[index].extend(values)
+            self._chunks.clear()
+            arrays = [
+                pa.array(values, type=typ) for values, typ in zip(merged, self.types, strict=True)
+            ]
+            _write_table_file(self.path, pa.Table.from_arrays(arrays, names=self.names))
             return
-        merged: list[list[Any]] = [[] for _ in self.names]
-        for chunk in self._chunks:
-            for index, values in enumerate(chunk):
-                merged[index].extend(values)
-        self._chunks.clear()
-        arrays = [
-            pa.array(values, type=typ) for values, typ in zip(merged, self.types, strict=True)
-        ]
-        _write_table_file(self.path, pa.Table.from_arrays(arrays, names=self.names))
+        if not self._parts:
+            empty = [pa.array([], type=typ) for typ in self.types]
+            _write_table_file(self.path, pa.Table.from_arrays(empty, names=self.names))
+            return
+        if len(self._parts) == 1:
+            atomic_replace(self._parts[0], self.path)
+            self._parts.clear()
+            return
+        self._stitch()
 
     def begin_row_groups(self) -> None:
-        """Start ParquetWriter groups. Further write_lists calls are not buffered."""
+        """Further ``write_lists`` calls are each one row group."""
         self._start_groups()
 
     def _start_groups(self) -> None:
-        if self._writer is not None:
+        if self._streaming:
             return
+        self._streaming = True
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._tmp = temporary_path(self.path)
-        schema = pa.schema(list(zip(self.names, self.types, strict=True)))
-        try:
-            self._writer = pq.ParquetWriter(self._tmp, schema)
-        except BaseException:
-            self._abort_tmp()
-            raise
         pending = self._chunks
         self._chunks = []
+        self._buffered = 0
         for chunk in pending:
             self._write_group(chunk)
 
     def _write_group(self, columns_data: Sequence[Sequence[Any]]) -> None:
-        assert self._writer is not None
         arrays = [
             pa.array(values, type=typ) for values, typ in zip(columns_data, self.types, strict=True)
         ]
-        self._writer.write_table(pa.Table.from_arrays(arrays, names=self.names))
+        table = pa.Table.from_arrays(arrays, names=self.names)
+        part = temporary_path(self.path)
+        part.unlink()
+        try:
+            copy_arrow_parquet(table, part)
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
+        self._parts.append(part)
+
+    def _stitch(self) -> None:
+        tmp = temporary_path(self.path)
+        schema = pa.schema(list(zip(self.names, self.types, strict=True)))
+        try:
+            with pq.ParquetWriter(tmp, schema, compression="snappy") as writer:
+                for part in self._parts:
+                    writer.write_table(read_parquet_table(part))
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        try:
+            atomic_replace(tmp, self.path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        self._drop_parts()
 
     def __enter__(self) -> RowGroupWriter:
         return self
@@ -364,17 +404,15 @@ class RowGroupWriter:
         return False
 
     def _abort_tmp(self) -> None:
-        writer = self._writer
-        self._writer = None
-        if writer is not None:
-            try:
-                writer.close()
-            except Exception:
-                pass
-        tmp = self._tmp
-        self._tmp = None
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
+        self._closed = True
+        self._chunks.clear()
+        self._drop_parts()
+
+    def _drop_parts(self) -> None:
+        parts = self._parts
+        self._parts = []
+        for part in parts:
+            part.unlink(missing_ok=True)
 
 
 class _RowView:
@@ -398,7 +436,7 @@ class ColumnRows:
     """Row views over per-column lists. Repeated strings can share one object."""
 
     def __init__(self, path: Path, dedup: tuple[str, ...] = ("sheet", "number_format")) -> None:
-        table = pq.read_table(path)
+        table = read_parquet_table(path)
         self._cols: dict[str, list[Any]] = {}
         for name in table.column_names:
             values = table.column(name).to_pylist()

@@ -33,7 +33,8 @@ def test_sessions_share_formula_ir(tmp_path: Path) -> None:
     root = tmp_path / "data"
     shared = shared_book_dir(root, job_id)
     shared.mkdir(parents=True)
-    (shared / "source.xlsx").write_bytes(raw)
+    (shared / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    (shared / "source" / "source.xlsx").write_bytes(raw)
 
     def once(session: str) -> None:
         settings = Settings(
@@ -59,6 +60,6 @@ def test_sessions_share_formula_ir(tmp_path: Path) -> None:
     once("beta")
 
     assert (shared / "ir" / "cells.parquet").stat().st_mtime_ns == compiled
-    assert (shared / "layout.json").is_file()
-    assert (session_job_dir(root, job_id, "alpha") / "context.md").is_file()
-    assert (session_job_dir(root, job_id, "beta") / "context.md").is_file()
+    assert (shared / "layout" / "layout.json").is_file()
+    assert (session_job_dir(root, job_id, "alpha") / "context" / "context.md").is_file()
+    assert (session_job_dir(root, job_id, "beta") / "context" / "context.md").is_file()

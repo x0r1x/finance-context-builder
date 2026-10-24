@@ -21,19 +21,19 @@ def _xlsx(path: Path) -> Path:
 
 def test_source_name_follows_the_bytes_not_the_suffix() -> None:
     assert source_name(SIGNATURE + b"rest") == "source.xls"
-    assert source_name(b"PK\x03\x04rest") == "source.xlsx"
+    assert source_name(b"PK\x03\x04rest") == "source/source.xlsx"
 
 
 def test_existing_xlsx_is_used_as_is(tmp_path: Path) -> None:
-    _xlsx(tmp_path / "source.xlsx")
+    _xlsx(tmp_path / "source" / "source.xlsx")
     assert not (tmp_path / "source.xls").exists()
     converter = FakeConverter(available=False)
-    assert ensure_xlsx(tmp_path, converter) == tmp_path / "source.xlsx"
+    assert ensure_xlsx(tmp_path, converter) == tmp_path / "source" / "source.xlsx"
     assert converter.calls == []
 
 
 def test_newer_xls_beside_a_stale_xlsx_is_reconverted(tmp_path: Path) -> None:
-    stale = _xlsx(tmp_path / "source.xlsx")
+    stale = _xlsx(tmp_path / "source" / "source.xlsx")
     write_ole2(tmp_path / "source.xls", XLS_STREAMS)
     os.utime(stale, ns=(1_000_000_000, 1_000_000_000))
     prepared = _xlsx(tmp_path / "prepared.xlsx")
@@ -47,7 +47,7 @@ def test_legacy_xls_is_converted_once(tmp_path: Path) -> None:
     write_ole2(tmp_path / "source.xls", XLS_STREAMS)
     converter = FakeConverter(_xlsx(tmp_path / "prepared.xlsx"))
     target = ensure_xlsx(tmp_path, converter)
-    assert target == tmp_path / "source.xlsx"
+    assert target == tmp_path / "source" / "source.xlsx"
     assert target.read_bytes() == (tmp_path / "prepared.xlsx").read_bytes()
     assert converter.calls == [tmp_path / "source.xls"]
     ensure_xlsx(tmp_path, converter)
@@ -56,7 +56,7 @@ def test_legacy_xls_is_converted_once(tmp_path: Path) -> None:
 
 
 def test_ole2_bytes_stored_as_xlsx_are_converted(tmp_path: Path) -> None:
-    write_ole2(tmp_path / "source.xlsx", XLS_STREAMS)
+    write_ole2(tmp_path / "source" / "source.xlsx", XLS_STREAMS)
     converter = FakeConverter(_xlsx(tmp_path / "prepared.xlsx"))
     target = ensure_xlsx(tmp_path, converter)
     assert target.read_bytes() == (tmp_path / "prepared.xlsx").read_bytes()
@@ -78,7 +78,7 @@ def test_missing_libreoffice_is_an_unsupported_media_type(tmp_path: Path) -> Non
         ensure_xlsx(tmp_path, FakeConverter(available=False))
     assert ei.value.code == "unsupported_media_type"
     assert "LibreOffice" in ei.value.detail
-    assert not (tmp_path / "source.xlsx").exists()
+    assert not (tmp_path / "source" / "source.xlsx").exists()
 
 
 def test_converter_output_that_is_not_a_zip_is_rejected(tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ def test_converter_output_that_is_not_a_zip_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ContextError) as ei:
         ensure_xlsx(tmp_path, FakeConverter(garbage))
     assert ei.value.code == "zip_rejected"
-    assert not (tmp_path / "source.xlsx").exists()
+    assert not (tmp_path / "source" / "source.xlsx").exists()
 
 
 def test_no_source_at_all_is_an_empty_file(tmp_path: Path) -> None:

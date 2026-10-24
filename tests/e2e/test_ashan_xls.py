@@ -94,7 +94,7 @@ def test_ashan_xls_converts_and_builds(xls_book: tuple[Path, ContextDocument]) -
     dest, doc = xls_book
     assert (dest / LEGACY_SOURCE).is_file()
     assert (dest / SOURCE).is_file()  # the LibreOffice copy every later stage reads
-    assert (dest / "context.json").is_file()
+    assert (dest / "context" / "context.json").is_file()
     assert doc.meta.status == "succeeded"
     assert doc.meta.questions == []
     assert doc.workbook.sheets == SHEETS

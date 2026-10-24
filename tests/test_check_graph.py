@@ -511,6 +511,29 @@ def test_normalized_value_that_only_reformats_the_cache_is_not_required(tmp_path
     assert result.returncode == 0, result.stderr
 
 
+def test_role_cell_trailing_space_matches_stripped_markdown(tmp_path: Path) -> None:
+    payload = _ok_context()
+    payload["blocks"][0]["rows"][0]["cells"] = [
+        {"addr": "F1", "col": 6, "role": "note", "cached_value": "Shown  "},
+    ]
+    context = _write(tmp_path / "context.json", payload)
+    graph = _write(tmp_path / "graph.json", _ok_graph())
+    context_md = tmp_path / "context.md"
+    context_md.write_text(
+        "EBITDA\nP&L\\|13\\|P&L!r2\n=SUM(RC[-4]:RC[-1])\nF note: Shown\n",
+        encoding="utf-8",
+    )
+    graph_md = tmp_path / "graph.md"
+    graph_md.write_text(
+        "Nodes: 8\nEdges: 20\nP&L!C13\nP&L\\|13\\|P&L!r2\n2024\naggregation\n=SUM(C9:C12)\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        str(context), str(graph), "--context-md", str(context_md), "--graph-md", str(graph_md)
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_axes_summary_reports_the_period_span(tmp_path: Path) -> None:
     axis = _dated_axis(
         (13, "2024", "2024-01-01", "2024-12-31"),

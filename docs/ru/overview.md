@@ -18,19 +18,20 @@
 
 На входе книга, формулы которой уже посчитаны. `.xlsb` и зашифрованные файлы отклоняются. Старый `.xls` принимается, если LibreOffice может его конвертировать.
 
-На выход джоба. `raw/`, formula IR (`cells`, `edges`, `cell_edges`, `compile.json`) и `layout.json` лежат в `shared/books/{job_id}/` и одинаковы для любой сессии. Context, graph, `meta.json`, `ir/graph_edges.parquet` и `ir/graph_index.parquet` лежат в `sessions/{session}/jobs/{job_id}/`. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла.
+На выход джоба. `raw/`, formula IR (`ir/cells.parquet`, `ir/edges.parquet`, `ir/cell_edges.parquet`, `ir/compile.json`) и `layout/layout.json` лежат в `shared/books/{job_id}/` и одинаковы для любой сессии. `context/`, `graph/` (`graph.json`, `graph.md`, `edges.parquet`, `index.parquet`) и `meta/meta.json` лежат в `sessions/{session}/jobs/{job_id}/`. `job_id` — это SHA-256 строки `context:` и `content_sha256` книги, поэтому имя каталога не совпадает с хэшем файла.
 
 | Артефакт | Содержимое |
 | --- | --- |
 | `raw/` | Ячейки, формулы, кэш, форматы, `cell_presence.parquet` (`populated` / `styled_blank`) |
-| `ir/` | Шаблоны, AST, `edges.parquet` (как написано в формуле), `cell_edges.parquet` (раскрытие формулы, lag пустой), `graph_edges.parquet` (`col_offset` / `period_lag`) и `compile.json` (штамп схемы IR) |
-| `layout.json` | Блоки отчёта, оси периодов, виды строк |
+| `ir/` | Шаблоны, AST, `edges.parquet` (как написано в формуле), `cell_edges.parquet` (раскрытие формулы, lag пустой) и `compile.json` (штамп схемы IR) |
+| `layout/layout.json` | Блоки отчёта, оси периодов, виды строк |
+| `graph/` | `graph.json`, `graph.md`, `edges.parquet` (`col_offset` / `period_lag`), `index.parquet` |
 | `graph.json` / `graph.md` | Схема `1.7.0`: счётчики parquet на уровне ячеек, `iterate`, циклы (`breakers`) / `circularity_hints`, `dangling_classes` и `links[]` (ячейка, формула A1, `formula_class`, `row_key`, `period_id`, входы; диапазон не раскрывается). В Markdown у links есть колонка Class. AST и cell-edges остаются в `ir/` |
 | `context.json` / `context.md` | Схема `1.14.0`: паспорт, `axes` (единственное место флагов и `group_key`), каждый блок и каждая строка (`row_key`, одна формула, серии кэша по `axis_ids`, `value_statuses`, `scale_factor`, `normalized_values`). Год, повторённый над месяцами, — `group_key`, не вторая ось. Год и месяц в одной полосе заголовков — одна таблица. Повтор той же шапки в следующей секции ссылается на ту же ось. В Markdown секция `## Axes` печатает ось один раз, периоды — колонками: в шапке id оси и ключи периодов (`\| PF Model!r9 \| 2021 \| 2022 \| 2032 \|`), под ней строки `Start` / `End` (ISO-даты периода, если линейка Start/End есть в книге), `Group` / `Calendar` / `Flags`. Таблица блока добавляет колонки `Path` (`label_path`) и `Cells` (`L total: -86400`, `G Start: 01.01.2024`). У role-ячейки есть `header`. Колонка `total` / `stub` не входит в ось. Пустые строки атрибутов скрыты: год без дат, группы и флагов — только шапка. Регулярная месячная сетка схлопывается в одну колонку на год (`\| Output!r6 \| 2020 \| 2021 \|` и строка `\| Periods \| 2020-01 .. 2020-12 \| ... \|`). JSON не пишет пустой `flags` и `calendar_year`, если год уже в ключе. У блока есть `Axes: ...` и одна сетка на серию. Пустая ячейка — `empty`, неприменимая ячейка — `n/a`, тысячи печатаются как `k£ ×1000` и `1.5 (1500)`. Заголовок периода — `period_key` и буква колонки (`Y23 (AA)`). Значение периода показывает кэш и `[Sheet!A1]`. Под блоком `relations` используют тот же `row_key`. Второго каталога строк и реестра ячеек нет. В шапке одна строка полноты контента. `graph` — указатель |
 
 Каталог, паспорт и наблюдения — HTTP-проекции, не файлы. Схемы: `catalog-2`, `summary-2`, `observation-2`. Подробности: [slices.md](slices.md).
 
-Formula IR и layout той же книги общие: `$DATA_DIR/shared/books/{job_id}/`. POST этот каталог не удаляет. Ребёнок джобы снимает устаревшие `layout.json`, `raw/` или formula IR под `shared/books/{job_id}/.lock` и публикует каждый файл через временный файл, fsync, `os.replace` и fsync каталога.
+Formula IR и layout той же книги общие: `$DATA_DIR/shared/books/{job_id}/`. POST этот каталог не удаляет. Ребёнок джобы снимает устаревшие `layout/layout.json`, `raw/` или formula IR под `shared/books/{job_id}/.lock` и публикует каждый файл через временный файл, fsync, `os.replace` и fsync каталога.
 
 ## Пайплайн
 

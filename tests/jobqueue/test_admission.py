@@ -56,5 +56,5 @@ def test_queue_config_omits_the_password(caplog) -> None:
     assert "s3cret" not in text
     assert "127.0.0.1" in text
     assert rows[0].queue == "finance-context"
-    assert rows[0].slots == 2
+    assert rows[0].slots == 4
     assert rows[0].timeout_sec == 3730

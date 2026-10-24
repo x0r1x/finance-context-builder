@@ -98,15 +98,20 @@ def test_get_context_md_rewrites_a_finished_job(tmp_path: Path) -> None:
             }
         ],
     }
-    (dest / "context.json").write_text(json.dumps(context), encoding="utf-8")
-    (dest / "context.md").write_text("1.3458683383241299\n", encoding="utf-8")
-    (dest / "graph.json").write_text("{}\n", encoding="utf-8")
-    (dest / "graph.md").write_text("PF Model!AA172 | Z172*(1+AA165)\n", encoding="utf-8")
+    (dest / "context" / "context.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "context" / "context.json").write_text(json.dumps(context), encoding="utf-8")
+    (dest / "context" / "context.md").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "context" / "context.md").write_text("1.3458683383241299\n", encoding="utf-8")
+    (dest / "graph" / "graph.json").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "graph" / "graph.json").write_text("{}\n", encoding="utf-8")
+    (dest / "graph" / "graph.md").parent.mkdir(parents=True, exist_ok=True)
+    (dest / "graph" / "graph.md").write_text("PF Model!AA172 | Z172*(1+AA165)\n", encoding="utf-8")
     with _app(tmp_path) as client:
         response = client.get(f"/v1/context-jobs/{job_id}/context.md")
     assert response.status_code == 200
     assert "1.3458683383241299 [PF Model!AA172]" in response.text
     assert "Z172*(1+AA165)" not in response.text
-    stored = json.loads((dest / "context.json").read_text(encoding="utf-8"))
+    stored = json.loads((dest / "context" / "context.json").read_text(encoding="utf-8"))
     assert stored["blocks"][0]["rows"][0]["values"] == ["1.3458683383241299"]
-    assert (dest / "graph.md").read_text(encoding="utf-8") == "PF Model!AA172 | Z172*(1+AA165)\n"
+    graph_md = (dest / "graph" / "graph.md").read_text(encoding="utf-8")
+    assert graph_md == "PF Model!AA172 | Z172*(1+AA165)\n"

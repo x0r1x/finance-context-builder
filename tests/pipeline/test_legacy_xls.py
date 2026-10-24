@@ -47,7 +47,7 @@ def test_legacy_xls_is_converted_before_parse(tmp_path: Path, dest: Path) -> Non
         dest, job_id="job-xls", source_filename="model.xls"
     )
     assert doc.meta.status == "succeeded"
-    assert (dest / "source.xlsx").is_file()
+    assert (dest / "source" / "source.xlsx").is_file()
     assert (dest / "source.xls").is_file()
     assert converter.calls == [dest / "source.xls"]
     labels = {row.label for block in doc.blocks for row in block.rows}
@@ -60,7 +60,7 @@ def test_legacy_xls_without_libreoffice_fails_cleanly(tmp_path: Path, dest: Path
     with pytest.raises(ContextError) as ei:
         pipeline.run(dest, job_id="job-xls", source_filename="model.xls")
     assert ei.value.code == "unsupported_media_type"
-    meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["stage"] == "parse"
 
 
@@ -75,7 +75,7 @@ def test_job_process_records_the_error_code(tmp_path: Path, monkeypatch) -> None
     _fail_with(monkeypatch, ContextError("zip_rejected", "not a zip"))
     run_job_process(str(tmp_path), "job-bad", 2)
     meta = json.loads(
-        (session_job_dir(tmp_path, "job-bad") / "meta.json").read_text(encoding="utf-8")
+        (session_job_dir(tmp_path, "job-bad") / "meta" / "meta.json").read_text(encoding="utf-8")
     )
     assert meta["status"] == "failed"
     assert meta["error"] == "zip_rejected"
@@ -87,7 +87,7 @@ def test_job_process_keeps_raising_an_unexpected_error(tmp_path: Path, monkeypat
     with pytest.raises(RuntimeError):
         run_job_process(str(tmp_path), "job-bug")
     meta = json.loads(
-        (session_job_dir(tmp_path, "job-bug") / "meta.json").read_text(encoding="utf-8")
+        (session_job_dir(tmp_path, "job-bug") / "meta" / "meta.json").read_text(encoding="utf-8")
     )
     assert meta["status"] == "failed"
     assert meta["error"] == "RuntimeError"
