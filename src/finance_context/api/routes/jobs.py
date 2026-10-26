@@ -234,6 +234,7 @@ def _named_write_probe(path: Path) -> bool:
 async def post_job(
     request: Request,
     file: Annotated[UploadFile | None, File()] = None,
+    rebuild: Annotated[bool, Query()] = False,
 ) -> JSONResponse:
     ctx = _ctx(request)
     if file is None:
@@ -251,7 +252,9 @@ async def post_job(
     )
     digest, job_id = await run_blocking(ctx, _digest_job, data)
     # Fsync, the publisher hash, and the enqueue share one worker thread.
-    body = await run_blocking(ctx, _accept_upload, ctx, filename, data, digest, job_id)
+    body = await run_blocking(
+        ctx, _accept_upload, ctx, filename, data, digest, job_id, rebuild
+    )
     if isinstance(body, dict) and isinstance(body.get("job_id"), str):
         body = dict(body)
         body["events_url"] = f"/v1/context-jobs/{body['job_id']}/events"
@@ -324,6 +327,7 @@ def _accept_upload(
     data: bytes,
     digest: str,
     job_id: str,
+    rebuild: bool = False,
 ) -> dict[str, object]:
     """Fsync the book, hash the publisher, and enqueue. One thread.
 
@@ -342,13 +346,17 @@ def _accept_upload(
     if not owner_path.exists():
         write_json(owner_path, {"content_sha256": digest, "source_filename": filename})
     try:
-        early = _inflight_response(ctx, job_id, dest)
+        early = _inflight_response(ctx, job_id, dest, rebuild=rebuild)
         if early is not None:
             return early
         with file_lock(dest / ".lock", blocking=False) as locked:
             if not locked or run_lock_busy(dest):
+                if rebuild:
+                    raise _JobStillRunning
                 return _dedup(ctx, job_id, dest)
-            return _enqueue_or_reuse(ctx, filename, digest, job_id, dest, shared)
+            return _enqueue_or_reuse(
+                ctx, filename, digest, job_id, dest, shared, rebuild=rebuild
+            )
     except _JobStillRunning as exc:
         raise ApiError(
             409,
@@ -363,7 +371,13 @@ def _accept_upload(
         ) from exc
 
 
-def _inflight_response(ctx: AppContext, job_id: str, dest: Path) -> dict[str, object] | None:
+def _inflight_response(
+    ctx: AppContext,
+    job_id: str,
+    dest: Path,
+    *,
+    rebuild: bool = False,
+) -> dict[str, object] | None:
     """Return the current job, or None when the caller may enqueue.
 
     A ``started`` hash with a free run lock is abandoned after one recheck:
@@ -388,6 +402,8 @@ def _inflight_response(ctx: AppContext, job_id: str, dest: Path) -> dict[str, ob
         return None
     if not _still_inflight(status, dest):
         return None
+    if rebuild:
+        raise _JobStillRunning
     if not publisher_changed(stored):
         return _dedup(ctx, job_id, dest)
     ctx.queue.request_stop(rq_id)
@@ -508,6 +524,8 @@ def _enqueue_or_reuse(
     job_id: str,
     dest: Path,
     shared: Path,
+    *,
+    rebuild: bool = False,
 ) -> dict[str, object]:
     settings = ctx.settings
     queue = ctx.queue
@@ -520,15 +538,15 @@ def _enqueue_or_reuse(
     corpse = _queue_lost_corpse(dest, stored, status)
     if corpse is False:
         raise _JobStillRunning
-    if corpse is not True and (
-        run_lock_busy(dest)
-        or (status in INFLIGHT_STATUSES and not _started_without_child(status, dest, stored))
-    ):
-        if publisher_changed(stored):
+    busy = run_lock_busy(dest) or (
+        status in INFLIGHT_STATUSES and not _started_without_child(status, dest, stored)
+    )
+    if corpse is not True and busy:
+        if rebuild or publisher_changed(stored):
             raise _JobStillRunning
         return _dedup(ctx, job_id, dest)
     ready = _ready_meta(dest)
-    if ready is not None:
+    if ready is not None and not rebuild:
         log_event(
             _LOGGER,
             logging.INFO,
@@ -554,7 +572,7 @@ def _enqueue_or_reuse(
     # context is still not a snapshot: _ready_meta already refused it, and the
     # child returns immediately when context.json and context.md are both there.
     shared.mkdir(parents=True, exist_ok=True)
-    stale = stale_from_meta(stored)
+    stale = "compile" if rebuild else stale_from_meta(stored)
     session_clear = stale if stale is not None else "layout"
     clear_downstream_artifacts(dest, stale_from=session_clear, drop_meta=False)
     record_rebuild_stage(dest, stale, generation=generation)

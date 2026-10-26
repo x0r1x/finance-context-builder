@@ -24,6 +24,7 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from finance_context.api.app import create_app
 from finance_context.app.ids import job_id_for, sha256_bytes
 from finance_context.app.publisher import publisher_fingerprint
+from finance_context.jobqueue.queue import INFLIGHT_STATUSES
 from finance_context.jobqueue.spawn import run_lock_busy
 from finance_context.settings import Settings
 
@@ -153,6 +154,40 @@ def test_repeat_post_keeps_ready_snapshot(client: TestClient, tmp_path: Path) ->
     assert repeated.json()["status"] not in {"queued", "running"}
     assert (job_dir / "context" / "context.json").read_bytes() == context
     assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_rebuild_query_runs_a_finished_book_again(client: TestClient, tmp_path: Path) -> None:
+    source = _xlsx(tmp_path / "model.xlsx")
+    created = _upload(client, source)
+    job_id = created.json()["job_id"]
+    assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
+    dest = _job_dir(tmp_path, job_id)
+    ctx = client.app.state.ctx
+    for _ in range(50):
+        status = ctx.queue.status(f"local--{job_id}")
+        if status not in INFLIGHT_STATUSES and not run_lock_busy(dest):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("job stayed inflight")
+    meta_path = dest / "meta" / "meta.json"
+    before = json.loads(meta_path.read_text(encoding="utf-8"))
+    repeated = client.post(
+        "/v1/context-jobs",
+        params={"rebuild": "true"},
+        files={
+            "file": (
+                "model.xlsx",
+                source.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert repeated.status_code == 202
+    assert repeated.json()["status"] in {"queued", "running"}
+    assert _wait_for_terminal(client, job_id)["status"] == "succeeded"
+    after = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert after["generation"] > before["generation"]
 
 
 def test_ready_post_logs_job_reuse_and_does_not_launch(tmp_path: Path, caplog) -> None:

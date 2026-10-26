@@ -6,6 +6,7 @@ import json
 import logging
 import shutil
 import tempfile
+import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any, Protocol
 import pyarrow as pa
 
 from finance_context.settings import Settings
+from finance_context.store.paths import shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.store")
 _BATCH_ROWS = 2048
@@ -40,6 +42,7 @@ _SESSION = (
     "meta/meta.json",
 )
 _EXPORT_WARNING = "minio export failed"
+_publish_held = threading.local()
 
 
 class ObjectStore(Protocol):
@@ -264,20 +267,121 @@ def read_published_file(settings: Settings, local: Path, job_id: str, relative: 
 
     A missing marker, an empty key list, a recorded export warning, or a
     failed bucket read uses the local file. An object left by a copy that
-    did not finish is not served.
+    did not finish is not served. A settled local book with no marker is
+    copied once, then read from the bucket.
     """
-    if _export_warning_recorded(local, relative):
+    if not settings.minio_configured() or _export_warning_recorded(local, relative):
         return read_blob_bytes(str(local))
-    if settings.minio_configured() and _marker_lists(settings, job_id, relative):
-        url = object_url(
-            settings.minio_bucket,
-            object_key(settings.minio_prefix, job_id, relative),
-        )
-        try:
-            return read_blob_bytes(url, settings)
-        except Exception:
-            _LOGGER.warning("minio read failed for %s", relative)
+    if _marker_lists(settings, job_id, relative):
+        return _read_bucket_or_local(settings, local, job_id, relative)
+    _ensure_published_book(settings, local, job_id, relative)
+    if _marker_lists(settings, job_id, relative):
+        return _read_bucket_or_local(settings, local, job_id, relative)
     return read_blob_bytes(str(local))
+
+
+def _read_bucket_or_local(settings: Settings, local: Path, job_id: str, relative: str) -> bytes:
+    url = object_url(
+        settings.minio_bucket,
+        object_key(settings.minio_prefix, job_id, relative),
+    )
+    try:
+        return read_blob_bytes(url, settings)
+    except Exception:
+        _LOGGER.warning("minio read failed for %s", relative)
+    return read_blob_bytes(str(local))
+
+
+def _ensure_published_book(settings: Settings, local: Path, job_id: str, relative: str) -> None:
+    """Copy a finished local book when the marker does not list it."""
+    dest = _session_dest(local, relative)
+    if dest is None or not _job_is_settled(dest):
+        return
+    if not _local_book_complete(settings, job_id, dest):
+        return
+    book = shared_book_dir(settings.data_dir, job_id)
+    with _publish_lock(book / ".minio-publish.lock"):
+        if _export_warning_recorded(local, relative) or not _job_is_settled(dest):
+            return
+        state, keys = _load_marker(settings, job_id)
+        if state == "unread":
+            return
+        if state == "missing":
+            warning = export_succeeded_book(settings, job_id=job_id, book=book, dest=dest)
+            if warning:
+                _set_export_warning(dest, warning)
+            return
+        wanted = object_key(settings.minio_prefix, job_id, relative)
+        if wanted in keys:
+            return
+        try:
+            republish_file(settings, local, job_id, relative)
+        except Exception:
+            _LOGGER.warning("minio export failed for %s", relative)
+
+
+def _session_dest(local: Path, relative: str) -> Path | None:
+    parts = Path(relative).parts
+    if not parts:
+        return None
+    try:
+        return local.parents[len(parts) - 1]
+    except IndexError:
+        return None
+
+
+def _job_is_settled(dest: Path) -> bool:
+    meta_path = dest / "meta" / "meta.json"
+    try:
+        stored = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(stored, dict):
+        return False
+    return stored.get("status") not in {None, "queued", "running"}
+
+
+def _local_book_complete(settings: Settings, job_id: str, dest: Path) -> bool:
+    book = shared_book_dir(settings.data_dir, job_id)
+    shared_ready = all((book / name).is_file() for name in _SHARED)
+    session_ready = all((dest / name).is_file() for name in _SESSION)
+    return shared_ready and session_ready
+
+
+def _set_export_warning(dest: Path, warning: str) -> None:
+    from finance_context.store.fs import update_json
+
+    def mutate(stored: dict) -> dict:
+        warnings = stored.get("warnings")
+        items = list(warnings) if isinstance(warnings, list) else []
+        if warning in items:
+            return stored
+        return {**stored, "warnings": [*items, warning]}
+
+    path = dest / "meta" / "meta.json"
+    if path.is_file():
+        update_json(path, mutate)
+
+
+@contextmanager
+def _publish_lock(path: Path) -> Iterator[None]:
+    """One writer for this marker file. The same thread may enter the same path again."""
+    held = getattr(_publish_held, "paths", None)
+    if held is None:
+        held = set()
+        _publish_held.paths = held
+    key = str(path)
+    if key in held:
+        yield
+        return
+    from finance_context.store.fs import file_lock
+
+    with file_lock(path):
+        held.add(key)
+        try:
+            yield
+        finally:
+            held.discard(key)
 
 
 def republish_file(
@@ -295,6 +399,17 @@ def republish_file(
     """
     if not settings.minio_configured():
         return
+    with _publish_lock(_publish_lock_path(settings, job_id, local, relative)):
+        _republish_body(settings, local, job_id, relative, store)
+
+
+def _republish_body(
+    settings: Settings,
+    local: Path,
+    job_id: str,
+    relative: str,
+    store: ObjectStore | None,
+) -> None:
     target = store if store is not None else DuckDBObjectStore(settings)
     url = object_url(settings.minio_bucket, object_key(settings.minio_prefix, job_id, relative))
     if not _mark_published_key(target, settings, job_id, relative, present=False):
@@ -318,10 +433,22 @@ def export_succeeded_book(
     marker before it replaces objects, then writes the marker again only after
     every key. A failed copy tries to leave the marker empty. If that write
     also fails, the previous marker stays. The returned warning keeps reads
-    on the local files. A finished job does not export again.
+    on the local files.
     """
     if not settings.minio_configured():
         return None
+    with _publish_lock(book / ".minio-publish.lock"):
+        return _export_body(settings, job_id=job_id, book=book, dest=dest, store=store)
+
+
+def _export_body(
+    settings: Settings,
+    *,
+    job_id: str,
+    book: Path,
+    dest: Path,
+    store: ObjectStore | None,
+) -> str | None:
     target = store if store is not None else DuckDBObjectStore(settings)
     pairs = [(book / name, name) for name in _SHARED]
     pairs.extend((dest / name, name) for name in _SESSION)
@@ -391,19 +518,46 @@ def _put_and_check(store: ObjectStore, local: Path, url: str) -> None:
 
 
 def _marker_lists(settings: Settings, job_id: str, relative: str) -> bool:
+    state, keys = _load_marker(settings, job_id)
+    if state != "ok":
+        return False
+    return object_key(settings.minio_prefix, job_id, relative) in keys
+
+
+def _load_marker(settings: Settings, job_id: str) -> tuple[str, set[str]]:
+    """``missing`` is no object. ``unread`` is a failed or unusable read."""
     marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
     url = object_url(settings.minio_bucket, marker_key)
     try:
         parsed = json.loads(read_blob_bytes(url, settings))
     except OSError:
-        return False
-    except Exception:
+        return "missing", set()
+    except Exception as exc:
+        if _http_404(exc):
+            return "missing", set()
         _LOGGER.warning("minio read failed for _complete.json")
-        return False
+        return "unread", set()
     keys = parsed.get("keys") if isinstance(parsed, dict) else None
-    if not isinstance(keys, list):
-        return False
-    return object_key(settings.minio_prefix, job_id, relative) in keys
+    if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+        return "unread", set()
+    return "ok", set(keys)
+
+
+def _http_404(exc: Exception) -> bool:
+    """DuckDB 2 reports a missing object as HTTPException, not OSError."""
+    import duckdb
+
+    return isinstance(exc, duckdb.HTTPException) and "HTTP 404" in str(exc)
+
+
+def _publish_lock_path(settings: Settings, job_id: str, local: Path, relative: str) -> Path:
+    """Same content hash shares one bucket prefix, so the lock is the shared book."""
+    book = shared_book_dir(settings.data_dir, job_id)
+    if book.is_dir():
+        return book / ".minio-publish.lock"
+    dest = _session_dest(local, relative)
+    root = dest if dest is not None else local.parent
+    return root / ".minio-publish.lock"
 
 
 def _mark_published_key(

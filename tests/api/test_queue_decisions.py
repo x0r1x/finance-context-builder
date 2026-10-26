@@ -17,6 +17,7 @@ from finance_context.api.errors import ApiError
 from finance_context.api.routes.jobs import _accept_upload, _queue_lost, _read_job
 from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline
+from finance_context.app.publisher import publisher_fingerprint
 from finance_context.jobqueue.spawn import HORSE_FILE, HORSE_LOCK, horse_owner_alive
 from finance_context.settings import Settings
 from finance_context.store.fs import file_lock, write_json
@@ -163,6 +164,74 @@ def test_publisher_change_stops_before_the_pipeline_lock_and_does_not_replace(
     assert caught.value.headers == {"Retry-After": "30"}
     assert queue.stopped == 1
     assert queue.deleted == 0
+    assert queue.enqueued == 0
+
+
+def _ready(dest: Path) -> None:
+    for name in (
+        "context/context.json",
+        "context/context.md",
+        "graph/graph.json",
+        "graph/graph.md",
+    ):
+        path = dest / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+
+
+def test_rebuild_requeues_a_ready_book_from_compile(tmp_path: Path) -> None:
+    queue = _Queue(None)
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(
+        ctx,
+        status="succeeded",
+        stage="done",
+        publisher=publisher_fingerprint(),
+        generation=1,
+    )
+    _ready(dest)
+    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB, True)
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
+    assert body["status"] == "queued"
+    assert queue.enqueued == 1
+    assert meta["rebuild_from"] == "compile"
+    assert meta["generation"] == 2
+
+
+def test_rebuild_waits_while_redis_still_says_started(tmp_path: Path) -> None:
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(
+        ctx,
+        status="succeeded",
+        stage="done",
+        publisher=publisher_fingerprint(),
+        generation=1,
+    )
+    _ready(dest)
+    with pytest.raises(ApiError) as caught:
+        _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB, True)
+    meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
+    assert caught.value.http_status == 409
+    assert caught.value.code == "job_still_running"
+    assert queue.enqueued == 0
+    assert "context/context.json" not in str(meta.get("rebuild_from"))
+    assert (dest / "context" / "context.json").is_file()
+
+
+def test_rebuild_of_a_running_job_stays_conflict(tmp_path: Path) -> None:
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(ctx, status="running", publisher=publisher_fingerprint())
+    run_lock = _hold(dest / ".run.lock")
+    try:
+        with pytest.raises(ApiError) as caught:
+            _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB, True)
+    finally:
+        fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
+        run_lock.close()
+    assert caught.value.http_status == 409
+    assert caught.value.code == "job_still_running"
     assert queue.enqueued == 0
 
 
