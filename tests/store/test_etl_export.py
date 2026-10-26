@@ -20,6 +20,7 @@ from finance_context.store.duckdb_io import (
     object_key,
     read_blob_bytes,
     read_published_file,
+    republish_file,
 )
 from finance_context.store.fs import RowGroupWriter, read_parquet, write_json, write_parquet
 
@@ -54,10 +55,13 @@ class _MemoryStore:
         self.order: list[str] = []
         self.fail = fail
         self.mismatch = mismatch
+        self.fail_on: str | None = None
 
     def put(self, local: Path, url: str) -> None:
         if self.fail is not None:
             raise self.fail
+        if self.fail_on is not None and self.fail_on in url:
+            raise RuntimeError("stopped")
         self.objects[url] = local.read_bytes()
         self.order.append(url)
 
@@ -131,7 +135,8 @@ def test_export_lists_every_book_key_and_writes_the_marker_last(tmp_path: Path) 
     )
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
     expected = [prefix + name for name in (*_SHARED, *_SESSION)]
-    assert store.order[:-1] == expected
+    assert store.order[0] == prefix + "_complete.json"
+    assert store.order[1:-1] == expected
     assert store.order[-1] == prefix + "_complete.json"
     for name in _LOCAL_ONLY:
         assert all(name not in url for url in store.order)
@@ -179,7 +184,9 @@ def test_copy_failure_keeps_the_local_files_and_hides_the_secret(
         export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=mismatch)
         == "minio export failed"
     )
-    assert all(not url.endswith("/_complete.json") for url in mismatch.order)
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    assert mismatch.order == [prefix + "_complete.json", prefix + "_complete.json"]
+    assert json.loads(mismatch.objects[prefix + "_complete.json"])["keys"] == []
 
 
 def test_local_duckdb_reads_match_the_serializer(tmp_path: Path) -> None:
@@ -216,6 +223,171 @@ def test_published_read_falls_back_to_data_dir(
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
     body = read_published_file(_minio(), local, _JOB, "context/context.json")
     assert body == b'{"ok": true}\n'
+
+
+def test_failed_recopy_hides_the_bucket_until_the_marker_is_rewritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    settings = _minio()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    local = dest / "context" / "context.json"
+    published = store.objects[prefix + "context/context.json"]
+    local.write_bytes(b'{"source":"budget.xlsx","v":2}\n')
+
+    def fake_read(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.startswith("s3://"):
+            if uri not in store.objects:
+                raise OSError(uri)
+            return store.objects[uri]
+        return Path(uri).read_bytes()
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    assert read_published_file(settings, local, _JOB, "context/context.json") == published
+
+    store.fail_on = "context/context.json"
+    assert (
+        export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
+        == "minio export failed"
+    )
+    assert json.loads(store.objects[prefix + "_complete.json"])["keys"] == []
+    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    cells = book / "raw" / "cells.parquet"
+    cells.write_bytes(b"local-only-cells\n")
+    assert store.objects[prefix + "raw/cells.parquet"] != b"local-only-cells\n"
+    assert read_published_file(settings, cells, _JOB, "raw/cells.parquet") == b"local-only-cells\n"
+
+
+def test_failed_republish_drops_the_key_so_the_next_read_is_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local = tmp_path / "context.md"
+    local.write_bytes(b"new-md\n")
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    marker_url = prefix + "_complete.json"
+    markdown_key = object_key("team/a", _JOB, "context/context.md")
+    other_key = object_key("team/a", _JOB, "context/context.json")
+    store = _MemoryStore()
+    store.objects[marker_url] = (
+        json.dumps({"keys": [markdown_key, other_key]}, indent=2) + "\n"
+    ).encode()
+    store.objects[prefix + "context/context.md"] = b"old-md\n"
+    store.fail_on = "context/context.md"
+
+    def fake_read(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.startswith("s3://"):
+            if uri not in store.objects:
+                raise OSError(uri)
+            return store.objects[uri]
+        return Path(uri).read_bytes()
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    settings = _minio()
+    with pytest.raises(RuntimeError, match="stopped"):
+        republish_file(settings, local, _JOB, "context/context.md", store=store)
+    marker = json.loads(store.objects[marker_url])
+    assert markdown_key not in marker["keys"]
+    assert other_key in marker["keys"]
+    assert read_published_file(settings, local, _JOB, "context/context.md") == b"new-md\n"
+
+
+def test_marker_clear_is_written_again_when_the_opening_put_does_not_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    settings = _minio()
+    store = _MemoryStore()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    local = dest / "context" / "context.json"
+    local.write_bytes(b'{"v":2}\n')
+    skipped = {"done": False}
+    original_put = store.put
+
+    def put(local_path: Path, url: str) -> None:
+        if url.endswith("/_complete.json") and not skipped["done"]:
+            skipped["done"] = True
+            raise RuntimeError("marker down")
+        original_put(local_path, url)
+
+    monkeypatch.setattr(store, "put", put)
+
+    def fake_read(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.startswith("s3://"):
+            if uri not in store.objects:
+                raise OSError(uri)
+            return store.objects[uri]
+        return Path(uri).read_bytes()
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) == (
+        "minio export failed"
+    )
+    assert json.loads(store.objects[prefix + "_complete.json"])["keys"] == []
+    assert read_published_file(settings, local, _JOB, "context/context.json") == b'{"v":2}\n'
+    meta = dest / "meta" / "meta.json"
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_text('{"warnings": ["minio export failed"]}\n', encoding="utf-8")
+    store.objects[prefix + "_complete.json"] = (
+        json.dumps({"keys": [object_key("team/a", _JOB, "context/context.json")]}, indent=2) + "\n"
+    ).encode()
+    store.objects[prefix + "context/context.json"] = b'{"v":1}\n'
+    assert read_published_file(settings, local, _JOB, "context/context.json") == b'{"v":2}\n'
+
+
+def test_truncated_republish_is_not_served(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local = tmp_path / "context.md"
+    local.write_bytes(b"new-md\n")
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    marker_url = prefix + "_complete.json"
+    markdown_key = object_key("team/a", _JOB, "context/context.md")
+    store = _MemoryStore()
+    store.objects[marker_url] = (json.dumps({"keys": [markdown_key]}, indent=2) + "\n").encode()
+    store.objects[prefix + "context/context.md"] = b"old-md\n"
+
+    original_put = store.put
+    original_size = store.size
+
+    def put(local_path: Path, url: str) -> None:
+        if url.endswith("/context/context.md"):
+            store.objects[url] = b"x"
+            store.order.append(url)
+            return
+        original_put(local_path, url)
+
+    def size(url: str) -> int:
+        if url.endswith("/context/context.md"):
+            return 1
+        return original_size(url)
+
+    monkeypatch.setattr(store, "put", put)
+    monkeypatch.setattr(store, "size", size)
+
+    def fake_read(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.startswith("s3://"):
+            if uri not in store.objects:
+                raise OSError(uri)
+            return store.objects[uri]
+        return Path(uri).read_bytes()
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    settings = _minio()
+    with pytest.raises(OSError, match="size mismatch"):
+        republish_file(settings, local, _JOB, "context/context.md", store=store)
+    assert markdown_key not in json.loads(store.objects[marker_url])["keys"]
+    assert read_published_file(settings, local, _JOB, "context/context.md") == b"new-md\n"
 
 
 def test_requested_row_groups_are_separate_files_stitched_by_pyarrow(tmp_path: Path) -> None:
@@ -273,13 +445,21 @@ def test_pipeline_records_the_warning_and_does_not_export_a_reuse(
     )
     del source
     calls: list[str] = []
+    published: list[str] = []
 
     def fake_export(settings: Settings, *, job_id: str, book: Path, dest: Path, store=None) -> str:
         del settings, book, dest, store
         calls.append(job_id)
         return "minio export failed"
 
+    def fake_republish(
+        settings: Settings, local: Path, job_id: str, relative: str, store=None
+    ) -> None:
+        del settings, local, job_id, store
+        published.append(relative)
+
     monkeypatch.setattr("finance_context.app.pipeline.export_succeeded_book", fake_export)
+    monkeypatch.setattr("finance_context.app.pipeline.republish_file", fake_republish)
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     pipeline.run(dest, job_id="job-test", source_filename="model.xlsx")
     meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
@@ -288,6 +468,28 @@ def test_pipeline_records_the_warning_and_does_not_export_a_reuse(
     assert (dest / "context" / "context.json").is_file()
     pipeline.run(dest, job_id="job-test")
     assert calls == ["job-test"]
+    assert published == []
+    (dest / "context" / "context.md.renderer").write_text("old\n", encoding="utf-8")
+    pipeline.run(dest, job_id="job-test")
+    assert calls == ["job-test"]
+    assert published == ["context/context.md"]
+    assert (dest / "context" / "context.md.renderer").read_text(encoding="utf-8") == (
+        "structure-columns\n"
+    )
+
+    def fail_republish(
+        settings: Settings, local: Path, job_id: str, relative: str, store=None
+    ) -> None:
+        del settings, local, job_id, store
+        published.append(relative)
+        raise OSError("marker")
+
+    monkeypatch.setattr("finance_context.app.pipeline.republish_file", fail_republish)
+    (dest / "context" / "context.md.renderer").write_text("old\n", encoding="utf-8")
+    pipeline.run(dest, job_id="job-test")
+    assert (dest / "context" / "context.md.renderer").read_text(encoding="utf-8") == "old\n"
+    pipeline.run(dest, job_id="job-test")
+    assert published[-1] == "context/context.md"
 
 
 def test_duckdb_batch_keeps_append_order_and_int64(tmp_path: Path) -> None:

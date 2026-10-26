@@ -22,7 +22,11 @@ from finance_context.models.context import (
     WorkbookRaw,
 )
 from finance_context.render.graph import render_graph_markdown, render_trace_markdown
-from finance_context.render.markdown import refresh_context_markdown, render_markdown
+from finance_context.render.markdown import (
+    commit_renderer_stamp,
+    refresh_context_markdown,
+    render_markdown,
+)
 
 GOLDEN_MD = Path(__file__).resolve().parents[1] / "fixtures" / "golden" / "simple_context.md"
 GOLDEN_JSON = Path(__file__).resolve().parents[1] / "fixtures" / "golden" / "simple_context.json"
@@ -363,6 +367,7 @@ def test_refresh_rewrites_stale_markdown_and_leaves_json(tmp_path: Path) -> None
     (tmp_path / "context.md").write_text("1.3458683383241299\n", encoding="utf-8")
     (tmp_path / "graph.md").write_text("PF Model!AA172\n", encoding="utf-8")
     assert refresh_context_markdown(tmp_path) is True
+    commit_renderer_stamp(tmp_path)
     rendered = (tmp_path / "context.md").read_text(encoding="utf-8")
     assert "1.3458683383241299 [PF Model!AA172]" in rendered
     assert context_path.read_text(encoding="utf-8") == payload

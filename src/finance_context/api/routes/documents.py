@@ -11,7 +11,7 @@ from finance_context.api.threads import run_blocking
 from finance_context.graph.models import GraphDocument
 from finance_context.models.context import ContextDocument
 from finance_context.observability import log_event
-from finance_context.render.markdown import refresh_context_markdown
+from finance_context.render.markdown import commit_renderer_stamp, refresh_context_markdown
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import read_blob_bytes, read_published_file, republish_file
 
@@ -68,6 +68,7 @@ async def get_context_md(request: Request, job_id: str) -> Response:
         if not copied:
             body = await run_blocking(ctx, read_blob_bytes, str(path))
             return Response(content=body, media_type="text/markdown")
+        await run_blocking(ctx, commit_renderer_stamp, path.parent)
     body = await run_blocking(
         ctx, _document_bytes, ctx.settings, path, job_id, "context/context.md"
     )
