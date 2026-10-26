@@ -334,6 +334,14 @@ def test_marker_clear_is_written_again_when_the_opening_put_does_not_commit(
     )
     assert json.loads(store.objects[prefix + "_complete.json"])["keys"] == []
     assert read_published_file(settings, local, _JOB, "context/context.json") == b'{"v":2}\n'
+    meta = dest / "meta" / "meta.json"
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_text('{"warnings": ["minio export failed"]}\n', encoding="utf-8")
+    store.objects[prefix + "_complete.json"] = (
+        json.dumps({"keys": [object_key("team/a", _JOB, "context/context.json")]}, indent=2) + "\n"
+    ).encode()
+    store.objects[prefix + "context/context.json"] = b'{"v":1}\n'
+    assert read_published_file(settings, local, _JOB, "context/context.json") == b'{"v":2}\n'
 
 
 def test_truncated_republish_is_not_served(
@@ -465,6 +473,23 @@ def test_pipeline_records_the_warning_and_does_not_export_a_reuse(
     pipeline.run(dest, job_id="job-test")
     assert calls == ["job-test"]
     assert published == ["context/context.md"]
+    assert (dest / "context" / "context.md.renderer").read_text(encoding="utf-8") == (
+        "structure-columns\n"
+    )
+
+    def fail_republish(
+        settings: Settings, local: Path, job_id: str, relative: str, store=None
+    ) -> None:
+        del settings, local, job_id, store
+        published.append(relative)
+        raise OSError("marker")
+
+    monkeypatch.setattr("finance_context.app.pipeline.republish_file", fail_republish)
+    (dest / "context" / "context.md.renderer").write_text("old\n", encoding="utf-8")
+    pipeline.run(dest, job_id="job-test")
+    assert (dest / "context" / "context.md.renderer").read_text(encoding="utf-8") == "old\n"
+    pipeline.run(dest, job_id="job-test")
+    assert published[-1] == "context/context.md"
 
 
 def test_duckdb_batch_keeps_append_order_and_int64(tmp_path: Path) -> None:

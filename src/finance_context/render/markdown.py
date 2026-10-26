@@ -48,17 +48,23 @@ def render_markdown(doc: ContextDocument) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def commit_renderer_stamp(dest: Path) -> None:
+    """Mark context.md current. Call this after a republish succeeds."""
+    (dest / _RENDERER_STAMP).write_text(MARKDOWN_RENDERER + "\n", encoding="utf-8")
+
+
 def write_context_markdown(dest: Path, doc: ContextDocument) -> None:
     """Write context.md and the renderer stamp. The workbook is not read."""
     dest.mkdir(parents=True, exist_ok=True)
     atomic_write_bytes(dest / "context.md", render_markdown(doc).encode("utf-8"))
-    (dest / _RENDERER_STAMP).write_text(MARKDOWN_RENDERER + "\n", encoding="utf-8")
+    commit_renderer_stamp(dest)
 
 
 def refresh_context_markdown(dest: Path) -> bool:
     """Rewrite context.md from context.json when the renderer stamp is old.
 
-    A matching stamp leaves the file alone. Graph files and the workbook stay.
+    A matching stamp leaves the file alone. The stamp stays unchanged so a
+    failed republish is tried again. Graph files and the workbook stay.
     """
     markdown_path = dest / "context.md"
     stamp_path = dest / _RENDERER_STAMP
@@ -69,7 +75,8 @@ def refresh_context_markdown(dest: Path) -> bool:
     if not context_path.is_file():
         return False
     doc = ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
-    write_context_markdown(dest, doc)
+    dest.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(markdown_path, render_markdown(doc).encode("utf-8"))
     return True
 
 

@@ -262,9 +262,12 @@ def read_blob_bytes(uri: str, settings: Settings | None = None) -> bytes:
 def read_published_file(settings: Settings, local: Path, job_id: str, relative: str) -> bytes:
     """Return the bucket object when the completion marker lists it.
 
-    A missing marker, an empty key list, or a failed bucket read uses the
-    local file. An object left by a copy that did not finish is not served.
+    A missing marker, an empty key list, a recorded export warning, or a
+    failed bucket read uses the local file. An object left by a copy that
+    did not finish is not served.
     """
+    if _export_warning_recorded(local, relative):
+        return read_blob_bytes(str(local))
     if settings.minio_configured() and _marker_lists(settings, job_id, relative):
         url = object_url(
             settings.minio_bucket,
@@ -313,9 +316,9 @@ def export_succeeded_book(
 
     Empty MinIO settings return immediately. The copy clears the completion
     marker before it replaces objects, then writes the marker again only after
-    every key. A failed copy leaves the marker with an empty key list, so
-    readers stay on the local files. The returned text is a job warning and
-    does not contain the secret.
+    every key. A failed copy tries to leave the marker empty. If that write
+    also fails, the previous marker stays. The returned warning keeps reads
+    on the local files. A finished job does not export again.
     """
     if not settings.minio_configured():
         return None
@@ -338,10 +341,22 @@ def export_succeeded_book(
         try:
             _put_marker(target, settings.minio_bucket, marker_key, [])
         except Exception:
-            # shortcut: previous marker stays if this write fails, upgrade when reuse exports again
             _LOGGER.warning("minio export failed for _complete.json")
         return _EXPORT_WARNING
     return None
+
+
+def _export_warning_recorded(local: Path, relative: str) -> bool:
+    parts = Path(relative).parts
+    if not parts:
+        return False
+    meta_path = local.parents[len(parts) - 1] / "meta" / "meta.json"
+    try:
+        stored = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    warnings = stored.get("warnings") if isinstance(stored, dict) else None
+    return isinstance(warnings, list) and _EXPORT_WARNING in warnings
 
 
 class DuckDBObjectStore:

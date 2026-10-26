@@ -48,7 +48,11 @@ from finance_context.memory import (
 )
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
 from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
-from finance_context.render.markdown import refresh_context_markdown, write_context_markdown
+from finance_context.render.markdown import (
+    commit_renderer_stamp,
+    refresh_context_markdown,
+    write_context_markdown,
+)
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import export_succeeded_book, republish_file
 from finance_context.store.fs import file_lock, read_parquet, update_json
@@ -159,6 +163,8 @@ class Pipeline:
                     republish_file(self.settings, markdown_path, job_id, "context/context.md")
                 except Exception:
                     _LOGGER.warning("minio export failed for context.md")
+                else:
+                    commit_renderer_stamp(dest_dir / "context")
             return ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
         if not has_source(book):
             raise ContextError("empty_file", "source.xlsx missing")
