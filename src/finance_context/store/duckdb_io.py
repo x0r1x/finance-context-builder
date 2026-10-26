@@ -42,7 +42,7 @@ _SESSION = (
     "meta/meta.json",
 )
 _EXPORT_WARNING = "minio export failed"
-_publish_depth = threading.local()
+_publish_held = threading.local()
 
 
 class ObjectStore(Protocol):
@@ -299,14 +299,14 @@ def _ensure_published_book(settings: Settings, local: Path, job_id: str, relativ
         return
     if not _local_book_complete(settings, job_id, dest):
         return
-    with _publish_lock(dest):
+    book = shared_book_dir(settings.data_dir, job_id)
+    with _publish_lock(book / ".minio-publish.lock"):
         if _export_warning_recorded(local, relative) or not _job_is_settled(dest):
             return
         state, keys = _load_marker(settings, job_id)
         if state == "unread":
             return
         if state == "missing":
-            book = shared_book_dir(settings.data_dir, job_id)
             warning = export_succeeded_book(settings, job_id=job_id, book=book, dest=dest)
             if warning:
                 _set_export_warning(dest, warning)
@@ -364,19 +364,24 @@ def _set_export_warning(dest: Path, warning: str) -> None:
 
 
 @contextmanager
-def _publish_lock(dest: Path) -> Iterator[None]:
-    """One writer for the completion marker. The same thread may enter again."""
-    if getattr(_publish_depth, "n", 0):
+def _publish_lock(path: Path) -> Iterator[None]:
+    """One writer for this marker file. The same thread may enter the same path again."""
+    held = getattr(_publish_held, "paths", None)
+    if held is None:
+        held = set()
+        _publish_held.paths = held
+    key = str(path)
+    if key in held:
         yield
         return
     from finance_context.store.fs import file_lock
 
-    with file_lock(dest / "meta" / "minio-publish.lock"):
-        _publish_depth.n = 1
+    with file_lock(path):
+        held.add(key)
         try:
             yield
         finally:
-            _publish_depth.n = 0
+            held.discard(key)
 
 
 def republish_file(
@@ -394,11 +399,7 @@ def republish_file(
     """
     if not settings.minio_configured():
         return
-    dest = _session_dest(local, relative)
-    if dest is None:
-        _republish_body(settings, local, job_id, relative, store)
-        return
-    with _publish_lock(dest):
+    with _publish_lock(_publish_lock_path(settings, job_id, local, relative)):
         _republish_body(settings, local, job_id, relative, store)
 
 
@@ -436,7 +437,7 @@ def export_succeeded_book(
     """
     if not settings.minio_configured():
         return None
-    with _publish_lock(dest):
+    with _publish_lock(book / ".minio-publish.lock"):
         return _export_body(settings, job_id=job_id, book=book, dest=dest, store=store)
 
 
@@ -531,13 +532,32 @@ def _load_marker(settings: Settings, job_id: str) -> tuple[str, set[str]]:
         parsed = json.loads(read_blob_bytes(url, settings))
     except OSError:
         return "missing", set()
-    except Exception:
+    except Exception as exc:
+        if _http_404(exc):
+            return "missing", set()
         _LOGGER.warning("minio read failed for _complete.json")
         return "unread", set()
     keys = parsed.get("keys") if isinstance(parsed, dict) else None
     if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
         return "unread", set()
     return "ok", set(keys)
+
+
+def _http_404(exc: Exception) -> bool:
+    """DuckDB 2 reports a missing object as HTTPException, not OSError."""
+    import duckdb
+
+    return isinstance(exc, duckdb.HTTPException) and "HTTP 404" in str(exc)
+
+
+def _publish_lock_path(settings: Settings, job_id: str, local: Path, relative: str) -> Path:
+    """Same content hash shares one bucket prefix, so the lock is the shared book."""
+    book = shared_book_dir(settings.data_dir, job_id)
+    if book.is_dir():
+        return book / ".minio-publish.lock"
+    dest = _session_dest(local, relative)
+    root = dest if dest is not None else local.parent
+    return root / ".minio-publish.lock"
 
 
 def _mark_published_key(

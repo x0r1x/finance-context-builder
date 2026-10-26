@@ -191,7 +191,13 @@ def shared_stale_stage(
         return _recorded_or_layout(recorded)
     if not isinstance(payload, dict):
         return _recorded_or_layout(recorded)
-    return stale_from_meta(payload)
+    detected = stale_from_meta(payload)
+    if detected is not None:
+        return detected
+    # An explicit compile or layout rebuild must rerun even when the sidecar matches.
+    if recorded in ("compile", "layout"):
+        return recorded
+    return None
 
 
 def session_stale_stage(meta: dict | None) -> str | None:

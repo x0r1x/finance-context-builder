@@ -356,6 +356,52 @@ def _memory_read(store: _MemoryStore):
     return fake_read
 
 
+def test_http_404_is_a_missing_marker_and_a_connection_error_is_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import duckdb
+
+    root = tmp_path / "data"
+    book = root / "shared" / "books" / _JOB
+    dest = root / "sessions" / "local" / "jobs" / _JOB
+    _fill(book, dest)
+    (dest / "meta" / "meta.json").write_text(
+        json.dumps({"status": "succeeded", "warnings": []}),
+        encoding="utf-8",
+    )
+    settings = _minio(data_dir=root)
+    local = dest / "context" / "context.json"
+    store = _MemoryStore()
+    monkeypatch.setattr(
+        "finance_context.store.duckdb_io.DuckDBObjectStore",
+        lambda _settings: store,
+    )
+
+    def unread(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.startswith("s3://"):
+            raise duckdb.IOException("Could not connect to server")
+        return Path(uri).read_bytes()
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", unread)
+    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    assert store.order == []
+
+    def missing(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.startswith("s3://") and uri not in store.objects:
+            raise duckdb.HTTPException("HTTP Error: HTTP HEAD error (HTTP 404 Not Found)")
+        if uri.startswith("s3://"):
+            return store.objects[uri]
+        return Path(uri).read_bytes()
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", missing)
+    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    marker = json.loads(store.objects[prefix + "_complete.json"])
+    assert object_key("team/a", _JOB, "context/context.json") in marker["keys"]
+
+
 def test_missing_marker_is_filled_from_the_local_book(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -12,7 +12,7 @@ import pytest
 
 from finance_context.app.artifacts import clear_downstream_artifacts, clear_shared_artifacts
 from finance_context.app.pipeline import Pipeline, execute_job
-from finance_context.app.publisher import stamped_stages
+from finance_context.app.publisher import publisher_fingerprint, stamped_stages
 from finance_context.app.shared_cache import (
     SharedCacheBusy,
     invalidate_for_run,
@@ -228,6 +228,25 @@ def test_stamp_leaves_an_unrebuilt_compile_unverified(tmp_path: Path) -> None:
     stamp = json.loads((book / "stages.json").read_text(encoding="utf-8"))
     assert stamp["stages"]["compile"] == "unverified"
     assert stamp["publisher"] == "partial"
+
+
+def test_rebuild_from_compile_drops_a_matching_shared_cache(tmp_path: Path) -> None:
+    book = _book_with_body(tmp_path)
+    write_shared_stamp(book)
+    dest = tmp_path / "job"
+    (dest / "meta").mkdir(parents=True)
+    (dest / "meta" / "meta.json").write_text(
+        json.dumps({"publisher": publisher_fingerprint(), "status": "succeeded"}),
+        encoding="utf-8",
+    )
+    record_rebuild_stage(dest, "compile")
+    with shared_book_lock(book, job_id="job-c", retry_after_sec=1, max_retries=0):
+        result = invalidate_for_run(dest, book, shared=True, job_id="job-c")
+    assert result.rebuilt_from == "compile"
+    assert not (book / "ir" / "cells.parquet").exists()
+    assert not (book / "raw" / "workbook.json").exists()
+    assert not (book / "layout" / "layout.json").exists()
+    assert (book / "source" / "source.xlsx").is_file()
 
 
 def test_stamp_keeps_a_compile_hash_that_already_matched(tmp_path: Path) -> None:

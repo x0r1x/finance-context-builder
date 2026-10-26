@@ -403,9 +403,7 @@ def _inflight_response(
     if not _still_inflight(status, dest):
         return None
     if rebuild:
-        if not _book_is_idle(stored, dest):
-            raise _JobStillRunning
-        return None
+        raise _JobStillRunning
     if not publisher_changed(stored):
         return _dedup(ctx, job_id, dest)
     ctx.queue.request_stop(rq_id)
@@ -416,13 +414,6 @@ def _inflight_response(
 
 def _still_inflight(status: str | None, dest: Path) -> bool:
     return status in INFLIGHT_STATUSES or run_lock_busy(dest)
-
-
-def _book_is_idle(stored: dict | None, dest: Path) -> bool:
-    """A succeeded book with a free run lock can be rebuilt. Redis may still say started."""
-    if run_lock_busy(dest):
-        return False
-    return isinstance(stored, dict) and stored.get("status") == "succeeded"
 
 
 def _failed_queue_lost(stored: dict | None) -> bool:
@@ -551,13 +542,9 @@ def _enqueue_or_reuse(
         status in INFLIGHT_STATUSES and not _started_without_child(status, dest, stored)
     )
     if corpse is not True and busy:
-        if rebuild:
-            if not _book_is_idle(stored, dest):
-                raise _JobStillRunning
-        elif publisher_changed(stored):
+        if rebuild or publisher_changed(stored):
             raise _JobStillRunning
-        else:
-            return _dedup(ctx, job_id, dest)
+        return _dedup(ctx, job_id, dest)
     ready = _ready_meta(dest)
     if ready is not None and not rebuild:
         log_event(

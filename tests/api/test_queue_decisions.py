@@ -198,7 +198,7 @@ def test_rebuild_requeues_a_ready_book_from_compile(tmp_path: Path) -> None:
     assert meta["generation"] == 2
 
 
-def test_rebuild_accepts_a_succeeded_book_while_redis_still_says_started(tmp_path: Path) -> None:
+def test_rebuild_waits_while_redis_still_says_started(tmp_path: Path) -> None:
     queue = _Queue("started")
     ctx = _ctx(tmp_path, queue)
     dest = _meta(
@@ -209,11 +209,14 @@ def test_rebuild_accepts_a_succeeded_book_while_redis_still_says_started(tmp_pat
         generation=1,
     )
     _ready(dest)
-    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB, True)
+    with pytest.raises(ApiError) as caught:
+        _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB, True)
     meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
-    assert body["status"] == "queued"
-    assert queue.enqueued == 1
-    assert meta["rebuild_from"] == "compile"
+    assert caught.value.http_status == 409
+    assert caught.value.code == "job_still_running"
+    assert queue.enqueued == 0
+    assert "context/context.json" not in str(meta.get("rebuild_from"))
+    assert (dest / "context" / "context.json").is_file()
 
 
 def test_rebuild_of_a_running_job_stays_conflict(tmp_path: Path) -> None:
