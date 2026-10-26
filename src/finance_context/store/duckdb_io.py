@@ -286,18 +286,19 @@ def republish_file(
 ) -> None:
     """Copy one local file onto its bucket key. No MinIO settings is a no-op.
 
-    A failed copy removes that key from the completion marker so the next read
-    uses the local file.
+    The key is taken off the marker before the copy and put back only after
+    the size check. A failed copy leaves the key off, so the next read uses
+    the local file.
     """
     if not settings.minio_configured():
         return
     target = store if store is not None else DuckDBObjectStore(settings)
     url = object_url(settings.minio_bucket, object_key(settings.minio_prefix, job_id, relative))
-    try:
-        _put_and_check(target, local, url)
-    except Exception:
-        _drop_published_key(target, settings, job_id, relative)
-        raise
+    if not _mark_published_key(target, settings, job_id, relative, present=False):
+        raise OSError("minio export failed for _complete.json")
+    _put_and_check(target, local, url)
+    if not _mark_published_key(target, settings, job_id, relative, present=True):
+        raise OSError("minio export failed for _complete.json")
 
 
 def export_succeeded_book(
@@ -334,6 +335,11 @@ def export_succeeded_book(
         _put_marker(target, settings.minio_bucket, marker_key, uploaded)
     except Exception:
         _LOGGER.warning("minio export failed for job %s", job_id)
+        try:
+            _put_marker(target, settings.minio_bucket, marker_key, [])
+        except Exception:
+            # shortcut: previous marker stays if this write fails, upgrade when a finished job exports again
+            _LOGGER.warning("minio export failed for _complete.json")
         return _EXPORT_WARNING
     return None
 
@@ -385,29 +391,37 @@ def _marker_lists(settings: Settings, job_id: str, relative: str) -> bool:
     return object_key(settings.minio_prefix, job_id, relative) in keys
 
 
-def _drop_published_key(store: ObjectStore, settings: Settings, job_id: str, relative: str) -> None:
+def _mark_published_key(
+    store: ObjectStore,
+    settings: Settings,
+    job_id: str,
+    relative: str,
+    *,
+    present: bool,
+) -> bool:
     marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
     url = object_url(settings.minio_bucket, marker_key)
     try:
         parsed = json.loads(read_blob_bytes(url, settings))
     except Exception:
         _LOGGER.warning("minio export failed for _complete.json")
-        return
+        return False
     keys = parsed.get("keys") if isinstance(parsed, dict) else None
     if not isinstance(keys, list):
-        return
+        return False
     wanted = object_key(settings.minio_prefix, job_id, relative)
-    if wanted not in keys:
-        return
+    if present:
+        updated = keys if wanted in keys else [*keys, wanted]
+    else:
+        updated = [key for key in keys if key != wanted]
+    if updated == keys:
+        return True
     try:
-        _put_marker(
-            store,
-            settings.minio_bucket,
-            marker_key,
-            [key for key in keys if key != wanted],
-        )
+        _put_marker(store, settings.minio_bucket, marker_key, updated)
     except Exception:
         _LOGGER.warning("minio export failed for _complete.json")
+        return False
+    return True
 
 
 def _put_marker(store: ObjectStore, bucket: str, key: str, uploaded: list[str]) -> None:
