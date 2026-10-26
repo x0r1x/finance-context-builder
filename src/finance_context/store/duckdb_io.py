@@ -338,7 +338,7 @@ def export_succeeded_book(
         try:
             _put_marker(target, settings.minio_bucket, marker_key, [])
         except Exception:
-            # shortcut: previous marker stays if this write fails, upgrade when a finished job exports again
+            # shortcut: previous marker stays if this write fails, upgrade when reuse exports again
             _LOGGER.warning("minio export failed for _complete.json")
         return _EXPORT_WARNING
     return None
