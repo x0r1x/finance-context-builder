@@ -50,7 +50,7 @@ from finance_context.models.context import ArtifactMeta, ContextDocument, GraphP
 from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
 from finance_context.render.markdown import refresh_context_markdown, write_context_markdown
 from finance_context.settings import Settings
-from finance_context.store.duckdb_io import export_succeeded_book
+from finance_context.store.duckdb_io import export_succeeded_book, republish_file
 from finance_context.store.fs import file_lock, read_parquet, update_json
 from finance_context.store.paths import session_job_dir, shared_book_dir
 
@@ -154,7 +154,11 @@ class Pipeline:
         context_path = dest_dir / "context" / "context.json"
         markdown_path = dest_dir / "context" / "context.md"
         if context_path.is_file() and markdown_path.is_file():
-            refresh_context_markdown(dest_dir / "context")
+            if refresh_context_markdown(dest_dir / "context"):
+                try:
+                    republish_file(self.settings, markdown_path, job_id, "context/context.md")
+                except Exception:
+                    _LOGGER.warning("minio export failed for context.md")
             return ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
         if not has_source(book):
             raise ContextError("empty_file", "source.xlsx missing")
