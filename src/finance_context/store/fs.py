@@ -14,7 +14,6 @@ import pyarrow.parquet as pq
 
 from finance_context.store.duckdb_io import (
     copy_arrow_parquet,
-    copy_blob,
     read_parquet_column_tuples,
     read_parquet_rows,
     read_parquet_table,
@@ -60,15 +59,8 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
 
 
 def _publish_blob(src: Path, path: Path) -> None:
-    """DuckDB copies ``src`` onto a temp file, then ``atomic_replace`` publishes it."""
-    published = temporary_path(path)
-    published.unlink()
-    try:
-        copy_blob(src, published)
-        atomic_replace(published, path)
-    except BaseException:
-        published.unlink(missing_ok=True)
-        raise
+    """Rename a finished temp onto ``path``. Same directory, so replace is atomic."""
+    atomic_replace(src, path)
 
 
 def atomic_replace(tmp: Path, path: Path) -> None:
