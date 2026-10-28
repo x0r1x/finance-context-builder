@@ -41,6 +41,7 @@ from finance_context.layout.relations import formula_relations
 from finance_context.layout.stage import layout_workbook
 from finance_context.memory import (
     MEMORY_ERROR_DETAIL,
+    out_of_memory,
     prefer_oom_kill,
     rss_bytes,
     trim_process_heap,
@@ -498,7 +499,10 @@ def _run_pipeline_child(
             error_code=exc.code,
             reason=exc.detail or None,
         )
-    except MemoryError:
+    except Exception as exc:
+        if not out_of_memory(exc):
+            mark_job_failed(dest, job_id, type(exc).__name__, generation)
+            raise
         mark_job_failed(dest, job_id, "workbook_too_large", generation, detail=MEMORY_ERROR_DETAIL)
         log_event(
             _LOGGER,
@@ -507,10 +511,8 @@ def _run_pipeline_child(
             f"workbook_too_large: {MEMORY_ERROR_DETAIL}",
             error_code="workbook_too_large",
             reason=MEMORY_ERROR_DETAIL,
+            cause=type(exc).__name__,
         )
-    except Exception as exc:
-        mark_job_failed(dest, job_id, type(exc).__name__, generation)
-        raise
     finally:
         # In-process tests call this too. A leftover deadline would outlive the job.
         _clear_child_watchdog()

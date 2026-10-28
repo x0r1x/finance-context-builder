@@ -124,6 +124,23 @@ def test_streaming_parse_matches_dom_bytes(tmp_path: Path) -> None:
     ).read_bytes()
 
 
+def test_streaming_raw_parquet_is_split_into_row_groups(tmp_path: Path) -> None:
+    """DuckDB holds one row group whole under its 256MB limit while it writes it."""
+    source = tmp_path / "long.xlsx"
+    cells = [CellSpec(addr=f"A{row}", value=str(row)) for row in range(1, 5001)]
+    build_xlsx(source, sheets=[SheetSpec(name="Data", cells=cells)])
+    split = tmp_path / "split"
+    whole = tmp_path / "whole"
+    split.mkdir()
+    whole.mkdir()
+    parse_workbook(source, split, settings=_settings(tmp_path, parquet_row_group_rows=2048))
+    parse_workbook(source, whole, settings=_settings(tmp_path, parquet_row_group_rows=0))
+    raw = "raw/cells.parquet"
+    assert pq.ParquetFile(split / raw).num_row_groups > 1
+    assert pq.ParquetFile(whole / raw).num_row_groups == 1
+    assert _same_table(split / raw, whole / raw)
+
+
 def test_row_group_of_one_keeps_values(tmp_path: Path) -> None:
     wide = _run(tmp_path, "wide", parquet_row_group_rows=0)
     split = _run(tmp_path, "split", parquet_row_group_rows=1)
