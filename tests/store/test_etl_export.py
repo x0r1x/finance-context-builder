@@ -189,6 +189,22 @@ def test_copy_failure_keeps_the_local_files_and_hides_the_secret(
     assert json.loads(mismatch.objects[prefix + "_complete.json"])["keys"] == []
 
 
+def test_local_read_blob_does_not_open_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import duckdb
+
+    path = tmp_path / "graph.json"
+    payload = b'{"nodes": 1}\n'
+    path.write_bytes(payload)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("duckdb.connect")
+
+    monkeypatch.setattr(duckdb, "connect", boom)
+    assert read_blob_bytes(str(path)) == payload
+
+
 def test_local_duckdb_reads_match_the_serializer(tmp_path: Path) -> None:
     table = tmp_path / "cells.parquet"
     write_parquet(

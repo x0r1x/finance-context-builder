@@ -98,6 +98,24 @@ def test_concurrent_writers_leave_identical_bytes(tmp_path: Path) -> None:
     assert stray == []
 
 
+def test_local_publish_does_not_open_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import duckdb
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("duckdb.connect")
+
+    monkeypatch.setattr(duckdb, "connect", boom)
+    payload = b'{"a": 1}\n'
+    target = tmp_path / "source.xlsx"
+    atomic_write_bytes(target, payload)
+    stream_json(tmp_path / "meta.json", {"a": 1})
+    assert target.read_bytes() == payload
+    assert json.loads((tmp_path / "meta.json").read_text(encoding="utf-8")) == {"a": 1}
+    assert {path.name for path in tmp_path.iterdir()} == {"source.xlsx", "meta.json"}
+
+
 def test_atomic_write_removes_the_temp_when_replace_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -216,19 +216,6 @@ class DuckDBBatch:
             tmp.unlink(missing_ok=True)
 
 
-def copy_blob(src: Path, dest: Path) -> None:
-    """Publish the bytes of ``src`` as ``dest``. The file is not re-encoded."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        dest.unlink()
-    with limited_connection() as con:
-        con.execute(
-            "COPY (SELECT content FROM read_blob(?)) TO ? "
-            "(FORMAT BLOB, COMPRESSION 'none', USE_TMP_FILE false)",
-            [str(src), str(dest)],
-        )
-
-
 def read_parquet_table(path: Path) -> pa.Table:
     with limited_connection() as con:
         # Relation.to_arrow_table avoids the DB-API copy warning in DuckDB 2.0.
@@ -250,9 +237,10 @@ def read_parquet_column_tuples(path: Path, columns: list[str]) -> list[tuple[Any
 
 
 def read_blob_bytes(uri: str, settings: Settings | None = None) -> bytes:
+    if not uri.startswith("s3://"):
+        return Path(uri).read_bytes()
     with limited_connection() as con:
-        if uri.startswith("s3://"):
-            _configure_s3(con, settings)
+        _configure_s3(con, settings)
         row = con.execute("SELECT content FROM read_blob(?)", [uri]).fetchone()
     if row is None or row[0] is None:
         raise OSError(f"missing object {uri}")
@@ -491,6 +479,7 @@ class DuckDBObjectStore:
         self._settings = settings
 
     def put(self, local: Path, url: str) -> None:
+        # shortcut: whole-file read_blob under 256MB, fix when the object must land in MinIO
         with limited_connection() as con:
             _configure_s3(con, self._settings)
             con.execute(
