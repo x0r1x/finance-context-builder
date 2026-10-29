@@ -51,16 +51,11 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
     src = temporary_path(path)
     try:
         src.write_bytes(data)
-        _publish_blob(src, path)
+        atomic_replace(src, path)
     except BaseException:
         src.unlink(missing_ok=True)
         raise
     src.unlink(missing_ok=True)
-
-
-def _publish_blob(src: Path, path: Path) -> None:
-    """Rename a finished temp onto ``path``. Same directory, so replace is atomic."""
-    atomic_replace(src, path)
 
 
 def atomic_replace(tmp: Path, path: Path) -> None:
@@ -169,7 +164,7 @@ def stream_json(path: Path, data: Any, *, sort_keys: bool = False) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        _publish_blob(src, path)
+        atomic_replace(src, path)
     except BaseException:
         src.unlink(missing_ok=True)
         raise

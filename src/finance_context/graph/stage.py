@@ -35,7 +35,7 @@ from finance_context.layout.resolve import period_headers
 from finance_context.models.context import GraphPointer
 from finance_context.settings import Settings
 from finance_context.store.fs import (
-    _publish_blob,
+    atomic_replace,
     atomic_write_bytes,
     read_parquet,
     temporary_path,
@@ -1069,8 +1069,8 @@ def _stream_graph_files(
             os.fsync(json_file.fileno())
             md_file.flush()
             os.fsync(md_file.fileno())
-        _publish_blob(json_tmp, dest_dir / "graph" / "graph.json")
-        _publish_blob(md_tmp, dest_dir / "graph" / "graph.md")
+        atomic_replace(json_tmp, dest_dir / "graph" / "graph.json")
+        atomic_replace(md_tmp, dest_dir / "graph" / "graph.md")
     except BaseException:
         json_tmp.unlink(missing_ok=True)
         md_tmp.unlink(missing_ok=True)
