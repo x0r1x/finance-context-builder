@@ -25,6 +25,18 @@ _logged_effective = False
 
 MEMORY_ERROR_DETAIL = "This workbook ran out of memory while it was being read."
 
+
+def out_of_memory(exc: BaseException) -> bool:
+    """``MemoryError``, or DuckDB refusing an allocation over its ``memory_limit``.
+
+    DuckDB raises its own ``OutOfMemoryException``, not ``MemoryError``.
+    """
+    if isinstance(exc, MemoryError):
+        return True
+    import duckdb
+
+    return isinstance(exc, duckdb.OutOfMemoryException)
+
 _PROC_CGROUP = Path("/proc/self/cgroup")
 _SYS_CGROUP = Path("/sys/fs/cgroup")
 _OOM_SCORE = Path("/proc/self/oom_score_adj")

@@ -280,8 +280,15 @@ def test_run_job_process_finishes_a_small_book_within_budget(
     assert "Traceback" not in text
 
 
+def _duckdb_out_of_memory() -> Exception:
+    import duckdb
+
+    return duckdb.OutOfMemoryException("Out of Memory Error: failed to allocate data")
+
+
+@pytest.mark.parametrize("error", [MemoryError, _duckdb_out_of_memory], ids=["python", "duckdb"])
 def test_memory_error_in_the_child_is_workbook_too_large(
-    tmp_path: Path, monkeypatch, capsys
+    tmp_path: Path, monkeypatch, capsys, error
 ) -> None:
     if not Path("/proc/self/oom_score_adj").is_file():
         pytest.skip("/proc/self/oom_score_adj is absent")
@@ -289,7 +296,7 @@ def test_memory_error_in_the_child_is_workbook_too_large(
     monkeypatch.setenv("LOG_JSON", "true")
 
     def boom(*_args, **_kwargs):
-        raise MemoryError
+        raise error()
 
     monkeypatch.setattr("finance_context.app.pipeline.compile_workbook", boom)
     job_id = "job"
@@ -309,6 +316,12 @@ def test_memory_error_in_the_child_is_workbook_too_large(
     assert meta["error"] == "workbook_too_large"
     assert "ran out of memory" in meta["detail"]
     assert "Traceback" not in text
+
+
+def test_out_of_memory_covers_duckdb_and_python_only() -> None:
+    assert memory.out_of_memory(MemoryError())
+    assert memory.out_of_memory(_duckdb_out_of_memory())
+    assert not memory.out_of_memory(ValueError("x"))
 
 
 def test_job_body_returns_only_the_workbook_too_large_detail() -> None:

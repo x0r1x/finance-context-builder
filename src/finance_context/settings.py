@@ -85,12 +85,12 @@ class Settings(BaseSettings):
     range_node_min_cells: int = DEFAULT_RANGE_NODE_MIN_CELLS
     trace_range_members: int = DEFAULT_TRACE_RANGE_MEMBERS
     job_oom_score_adj: int = DEFAULT_OOM_SCORE_ADJ
-    # lxml iterparse into column lists. Raw parquet stays one row group.
+    # lxml iterparse into column lists. Raw parquet uses parquet_row_group_rows.
     parse_streaming: bool = True
     # json.dump instead of json.dumps for context.json and other job JSON.
     json_stream: bool = True
-    # IR and graph parquet row-group size. 0 writes one group, matching the
-    # single-table bytes. Raw cells and presence ignore this and stay one group.
+    # Raw, IR and graph parquet row-group size. 0 writes one group, matching the
+    # single-table bytes. One group of a large book does not fit DuckDB's 256MB.
     parquet_row_group_rows: int = DEFAULT_PARQUET_ROW_GROUP_ROWS
     # Compile-local map of repeated node ids. Dropped after compile. Not sys.intern.
     compile_string_pool: bool = True

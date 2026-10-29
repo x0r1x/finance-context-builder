@@ -19,7 +19,7 @@ from finance_context.excel.legacy import LEGACY_SOURCE, SOURCE, source_name
 from finance_context.jobqueue.embedded import start_for_serve, stop_for_serve
 from finance_context.jobqueue.parents import arm_embedded_parent
 from finance_context.jobqueue.pool import serve_workers, worker_check
-from finance_context.memory import MEMORY_ERROR_DETAIL
+from finance_context.memory import MEMORY_ERROR_DETAIL, out_of_memory
 from finance_context.observability import configure_logging
 from finance_context.settings import DEFAULT_DATA_DIR, Settings
 from finance_context.store.filesystem import ensure_data_dir_local
@@ -123,13 +123,13 @@ def build(
         mark_job_failed(dest, job_id, exc.code, detail=exc.detail or None)
         typer.echo(f"failed: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except MemoryError:
+    except Exception as exc:
+        if not out_of_memory(exc):
+            mark_job_failed(dest, job_id, type(exc).__name__)
+            raise
         mark_job_failed(dest, job_id, "workbook_too_large", detail=MEMORY_ERROR_DETAIL)
         typer.echo(f"failed: workbook_too_large: {MEMORY_ERROR_DETAIL}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
-        mark_job_failed(dest, job_id, type(exc).__name__)
-        raise
     for path in published:
         typer.echo(path)
     typer.echo(doc.meta.status)

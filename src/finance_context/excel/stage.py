@@ -36,8 +36,10 @@ def parse_workbook(
                 meta = parse_ooxml_columns(zf, cells, presence)
             finally:
                 zf.close()
-            cells.finish(cells_path, 0)
-            presence.finish(presence_path, 0)
+            # One row group is held whole in DuckDB memory (256MB) while it is
+            # written, so a large book is split like the IR parquet.
+            cells.finish(cells_path, chosen.parquet_row_group_rows)
+            presence.finish(presence_path, chosen.parquet_row_group_rows)
         except Exception:
             cells.abort()
             presence.abort()
