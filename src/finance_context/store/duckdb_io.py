@@ -236,6 +236,26 @@ def read_parquet_column_tuples(path: Path, columns: list[str]) -> list[tuple[Any
     return [tuple(row) for row in rows]
 
 
+def read_parquet_dicts(
+    path: Path,
+    columns: list[str],
+    *,
+    where: str | None = None,
+    params: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Read named columns. ``where`` is SQL with ``?`` placeholders, not cell text."""
+    selected = ", ".join(_quote_ident(name) for name in columns)
+    sql = f"SELECT {selected} FROM read_parquet(?)"
+    bind: list[Any] = [str(path)]
+    if where:
+        sql = f"{sql} WHERE {where}"
+        bind.extend(params or [])
+    with limited_connection() as con:
+        cursor = con.execute(sql, bind)
+        names = [item[0] for item in cursor.description]
+        return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+
+
 def read_blob_bytes(uri: str, settings: Settings | None = None) -> bytes:
     if not uri.startswith("s3://"):
         return Path(uri).read_bytes()

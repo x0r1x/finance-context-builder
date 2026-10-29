@@ -6,7 +6,7 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.app.pipeline import Pipeline
 from finance_context.settings import Settings
-from finance_context.store.fs import read_parquet
+from finance_context.store.fs import read_parquet, read_parquet_dicts
 
 
 def _model(path: Path) -> Path:
@@ -34,11 +34,17 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
     (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
     (dest / "source" / "source.xlsx").write_bytes(source.read_bytes())
     reads: list[str] = []
+    column_reads: list[str] = []
     real = read_parquet
+    real_columns = read_parquet_dicts
 
     def spy(path: Path) -> list[dict]:
         reads.append(Path(path).as_posix())
         return real(path)
+
+    def spy_columns(path: Path, columns, **kwargs) -> list[dict]:
+        column_reads.append(Path(path).as_posix())
+        return real_columns(path, columns, **kwargs)
 
     for module in (
         "finance_context.store.fs",
@@ -48,6 +54,7 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
         "finance_context.app.pipeline",
     ):
         monkeypatch.setattr(f"{module}.read_parquet", spy)
+        monkeypatch.setattr(f"{module}.read_parquet_dicts", spy_columns, raising=False)
 
     compiles: list[int] = []
     import finance_context.app.pipeline as pipeline_mod
@@ -63,12 +70,15 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     pipeline.run(dest, job_id="job-pass", source_filename="model.xlsx")
     assert compiles == [1]
+    # The full row dump stays unread. Layout and context ask for columns.
     assert not any(path.endswith("ir/cells.parquet") for path in reads)
+    assert any(path.endswith("ir/cells.parquet") for path in column_reads)
 
     for name in ("context/context.json", "context/context.md"):
         (dest / name).unlink()
     reads.clear()
+    column_reads.clear()
     compiles.clear()
     pipeline.run(dest, job_id="job-pass", source_filename="model.xlsx")
     assert compiles == []
-    assert any(path.endswith("ir/cells.parquet") for path in reads)
+    assert any(path.endswith("ir/cells.parquet") for path in column_reads)

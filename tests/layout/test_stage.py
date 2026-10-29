@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import weakref
 from pathlib import Path
 
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
@@ -11,6 +12,7 @@ from finance_context.excel import parse_workbook
 from finance_context.excel.a1 import parse_addr
 from finance_context.formulas import compile_workbook
 from finance_context.layout import layout_workbook
+from finance_context.layout import stage as layout_stage
 from finance_context.observability import JsonFormatter, job_id_var, stage_var
 from finance_context.store.fs import write_cells_parquet
 
@@ -72,6 +74,58 @@ def test_layout_writes_json_registers_axes_and_no_findings(
         if row.check_row
     ]
     assert "Check" in checks
+
+
+def test_layout_drops_one_sheet_before_reading_the_next(
+    tmp_path: Path, dest: Path, monkeypatch
+) -> None:
+    source = tmp_path / "two.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="One",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="A2", value="Revenue", type="s"),
+                    CellSpec(addr="B2", value="10"),
+                ],
+            ),
+            SheetSpec(
+                name="Two",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2024", type="s"),
+                    CellSpec(addr="A2", value="Cost", type="s"),
+                    CellSpec(addr="B2", value="4"),
+                ],
+            ),
+        ],
+        shared_strings=["Item", "2023", "2024", "Revenue", "Cost"],
+    )
+    parse_workbook(source, dest)
+    compile_workbook(dest)
+    held: list[weakref.ReferenceType[list]] = []
+    real = layout_stage._read_layout_sheet
+
+    class _SheetCells(list):
+        pass
+
+    def spy(dest_dir, sheet, meta):
+        if held:
+            assert held[-1]() is None
+        rows = _SheetCells(real(dest_dir, sheet, meta))
+        held.append(weakref.ref(rows))
+        return rows
+
+    monkeypatch.setattr(layout_stage, "_read_layout_sheet", spy)
+    layout = layout_workbook(dest)
+    assert [sheet.name for sheet in layout.sheets] == ["One", "Two"]
+    assert len(held) == 2
+    assert "ast_json" not in layout_stage._LAYOUT_COLUMNS
+    assert "comment" not in layout_stage._LAYOUT_COLUMNS
+    assert "comment" not in layout_stage._RELATION_COLUMNS
 
 
 def test_layout_decodes_date_serial_from_workbook_meta(tmp_path: Path, dest: Path) -> None:

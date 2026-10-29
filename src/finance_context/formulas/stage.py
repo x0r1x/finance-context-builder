@@ -21,10 +21,9 @@ from finance_context.formulas.models import (
     cell_parquet_row,
 )
 from finance_context.formulas.names import resolve_defined_name_edges
-from finance_context.memory import usage_for_book
+from finance_context.memory import load_presence, usage_for_book
 from finance_context.settings import Settings
 from finance_context.store.fs import (
-    ColumnRows,
     RowGroupWriter,
     read_parquet,
     write_json,
@@ -98,19 +97,20 @@ def compile_workbook(
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
     raw_path = dest_dir / "raw" / "cells.parquet"
     if chosen.parse_streaming:
-        cells, edges, extra_nodes, formula_count, pool = _compile_cells_streaming(
+        cell_count, edges, extra_nodes, formula_count, pool = _compile_cells_streaming(
             dest_dir, raw_path, engine, meta, chosen
         )
     else:
         cells, edges, extra_nodes, formula_count, pool = _compile_cells_loaded(
             raw_path, engine, meta, chosen
         )
+        cell_count = len(cells)
     known = set(extra_nodes)
     sheets = {
         str(item["name"] if isinstance(item, dict) else item.name)
         for item in (meta.get("sheets") or [])
     }
-    presence = _presence_index(dest_dir, columnar=chosen.parse_streaming, pool=pool)
+    presence = load_presence(dest_dir / "raw" / "cell_presence.parquet", pool=pool)
     if usage is None:
         usage = usage_for_book(dest_dir)
     if chosen.graph_stream:
@@ -139,6 +139,7 @@ def compile_workbook(
         _write_edges(dest_dir, edges, settings=chosen)
     else:
         _write_cells_and_edges(dest_dir, cells, edges, settings=chosen)
+        del cells
     if not chosen.graph_stream:
         _write_cell_edge_rows(
             dest_dir,
@@ -150,7 +151,9 @@ def compile_workbook(
         {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
         stream=chosen.json_stream,
     )
-    return CompileResult(cells=cells, edges=edges, cell_edges=cell_edges)
+    return CompileResult(
+        cells=[], edges=edges, cell_edges=cell_edges, cell_count=cell_count
+    )
 
 
 def _compile_cells_loaded(
@@ -182,16 +185,19 @@ def _compile_cells_streaming(
     engine: FormulaEngine,
     meta: dict,
     chosen: Settings,
-) -> tuple[list[IrCell], list[Edge], list[str], int, dict[str, str] | None]:
-    """Read raw cells in chunks and publish ``ir/cells.parquet`` from the batch."""
+) -> tuple[int, list[Edge], list[str], int, dict[str, str] | None]:
+    """Read raw cells in chunks and publish ``ir/cells.parquet`` from the batch.
+
+    Each cell is written and dropped. Callers read the columns they need.
+    """
     from finance_context.store.duckdb_io import DuckDBBatch, limited_connection
 
     cells_path = dest_dir / "ir" / "cells.parquet"
     batch = DuckDBBatch(Path(str(cells_path) + ".build.duckdb"), IR_CELL_COLUMNS)
-    cells: list[IrCell] = []
     edges: list[Edge] = []
     extra_nodes: list[str] = []
     formula_count = 0
+    cell_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
     defined_names = meta.get("defined_names")
     try:
@@ -219,7 +225,7 @@ def _compile_cells_streaming(
                     )
                     if added:
                         formula_count += 1
-                    cells.append(cell)
+                    cell_count += 1
                     chunk.append(cell_parquet_row(cell))
                 _intern_resolved_edges(edges[edge_at:], defined_names, pool)
                 batch.add_rows(chunk)
@@ -227,7 +233,7 @@ def _compile_cells_streaming(
     except Exception:
         batch.abort()
         raise
-    return cells, edges, extra_nodes, formula_count, pool
+    return cell_count, edges, extra_nodes, formula_count, pool
 
 
 def _take_cell(
@@ -560,20 +566,3 @@ def _write_object_batches(path, columns, objs, getters, row_group_rows: int) -> 
             writer.write_lists([[getter(obj) for obj in part] for getter in getters])
 
 
-def _presence_index(
-    dest_dir: Path,
-    *,
-    columnar: bool = False,
-    pool: dict[str, str] | None = None,
-) -> dict[str, str]:
-    path = dest_dir / "raw" / "cell_presence.parquet"
-    if not path.is_file():
-        return {}
-    out: dict[str, str] = {}
-    rows = ColumnRows(path, dedup=("sheet", "presence")) if columnar else read_parquet(path)
-    for row in rows:
-        node = canonical_node_id(str(row["sheet"]), str(row["addr"]))
-        if pool is not None:
-            node = pool.setdefault(node, node)
-        out[node] = str(row["presence"])
-    return out

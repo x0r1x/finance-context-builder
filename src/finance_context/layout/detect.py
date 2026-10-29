@@ -43,25 +43,59 @@ def detect_layout(
     below = summary_below or {}
     edges = None if edges is None else [as_edge(edge) for edge in edges]
     by_sheet: dict[str, list[dict]] = {}
+    order: list[str] = []
     for cell in cells:
-        by_sheet.setdefault(cell["sheet"], []).append(cell)
-    sheets = []
-    for name, sheet_cells in by_sheet.items():
-        row_ids = None if hidden_rows is None else set(hidden_rows.get(name, ()))
-        blocks, axes = _blocks_for_sheet(
+        name = cell["sheet"]
+        bucket = by_sheet.get(name)
+        if bucket is None:
+            bucket = []
+            by_sheet[name] = bucket
+            order.append(name)
+        bucket.append(cell)
+    sheets = [
+        _sheet_layout(
             name,
-            sheet_cells,
-            date1904,
-            edges,
-            hidden_cols=set(columns.get(name, ())),
-            hidden_row_ids=row_ids,
-            summary_below=below.get(name, True),
+            by_sheet[name],
+            date1904=date1904,
+            edges=edges,
+            hidden_sheets=hidden,
+            hidden_columns=columns,
+            hidden_rows=hidden_rows,
+            summary_below=below,
             defined_names=defined_names,
         )
-        sheets.append(SheetLayout(name=name, blocks=blocks, axes=axes, hidden=name in hidden))
+        for name in order
+    ]
     layout = Layout(sheets=sheets)
     link_workbook_timelines(layout, cells, date1904)
     return layout
+
+
+def _sheet_layout(
+    name: str,
+    sheet_cells: list[dict],
+    *,
+    date1904: bool,
+    edges: list[dict] | None,
+    hidden_sheets: set[str],
+    hidden_columns: dict[str, set[int]],
+    hidden_rows: dict[str, set[int]] | None,
+    summary_below: dict[str, bool],
+    defined_names: list | None,
+) -> SheetLayout:
+    """Blocks for one sheet. The caller drops ``sheet_cells`` before the next sheet."""
+    row_ids = None if hidden_rows is None else set(hidden_rows.get(name, ()))
+    blocks, axes = _blocks_for_sheet(
+        name,
+        sheet_cells,
+        date1904,
+        edges,
+        hidden_cols=set(hidden_columns.get(name, ())),
+        hidden_row_ids=row_ids,
+        summary_below=summary_below.get(name, True),
+        defined_names=defined_names,
+    )
+    return SheetLayout(name=name, blocks=blocks, axes=axes, hidden=name in hidden_sheets)
 
 
 def _blocks_for_sheet(

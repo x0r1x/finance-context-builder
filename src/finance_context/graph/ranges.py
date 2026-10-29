@@ -31,14 +31,6 @@ _NARROW_COLUMNS = 64
 SEGMENT_PREFIX = "#seg|"
 
 
-def is_whole_column(node: RangeNode) -> bool:
-    return node.r1 == 1 and node.r2 == 1_048_576
-
-
-def is_whole_row(node: RangeNode) -> bool:
-    return node.c1 == 1 and node.c2 == 16_384
-
-
 class CellGrid:
     """Cells of a book by sheet and column, for range members in row-major order."""
 
@@ -69,14 +61,13 @@ class CellGrid:
         """Columns that hold members. A bounded rectangle counts its blank cells."""
         if not whole_axis(node.c1, node.c2, node.r1, node.r2):
             return list(range(node.c1, node.c2 + 1))
-        if is_whole_column(node):
-            columns = self.usage.rows_by_col.get(node.sheet, {})
-            return sorted(col for col in columns if node.c1 <= col <= node.c2)
-        rows = self.usage.cols_by_row.get(node.sheet, {})
-        found: set[int] = set()
-        for row, cols in rows.items():
-            if node.r1 <= row <= node.r2:
-                found.update(cols)
+        columns = self.usage.rows_by_col.get(node.sheet, {})
+        found: list[int] = []
+        for col, spans in columns.items():
+            if col < node.c1 or col > node.c2:
+                continue
+            if any(not (end < node.r1 or start > node.r2) for start, end in spans):
+                found.append(col)
         return sorted(found)
 
 

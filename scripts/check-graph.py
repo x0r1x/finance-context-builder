@@ -297,23 +297,32 @@ def _in_markdown(text: str, markdown: str) -> bool:
 
 
 def _locate(markdown: str, needle: str, pos: int) -> int:
-    """Index of needle at or after pos, else before pos. -1 if it never occurs."""
+    """Index of needle at or after pos, else one that reaches pos, else earlier."""
     at = markdown.find(needle, pos)
     if at >= 0:
         return at
-    if pos:
-        at = markdown.find(needle, 0, pos)
-        if at >= 0:
-            return at
+    if not pos:
+        return -1
+    # The cursor can stop on a digit inside ``[PF Model!E20]`` after a cell
+    # value of ``0`` was sought. That match is neither fully before pos nor
+    # fully after it.
+    begin = max(0, pos - len(needle))
+    at = markdown.find(needle, begin)
+    if at >= 0 and at < pos <= at + len(needle):
+        return at
+    at = markdown.find(needle, 0, pos)
+    if at >= 0:
+        return at
     return -1
 
 
 def _seek(markdown: str, needle: str, cursor: list[int], *, escape: bool = False) -> bool:
     """True when needle occurs in markdown.
 
-    A hit at or after the cursor moves the cursor past it. A hit only earlier
-    (a repeated label) leaves the cursor. One forward pass stays linear; a
-    search from the start of a multi-megabyte file per row does not.
+    A hit at or after the cursor, or one the cursor already sits inside, moves
+    the cursor past it. A hit only earlier (a repeated label) leaves the cursor.
+    One forward pass stays linear; a search from the start of a multi-megabyte
+    file per row does not.
     """
     if not needle:
         return True
@@ -327,8 +336,9 @@ def _seek(markdown: str, needle: str, cursor: list[int], *, escape: bool = False
             used = escaped
     if at < 0:
         return False
-    if at >= pos:
-        cursor[0] = at + len(used)
+    end = at + len(used)
+    if end > pos:
+        cursor[0] = end
     return True
 
 

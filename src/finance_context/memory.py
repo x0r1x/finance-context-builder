@@ -411,33 +411,106 @@ def formula_targets(formula: str, sheet: str) -> list[str]:
     return targets
 
 
-def _canonical_node(sheet: object, addr: object) -> str | None:
-    from finance_context.excel.a1 import format_addr, parse_addr
+class PresenceIndex:
+    """Lookup for formula targets. Blanks are column runs, not one key per cell."""
 
-    if not sheet or not addr:
-        return None
-    try:
-        col, row = parse_addr(str(addr))
-    except ValueError:
-        return None
-    return f"{sheet}!{format_addr(col, row)}"
+    def __init__(self) -> None:
+        self.populated: set[str] = set()
+        self.blanks: dict[str, dict[int, tuple[tuple[int, int], ...]]] = {}
+        # Taken from the sheet and address columns. Not parsed back out of
+        # "Sheet!A1": a sheet name that starts with ' is not a quoted ref.
+        self.populated_at: list[tuple[str, int, int]] = []
+
+    def __bool__(self) -> bool:
+        return bool(self.populated) or bool(self.blanks)
+
+    def get(self, target: str, default: str | None = None) -> str | None:
+        if target in self.populated:
+            return "populated"
+        try:
+            from finance_context.excel.a1 import parse_addr
+            from finance_context.formulas.csr import _span_has, split_sheet_ref
+
+            sheet, body = split_sheet_ref(str(target))
+            col, row = parse_addr(body)
+        except ValueError:
+            return default
+        spans = self.blanks.get(sheet, {}).get(col)
+        if spans and _span_has(spans, row):
+            return "styled_blank"
+        return default
+
+    def present_spans(self) -> list[tuple[str, int, int, int]]:
+        """``(sheet, col, row_start, row_end)`` for every present cell."""
+        found: list[tuple[str, int, int, int]] = [
+            (sheet, col, row, row) for sheet, col, row in self.populated_at
+        ]
+        for sheet, columns in self.blanks.items():
+            for col, spans in columns.items():
+                for start, end in spans:
+                    found.append((sheet, col, start, end))
+        return found
+
+
+def load_presence(path: Path, *, pool: dict[str, str] | None = None) -> PresenceIndex:
+    """Read presence. A file without ``row_end`` is one cell per row."""
+    from finance_context.excel.a1 import format_addr, parse_addr
+    from finance_context.formulas.csr import _merge_spans
+
+    index = PresenceIndex()
+    if not path.is_file():
+        return index
+    import pyarrow.parquet as pq
+
+    schema = pq.read_schema(path)
+    names = ["sheet", "addr", "presence"]
+    has_end = "row_end" in schema.names
+    if has_end:
+        names.append("row_end")
+    table = pq.read_table(path, columns=names)
+    sheets = table.column("sheet").to_pylist()
+    addrs = table.column("addr").to_pylist()
+    kinds = table.column("presence").to_pylist()
+    ends = table.column("row_end").to_pylist() if has_end else None
+    pending: dict[str, dict[int, list[tuple[int, int]]]] = {}
+    for index_row, sheet in enumerate(sheets):
+        try:
+            col, row = parse_addr(str(addrs[index_row]))
+        except ValueError:
+            continue
+        end = row
+        if ends is not None and ends[index_row] is not None:
+            end = int(ends[index_row])
+        sheet_name = "" if sheet is None else str(sheet)
+        if str(kinds[index_row]) == "populated":
+            node = f"{sheet_name}!{format_addr(col, row)}"
+            if pool is not None:
+                node = pool.setdefault(node, node)
+            index.populated.add(node)
+            index.populated_at.append((sheet_name, col, row))
+            continue
+        pending.setdefault(sheet_name, {}).setdefault(col, []).append(
+            (min(row, end), max(row, end))
+        )
+    index.blanks = {
+        sheet: {col: _merge_spans(items) for col, items in columns.items()}
+        for sheet, columns in pending.items()
+    }
+    return index
 
 
 def usage_for_book(dest_dir: Path):
-    """Present cells for range clipping: parsed cells plus styled blanks."""
-    # Imported lazily: formulas/__init__ pulls compile, which imports this module.
-    from finance_context.formulas.csr import sheet_usage
+    """Present cells for range clipping: parsed cells plus styled blanks.
 
-    nodes: list[str] = []
-    for name in ("cells.parquet", "cell_presence.parquet"):
-        path = dest_dir / "raw" / name
-        if not path.is_file():
-            continue
-        for sheet, addr in read_parquet_columns(path, ("sheet", "addr")):
-            node = _canonical_node(sheet, addr)
-            if node is not None:
-                nodes.append(node)
-    return sheet_usage(nodes)
+    Presence already includes populated cells, so cells.parquet is not read again.
+    """
+    # Imported lazily: formulas/__init__ pulls compile, which imports this module.
+    from finance_context.formulas.csr import sheet_usage_spans
+
+    path = dest_dir / "raw" / "cell_presence.parquet"
+    if not path.is_file():
+        return sheet_usage_spans(())
+    return sheet_usage_spans(load_presence(path).present_spans())
 
 
 def assess_raw(dest_dir: Path, usage: object | None = None) -> WorkbookEstimate:

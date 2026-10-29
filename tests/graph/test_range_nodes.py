@@ -212,10 +212,15 @@ def test_graph_links_and_cycles_match_expansion(runs: tuple[Path, Path]) -> None
 
 def _present_rows(dest: Path) -> dict[str, dict[int, set[int]]]:
     usage = usage_for_book(dest)
-    return {
-        sheet: {col: set(rows) for col, rows in cols.items()}
-        for sheet, cols in usage.rows_by_col.items()
-    }
+    found: dict[str, dict[int, set[int]]] = {}
+    for sheet, cols in usage.rows_by_col.items():
+        found[sheet] = {}
+        for col, spans in cols.items():
+            rows: set[int] = set()
+            for start, end in spans:
+                rows.update(range(start, end + 1))
+            found[sheet][col] = rows
+    return found
 
 
 def _member_rows(item: dict, present: dict[str, dict[int, set[int]]]) -> set[int]:
