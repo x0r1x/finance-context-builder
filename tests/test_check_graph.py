@@ -651,6 +651,22 @@ def test_period_value_must_carry_the_graph_cell(tmp_path: Path) -> None:
     assert linked.returncode == 0, linked.stderr
 
 
+def test_seek_advances_past_a_later_match_and_rejects_a_missing_one() -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("check_graph", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    cursor = [0]
+    assert module._seek("head TARGET tail", "TARGET", cursor)
+    assert cursor[0] == len("head TARGET")
+    cursor = [10]
+    assert module._seek("EARLY .... LATE", "EARLY", cursor)
+    assert cursor[0] == 10
+    assert not module._seek("nothing here", "missing", [0])
+
+
 def test_trace_rejects_ast(tmp_path: Path) -> None:
     trace = _write(
         tmp_path / "trace.json",

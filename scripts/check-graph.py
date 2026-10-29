@@ -296,6 +296,42 @@ def _in_markdown(text: str, markdown: str) -> bool:
     return text.replace("|", "\\|") in markdown
 
 
+def _locate(markdown: str, needle: str, pos: int) -> int:
+    """Index of needle at or after pos, else before pos. -1 if it never occurs."""
+    at = markdown.find(needle, pos)
+    if at >= 0:
+        return at
+    if pos:
+        at = markdown.find(needle, 0, pos)
+        if at >= 0:
+            return at
+    return -1
+
+
+def _seek(markdown: str, needle: str, cursor: list[int], *, escape: bool = False) -> bool:
+    """True when needle occurs in markdown.
+
+    A hit at or after the cursor moves the cursor past it. A hit only earlier
+    (a repeated label) leaves the cursor. One forward pass stays linear; a
+    search from the start of a multi-megabyte file per row does not.
+    """
+    if not needle:
+        return True
+    pos = cursor[0]
+    at = _locate(markdown, needle, pos)
+    used = needle
+    if at < 0 and escape:
+        escaped = needle.replace("|", "\\|")
+        if escaped != needle:
+            at = _locate(markdown, escaped, pos)
+            used = escaped
+    if at < 0:
+        return False
+    if at >= pos:
+        cursor[0] = at + len(used)
+    return True
+
+
 _MD_CELL = str.maketrans({"|": "\\|", "\n": " "})
 
 
@@ -383,29 +419,32 @@ def _axis_period_grid(axis: dict[str, Any], markdown: str) -> list[str]:
 
 def check_context_markdown(context: dict[str, Any], markdown: str) -> list[str]:
     errors: list[str] = _check_axes_markdown(context, markdown)
+    cursor = [0]
+    # "empty" and "n/a" are one token for the whole file, not one search per row.
+    tokens: dict[str, bool] = {}
     for block in context.get("blocks") or []:
         if not isinstance(block, dict):
             continue
         block_id = str(block.get("block_id") or "")
-        if block_id and block_id not in markdown:
+        if block_id and not _seek(markdown, block_id, cursor):
             errors.append(f"context.md missing block {block_id}")
         for row in block.get("rows") or []:
             if not isinstance(row, dict):
                 continue
             label = _markdown_cell(str(row.get("label") or ""))
-            if label and label not in markdown:
+            if label and not _seek(markdown, label, cursor):
                 errors.append(f"context.md missing row {label}")
                 break
             row_key = row.get("row_key")
-            if row_key and not _in_markdown(str(row_key), markdown):
+            if row_key and not _seek(markdown, str(row_key), cursor, escape=True):
                 errors.append(f"context.md missing row_key {row_key}")
                 break
             formula = _markdown_cell(str(row.get("formula") or ""))
-            if formula and formula not in markdown:
+            if formula and not _seek(markdown, formula, cursor):
                 errors.append(f"context.md missing formula {formula}")
                 break
-            errors.extend(_check_row_markdown(row, markdown))
-            errors.extend(_check_period_cell_addresses(context, block, row, markdown))
+            errors.extend(_check_row_markdown(row, markdown, cursor, tokens))
+            errors.extend(_check_period_cell_addresses(context, block, row, markdown, cursor))
             if errors:
                 break
     return errors
@@ -453,6 +492,7 @@ def _check_period_cell_addresses(
     block: dict[str, Any],
     row: dict[str, Any],
     markdown: str,
+    cursor: list[int],
 ) -> list[str]:
     """A period value must carry `[Sheet!A1]`. The formula stays in graph.md."""
     sheet = row.get("sheet")
@@ -469,26 +509,54 @@ def _check_period_cell_addresses(
         letter = _column_letter(period.get("col"))
         if not letter:
             continue
-        addr = f"{sheet}!{letter}{number}"
-        if f"[{addr}]" not in markdown:
-            return [f"context.md period value missing [{addr}]"]
+        addr = f"[{sheet}!{letter}{number}]"
+        if not _seek(markdown, addr, cursor):
+            return [f"context.md period value missing {addr}"]
     return []
 
 
-def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:
+def _token_present(markdown: str, needle: str, cache: dict[str, bool]) -> bool:
+    hit = cache.get(needle)
+    if hit is None:
+        hit = needle in markdown
+        cache[needle] = hit
+    return hit
+
+
+def _check_row_markdown(
+    row: dict[str, Any],
+    markdown: str,
+    cursor: list[int],
+    tokens: dict[str, bool],
+) -> list[str]:
     statuses = row.get("value_statuses") or []
-    if isinstance(statuses, list) and "empty" in statuses and "empty" not in markdown:
+    if (
+        isinstance(statuses, list)
+        and "empty" in statuses
+        and not _token_present(markdown, "empty", tokens)
+    ):
         return ["context.md missing empty value status"]
-    if isinstance(statuses, list) and "not_applicable" in statuses and "n/a" not in markdown:
+    if (
+        isinstance(statuses, list)
+        and "not_applicable" in statuses
+        and not _token_present(markdown, "n/a", tokens)
+    ):
         return ["context.md missing n/a value status"]
     factor = row.get("scale_factor")
-    if isinstance(factor, int) and factor not in (0, 1) and f"×{factor}" not in markdown:
-        return [f"context.md missing scale factor ×{factor}"]
+    if isinstance(factor, int) and factor not in (0, 1):
+        mark = f"×{factor}"
+        if not _token_present(markdown, mark, tokens):
+            return [f"context.md missing scale factor {mark}"]
     values = row.get("values") or []
     normalized = row.get("normalized_values") or []
     if isinstance(values, list) and isinstance(normalized, list):
         for value, norm in zip(values, normalized, strict=False):
-            if value and norm and _scaled(str(value), str(norm)) and str(norm) not in markdown:
+            if (
+                value
+                and norm
+                and _scaled(str(value), str(norm))
+                and not _seek(markdown, str(norm), cursor)
+            ):
                 return [f"context.md missing normalized value {norm}"]
     for cell in row.get("cells") or []:
         if not isinstance(cell, dict) or cell.get("role") == "unit":
@@ -498,7 +566,7 @@ def _check_row_markdown(row: dict[str, Any], markdown: str) -> list[str]:
             continue
         # The renderer strips the cell, so trailing spaces in the cache are gone.
         folded = _markdown_cell(str(value))
-        if folded and not _in_markdown(folded, markdown):
+        if folded and not _seek(markdown, folded, cursor, escape=True):
             return [f"context.md missing {cell.get('role')} cell {cell.get('addr')}"]
     return []
 
@@ -513,32 +581,78 @@ def _scaled(value: str, normalized: str) -> bool:
     return abs(left - right) > 1e-9 * max(1.0, abs(left), abs(right))
 
 
+def _span(markdown: str, at: int, extra_lines: int = 6) -> str:
+    """The line of ``at`` plus a few following lines.
+
+    A rendered link is one line. The script fixtures put each field on its own
+    line under the cell, so the window covers those too.
+    """
+    start = markdown.rfind("\n", 0, at) + 1
+    end = markdown.find("\n", at)
+    if end < 0:
+        end = len(markdown)
+    for _ in range(extra_lines):
+        nxt = markdown.find("\n", end + 1)
+        if nxt < 0:
+            end = len(markdown)
+            break
+        end = nxt
+    return markdown[start:end]
+
+
+def _near(markdown: str, needle: str, at: int, *, escape: bool = False) -> bool:
+    span = _span(markdown, at)
+    if needle in span:
+        return True
+    escaped = needle.replace("|", "\\|") if escape else needle
+    if escaped != needle and escaped in span:
+        return True
+    # Not beside the cell. Same presence rule as scanning the whole file.
+    if escape:
+        return _in_markdown(needle, markdown)
+    return needle in markdown
+
+
 def check_graph_markdown(graph: dict[str, Any], markdown: str) -> list[str]:
     errors: list[str] = []
     for key in ("nodes", "edges"):
         if key in graph and str(graph[key]) not in markdown:
             errors.append(f"graph.md missing {key} count {graph[key]}")
+    # Cycle members repeat cell addresses above the table. Start at the table
+    # so each cell is found on its own row, just after the previous one.
+    pos = 0
+    header = markdown.find("\n## Links\n")
+    if header >= 0:
+        pos = header + len("\n## Links\n")
     for link in graph.get("links") or []:
         if not isinstance(link, dict):
             continue
         cell = str(link.get("cell") or "")
-        if cell and cell not in markdown:
-            errors.append(f"graph.md missing link {cell}")
-            break
+        if cell:
+            at = markdown.find(cell, pos)
+            if at < 0:
+                if cell not in markdown:
+                    errors.append(f"graph.md missing link {cell}")
+                    break
+                at = markdown.find(cell)
+            else:
+                pos = at + len(cell)
+        else:
+            at = pos
         formula = link.get("formula")
-        if formula and str(formula) not in markdown:
+        if formula and not _near(markdown, str(formula), at):
             errors.append(f"graph.md missing formula {formula}")
             break
         row_key = link.get("row_key")
-        if row_key and not _in_markdown(str(row_key), markdown):
+        if row_key and not _near(markdown, str(row_key), at, escape=True):
             errors.append(f"graph.md missing row_key {row_key}")
             break
         period_id = link.get("period_id")
-        if period_id and str(period_id) not in markdown:
+        if period_id and not _near(markdown, str(period_id), at):
             errors.append(f"graph.md missing period {period_id}")
             break
         formula_class = link.get("formula_class")
-        if formula_class and str(formula_class) not in markdown:
+        if formula_class and not _near(markdown, str(formula_class), at):
             errors.append(f"graph.md missing formula class {formula_class}")
             break
     return errors

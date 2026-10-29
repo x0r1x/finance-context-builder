@@ -32,11 +32,10 @@ for name in context.md graph.md; do
     exit 1
   fi
 done
+# Markdown was already checked in run-context-job.sh. This pass only prints axes.
 if ! axes="$(python3 "$SCRIPTS/check-graph.py" \
   "$RUN_DIR/json/context.json" \
   "$RUN_DIR/json/graph.json" \
-  --context-md "$RUN_DIR/md/context.md" \
-  --graph-md "$RUN_DIR/md/graph.md" \
   --axes-summary)"; then
   echo "check-graph.py rejected the context and graph documents" >&2
   exit 1
