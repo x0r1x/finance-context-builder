@@ -18,6 +18,7 @@ from finance_context.store.duckdb_io import (
     read_parquet_rows,
     read_parquet_table,
 )
+from finance_context.store.duckdb_io import read_parquet_dicts as _read_parquet_dicts
 
 _CELL_COLUMNS = (
     "sheet",
@@ -232,6 +233,17 @@ def read_parquet(path: Path) -> list[dict[str, Any]]:
 def read_parquet_columns(path: Path, columns: Sequence[str]) -> list[tuple[Any, ...]]:
     """Read named columns only. The rest of the row stays on disk."""
     return read_parquet_column_tuples(path, list(columns))
+
+
+def read_parquet_dicts(
+    path: Path,
+    columns: Sequence[str],
+    *,
+    where: str | None = None,
+    params: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Read named columns as dicts. Other columns stay on disk."""
+    return _read_parquet_dicts(path, list(columns), where=where, params=params)
 
 
 RAW_CELL_TYPES = (

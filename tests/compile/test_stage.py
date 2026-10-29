@@ -38,7 +38,9 @@ def test_compile_writes_ir_artifacts_and_templates(tmp_path: Path, dest: Path) -
     assert by[("P&L", "D24")]["formula_template"] == "=Inputs!R[-19]C[0]"
     assert by[("P&L", "D24")]["unparsed"] is False
     assert any(e["kind"] == "cross_sheet" and e["target"] == "Inputs!D5" for e in edges)
-    assert result.cells and result.edges and result.cell_edges
+    assert result.cell_count == 3
+    assert not result.cells
+    assert result.edges and result.cell_edges
     assert (dest / "ir" / "cells.parquet").is_file()
     assert (dest / "ir" / "edges.parquet").is_file()
     assert (dest / "ir" / "cell_edges.parquet").is_file()

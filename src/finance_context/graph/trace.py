@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import bisect
 import json
 from collections import defaultdict, deque
 from pathlib import Path
 
-from finance_context.formulas.csr import SheetUsage, present_count, whole_axis
+from finance_context.formulas.csr import SheetUsage, _span_has, present_count, whole_axis
 from finance_context.graph.models import TraceDocument, TraceEdge, TraceNode
 from finance_context.graph.ranges import CellGrid, CoverIndex, range_nodes
 from finance_context.graph.refs import parse_node_id
@@ -252,9 +251,8 @@ class _Ranges:
         return present_count(node, self._usage()) > 0
 
     def _exists(self, sheet: str, col: int, row: int) -> bool:
-        rows = self._usage().rows_by_col.get(sheet, {}).get(col, ())
-        slot = bisect.bisect_left(rows, row)
-        return slot < len(rows) and rows[slot] == row
+        spans = self._usage().rows_by_col.get(sheet, {}).get(col, ())
+        return _span_has(spans, row)
 
     def covers(self, cell: str) -> bool:
         return bool(self.covering(cell))

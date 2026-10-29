@@ -27,7 +27,7 @@ from finance_context.formulas.csr import (
     reset_range_expand_cap,
     reset_range_node_min_cells,
 )
-from finance_context.formulas.models import as_edge, as_ir_cell, release_cell_asts
+from finance_context.formulas.models import as_edge, release_cell_asts
 from finance_context.formulas.stage import EdgeCount, compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
 from finance_context.jobqueue.progress import (
@@ -38,7 +38,7 @@ from finance_context.jobqueue.progress import (
 )
 from finance_context.layout.models import Layout
 from finance_context.layout.relations import formula_relations
-from finance_context.layout.stage import layout_workbook
+from finance_context.layout.stage import layout_workbook, load_relation_cells
 from finance_context.memory import (
     MEMORY_ERROR_DETAIL,
     out_of_memory,
@@ -56,10 +56,23 @@ from finance_context.render.markdown import (
 )
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import export_succeeded_book, republish_file
-from finance_context.store.fs import file_lock, read_parquet, update_json
+from finance_context.store.fs import file_lock, read_parquet, read_parquet_dicts, update_json
 from finance_context.store.paths import session_job_dir, shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
+# Graph and context do not read comments or formula ASTs.
+_SLIM_CELL_COLUMNS = (
+    "sheet",
+    "row",
+    "col",
+    "addr",
+    "formula_raw",
+    "formula_template",
+    "unparsed",
+    "cached_value",
+    "hidden",
+    "number_format",
+)
 _TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
 # Interpreter startup sits between proc.start() and process_mono_start, and
 # mark_job_failed still has to hit disk. Both fit in this margin.
@@ -251,28 +264,27 @@ class Pipeline:
                     usage=book_usage(),
                     settings=self.settings,
                 )
-                profile["cells"] = len(compiled_book.cells)
+                profile["cells"] = compiled_book.cell_count
                 profile["edges"] = len(compiled_book.edges)
                 profile["cell_edges"] = len(compiled_book.cell_edges)
                 return compiled_book
 
             compiled = _timed("compile", compile_and_count, profile, settings=self.settings)
-            ir_cells = compiled.cells
+            cell_count = compiled.cell_count
             ir_edges = compiled.edges
             ir_cell_edges = compiled.cell_edges
             compiled = None
         else:
-            ir_cells, ir_edges, ir_cell_edges = _read_ir(
+            ir_edges, ir_cell_edges = _read_ir(
                 book, count_cell_edges=self.settings.graph_stream
             )
+            cell_count = _parquet_rows(book / "ir" / "cells.parquet")
         set_stage("layout")
         if not (book / "layout" / "layout.json").is_file():
-            layout_profile = {"cells": len(ir_cells), "edges": len(ir_edges)}
+            layout_profile = {"cells": cell_count, "edges": len(ir_edges)}
             layout = _timed(
                 "layout",
-                lambda: layout_workbook(
-                    book, cells=ir_cells, edges=ir_edges, settings=self.settings
-                ),
+                lambda: layout_workbook(book, edges=ir_edges, settings=self.settings),
                 layout_profile,
                 settings=self.settings,
             )
@@ -281,10 +293,12 @@ class Pipeline:
             layout = Layout.model_validate_json(
                 (book / "layout" / "layout.json").read_text(encoding="utf-8")
             )
-        cells = ir_cells
+        relation_cells = load_relation_cells(book, layout)
+        relations = formula_relations(layout, relation_cells)
+        release_cell_asts(relation_cells)
+        relation_cells = None
         edges = ir_edges
-        relations = formula_relations(layout, ir_cells)
-        release_cell_asts(ir_cells)
+        cells = _slim_cells(book)
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status()
         set_stage("graph", status="running")
@@ -295,7 +309,7 @@ class Pipeline:
             or not (dest_dir / "graph" / "edges.parquet").is_file()
         ):
             graph_profile = {
-                "cells": len(ir_cells),
+                "cells": cell_count,
                 "edges": len(ir_edges),
                 "cell_edges": len(ir_cell_edges),
             }
@@ -306,7 +320,7 @@ class Pipeline:
                     dest_dir,
                     job_id=job_id,
                     layout=layout,
-                    cells=ir_cells,
+                    cells=cells,
                     edges=ir_edges,
                     cell_edges=graph_edges,
                     book_dir=book,
@@ -340,7 +354,7 @@ class Pipeline:
             )
         ir_cell_edges = None
         set_stage("build", status="running")
-        build_profile = {"cells": len(cells), "edges": len(edges)}
+        build_profile = {"cells": cell_count, "edges": len(edges)}
 
         def build_and_count():
             built = build_context(
@@ -361,7 +375,7 @@ class Pipeline:
             return built
 
         doc = _timed("build", build_and_count, build_profile, settings=self.settings)
-        cells = edges = ir_cells = ir_edges = relations = None
+        cells = edges = ir_edges = relations = None
         _write_sorted_json(
             dest_dir / "context" / "context.json",
             doc.model_dump(mode="json"),
@@ -755,23 +769,31 @@ def _wait_for_pause_release() -> None:
 
 def _read_ir(
     dest_dir: Path, *, count_cell_edges: bool = False
-) -> tuple[list, list, list | EdgeCount]:
-    cells = read_parquet(dest_dir / "ir" / "cells.parquet")
+) -> tuple[list, list | EdgeCount]:
     edges_path = dest_dir / "ir" / "edges.parquet"
     edges = read_parquet(edges_path) if edges_path.is_file() else []
     cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
     if count_cell_edges and cell_edges_path.is_file():
-        import pyarrow.parquet as pq
-
-        cell_edges: list | EdgeCount = EdgeCount(pq.ParquetFile(cell_edges_path).metadata.num_rows)
+        cell_edges: list | EdgeCount = EdgeCount(_parquet_rows(cell_edges_path))
     else:
         loaded = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
         cell_edges = [as_cell_edge(edge) for edge in loaded]
-    return (
-        [as_ir_cell(cell) for cell in cells],
-        [as_edge(edge) for edge in edges],
-        cell_edges,
-    )
+    return [as_edge(edge) for edge in edges], cell_edges
+
+
+def _parquet_rows(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    import pyarrow.parquet as pq
+
+    return pq.ParquetFile(path).metadata.num_rows
+
+
+def _slim_cells(dest_dir: Path) -> list[dict]:
+    path = dest_dir / "ir" / "cells.parquet"
+    if not path.is_file():
+        return []
+    return read_parquet_dicts(path, list(_SLIM_CELL_COLUMNS))
 
 
 def _raise_if_cancelled(progress: object | None) -> None:

@@ -665,6 +665,13 @@ def test_seek_advances_past_a_later_match_and_rejects_a_missing_one() -> None:
     assert module._seek("EARLY .... LATE", "EARLY", cursor)
     assert cursor[0] == 10
     assert not module._seek("nothing here", "missing", [0])
+    # Two cached zeros. The second "0" is the digit inside E20.
+    text = "0 [PF Model!E20] | 0 [PF Model!G20]"
+    cursor = [0]
+    assert module._seek(text, "0", cursor)
+    assert module._seek(text, "0", cursor)
+    assert module._seek(text, "[PF Model!E20]", cursor)
+    assert module._seek(text, "[PF Model!G20]", cursor)
 
 
 def test_trace_rejects_ast(tmp_path: Path) -> None:
