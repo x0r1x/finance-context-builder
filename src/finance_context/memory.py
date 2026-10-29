@@ -417,6 +417,9 @@ class PresenceIndex:
     def __init__(self) -> None:
         self.populated: set[str] = set()
         self.blanks: dict[str, dict[int, tuple[tuple[int, int], ...]]] = {}
+        # Taken from the sheet and address columns. Not parsed back out of
+        # "Sheet!A1": a sheet name that starts with ' is not a quoted ref.
+        self.populated_at: list[tuple[str, int, int]] = []
 
     def __bool__(self) -> bool:
         return bool(self.populated) or bool(self.blanks)
@@ -439,17 +442,9 @@ class PresenceIndex:
 
     def present_spans(self) -> list[tuple[str, int, int, int]]:
         """``(sheet, col, row_start, row_end)`` for every present cell."""
-        from finance_context.excel.a1 import parse_addr
-        from finance_context.formulas.csr import split_sheet_ref
-
-        found: list[tuple[str, int, int, int]] = []
-        for node in self.populated:
-            try:
-                sheet, body = split_sheet_ref(node)
-                col, row = parse_addr(body)
-            except ValueError:
-                continue
-            found.append((sheet, col, row, row))
+        found: list[tuple[str, int, int, int]] = [
+            (sheet, col, row, row) for sheet, col, row in self.populated_at
+        ]
         for sheet, columns in self.blanks.items():
             for col, spans in columns.items():
                 for start, end in spans:
@@ -492,6 +487,7 @@ def load_presence(path: Path, *, pool: dict[str, str] | None = None) -> Presence
             if pool is not None:
                 node = pool.setdefault(node, node)
             index.populated.add(node)
+            index.populated_at.append((sheet_name, col, row))
             continue
         pending.setdefault(sheet_name, {}).setdefault(col, []).append(
             (min(row, end), max(row, end))
