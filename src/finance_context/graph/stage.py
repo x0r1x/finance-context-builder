@@ -53,6 +53,182 @@ INDEX_COLUMNS = (
 )
 
 
+class _Periods:
+    """Period of a node from its column. No per-cell dictionary."""
+
+    def __init__(self, period_by_cell: dict[tuple[str, int], str]) -> None:
+        self._columns = period_by_cell
+
+    def get(self, node: str, default: str | None = None) -> str | None:
+        parsed = parse_node_id(node)
+        if parsed is None:
+            return default
+        return self._columns.get((parsed[0], parsed[1]), default)
+
+
+def _formula_cells(book: Path) -> list[dict]:
+    """Formula rows only. Value cells stay in the parquet file."""
+    import pyarrow.parquet as pq
+
+    path = book / "ir" / "cells.parquet"
+    if not path.is_file():
+        return []
+    found: list[dict] = []
+    columns = ["sheet", "row", "col", "addr", "formula_raw"]
+    for batch in pq.ParquetFile(path).iter_batches(columns=columns, batch_size=65536):
+        raw = batch.column(4).to_pylist()
+        sheets = batch.column(0).to_pylist()
+        rows = batch.column(1).to_pylist()
+        cols = batch.column(2).to_pylist()
+        addrs = batch.column(3).to_pylist()
+        for index, formula in enumerate(raw):
+            if not formula:
+                continue
+            found.append(
+                {
+                    "sheet": sheets[index],
+                    "row": rows[index],
+                    "col": cols[index],
+                    "addr": addrs[index],
+                    "formula_raw": formula,
+                }
+            )
+    return found
+
+
+def _circular_rows(layout: Layout) -> dict[tuple[str, int], str]:
+    found: dict[tuple[str, int], str] = {}
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            for row in block.rows:
+                if "circular" in (row.label or "").casefold():
+                    found[(sheet.name, int(row.row))] = row.label
+    return found
+
+
+def _stream_index(
+    book: Path,
+    path: Path,
+    row_meta: dict[tuple[str, int], str],
+    period_by_cell: dict[tuple[str, int], str],
+    layout: Layout,
+    cell_edge_path: Path | None,
+    cell_edges: list | None,
+    row_group_rows: int,
+) -> tuple[int, dict[tuple[str, int], list[str]]]:
+    """Write the graph index from parquet. The cell dictionaries are not kept."""
+    import pyarrow.parquet as pq
+
+    from finance_context.store.fs import RowGroupWriter
+
+    circular = _circular_rows(layout)
+    circular_ids: dict[tuple[str, int], list[str]] = {}
+    count = 0
+    names = [name for name, _dtype in INDEX_COLUMNS]
+    source = book / "ir" / "cells.parquet"
+    columns = ["sheet", "addr", "row", "col", "formula_raw", "cached_value"]
+    with RowGroupWriter(path, INDEX_COLUMNS, row_group_rows) as writer:
+        chunk: list[list[object]] = [[] for _ in names]
+        if source.is_file():
+            for batch in pq.ParquetFile(source).iter_batches(columns=columns, batch_size=65536):
+                sheets = batch.column(0).to_pylist()
+                addrs = batch.column(1).to_pylist()
+                row_numbers = batch.column(2).to_pylist()
+                col_numbers = batch.column(3).to_pylist()
+                formulas = batch.column(4).to_pylist()
+                cached = batch.column(5).to_pylist()
+                for index, sheet_name in enumerate(sheets):
+                    sheet = str(sheet_name)
+                    addr = str(addrs[index])
+                    row_n = int(row_numbers[index])
+                    col_n = int(col_numbers[index])
+                    formula = formulas[index]
+                    value = cached[index]
+                    if formula:
+                        node_type = "calculated"
+                    elif value not in (None, ""):
+                        node_type = "input"
+                    else:
+                        node_type = "empty"
+                    node_id = f"{sheet}!{addr}"
+                    row = (
+                        node_id,
+                        sheet,
+                        addr,
+                        row_meta.get((sheet, row_n)),
+                        period_by_cell.get((sheet, col_n)),
+                        node_type,
+                    )
+                    for slot, item in enumerate(row):
+                        chunk[slot].append(item)
+                    count += 1
+                    label_row = (sheet, row_n)
+                    if label_row in circular:
+                        bucket = circular_ids.setdefault(label_row, [])
+                        if node_id not in bucket:
+                            bucket.append(node_id)
+                    if len(chunk[0]) >= 65536:
+                        writer.write_lists(chunk)
+                        chunk = [[] for _ in names]
+        if chunk[0]:
+            writer.write_lists(chunk)
+    empty = _missing_empty_nodes(cell_edge_path, cell_edges, path)
+    if empty:
+        _append_index_rows(
+            path,
+            [_empty_index_row(node_id, row_meta, period_by_cell) for node_id in empty],
+        )
+        count += len(empty)
+    return count, circular_ids
+
+
+def _missing_empty_nodes(
+    cell_edge_path: Path | None,
+    cell_edges: list | None,
+    index_path: Path,
+) -> list[str]:
+    if cell_edges is not None:
+        return _empty_range_nodes(cell_edges, _index_ids(index_path))
+    if cell_edge_path is None or not cell_edge_path.is_file() or not index_path.is_file():
+        return []
+    from finance_context.store.duckdb_io import limited_connection
+
+    with limited_connection() as con:
+        rows = con.execute(
+            """
+            SELECT target FROM (
+                SELECT target, row_number() OVER () AS ord
+                FROM read_parquet(?)
+                WHERE status = 'empty' AND target IS NOT NULL AND target <> ''
+            )
+            WHERE target NOT IN (SELECT node_id FROM read_parquet(?))
+            QUALIFY row_number() OVER (PARTITION BY target ORDER BY ord) = 1
+            ORDER BY ord
+            """,
+            [str(cell_edge_path), str(index_path)],
+        ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _index_ids(path: Path) -> set[str]:
+    import pyarrow.parquet as pq
+
+    if not path.is_file():
+        return set()
+    table = pq.read_table(path, columns=["node_id"])
+    return {str(item) for item in table.column(0).to_pylist() if item}
+
+
+def _append_index_rows(path: Path, rows: list[tuple[object, ...]]) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    names = [name for name, _dtype in INDEX_COLUMNS]
+    extra = pa.Table.from_pylist([dict(zip(names, row, strict=True)) for row in rows])
+    current = pq.read_table(path)
+    pq.write_table(pa.concat_tables([current, extra], promote_options="default"), path)
+
+
 def build_formula_graph(
     dest_dir: Path,
     *,
@@ -72,8 +248,6 @@ def build_formula_graph(
         and cell_edge_path.is_file()
         and (cell_edges is None or isinstance(cell_edges, EdgeCount))
     )
-    if cells is None:
-        cells = read_parquet(book / "ir" / "cells.parquet")
     if edges is None:
         edges_path = book / "ir" / "edges.parquet"
         edges = read_parquet(edges_path) if edges_path.is_file() else []
@@ -85,20 +259,36 @@ def build_formula_graph(
 
     row_meta = _row_meta(layout)
     period_by_cell, _period_index = _period_maps(layout)
-    index_rows = _index_rows(cells, row_meta, period_by_cell)
-    if stream:
-        empty_nodes = _empty_nodes_from_parquet(cell_edge_path, {row[0] for row in index_rows})
+    if cells is None:
+        node_count, circular_ids = _stream_index(
+            book,
+            dest_dir / "graph" / "index.parquet",
+            row_meta,
+            period_by_cell,
+            layout,
+            cell_edge_path if stream else None,
+            cell_edges if not stream else None,
+            chosen.parquet_row_group_rows,
+        )
+        cells = _formula_cells(book)
+        index_rows: list[tuple[object, ...]] = []
     else:
-        empty_nodes = _empty_range_nodes(cell_edges, {row[0] for row in index_rows})
-    index_rows.extend(
-        _empty_index_row(node_id, row_meta, period_by_cell) for node_id in empty_nodes
-    )
-    write_parquet(
-        dest_dir / "graph" / "index.parquet",
-        INDEX_COLUMNS,
-        index_rows,
-        row_group_rows=chosen.parquet_row_group_rows,
-    )
+        index_rows = _index_rows(cells, row_meta, period_by_cell)
+        if stream:
+            empty_nodes = _empty_nodes_from_parquet(cell_edge_path, {row[0] for row in index_rows})
+        else:
+            empty_nodes = _empty_range_nodes(cell_edges, {row[0] for row in index_rows})
+        index_rows.extend(
+            _empty_index_row(node_id, row_meta, period_by_cell) for node_id in empty_nodes
+        )
+        write_parquet(
+            dest_dir / "graph" / "index.parquet",
+            INDEX_COLUMNS,
+            index_rows,
+            row_group_rows=chosen.parquet_row_group_rows,
+        )
+        node_count = len(index_rows)
+        circular_ids = None
 
     if stream:
         cycles, doc, iterate = _graph_from_parquet(
@@ -113,9 +303,11 @@ def build_formula_graph(
             period_by_cell,
             cell_edge_path,
             stream_json=chosen.json_stream,
+            node_count=node_count,
+            circular_ids=circular_ids,
         )
     else:
-        period_of = {row[0]: row[4] for row in index_rows}
+        period_of = _Periods(period_by_cell)
         view = _RangeView(book, cells, period_by_cell)
         enriched = [_enrich_edge(edge, period_of, view) for edge in cell_edges]
         write_parquet(
@@ -154,9 +346,9 @@ def build_formula_graph(
             range_edges=users,
             period_chain=lambda source, member: _member_chain(source, member, period_of),
         )
-        hints = circularity_hints(layout, index_rows, cycles)
+        hints = circularity_hints(layout, index_rows, cycles, cells_by_row=circular_ids)
         iterate = _workbook_iterate(book)
-        doc = _summary(job_id, len(index_rows), edges, enriched, cycles, iterate, hints)
+        doc = _summary(job_id, node_count, edges, enriched, cycles, iterate, hints)
         lags = _lags_by_source(enriched)
         _add_range_lags(lags, users, view, period_of)
         doc.links = _formula_links(cells, edges, row_meta, period_by_cell, lags=lags)
@@ -219,10 +411,11 @@ def circularity_hints(
     layout: Layout,
     index_rows: list[tuple[object, ...]],
     cycles: list[CycleRecord],
+    cells_by_row: dict[tuple[str, int], list[str]] | None = None,
 ) -> list[CircularityHint]:
     if cycles:
         return []
-    cells = _cells_by_row(index_rows)
+    cells = cells_by_row if cells_by_row is not None else _cells_by_row(index_rows)
     hints: list[CircularityHint] = []
     seen: set[tuple[str, int]] = set()
 
@@ -811,6 +1004,8 @@ def _graph_from_parquet(
     path: Path,
     *,
     stream_json: bool,
+    node_count: int,
+    circular_ids: dict[tuple[str, int], list[str]] | None,
 ):
     """Enrich and classify from parquet row groups. The cell-edge list is not loaded."""
     import array
@@ -819,7 +1014,7 @@ def _graph_from_parquet(
 
     from finance_context.store.fs import RowGroupWriter
 
-    period_of = {row[0]: row[4] for row in index_rows}
+    period_of = _Periods(period_by_cell)
     kinds: Counter[str] = Counter()
     classes: Counter[str] = Counter()
     seen_class: set[tuple[str, str]] = set()
@@ -927,12 +1122,12 @@ def _graph_from_parquet(
 
     cycles = _cycles_packed(ids.map, src_ids, tgt_ids, flags, extra)
     del ids, src_ids, tgt_ids, flags
-    hints = circularity_hints(layout, index_rows, cycles)
+    hints = circularity_hints(layout, index_rows, cycles, cells_by_row=circular_ids)
     iterate = _workbook_iterate(book)
     doc = GraphDocument(
         schema_version=GRAPH_SCHEMA_VERSION,
         job_id=job_id,
-        nodes=len(index_rows),
+        nodes=node_count,
         edges=n_edges,
         kinds=dict(kinds),
         contract=GraphContract(),

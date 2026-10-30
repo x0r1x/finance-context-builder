@@ -194,6 +194,7 @@ class CompileResult:
     edges: list[Edge] = field(default_factory=list)
     cell_edges: list[Any] = field(default_factory=list)
     cell_count: int = 0
+    usage: object | None = None
 
 
 def as_edge(value: Edge | Mapping[str, Any]) -> Edge:

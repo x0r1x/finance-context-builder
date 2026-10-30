@@ -56,23 +56,10 @@ from finance_context.render.markdown import (
 )
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import export_succeeded_book, republish_file
-from finance_context.store.fs import file_lock, read_parquet, read_parquet_dicts, update_json
+from finance_context.store.fs import file_lock, read_parquet, update_json
 from finance_context.store.paths import session_job_dir, shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
-# Graph and context do not read comments or formula ASTs.
-_SLIM_CELL_COLUMNS = (
-    "sheet",
-    "row",
-    "col",
-    "addr",
-    "formula_raw",
-    "formula_template",
-    "unparsed",
-    "cached_value",
-    "hidden",
-    "number_format",
-)
 _TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
 # Interpreter startup sits between proc.start() and process_mono_start, and
 # mark_job_failed still has to hit disk. Both fit in this margin.
@@ -259,14 +246,11 @@ class Pipeline:
             profile: dict[str, int] = {}
 
             def compile_and_count():
-                compiled_book = compile_workbook(
-                    book,
-                    usage=book_usage(),
-                    settings=self.settings,
-                )
+                compiled_book = compile_workbook(book, settings=self.settings)
                 profile["cells"] = compiled_book.cell_count
                 profile["edges"] = len(compiled_book.edges)
                 profile["cell_edges"] = len(compiled_book.cell_edges)
+                usage_box[0] = compiled_book.usage
                 return compiled_book
 
             compiled = _timed("compile", compile_and_count, profile, settings=self.settings)
@@ -298,7 +282,6 @@ class Pipeline:
         release_cell_asts(relation_cells)
         relation_cells = None
         edges = ir_edges
-        cells = _slim_cells(book)
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status()
         set_stage("graph", status="running")
@@ -320,7 +303,6 @@ class Pipeline:
                     dest_dir,
                     job_id=job_id,
                     layout=layout,
-                    cells=cells,
                     edges=ir_edges,
                     cell_edges=graph_edges,
                     book_dir=book,
@@ -360,8 +342,8 @@ class Pipeline:
             built = build_context(
                 job_id=job_id,
                 workbook_meta=workbook_meta,
-                cells=cells,
                 layout=layout,
+                book_dir=book,
                 relations=relations,
                 source_filename=source_filename,
                 content_sha256=content_sha256,
@@ -375,7 +357,7 @@ class Pipeline:
             return built
 
         doc = _timed("build", build_and_count, build_profile, settings=self.settings)
-        cells = edges = ir_edges = relations = None
+        edges = ir_edges = relations = None
         _write_sorted_json(
             dest_dir / "context" / "context.json",
             doc.model_dump(mode="json"),
@@ -787,13 +769,6 @@ def _parquet_rows(path: Path) -> int:
     import pyarrow.parquet as pq
 
     return pq.ParquetFile(path).metadata.num_rows
-
-
-def _slim_cells(dest_dir: Path) -> list[dict]:
-    path = dest_dir / "ir" / "cells.parquet"
-    if not path.is_file():
-        return []
-    return read_parquet_dicts(path, list(_SLIM_CELL_COLUMNS))
 
 
 def _raise_if_cancelled(progress: object | None) -> None:

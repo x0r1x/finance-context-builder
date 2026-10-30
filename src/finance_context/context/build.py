@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 
 from finance_context.context.assemble import (
     _SERIES_KINDS,
@@ -14,7 +15,7 @@ from finance_context.context.series import (
     scale_factor_for,
     value_status,
 )
-from finance_context.context.timeline import build_axes
+from finance_context.context.timeline import _period_warning_text, build_axes
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.formulas.csr import SheetUsage
 from finance_context.layout.adjacency import RangeReads, row_adjacency
@@ -25,6 +26,7 @@ from finance_context.layout.periods import (
     display_cell_text,
     is_calendar_hit,
     period_like_header,
+    unparsed_period_shape,
 )
 from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
@@ -61,7 +63,7 @@ def build_context(
     *,
     job_id: str,
     workbook_meta: dict,
-    cells: list[dict],
+    cells: list[dict] | None = None,
     layout: Layout,
     relations: list[RowRelation] | None = None,
     source_filename: str | None = None,
@@ -71,40 +73,73 @@ def build_context(
     graph: GraphPointer | None = None,
     edges: list[dict] | None = None,
     usage: SheetUsage | None = None,
+    book_dir: Path | None = None,
 ) -> ContextDocument:
     relations = list(relations or [])
-    by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
-    by_sheet_row: dict[str, dict[int, list[dict]]] = {}
-    for cell in cells:
-        by_sheet_row.setdefault(cell["sheet"], {}).setdefault(int(cell["row"]), []).append(cell)
     date1904 = bool(workbook_meta.get("date1904"))
     defined_names = list(workbook_meta.get("defined_names") or [])
+    formula_stats: _FormulaStats | None = None
+    hidden_indexes = None
+    if cells is None:
+        if book_dir is None:
+            raise ValueError("build_context needs cells or book_dir")
+        cell_path = book_dir / "ir" / "cells.parquet"
+        cells = _layout_value_cells(cell_path, layout)
+        formula_stats = _formula_stats(cell_path)
+        hidden_indexes = _occupied_from_file(cell_path)
+        switch_rows = _switch_rows(cell_path, defined_names)
+        cell_total = _file_rows(cell_path)
+    else:
+        switch_rows = None
+        cell_total = len(cells)
+    by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+    if switch_rows is None:
+        by_sheet_row: dict[str, dict[int, list[dict]]] = {}
+        for cell in cells:
+            by_sheet_row.setdefault(cell["sheet"], {}).setdefault(int(cell["row"]), []).append(cell)
+    else:
+        by_sheet_row = switch_rows
     switches = {
         name: selector_rows(rows, date1904, defined_names=defined_names, sheet=name)
         for name, rows in by_sheet_row.items()
     }
-    axes, timeline_warnings = build_axes(
-        layout, cells, date1904=bool(workbook_meta.get("date1904"))
-    )
+    axes, timeline_warnings = build_axes(layout, cells, date1904=date1904)
+    if formula_stats is not None and book_dir is not None:
+        timeline_warnings = [
+            warning
+            for warning in timeline_warnings
+            if not warning.startswith("Unparsed period header ")
+        ]
+        timeline_warnings.extend(_period_warnings(book_dir / "ir" / "cells.parquet", date1904))
     axes_by_id = {axis.id: axis for axis in axes}
     reads = RangeReads()
     precedents, dependents = row_adjacency(edges or [], limit=0, usage=usage, ranges=reads)
-    hidden_warnings = _hidden_warnings(workbook_meta, cells)
+    if hidden_indexes is None:
+        hidden_warnings = _hidden_warnings(workbook_meta, cells)
+    else:
+        hidden_warnings = _hidden_warnings_from_indexes(workbook_meta, hidden_indexes)
     warnings: list[str] = []
     formula_count = 0
     missing_cached = 0
     unparsed = 0
     missing_addrs: list[str] = []
     unparsed_addrs: list[str] = []
-    for cell in cells:
-        if cell.get("formula_raw"):
-            formula_count += 1
-            if cell.get("cached_value") is None:
-                missing_cached += 1
-                missing_addrs.append(f"{cell['sheet']}!{cell['addr']}")
-            if cell.get("unparsed"):
-                unparsed += 1
-                unparsed_addrs.append(f"{cell['sheet']}!{cell['addr']}")
+    if formula_stats is None:
+        for cell in cells:
+            if cell.get("formula_raw"):
+                formula_count += 1
+                if cell.get("cached_value") is None:
+                    missing_cached += 1
+                    missing_addrs.append(f"{cell['sheet']}!{cell['addr']}")
+                if cell.get("unparsed"):
+                    unparsed += 1
+                    unparsed_addrs.append(f"{cell['sheet']}!{cell['addr']}")
+    else:
+        formula_count = formula_stats.formula_count
+        missing_cached = formula_stats.missing_cached
+        unparsed = formula_stats.unparsed
+        missing_addrs = formula_stats.missing_addrs
+        unparsed_addrs = formula_stats.unparsed_addrs
     if unparsed_addrs:
         sample = ", ".join(unparsed_addrs[:3])
         warnings.append(f"{len(unparsed_addrs)} unparsed formula(s) (e.g. {sample})")
@@ -280,7 +315,7 @@ def build_context(
     workbook = WorkbookRaw(
         sheets=sheets,
         sheet_count=len(sheets),
-        cell_count=len(cells),
+        cell_count=cell_total,
         has_vba=bool(workbook_meta.get("has_vba")),
         has_xlm=bool(workbook_meta.get("has_xlm")),
         externals=list(workbook_meta.get("externals") or []),
@@ -590,6 +625,226 @@ def _no_axis_warning(sheet: str, row: int, headers: list[AxisHeader]) -> str:
         f"No time axis on {sheet}: headers {span} look like periods but do not form"
         f" an axis ({quoted}); columns kept as unknown"
     )
+
+
+class _FormulaStats:
+    def __init__(self) -> None:
+        self.formula_count = 0
+        self.missing_cached = 0
+        self.unparsed = 0
+        self.missing_addrs: list[str] = []
+        self.unparsed_addrs: list[str] = []
+
+
+def _layout_rows(layout: Layout) -> dict[str, set[int]]:
+    found: dict[str, set[int]] = {}
+    for sheet in layout.sheets:
+        rows = found.setdefault(sheet.name, set())
+        for block in sheet.blocks:
+            for row in block.rows:
+                rows.add(int(row.row))
+            axis = getattr(block, "axis", None)
+            if axis is not None and getattr(axis, "row", None):
+                rows.add(int(axis.row))
+        for axis in sheet.axes:
+            header = getattr(axis, "header_row", None)
+            if header:
+                rows.add(int(header))
+    return {name: rows for name, rows in found.items() if rows}
+
+
+def _layout_value_cells(path: Path, layout: Layout) -> list[dict]:
+    from finance_context.store.fs import read_parquet_dicts
+
+    if not path.is_file():
+        return []
+    columns = [
+        "sheet",
+        "row",
+        "col",
+        "addr",
+        "formula_raw",
+        "formula_template",
+        "cached_value",
+        "hidden",
+        "number_format",
+        "unparsed",
+    ]
+    found: list[dict] = []
+    for sheet, rows in _layout_rows(layout).items():
+        found.extend(
+            read_parquet_dicts(
+                path,
+                columns,
+                where="sheet = ? AND row IN (SELECT unnest(?::BIGINT[]))",
+                params=[sheet, [int(row) for row in rows]],
+            )
+        )
+    return found
+
+
+def _iter_cell_columns(path: Path, columns: list[str]):
+    import pyarrow.parquet as pq
+
+    if not path.is_file():
+        return
+    for batch in pq.ParquetFile(path).iter_batches(columns=columns, batch_size=65536):
+        yield [batch.column(index).to_pylist() for index in range(len(columns))]
+
+
+def _formula_stats(path: Path) -> _FormulaStats:
+    stats = _FormulaStats()
+    for sheets, addrs, formulas, cached, flags in _iter_cell_columns(
+        path, ["sheet", "addr", "formula_raw", "cached_value", "unparsed"]
+    ):
+        for index, formula in enumerate(formulas):
+            if not formula:
+                continue
+            stats.formula_count += 1
+            addr = f"{sheets[index]}!{addrs[index]}"
+            if cached[index] is None:
+                stats.missing_cached += 1
+                stats.missing_addrs.append(addr)
+            if flags[index]:
+                stats.unparsed += 1
+                stats.unparsed_addrs.append(addr)
+    return stats
+
+
+def _occupied_from_file(path: Path) -> tuple[dict[str, set[int]], dict[str, set[int]]]:
+    rows: dict[str, set[int]] = {}
+    cols: dict[str, set[int]] = {}
+    for sheets, row_numbers, col_numbers, formulas, cached in _iter_cell_columns(
+        path, ["sheet", "row", "col", "formula_raw", "cached_value"]
+    ):
+        for index, sheet_name in enumerate(sheets):
+            cell = {"formula_raw": formulas[index], "cached_value": cached[index]}
+            if not _cell_has_content(cell):
+                continue
+            sheet = str(sheet_name or "")
+            rows.setdefault(sheet, set()).add(int(row_numbers[index]))
+            cols.setdefault(sheet, set()).add(int(col_numbers[index]))
+    return rows, cols
+
+
+def _switch_rows(
+    path: Path, defined_names: list | None
+) -> dict[str, dict[int, list[dict]]]:
+    """Formula rows plus the constant cells those formulas name as switches."""
+    from finance_context.layout.params import _names_on_sheet, _switch_args
+    from finance_context.store.fs import read_parquet_dicts
+
+    formulas: list[dict] = []
+    for sheets, rows, cols, addrs, raw in _iter_cell_columns(
+        path, ["sheet", "row", "col", "addr", "formula_raw"]
+    ):
+        for index, formula in enumerate(raw):
+            if not formula:
+                continue
+            formulas.append(
+                {
+                    "sheet": sheets[index],
+                    "row": int(rows[index]),
+                    "col": int(cols[index]),
+                    "addr": addrs[index],
+                    "formula_raw": formula,
+                }
+            )
+    by_sheet: dict[str, dict[int, list[dict]]] = {}
+    wanted: dict[str, set[str]] = {}
+    names_by_sheet: dict[str, dict[str, str]] = {}
+    for cell in formulas:
+        sheet = str(cell["sheet"])
+        by_sheet.setdefault(sheet, {}).setdefault(cell["row"], []).append(cell)
+        names = names_by_sheet.setdefault(sheet, _names_on_sheet(defined_names, sheet))
+        for addr in _switch_args(str(cell["formula_raw"]), names):
+            wanted.setdefault(sheet, set()).add(addr.upper().replace("$", ""))
+    if not path.is_file():
+        return by_sheet
+    for sheet, addrs in wanted.items():
+        if not addrs:
+            continue
+        present = {
+            str(cell.get("addr") or "").upper().replace("$", "")
+            for rows in by_sheet.get(sheet, {}).values()
+            for cell in rows
+        }
+        missing = [addr for addr in addrs if addr not in present]
+        if not missing:
+            continue
+        fetched = read_parquet_dicts(
+            path,
+            ["sheet", "row", "col", "addr", "formula_raw"],
+            where="sheet = ? AND upper(replace(addr, '$', '')) IN (SELECT unnest(?::VARCHAR[]))",
+            params=[sheet, missing],
+        )
+        for cell in fetched:
+            by_sheet.setdefault(sheet, {}).setdefault(int(cell["row"]), []).append(cell)
+    return by_sheet
+
+
+def _period_warnings(path: Path, date1904: bool) -> list[str]:
+    out: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for sheets, addrs, cached, formats in _iter_cell_columns(
+        path, ["sheet", "addr", "cached_value", "number_format"]
+    ):
+        for index, value in enumerate(cached):
+            cell = {
+                "sheet": sheets[index],
+                "addr": addrs[index],
+                "cached_value": value,
+                "number_format": formats[index],
+            }
+            text = _period_warning_text(cell, date1904)
+            if not text or not unparsed_period_shape(text):
+                continue
+            key = (str(cell["sheet"]), text)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(f"Unparsed period header {cell['sheet']}!{cell['addr']}: «{text}»")
+    return out
+
+
+def _file_rows(path: Path) -> int:
+    import pyarrow.parquet as pq
+
+    if not path.is_file():
+        return 0
+    return pq.ParquetFile(path).metadata.num_rows
+
+
+def _hidden_warnings_from_indexes(
+    workbook_meta: dict,
+    indexes: tuple[dict[str, set[int]], dict[str, set[int]]],
+) -> list[str]:
+    occupied_rows, occupied_cols = indexes
+    warnings: list[str] = []
+    for sheet in workbook_meta.get("sheets") or []:
+        if not isinstance(sheet, dict) or not sheet.get("name"):
+            continue
+        name = str(sheet["name"])
+        if sheet.get("hidden"):
+            warnings.append(f"Hidden sheet {name} is included")
+        rows = _span_list(
+            row
+            for row in sheet.get("hidden_rows") or []
+            if int(row) in occupied_rows.get(name, ())
+        )
+        if rows:
+            warnings.append(f"Hidden rows {name}!{rows} are included")
+        cols = _span_list(
+            (
+                col
+                for col in sheet.get("hidden_cols") or []
+                if int(col) in occupied_cols.get(name, ())
+            ),
+            index_to_col,
+        )
+        if cols:
+            warnings.append(f"Hidden columns {name}!{cols} are included")
+    return warnings
 
 
 def _hidden_warnings(workbook_meta: dict, cells: list[dict]) -> list[str]:

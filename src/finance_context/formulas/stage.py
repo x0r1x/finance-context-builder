@@ -21,7 +21,7 @@ from finance_context.formulas.models import (
     cell_parquet_row,
 )
 from finance_context.formulas.names import resolve_defined_name_edges
-from finance_context.memory import load_presence, usage_for_book
+from finance_context.memory import load_presence, usage_from_presence
 from finance_context.settings import Settings
 from finance_context.store.fs import (
     RowGroupWriter,
@@ -97,22 +97,21 @@ def compile_workbook(
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
     raw_path = dest_dir / "raw" / "cells.parquet"
     if chosen.parse_streaming:
-        cell_count, edges, extra_nodes, formula_count, pool = _compile_cells_streaming(
+        cell_count, edges, known, formula_count, pool = _compile_cells_streaming(
             dest_dir, raw_path, engine, meta, chosen
         )
     else:
-        cells, edges, extra_nodes, formula_count, pool = _compile_cells_loaded(
+        cells, edges, known, formula_count, pool = _compile_cells_loaded(
             raw_path, engine, meta, chosen
         )
         cell_count = len(cells)
-    known = set(extra_nodes)
     sheets = {
         str(item["name"] if isinstance(item, dict) else item.name)
         for item in (meta.get("sheets") or [])
     }
     presence = load_presence(dest_dir / "raw" / "cell_presence.parquet", pool=pool)
     if usage is None:
-        usage = usage_for_book(dest_dir)
+        usage = usage_from_presence(presence)
     if chosen.graph_stream:
         cell_edges: list | EdgeCount = _write_cell_edge_batches(
             dest_dir,
@@ -152,7 +151,11 @@ def compile_workbook(
         stream=chosen.json_stream,
     )
     return CompileResult(
-        cells=[], edges=edges, cell_edges=cell_edges, cell_count=cell_count
+        cells=[],
+        edges=edges,
+        cell_edges=cell_edges,
+        cell_count=cell_count,
+        usage=usage,
     )
 
 
@@ -161,22 +164,22 @@ def _compile_cells_loaded(
     engine: FormulaEngine,
     meta: dict,
     chosen: Settings,
-) -> tuple[list[IrCell], list[Edge], list[str], int, dict[str, str] | None]:
+) -> tuple[list[IrCell], list[Edge], set[str], int, dict[str, str] | None]:
     raw_rows = read_parquet(raw_path)
     cells: list[IrCell] = []
     edges: list[Edge] = []
-    extra_nodes: list[str] = []
+    known: set[str] = set()
     formula_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
     for row, (parsed, release) in zip(raw_rows, _iter_parsed(engine, raw_rows), strict=True):
         cell, added = _take_cell(
-            row, parsed, release, pool=pool, edges=edges, extra_nodes=extra_nodes, chosen=chosen
+            row, parsed, release, pool=pool, edges=edges, known=known, chosen=chosen
         )
         if added:
             formula_count += 1
         cells.append(cell)
     _intern_resolved_edges(edges, meta.get("defined_names"), pool)
-    return cells, edges, extra_nodes, formula_count, pool
+    return cells, edges, known, formula_count, pool
 
 
 def _compile_cells_streaming(
@@ -185,7 +188,7 @@ def _compile_cells_streaming(
     engine: FormulaEngine,
     meta: dict,
     chosen: Settings,
-) -> tuple[int, list[Edge], list[str], int, dict[str, str] | None]:
+) -> tuple[int, list[Edge], set[str], int, dict[str, str] | None]:
     """Read raw cells in chunks and publish ``ir/cells.parquet`` from the batch.
 
     Each cell is written and dropped. Callers read the columns they need.
@@ -195,7 +198,7 @@ def _compile_cells_streaming(
     cells_path = dest_dir / "ir" / "cells.parquet"
     batch = DuckDBBatch(Path(str(cells_path) + ".build.duckdb"), IR_CELL_COLUMNS)
     edges: list[Edge] = []
-    extra_nodes: list[str] = []
+    known: set[str] = set()
     formula_count = 0
     cell_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
@@ -220,7 +223,7 @@ def _compile_cells_streaming(
                         release,
                         pool=pool,
                         edges=edges,
-                        extra_nodes=extra_nodes,
+                        known=known,
                         chosen=chosen,
                     )
                     if added:
@@ -233,7 +236,7 @@ def _compile_cells_streaming(
     except Exception:
         batch.abort()
         raise
-    return cell_count, edges, extra_nodes, formula_count, pool
+    return cell_count, edges, known, formula_count, pool
 
 
 def _take_cell(
@@ -243,7 +246,7 @@ def _take_cell(
     *,
     pool: dict[str, str] | None,
     edges: list[Edge],
-    extra_nodes: list[str],
+    known: set[str],
     chosen: Settings,
 ) -> tuple[IrCell, bool]:
     added = bool(row.get("formula_raw"))
@@ -255,7 +258,7 @@ def _take_cell(
                 edge.source = pool.setdefault(edge.source, edge.source)
                 if edge.target:
                     edge.target = pool.setdefault(edge.target, edge.target)
-    extra_nodes.append(node_id)
+    known.add(node_id)
     template = None
     unparsed = False
     ast_json = None
@@ -454,13 +457,20 @@ def _write_cell_edge_batches(
     row_group_rows: int,
 ) -> EdgeCount:
     path = dest_dir / "ir" / "cell_edges.parquet"
+    staged = path.with_name("cell_edges.parquet.dup")
     names = [name for name, _dtype in IR_CELL_EDGE_COLUMNS]
-    with RowGroupWriter(path, IR_CELL_EDGE_COLUMNS, row_group_rows) as writer:
+    staged_columns = [*IR_CELL_EDGE_COLUMNS, ("seq", "INTEGER")]
+    seq = 0
+    with RowGroupWriter(staged, staged_columns, row_group_rows) as writer:
 
         def consume(columns: dict[str, list]) -> None:
-            writer.write_lists([columns[name] for name in names])
+            nonlocal seq
+            width = len(columns["source"])
+            seqs = list(range(seq, seq + width))
+            seq += width
+            writer.write_lists([columns[name] for name in names] + [seqs])
 
-        count = expand_cell_edges_column_batches(
+        expand_cell_edges_column_batches(
             edges,
             known,
             known_sheets=sheets,
@@ -470,7 +480,36 @@ def _write_cell_edge_batches(
             consume=consume,
             batch_size=row_group_rows,
         )
+    if seq == 0:
+        staged.unlink(missing_ok=True)
+        write_parquet(path, IR_CELL_EDGE_COLUMNS, [], row_group_rows=row_group_rows)
+        return EdgeCount(0)
+    count = _keep_first_cell_edges(staged, path, row_group_rows=row_group_rows)
+    staged.unlink(missing_ok=True)
     return EdgeCount(count)
+
+
+def _keep_first_cell_edges(staged: Path, dest: Path, *, row_group_rows: int) -> int:
+    """First ``(source, target, kind)`` wins. ``seq`` is the write order."""
+    from finance_context.store.duckdb_io import _quote_ident, limited_connection
+
+    chosen = ", ".join(_quote_ident(name) for name, _dtype in IR_CELL_EDGE_COLUMNS)
+    with limited_connection() as con:
+        rows = con.execute(
+            f"""
+            SELECT {chosen} FROM (
+                SELECT *, row_number() OVER (
+                    PARTITION BY source, target, kind ORDER BY seq
+                ) AS rn
+                FROM read_parquet(?)
+            )
+            WHERE rn = 1
+            ORDER BY seq
+            """,
+            [str(staged)],
+        ).fetchall()
+    write_parquet(dest, IR_CELL_EDGE_COLUMNS, rows, row_group_rows=row_group_rows)
+    return len(rows)
 
 
 def _write_cell_edge_rows(dest_dir: Path, cell_edges: list, *, row_group_rows: int) -> None:

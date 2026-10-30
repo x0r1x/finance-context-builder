@@ -79,6 +79,16 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
     reads.clear()
     column_reads.clear()
     compiles.clear()
+    scanned: list[str] = []
+    import finance_context.context.build as context_build
+
+    real_stats = context_build._formula_stats
+
+    def spy_stats(path: Path):
+        scanned.append(Path(path).as_posix())
+        return real_stats(path)
+
+    monkeypatch.setattr(context_build, "_formula_stats", spy_stats)
     pipeline.run(dest, job_id="job-pass", source_filename="model.xlsx")
     assert compiles == []
-    assert any(path.endswith("ir/cells.parquet") for path in column_reads)
+    assert any(path.endswith("ir/cells.parquet") for path in scanned)

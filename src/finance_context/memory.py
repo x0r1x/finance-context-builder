@@ -412,91 +412,137 @@ def formula_targets(formula: str, sheet: str) -> list[str]:
 
 
 class PresenceIndex:
-    """Lookup for formula targets. Blanks are column runs, not one key per cell."""
+    """Column runs for value cells and for styled blanks. One index for both."""
 
     def __init__(self) -> None:
-        self.populated: set[str] = set()
+        self.populated: dict[str, dict[int, tuple[tuple[int, int], ...]]] = {}
         self.blanks: dict[str, dict[int, tuple[tuple[int, int], ...]]] = {}
-        # Taken from the sheet and address columns. Not parsed back out of
-        # "Sheet!A1": a sheet name that starts with ' is not a quoted ref.
-        self.populated_at: list[tuple[str, int, int]] = []
 
     def __bool__(self) -> bool:
         return bool(self.populated) or bool(self.blanks)
 
     def get(self, target: str, default: str | None = None) -> str | None:
-        if target in self.populated:
-            return "populated"
         try:
-            from finance_context.excel.a1 import parse_addr
-            from finance_context.formulas.csr import _span_has, split_sheet_ref
-
-            sheet, body = split_sheet_ref(str(target))
-            col, row = parse_addr(body)
+            sheet, col, row = _target_cell(str(target))
         except ValueError:
             return default
-        spans = self.blanks.get(sheet, {}).get(col)
-        if spans and _span_has(spans, row):
+        from finance_context.formulas.csr import _span_has
+
+        if _span_has(self.populated.get(sheet, {}).get(col, ()), row):
+            return "populated"
+        if _span_has(self.blanks.get(sheet, {}).get(col, ()), row):
             return "styled_blank"
         return default
 
-    def present_spans(self) -> list[tuple[str, int, int, int]]:
-        """``(sheet, col, row_start, row_end)`` for every present cell."""
-        found: list[tuple[str, int, int, int]] = [
-            (sheet, col, row, row) for sheet, col, row in self.populated_at
-        ]
-        for sheet, columns in self.blanks.items():
-            for col, spans in columns.items():
-                for start, end in spans:
-                    found.append((sheet, col, start, end))
-        return found
+    def spans(self):
+        """``(sheet, col, row_start, row_end)`` runs. Not one tuple per cell."""
+        for kind in (self.populated, self.blanks):
+            for sheet, columns in kind.items():
+                for col, runs in columns.items():
+                    for start, end in runs:
+                        yield sheet, col, start, end
+
+
+def _target_cell(target: str) -> tuple[str, int, int]:
+    """Sheet, column and row of a formula target.
+
+    ``'Data!B1`` is a sheet whose name starts with a quote, not an Excel quote.
+    """
+    from finance_context.excel.a1 import parse_addr
+    from finance_context.formulas.csr import split_sheet_ref
+
+    try:
+        sheet, body = split_sheet_ref(target)
+    except ValueError:
+        if "!" not in target:
+            raise
+        sheet, body = target.rsplit("!", 1)
+    col, row = parse_addr(body)
+    return sheet, col, row
+
+
+def _touch_run(
+    open_runs: dict[tuple[str, int], list[int]],
+    closed: dict[str, dict[int, list[tuple[int, int]]]],
+    sheet: str,
+    col: int,
+    start: int,
+    end: int,
+) -> None:
+    if start > end:
+        start, end = end, start
+    key = (sheet, col)
+    run = open_runs.get(key)
+    if run is not None and start <= run[1] + 1 and end + 1 >= run[0]:
+        run[0] = min(run[0], start)
+        run[1] = max(run[1], end)
+        return
+    if run is not None:
+        closed.setdefault(sheet, {}).setdefault(col, []).append((run[0], run[1]))
+    open_runs[key] = [start, end]
+
+
+def _close_runs(
+    open_runs: dict[tuple[str, int], list[int]],
+    closed: dict[str, dict[int, list[tuple[int, int]]]],
+) -> dict[str, dict[int, tuple[tuple[int, int], ...]]]:
+    from finance_context.formulas.csr import _merge_spans
+
+    for (sheet, col), run in open_runs.items():
+        closed.setdefault(sheet, {}).setdefault(col, []).append((run[0], run[1]))
+    return {
+        sheet: {col: _merge_spans(items) for col, items in columns.items()}
+        for sheet, columns in closed.items()
+    }
 
 
 def load_presence(path: Path, *, pool: dict[str, str] | None = None) -> PresenceIndex:
-    """Read presence. A file without ``row_end`` is one cell per row."""
-    from finance_context.excel.a1 import format_addr, parse_addr
-    from finance_context.formulas.csr import _merge_spans
-
+    """Read presence by row group. A file without ``row_end`` is one cell per row."""
+    del pool
     index = PresenceIndex()
     if not path.is_file():
         return index
     import pyarrow.parquet as pq
+
+    from finance_context.excel.a1 import parse_addr
 
     schema = pq.read_schema(path)
     names = ["sheet", "addr", "presence"]
     has_end = "row_end" in schema.names
     if has_end:
         names.append("row_end")
-    table = pq.read_table(path, columns=names)
-    sheets = table.column("sheet").to_pylist()
-    addrs = table.column("addr").to_pylist()
-    kinds = table.column("presence").to_pylist()
-    ends = table.column("row_end").to_pylist() if has_end else None
-    pending: dict[str, dict[int, list[tuple[int, int]]]] = {}
-    for index_row, sheet in enumerate(sheets):
-        try:
-            col, row = parse_addr(str(addrs[index_row]))
-        except ValueError:
-            continue
-        end = row
-        if ends is not None and ends[index_row] is not None:
-            end = int(ends[index_row])
-        sheet_name = "" if sheet is None else str(sheet)
-        if str(kinds[index_row]) == "populated":
-            node = f"{sheet_name}!{format_addr(col, row)}"
-            if pool is not None:
-                node = pool.setdefault(node, node)
-            index.populated.add(node)
-            index.populated_at.append((sheet_name, col, row))
-            continue
-        pending.setdefault(sheet_name, {}).setdefault(col, []).append(
-            (min(row, end), max(row, end))
-        )
-    index.blanks = {
-        sheet: {col: _merge_spans(items) for col, items in columns.items()}
-        for sheet, columns in pending.items()
-    }
+    values: dict[tuple[str, int], list[int]] = {}
+    blanks: dict[tuple[str, int], list[int]] = {}
+    closed_values: dict[str, dict[int, list[tuple[int, int]]]] = {}
+    closed_blanks: dict[str, dict[int, list[tuple[int, int]]]] = {}
+    for batch in pq.ParquetFile(path).iter_batches(columns=names, batch_size=65536):
+        sheets = batch.column(0).to_pylist()
+        addrs = batch.column(1).to_pylist()
+        kinds = batch.column(2).to_pylist()
+        ends = batch.column(3).to_pylist() if has_end else None
+        for index_row, sheet in enumerate(sheets):
+            try:
+                col, row = parse_addr(str(addrs[index_row]))
+            except ValueError:
+                continue
+            end = row
+            if ends is not None and ends[index_row] is not None:
+                end = int(ends[index_row])
+            sheet_name = "" if sheet is None else str(sheet)
+            if str(kinds[index_row]) == "populated":
+                _touch_run(values, closed_values, sheet_name, col, row, end)
+            else:
+                _touch_run(blanks, closed_blanks, sheet_name, col, row, end)
+    index.populated = _close_runs(values, closed_values)
+    index.blanks = _close_runs(blanks, closed_blanks)
     return index
+
+
+def usage_from_presence(presence: PresenceIndex):
+    """Sheet index from a presence load. Does not read the file again."""
+    from finance_context.formulas.csr import sheet_usage_spans
+
+    return sheet_usage_spans(presence.spans())
 
 
 def usage_for_book(dest_dir: Path):
@@ -504,13 +550,10 @@ def usage_for_book(dest_dir: Path):
 
     Presence already includes populated cells, so cells.parquet is not read again.
     """
-    # Imported lazily: formulas/__init__ pulls compile, which imports this module.
-    from finance_context.formulas.csr import sheet_usage_spans
-
     path = dest_dir / "raw" / "cell_presence.parquet"
     if not path.is_file():
-        return sheet_usage_spans(())
-    return sheet_usage_spans(load_presence(path).present_spans())
+        return usage_from_presence(PresenceIndex())
+    return usage_from_presence(load_presence(path))
 
 
 def assess_raw(dest_dir: Path, usage: object | None = None) -> WorkbookEstimate:
