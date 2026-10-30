@@ -621,7 +621,7 @@ def _configure_s3(con: Any, settings: Settings | None) -> None:
     secret = ""
     if settings.minio_secret_key is not None:
         secret = settings.minio_secret_key.get_secret_value()
-    con.execute("INSTALL httpfs")
+    con.execute("SET extension_directory='/app/.duckdb/extensions'")
     con.execute("LOAD httpfs")
     con.execute(
         """
