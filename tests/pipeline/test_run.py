@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
 from pathlib import Path
 
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
-from finance_context.app.pipeline import Pipeline, _timed, run_job_process
+from finance_context.app.pipeline import Pipeline, _stage, run_job_process
 from finance_context.excel import parse_workbook
+from finance_context.observability import JsonFormatter
 from finance_context.settings import Settings
 
 
@@ -60,8 +62,10 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
 def test_run_job_process_emits_stage_done_on_stdout(tmp_path: Path, capsys, monkeypatch) -> None:
     logger = logging.getLogger("finance_context")
     saved = (list(logger.handlers), logger.level, logger.propagate)
+
     def fake_run(self, dest, *, job_id, **kwargs):
-        _timed("parse", lambda: None)
+        with _stage("parse", root=Path(dest), saved=()):
+            return None
 
     monkeypatch.setattr(Pipeline, "run", fake_run)
     try:
@@ -75,3 +79,68 @@ def test_run_job_process_emits_stage_done_on_stdout(tmp_path: Path, capsys, monk
         logger.propagate = saved[2]
     assert '"event": "stage_done"' in captured
     assert '"stage": "parse"' in captured
+
+
+def _log_lines(run) -> list[dict]:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    logger = logging.getLogger("finance_context.pipeline")
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        run()
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    return [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+
+
+def test_pipeline_logs_each_stage_with_the_filename_and_saved_paths(
+    tmp_path: Path, dest: Path
+) -> None:
+    source = _model(tmp_path / "model.xlsx")
+    target = dest / "source" / "source.xlsx"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(source.read_bytes())
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
+    first = _log_lines(lambda: pipeline.run(dest, job_id="job-test", source_filename="model.xlsx"))
+    done = {row["stage"]: row for row in first if row["event"] == "stage_done"}
+    assert list(done) == ["parse", "compile", "layout", "graph", "build", "render"]
+    for stage in done:
+        assert any(row["event"] == "stage_start" and row["stage"] == stage for row in first)
+        row = done[stage]
+        assert row["source_filename"] == "model.xlsx"
+        assert row["job_id"] == "job-test"
+        assert Path(row["dir"]).is_absolute()
+    assert "raw/cells.parquet" in done["parse"]["saved"]
+    assert "raw/cell_presence.parquet" in done["parse"]["saved"]
+    assert "raw/workbook.json" in done["parse"]["saved"]
+    assert "ir/cells.parquet" in done["compile"]["saved"]
+    assert "ir/edges.parquet" in done["compile"]["saved"]
+    assert "ir/cell_edges.parquet" in done["compile"]["saved"]
+    assert done["layout"]["saved"] == ["layout/layout.json"]
+    assert "graph/graph.json" in done["graph"]["saved"]
+    assert "graph/graph.md" in done["graph"]["saved"]
+    assert "graph/index.parquet" in done["graph"]["saved"]
+    assert "graph/edges.parquet" in done["graph"]["saved"]
+    assert done["build"]["saved"] == ["context/context.json"]
+    assert done["render"]["saved"] == ["context/context.md"]
+
+    (dest / "owner.json").write_text(
+        json.dumps({"source_filename": "model.xlsx"}), encoding="utf-8"
+    )
+    second = _log_lines(lambda: pipeline.run(dest, job_id="job-test"))
+    reused = [row for row in second if row["event"] == "job_reused"]
+    assert len(reused) == 1
+    assert reused[0]["source_filename"] == "model.xlsx"
+    assert reused[0]["job_id"] == "job-test"
+    for name in (
+        "context/context.json",
+        "context/context.md",
+        "graph/graph.json",
+        "graph/graph.md",
+    ):
+        assert name in reused[0]["saved"]
+    assert not any(row["event"] == "stage_start" and row["stage"] == "parse" for row in second)

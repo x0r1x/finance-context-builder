@@ -72,6 +72,7 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
         current.meta["data_dir"] = data_dir
         current.meta["generation"] = generation
         current.save_meta()
+    raw_name = payload.get("source_filename")
     log_event(
         _LOGGER,
         logging.INFO,
@@ -82,6 +83,7 @@ def execute_job(payload: dict[str, object]) -> Retry | None:
         queue=settings.queue_name,
         generation=generation,
         rq_job_id=None if current is None else current.id,
+        source_filename=raw_name if isinstance(raw_name, str) and raw_name else None,
     )
     emit_progress(
         settings,

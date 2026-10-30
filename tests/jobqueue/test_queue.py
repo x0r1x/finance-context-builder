@@ -51,6 +51,7 @@ def test_enqueue_is_unique_and_counts_the_session(redis_settings: Settings, capl
         "job_id": _BOOK,
         "data_dir": "/tmp/finance-context-test",
         "generation": 4,
+        "source_filename": "model.xlsx",
     }
     caplog.set_level(logging.INFO, logger="finance_context.jobqueue")
     rq_id = queue.enqueue(payload)
@@ -69,6 +70,7 @@ def test_enqueue_is_unique_and_counts_the_session(redis_settings: Settings, capl
     assert body["job_id"] == _BOOK
     assert body["rq_job_id"] == rq_id
     assert body["generation"] == 4
+    assert body["source_filename"] == "model.xlsx"
     assert "redis://" not in line
 
 

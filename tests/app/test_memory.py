@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context import memory
-from finance_context.app.pipeline import _timed, run_job_process
+from finance_context.app.pipeline import _stage, run_job_process
 from finance_context.excel import parse_workbook
 from finance_context.formulas.csr import expand_range, expansion_count
 from finance_context.memory import (
@@ -22,7 +22,12 @@ from finance_context.memory import (
     prefer_oom_kill,
     resolve_job_budget_bytes,
 )
-from finance_context.observability import JsonFormatter
+from finance_context.observability import (
+    JsonFormatter,
+    job_id_var,
+    log_event,
+    source_filename_var,
+)
 from finance_context.settings import (
     DEFAULT_MEMORY_BUDGET_BYTES,
     DEFAULT_RANGE_EXPAND_CAP,
@@ -180,7 +185,7 @@ def test_cgroup_v1_ignores_the_unlimited_sentinel(tmp_path: Path) -> None:
     assert cgroup_memory_limit_bytes(proc, sysfs) == 4000
 
 
-def test_stage_done_carries_rss_counts_and_budget() -> None:
+def _pipeline_lines(run, into: list[dict] | None = None) -> list[dict]:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter())
@@ -189,17 +194,26 @@ def test_stage_done_carries_rss_counts_and_budget() -> None:
     logger.setLevel(logging.INFO)
     logger.addHandler(handler)
     try:
-        _timed(
-            "compile",
-            lambda: None,
-            {"cells": 4, "formulas": 2},
-        )
+        run()
     finally:
         logger.removeHandler(handler)
         logger.setLevel(previous)
-    payloads = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
-    assert [row["event"] for row in payloads] == ["stage_done"]
-    row = payloads[0]
+        rows = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+        if into is not None:
+            into.extend(rows)
+    return rows
+
+
+def test_stage_done_carries_rss_counts_and_budget(tmp_path: Path) -> None:
+    counts = {"cells": 4, "formulas": 2}
+
+    def run() -> None:
+        with _stage("compile", root=tmp_path, saved=("ir/cells.parquet",), counts=counts):
+            return None
+
+    payloads = _pipeline_lines(run)
+    assert [row["event"] for row in payloads] == ["stage_start", "stage_done"]
+    row = payloads[1]
     assert row["msg"] == "compile done"
     assert row["logger"] == "finance_context.pipeline"
     assert isinstance(row["duration_ms"], int)
@@ -208,8 +222,66 @@ def test_stage_done_carries_rss_counts_and_budget() -> None:
     assert row["rss_peak_mb"] >= 0
     assert row["cells"] == 4
     assert row["formulas"] == 2
+    assert row["saved"] == []
+    assert row["dir"] == str(tmp_path)
     assert "estimate_bytes" not in row
     assert "budget_bytes" not in row
+
+
+def test_stage_failure_logs_stage_failed(tmp_path: Path) -> None:
+    def run() -> None:
+        with _stage("parse", root=tmp_path, saved=("raw/cells.parquet",)):
+            raise RuntimeError("boom")
+
+    payloads: list[dict] = []
+    with pytest.raises(RuntimeError, match="boom"):
+        _pipeline_lines(run, payloads)
+    assert [row["event"] for row in payloads] == ["stage_start", "stage_failed"]
+    failed = payloads[1]
+    assert failed["msg"] == "parse failed"
+    assert failed["stage"] == "parse"
+    assert isinstance(failed["duration_ms"], int)
+    assert failed["rss_peak_mb"] >= 0
+    assert failed["saved"] == []
+
+
+def test_formatter_keeps_workbook_name_and_drops_secrets() -> None:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    logger = logging.getLogger("finance_context.formatter_probe")
+    logger.handlers.clear()
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.addHandler(handler)
+    name = source_filename_var.set("from-context.xlsx")
+    job = job_id_var.set("job-from-context")
+    try:
+        log_event(
+            logger,
+            logging.INFO,
+            "stage_done",
+            "parse done",
+            saved=["raw/cells.parquet"],
+            formula="=A1+1",
+            filename="not-the-book.py",
+            source_filename="model.xlsx",
+        )
+        log_event(logger, logging.INFO, "stage_start", "compile started")
+    finally:
+        source_filename_var.reset(name)
+        job_id_var.reset(job)
+        logger.removeHandler(handler)
+    rows = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+    explicit = rows[0]
+    assert explicit["source_filename"] == "model.xlsx"
+    assert explicit["saved"] == ["raw/cells.parquet"]
+    assert explicit["job_id"] == "job-from-context"
+    assert "formula" not in explicit
+    assert "filename" not in explicit
+    inherited = rows[1]
+    assert inherited["source_filename"] == "from-context.xlsx"
+    assert inherited["job_id"] == "job-from-context"
 
 
 def test_prefer_oom_kill_writes_the_score(tmp_path: Path) -> None:

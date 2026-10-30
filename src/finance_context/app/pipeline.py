@@ -5,6 +5,8 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 from finance_context.adapters.soffice import SofficeConverter
@@ -48,7 +50,7 @@ from finance_context.memory import (
     usage_for_book,
 )
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
-from finance_context.observability import configure_logging, job_id_var, log_event, stage_var
+from finance_context.observability import bind_log_context, configure_logging, log_event, stage_var
 from finance_context.render.markdown import (
     commit_renderer_stamp,
     refresh_context_markdown,
@@ -64,6 +66,23 @@ _TERMINAL_STATUS = {"succeeded", "degraded", "needs_input", "failed"}
 # Interpreter startup sits between proc.start() and process_mono_start, and
 # mark_job_failed still has to hit disk. Both fit in this margin.
 _BUSY_TIMEOUT_MARGIN_SEC = 2.0
+_PARSE_SAVED = ("raw/cells.parquet", "raw/cell_presence.parquet", "raw/workbook.json")
+_COMPILE_SAVED = ("ir/cells.parquet", "ir/edges.parquet", "ir/cell_edges.parquet")
+_LAYOUT_SAVED = ("layout/layout.json",)
+_GRAPH_SAVED = (
+    "graph/graph.json",
+    "graph/graph.md",
+    "graph/index.parquet",
+    "graph/edges.parquet",
+)
+_BUILD_SAVED = ("context/context.json",)
+_RENDER_SAVED = ("context/context.md",)
+_REUSE_SAVED = (
+    "context/context.json",
+    "context/context.md",
+    "graph/graph.json",
+    "graph/graph.md",
+)
 _READY_ARTIFACTS = (
     "context/context.json",
     "context/context.md",
@@ -94,10 +113,9 @@ class Pipeline:
         generation: int = 0,
         shared_dir: Path | None = None,
     ) -> ContextDocument:
-        token_job = job_id_var.set(job_id)
         book = shared_dir or dest_dir
         shared = book != dest_dir
-        try:
+        with bind_log_context(job_id, source_filename or _owner_name(dest_dir)):
             dest_dir.mkdir(parents=True, exist_ok=True)
             book.mkdir(parents=True, exist_ok=True)
             with shared_book_lock(
@@ -139,8 +157,6 @@ class Pipeline:
                         adopt=invalidation.adopt,
                     )
                 return document
-        finally:
-            job_id_var.reset(token_job)
 
     def _run(
         self,
@@ -166,6 +182,15 @@ class Pipeline:
                     _LOGGER.warning("minio export failed for context.md")
                 else:
                     commit_renderer_stamp(dest_dir / "context")
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "job_reused",
+                "finished artifacts kept",
+                reused=True,
+                dir=str(dest_dir),
+                saved=_existing(dest_dir, _REUSE_SAVED),
+            )
             return ContextDocument.model_validate_json(context_path.read_text(encoding="utf-8"))
         if not has_source(book):
             raise ContextError("empty_file", "source.xlsx missing")
@@ -236,29 +261,30 @@ class Pipeline:
             return usage_box[0]
 
         if not (book / "raw" / "workbook.json").is_file():
-
-            def parse_book() -> None:
+            with _stage("parse", root=book, saved=_PARSE_SAVED, settings=self.settings):
                 parse_workbook(ensure_xlsx(book, self.converter), book, settings=self.settings)
-
-            _timed("parse", parse_book, settings=self.settings)
+        else:
+            _stage_reused("parse", root=book, saved=_PARSE_SAVED)
         set_stage("compile")
         if not ir_is_current(book):
             profile: dict[str, int] = {}
-
-            def compile_and_count():
+            with _stage(
+                "compile",
+                root=book,
+                saved=_COMPILE_SAVED,
+                counts=profile,
+                settings=self.settings,
+            ):
                 compiled_book = compile_workbook(book, settings=self.settings)
                 profile["cells"] = compiled_book.cell_count
                 profile["edges"] = len(compiled_book.edges)
                 profile["cell_edges"] = len(compiled_book.cell_edges)
                 usage_box[0] = compiled_book.usage
-                return compiled_book
-
-            compiled = _timed("compile", compile_and_count, profile, settings=self.settings)
-            cell_count = compiled.cell_count
-            ir_edges = compiled.edges
-            ir_cell_edges = compiled.cell_edges
-            compiled = None
+                cell_count = compiled_book.cell_count
+                ir_edges = compiled_book.edges
+                ir_cell_edges = compiled_book.cell_edges
         else:
+            _stage_reused("compile", root=book, saved=_COMPILE_SAVED)
             ir_edges, ir_cell_edges = _read_ir(
                 book, count_cell_edges=self.settings.graph_stream
             )
@@ -266,13 +292,16 @@ class Pipeline:
         set_stage("layout")
         if not (book / "layout" / "layout.json").is_file():
             layout_profile = {"cells": cell_count, "edges": len(ir_edges)}
-            layout = _timed(
+            with _stage(
                 "layout",
-                lambda: layout_workbook(book, edges=ir_edges, settings=self.settings),
-                layout_profile,
+                root=book,
+                saved=_LAYOUT_SAVED,
+                counts=layout_profile,
                 settings=self.settings,
-            )
+            ):
+                layout = layout_workbook(book, edges=ir_edges, settings=self.settings)
         else:
+            _stage_reused("layout", root=book, saved=_LAYOUT_SAVED)
             _pause_layout_reuse()
             layout = Layout.model_validate_json(
                 (book / "layout" / "layout.json").read_text(encoding="utf-8")
@@ -297,9 +326,14 @@ class Pipeline:
                 "cell_edges": len(ir_cell_edges),
             }
             graph_edges = None if isinstance(ir_cell_edges, EdgeCount) else ir_cell_edges
-            graph = _timed(
+            with _stage(
                 "graph",
-                lambda: build_formula_graph(
+                root=dest_dir,
+                saved=_GRAPH_SAVED,
+                counts=graph_profile,
+                settings=self.settings,
+            ):
+                graph = build_formula_graph(
                     dest_dir,
                     job_id=job_id,
                     layout=layout,
@@ -307,11 +341,9 @@ class Pipeline:
                     cell_edges=graph_edges,
                     book_dir=book,
                     settings=self.settings,
-                ),
-                graph_profile,
-                settings=self.settings,
-            )
+                )
         else:
+            _stage_reused("graph", root=dest_dir, saved=_GRAPH_SAVED)
             payload = json.loads((dest_dir / "graph" / "graph.json").read_text(encoding="utf-8"))
             unexpected = sum(
                 1 for c in payload.get("cycles") or [] if c.get("class") == "unexpected"
@@ -337,9 +369,14 @@ class Pipeline:
         ir_cell_edges = None
         set_stage("build", status="running")
         build_profile = {"cells": cell_count, "edges": len(edges)}
-
-        def build_and_count():
-            built = build_context(
+        with _stage(
+            "build",
+            root=dest_dir,
+            saved=_BUILD_SAVED,
+            counts=build_profile,
+            settings=self.settings,
+        ):
+            doc = build_context(
                 job_id=job_id,
                 workbook_meta=workbook_meta,
                 layout=layout,
@@ -353,22 +390,16 @@ class Pipeline:
                 edges=edges,
                 usage=book_usage(),
             )
-            build_profile["formulas"] = built.workbook.formula_count
-            return built
-
-        doc = _timed("build", build_and_count, build_profile, settings=self.settings)
-        edges = ir_edges = relations = None
-        _write_sorted_json(
-            dest_dir / "context" / "context.json",
-            doc.model_dump(mode="json"),
-            stream=self.settings.json_stream,
-        )
+            build_profile["formulas"] = doc.workbook.formula_count
+            edges = ir_edges = relations = None
+            _write_sorted_json(
+                dest_dir / "context" / "context.json",
+                doc.model_dump(mode="json"),
+                stream=self.settings.json_stream,
+            )
         set_stage("render", status="running")
-        _timed(
-            "render",
-            lambda: write_context_markdown(dest_dir / "context", doc),
-            settings=self.settings,
-        )
+        with _stage("render", root=dest_dir, saved=_RENDER_SAVED, settings=self.settings):
+            write_context_markdown(dest_dir / "context", doc)
         _raise_if_cancelled(progress)
         _write_meta(
             dest_dir,
@@ -466,52 +497,55 @@ def _run_pipeline_child(
     dest = session_job_dir(settings.data_dir, job_id, settings.session_id)
     shared = shared_book_dir(settings.data_dir, job_id)
     pipeline = Pipeline(settings)
-    try:
-        if wait_on_busy:
-            execute_job(
-                pipeline,
-                dest,
-                job_id=job_id,
-                generation=generation,
-                shared_dir=shared,
+    with bind_log_context(job_id, _owner_name(dest)):
+        try:
+            if wait_on_busy:
+                execute_job(
+                    pipeline,
+                    dest,
+                    job_id=job_id,
+                    generation=generation,
+                    shared_dir=shared,
+                )
+            else:
+                pipeline.run(
+                    dest,
+                    job_id=job_id,
+                    generation=generation,
+                    shared_dir=shared,
+                )
+        except SharedCacheBusy:
+            raise SystemExit(SHARED_CACHE_BUSY_EXIT) from None
+        except ContextError as exc:
+            # A known refusal (encrypted book, over budget, bad zip): the code, no traceback.
+            mark_job_failed(dest, job_id, exc.code, generation, detail=exc.detail or None)
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "job_failed",
+                str(exc),
+                error_code=exc.code,
+                reason=exc.detail or None,
             )
-        else:
-            pipeline.run(
-                dest,
-                job_id=job_id,
-                generation=generation,
-                shared_dir=shared,
+        except Exception as exc:
+            if not out_of_memory(exc):
+                mark_job_failed(dest, job_id, type(exc).__name__, generation)
+                raise
+            mark_job_failed(
+                dest, job_id, "workbook_too_large", generation, detail=MEMORY_ERROR_DETAIL
             )
-    except SharedCacheBusy:
-        raise SystemExit(SHARED_CACHE_BUSY_EXIT) from None
-    except ContextError as exc:
-        # A known refusal (encrypted book, over budget, bad zip): the code, no traceback.
-        mark_job_failed(dest, job_id, exc.code, generation, detail=exc.detail or None)
-        log_event(
-            _LOGGER,
-            logging.WARNING,
-            "job_failed",
-            str(exc),
-            error_code=exc.code,
-            reason=exc.detail or None,
-        )
-    except Exception as exc:
-        if not out_of_memory(exc):
-            mark_job_failed(dest, job_id, type(exc).__name__, generation)
-            raise
-        mark_job_failed(dest, job_id, "workbook_too_large", generation, detail=MEMORY_ERROR_DETAIL)
-        log_event(
-            _LOGGER,
-            logging.WARNING,
-            "job_failed",
-            f"workbook_too_large: {MEMORY_ERROR_DETAIL}",
-            error_code="workbook_too_large",
-            reason=MEMORY_ERROR_DETAIL,
-            cause=type(exc).__name__,
-        )
-    finally:
-        # In-process tests call this too. A leftover deadline would outlive the job.
-        _clear_child_watchdog()
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "job_failed",
+                f"workbook_too_large: {MEMORY_ERROR_DETAIL}",
+                error_code="workbook_too_large",
+                reason=MEMORY_ERROR_DETAIL,
+                cause=type(exc).__name__,
+            )
+        finally:
+            # In-process tests call this too. A leftover deadline would outlive the job.
+            _clear_child_watchdog()
 
 
 def execute_job(
@@ -541,35 +575,36 @@ def execute_job(
     """
     attempts = 0
     deadline = _busy_deadline(pipeline)
-    while True:
-        try:
-            return pipeline.run(
-                dest_dir,
-                job_id=job_id,
-                source_filename=source_filename,
-                content_sha256=content_sha256,
-                progress=progress,
-                generation=generation,
-                shared_dir=shared_dir,
-            )
-        except SharedCacheBusy as exc:
-            attempts += 1
-            log_event(
-                _LOGGER,
-                logging.INFO,
-                "shared_cache_busy_requeue",
-                "shared cache busy",
-                job_id=exc.job_id,
-                attempt=attempts,
-                retry_after_sec=exc.retry_after_sec,
-                max_retries=exc.max_retries,
-            )
-            if attempts > exc.max_retries or _busy_wait_exceeds(deadline, exc.retry_after_sec):
-                raise ContextError(
-                    "shared_cache_busy",
-                    "shared book cache stayed busy",
-                ) from exc
-            time.sleep(exc.retry_after_sec)
+    with bind_log_context(job_id, source_filename or _owner_name(dest_dir)):
+        while True:
+            try:
+                return pipeline.run(
+                    dest_dir,
+                    job_id=job_id,
+                    source_filename=source_filename,
+                    content_sha256=content_sha256,
+                    progress=progress,
+                    generation=generation,
+                    shared_dir=shared_dir,
+                )
+            except SharedCacheBusy as exc:
+                attempts += 1
+                log_event(
+                    _LOGGER,
+                    logging.INFO,
+                    "shared_cache_busy_requeue",
+                    "shared cache busy",
+                    job_id=exc.job_id,
+                    attempt=attempts,
+                    retry_after_sec=exc.retry_after_sec,
+                    max_retries=exc.max_retries,
+                )
+                if attempts > exc.max_retries or _busy_wait_exceeds(deadline, exc.retry_after_sec):
+                    raise ContextError(
+                        "shared_cache_busy",
+                        "shared book cache stayed busy",
+                    ) from exc
+                time.sleep(exc.retry_after_sec)
 
 
 def _arm_child_watchdog(timeout: object) -> None:
@@ -783,14 +818,34 @@ def _final_status() -> str:
     return "succeeded"
 
 
-def _timed(
+def _existing(root: Path, relative: tuple[str, ...]) -> list[str]:
+    return [name for name in relative if (root / name).is_file()]
+
+
+def _stage_reused(stage: str, *, root: Path, saved: tuple[str, ...]) -> None:
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "stage_reused",
+        f"{stage} kept",
+        stage=stage,
+        reused=True,
+        dir=str(root),
+        saved=_existing(root, saved),
+    )
+
+
+@contextmanager
+def _stage(
     stage: str,
-    fn,
-    counts: dict[str, int] | None = None,
     *,
+    root: Path,
+    saved: tuple[str, ...],
+    counts: dict[str, int] | None = None,
     settings: Settings | None = None,
-):
+) -> Generator[None, None, None]:
     token = stage_var.set(stage)
+    log_event(_LOGGER, logging.INFO, "stage_start", f"{stage} started", stage=stage)
     rss_in = rss_bytes()
     peak = rss_in
     stop = threading.Event()
@@ -805,31 +860,34 @@ def _timed(
     sampler = threading.Thread(target=_sample, name=f"rss-{stage}", daemon=True)
     sampler.start()
     t0 = time.monotonic()
+    failed = False
     try:
-        return fn()
+        yield
+    except BaseException:
+        failed = True
+        raise
     finally:
         stop.set()
         sampler.join(timeout=0.2)
         rss_out = rss_bytes()
         if rss_out > peak:
             peak = rss_out
-        duration_ms = int((time.monotonic() - t0) * 1000)
         fields: dict[str, object] = {
             "stage": stage,
-            "duration_ms": duration_ms,
+            "duration_ms": int((time.monotonic() - t0) * 1000),
             "rss_in_mb": _mb(rss_in),
             "rss_out_mb": _mb(rss_out),
             "rss_peak_mb": _mb(peak),
+            "dir": str(root),
+            "saved": _existing(root, saved),
         }
-        for key in (
-            "cells",
-            "formulas",
-            "edges",
-            "cell_edges",
-        ):
+        for key in ("cells", "formulas", "edges", "cell_edges"):
             if counts and key in counts:
                 fields[key] = counts[key]
-        log_event(_LOGGER, logging.INFO, "stage_done", f"{stage} done", **fields)
+        if failed:
+            log_event(_LOGGER, logging.WARNING, "stage_failed", f"{stage} failed", **fields)
+        else:
+            log_event(_LOGGER, logging.INFO, "stage_done", f"{stage} done", **fields)
         if settings is not None and settings.job_malloc_trim:
             trim_process_heap()
         stage_var.reset(token)
@@ -901,3 +959,10 @@ def _load_owner(dest_dir: Path) -> dict:
     if not path.is_file():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _owner_name(dest_dir: Path) -> str | None:
+    name = _load_owner(dest_dir).get("source_filename")
+    if isinstance(name, str) and name:
+        return name
+    return None

@@ -41,7 +41,7 @@ _LOGGER = logging.getLogger("finance_context.pipeline")
 
 
 def _timed_step(event: str, msg: str, fn):
-    """Log one layout step with `duration_ms`, like pipeline `_timed`.
+    """Log one layout step with `duration_ms`, like pipeline `_stage`.
 
     Job id and the current stage are left for JsonFormatter to attach.
     """

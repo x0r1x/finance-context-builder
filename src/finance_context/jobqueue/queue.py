@@ -169,6 +169,7 @@ class RQJobQueue:
             job = self._guard(_enqueue)
         except DuplicateJobError as exc:
             raise DuplicateEnqueue(rq_id) from exc
+        raw_name = payload.get("source_filename")
         log_event(
             _LOGGER,
             logging.INFO,
@@ -179,6 +180,7 @@ class RQJobQueue:
             session_id=session_id,
             queue=settings.queue_name,
             generation=payload.get("generation"),
+            source_filename=raw_name if isinstance(raw_name, str) and raw_name else None,
         )
         return job.id
 

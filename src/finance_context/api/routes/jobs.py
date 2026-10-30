@@ -501,6 +501,29 @@ def _abandoned_started(
     return horse_owner_alive(dest, _disk_generation(reloaded)) is False
 
 
+def _book_filename(dest: Path, *candidates: object) -> str | None:
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate:
+            return candidate
+        if isinstance(candidate, dict):
+            name = candidate.get("source_filename")
+            if isinstance(name, str) and name:
+                return name
+    owner = dest / "owner.json"
+    if not owner.is_file():
+        return None
+    try:
+        payload = json.loads(owner.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    name = payload.get("source_filename")
+    if isinstance(name, str) and name:
+        return name
+    return None
+
+
 def _dedup(ctx: AppContext, job_id: str, dest: Path) -> dict[str, object]:
     stored = _load_meta(dest)
     log_event(
@@ -513,6 +536,7 @@ def _dedup(ctx: AppContext, job_id: str, dest: Path) -> dict[str, object]:
         queue=ctx.settings.queue_name,
         rq_job_id=rq_job_id(ctx.settings.session_id, job_id),
         status=None if stored is None else stored.get("status"),
+        source_filename=_book_filename(dest, stored),
     )
     return _running_body(job_id, dest)
 
@@ -555,6 +579,7 @@ def _enqueue_or_reuse(
             job_id=job_id,
             status=ready.get("status"),
             stage=ready.get("stage"),
+            source_filename=_book_filename(dest, filename, ready),
         )
         return {
             "job_id": job_id,
@@ -604,6 +629,7 @@ def _enqueue_or_reuse(
         "job_id": job_id,
         "data_dir": str(settings.data_dir),
         "generation": generation,
+        "source_filename": filename,
     }
     try:
         queue.enqueue(payload)
@@ -617,6 +643,7 @@ def _enqueue_or_reuse(
             session_id=settings.session_id,
             queue=settings.queue_name,
             rq_job_id=rq_id,
+            source_filename=filename or None,
         )
         return _running_body(job_id, dest)
     emit_progress(

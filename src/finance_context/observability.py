@@ -3,17 +3,23 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from contextvars import ContextVar
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from datetime import UTC, datetime
 from typing import TextIO
 
 job_id_var: ContextVar[str | None] = ContextVar("job_id", default=None)
 stage_var: ContextVar[str | None] = ContextVar("stage", default=None)
+source_filename_var: ContextVar[str | None] = ContextVar("source_filename", default=None)
 
+# Workbook names use source_filename. `filename` stays forbidden because it is
+# the LogRecord attribute for the .py file that called the logger.
 FORBIDDEN_LOG_KEYS = frozenset(
     {
         "actor_id",
         "api_key",
+        "authorization",
         "cached_value",
         "cell",
         "content",
@@ -21,80 +27,12 @@ FORBIDDEN_LOG_KEYS = frozenset(
         "formula",
         "formula_raw",
         "label",
-        "source_filename",
-        "authorization",
     }
 )
 
-_ALLOWED_EXTRA = frozenset(
-    {
-        "event",
-        "stage",
-        "duration_ms",
-        "http_status",
-        "reason",
-        "skipped",
-        "worker",
-        "kind",
-        "reachable",
-        "latency_ms",
-        "status",
-        "error_code",
-        "count",
-        "cells",
-        "formulas",
-        "edges",
-        "cell_edges",
-        "budget_bytes",
-        "api_reserve_fraction",
-        "default_budget_bytes",
-        "watch_interval_sec",
-        "range_expand_cap",
-        "oom_score_adj",
-        "parse_streaming",
-        "json_stream",
-        "parquet_row_group_rows",
-        "compile_string_pool",
-        "compile_ast_zlib",
-        "graph_stream",
-        "layout_columnar_facts",
-        "malloc_arena_max",
-        "malloc_trim",
-        "attempt",
-        "retry_after_sec",
-        "max_retries",
-        "stale_from",
-        "rss_in_mb",
-        "rss_out_mb",
-        "rss_peak_mb",
-        "configured",
-        "path",
-        "method",
-        "http_code",
-        "exc_type",
-        "job_id",
-        "host",
-        "queue",
-        "session_id",
-        "rq_job_id",
-        "generation",
-        "redis_scheme",
-        "redis_host",
-        "redis_port",
-        "redis_db",
-        "slots",
-        "retry_in_sec",
-        "inflight",
-        "oom_kill",
-        "timeout_sec",
-        "margin_sec",
-        "ttl_sec",
-        "result_ttl_sec",
-        "failure_ttl_sec",
-        "thread_limit",
-        "readyz_ttl_sec",
-    }
-)
+# Blank record attributes, plus the two the formatter adds itself.
+# Anything else on the record came from log_event and is emitted.
+_RESERVED_LOG_KEYS = frozenset(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
 
 class JsonFormatter(logging.Formatter):
@@ -107,17 +45,22 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
-        aid = job_id_var.get()
-        if aid:
-            payload["job_id"] = aid
-        st = stage_var.get()
-        if st:
-            payload.setdefault("stage", st)
         for key, value in record.__dict__.items():
-            if key in FORBIDDEN_LOG_KEYS:
+            if key in _RESERVED_LOG_KEYS or key in FORBIDDEN_LOG_KEYS or value is None:
                 continue
-            if key in _ALLOWED_EXTRA and value is not None:
-                payload[key] = value
+            payload[key] = value
+        if "job_id" not in payload:
+            aid = job_id_var.get()
+            if aid:
+                payload["job_id"] = aid
+        if "source_filename" not in payload:
+            book = source_filename_var.get()
+            if book:
+                payload["source_filename"] = book
+        if "stage" not in payload:
+            st = stage_var.get()
+            if st:
+                payload["stage"] = st
         if record.exc_info and record.exc_info[0] is not None:
             payload["exc_type"] = record.exc_info[0].__name__
         return json.dumps(payload, ensure_ascii=False)
@@ -165,7 +108,30 @@ def log_event(logger: logging.Logger, level: int, event: str, msg: str, **fields
     extra = {"event": event}
     exc_info = fields.pop("exc_info", False)
     for key, value in fields.items():
-        if key in FORBIDDEN_LOG_KEYS:
+        if key in FORBIDDEN_LOG_KEYS or key in _RESERVED_LOG_KEYS:
             continue
         extra[key] = value
     logger.log(level, msg, extra=extra, exc_info=exc_info)
+
+
+@contextmanager
+def bind_log_context(
+    job_id: str | None = None,
+    source_filename: str | None = None,
+) -> Generator[None, None, None]:
+    """Attach the job id and workbook name to later log lines.
+
+    A bind that is already active stays as it is. The inner call does not
+    clear it on the way out, so a failure log after ``Pipeline.run`` still
+    sees the id the child set.
+    """
+    tokens: list[tuple[ContextVar[str | None], Token[str | None]]] = []
+    if job_id and job_id_var.get() is None:
+        tokens.append((job_id_var, job_id_var.set(job_id)))
+    if source_filename and source_filename_var.get() is None:
+        tokens.append((source_filename_var, source_filename_var.set(source_filename)))
+    try:
+        yield
+    finally:
+        for var, token in reversed(tokens):
+            var.reset(token)
