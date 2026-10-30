@@ -64,5 +64,10 @@ def test_layout_keeps_going_when_a_header_cell_is_not_a_finite_number() -> None:
         _c("CF", "B8", "inf"),
     ]
     layout = detect_layout(cells)
-    assert layout.sheets
-    assert layout.sheets[0].blocks
+    sheet = layout.sheets[0]
+    assert sheet.blocks
+    periods = [period.text for axis in sheet.axes for period in axis.periods]
+    assert "2023" in periods
+    assert "2024" in periods
+    assert "inf" not in periods
+    assert "nan" not in periods

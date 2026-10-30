@@ -79,6 +79,20 @@ def test_float_residue_next_to_the_series_scale_is_zero() -> None:
     assert normalize_series(["0.000001", "0.000002"], 1) == ["0.000001", "0.000002"]
 
 
+def test_grouped_decimal_comma_matches_layout() -> None:
+    assert normalize_value("1 230,5", 1) == "1230.5"
+    assert normalize_value("1\xa0230,5", 1) == "1230.5"
+    assert normalize_value("1\u202f230,5", 1) == "1230.5"
+    assert normalize_value("12%", 1) == "12"
+
+
+def test_scale_past_the_float_range_is_missing() -> None:
+    from finance_context.context.series import normalize_series
+
+    assert normalize_series(["1e308", "10"], 1000) == [None, "10000"]
+    assert normalize_series(["1e308"], 1000) == [None]
+
+
 def test_cached_number_is_canonical_without_a_scale_factor() -> None:
     from finance_context.context.series import normalize_series
 

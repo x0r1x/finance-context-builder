@@ -44,3 +44,10 @@ def test_text_numbers_do_not_abort_the_build(tmp_path: Path) -> None:
     )
     assert document.meta.status == "succeeded"
     assert document.blocks
+    rate = next(row for block in document.blocks for row in block.rows if row.label == "Ставка")
+    assert rate.normalized_values == ["1230.5", None]
+    assert rate.numeric_summary is not None
+    assert rate.numeric_summary.n == 1
+    assert rate.numeric_summary.minimum == "1230.5"
+    assert rate.numeric_summary.maximum == "1230.5"
+    assert rate.numeric_summary.first == "1 230,5"

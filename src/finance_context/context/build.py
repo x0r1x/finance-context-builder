@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from collections import Counter
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from finance_context.context.timeline import _period_warning_text, build_axes
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.formulas.csr import SheetUsage
 from finance_context.layout.adjacency import RangeReads, row_adjacency
+from finance_context.layout.cells import parse_number
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
 from finance_context.layout.params import selector_rows
 from finance_context.layout.periods import (
@@ -505,13 +505,8 @@ def _row_formula_and_numbers(
         if raw_first is None:
             raw_first = text
         raw_last = text
-        if "_" in text:
-            continue
-        try:
-            number = float(text.replace(",", ""))
-        except ValueError:
-            continue
-        if not math.isfinite(number):
+        number = parse_number(text)
+        if number is None:
             continue
         numbers.append(number)
     fingerprint = Counter(templates).most_common(1)[0][0] if templates else None
