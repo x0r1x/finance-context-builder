@@ -6,7 +6,7 @@ from datetime import date
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
-from finance_context.layout.cells import _cell_at, _is_int_text, _is_number, _text
+from finance_context.layout.cells import _cell_at, _text, parse_int, parse_number
 from finance_context.layout.markers import apply_axis_markers
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
 from finance_context.layout.periods import (
@@ -386,11 +386,12 @@ def _relative_run(
         text = _text(cell, date1904)
         if not text or classify_header(text) is not None:
             continue
-        if not _is_int_text(text):
-            if _is_number(text):
+        number = parse_int(text)
+        if number is None:
+            if parse_number(text) is not None:
                 seq = []
             continue
-        seq.append((int(cell["col"]), int(float(text.replace(",", ".")))))
+        seq.append((int(cell["col"]), number))
     bridge = hidden_cols or set()
     best: list[tuple[int, int]] = []
     run: list[tuple[int, int]] = []
@@ -511,9 +512,8 @@ def _is_flag_bits_row(
         text = _text(cell, date1904)
         if not text:
             continue
-        if not _is_number(text):
-            return False
-        if float(text.replace(" ", "").replace(",", ".")) not in {0.0, 1.0}:
+        number = parse_number(text)
+        if number is None or number not in {0.0, 1.0}:
             return False
         bits += 1
     return bits >= 2

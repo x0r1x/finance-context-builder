@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -504,10 +505,15 @@ def _row_formula_and_numbers(
         if raw_first is None:
             raw_first = text
         raw_last = text
+        if "_" in text:
+            continue
         try:
-            numbers.append(float(text.replace(",", "")))
+            number = float(text.replace(",", ""))
         except ValueError:
             continue
+        if not math.isfinite(number):
+            continue
+        numbers.append(number)
     fingerprint = Counter(templates).most_common(1)[0][0] if templates else None
     if fingerprint:
         for header in headers:

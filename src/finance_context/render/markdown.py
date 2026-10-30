@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from finance_context.context.measure import Measure
@@ -462,19 +463,27 @@ def _percent_amount(text: str) -> str | None:
     cleaned = text.strip().replace(" ", "").replace(",", "")
     if not cleaned:
         return None
+    if "_" in cleaned:
+        return None
     try:
         number = float(cleaned)
     except ValueError:
+        return None
+    if not math.isfinite(number):
         return None
     return format_number(number * 100)
 
 
 def _differs(text: str, normalized: str) -> bool:
     """Show the base-unit amount only when scale changes it, not when formatting does."""
+    if "_" in text or "_" in normalized:
+        return normalized != text
     try:
         value = float(text.replace(",", ""))
         base = float(normalized.replace(",", ""))
     except ValueError:
+        return normalized != text
+    if not math.isfinite(value) or not math.isfinite(base):
         return normalized != text
     return abs(value - base) > 1e-9 * max(1.0, abs(value), abs(base))
 

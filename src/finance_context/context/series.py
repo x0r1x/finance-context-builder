@@ -6,6 +6,8 @@ that list. They are not a second cell catalog.
 
 from __future__ import annotations
 
+import math
+
 from finance_context.vocab import ValueStatus
 
 SCALE_FACTORS: dict[str, int] = {
@@ -79,13 +81,20 @@ def _parse_number(text: str) -> float | None:
         cleaned = cleaned[:-1]
     if not cleaned:
         return None
+    if "_" in cleaned:
+        return None
     try:
-        return float(cleaned)
+        value = float(cleaned)
     except ValueError:
         return None
+    if not math.isfinite(value):
+        return None
+    return value
 
 
 def format_number(number: float) -> str:
+    if not math.isfinite(number):
+        return ""
     if abs(number - round(number)) < 1e-9:
         return str(int(round(number)))
     return f"{number:.10f}".rstrip("0").rstrip(".")

@@ -3,7 +3,14 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from finance_context.layout.cells import _cell_at, _is_int_text, _is_number, _text
+from finance_context.layout.cells import (
+    _cell_at,
+    _is_int_text,
+    _is_number,
+    _text,
+    parse_int,
+    parse_number,
+)
 from finance_context.layout.models import LayoutRow
 from finance_context.layout.params import attach_stub_cells
 from finance_context.layout.periods import (
@@ -176,11 +183,12 @@ def _is_counter_row(row_cells: list[dict], date1904: bool) -> bool:
             continue
         if classify_header(text) is not None:
             continue
-        if not _is_int_text(text):
-            if _is_number(text):
+        number = parse_int(text)
+        if number is None:
+            if parse_number(text) is not None:
                 return False
             continue
-        nums.append(int(float(text.replace(",", "."))))
+        nums.append(number)
     return len(nums) >= 2 and nums == list(range(1, len(nums) + 1))
 
 
@@ -212,7 +220,9 @@ def _bare_year_values(row_cells: list[dict], date1904: bool) -> list[int]:
         if text is None:
             continue
         if _is_bare_year_text(text):
-            values.append(int(float(text.replace(" ", "").replace(",", "."))))
+            year = parse_int(text)
+            if year is not None:
+                values.append(year)
             continue
         if _is_number(text):
             return []
@@ -250,7 +260,9 @@ def _year_banner_by_column(row_cells: list[dict], date1904: bool) -> dict[int, s
         text = _text(cell, date1904)
         if not text or not _is_bare_year_text(text):
             continue
-        found[int(cell["col"])] = str(int(float(text.replace(" ", "").replace(",", "."))))
+        year = parse_int(text)
+        if year is not None:
+            found[int(cell["col"])] = str(year)
     return found
 
 
@@ -700,16 +712,12 @@ def _row_kind(
         if text and _is_number(text):
             has_number = True
             if binary_ok:
-                try:
-                    value = float(text.replace(" ", "").replace(",", "."))
-                except ValueError:
+                value = parse_number(text)
+                if value is None or value not in {0.0, 1.0}:
                     binary_ok = False
                 else:
-                    if value not in {0.0, 1.0}:
-                        binary_ok = False
-                    else:
-                        binary_vals.add(int(value))
-                        binary_n += 1
+                    binary_vals.add(int(value))
+                    binary_n += 1
     flag_label = bool(_SCENARIO_LABEL.search(label) or _FLAG_BODY.search(label))
     if not has_formula and not has_number:
         return "flag" if flag_label and has_text else "abstract"
@@ -735,11 +743,11 @@ def _is_index_values(
         text = _text(cell, date1904)
         if not text:
             continue
-        if not _is_int_text(text):
-            if _is_number(text):
+        value = parse_int(text)
+        if value is None:
+            if parse_number(text) is not None:
                 return False
             continue
-        value = int(float(text.replace(",", ".")))
         if abs(value) > 53:
             return False
         nums.append(value)
