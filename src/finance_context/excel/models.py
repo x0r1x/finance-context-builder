@@ -57,6 +57,9 @@ class CellPresence(BaseModel):
     sheet: str
     addr: str
     presence: Literal["populated", "styled_blank"]
+    # Inclusive end row. Equal to the address row for one cell. A longer run is
+    # consecutive styled blanks down one column.
+    row_end: int | None = None
 
 
 class RawCell(BaseModel):

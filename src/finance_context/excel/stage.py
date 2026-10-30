@@ -18,6 +18,7 @@ PRESENCE_COLUMNS = (
     ("sheet", "VARCHAR"),
     ("addr", "VARCHAR"),
     ("presence", "VARCHAR"),
+    ("row_end", "INTEGER"),
 )
 
 
@@ -61,7 +62,10 @@ def parse_workbook(
     write_parquet(
         dest_dir / "raw" / "cell_presence.parquet",
         PRESENCE_COLUMNS,
-        [(row.sheet, row.addr, row.presence) for row in presence_rows],
+        [
+            (row.sheet, row.addr, row.presence, row.row_end)
+            for row in presence_rows
+        ],
         row_group_rows=0,
     )
     write_json(

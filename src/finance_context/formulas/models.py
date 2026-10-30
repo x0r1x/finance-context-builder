@@ -188,9 +188,13 @@ def _opt_int(value: object) -> int | None:
 
 @dataclass
 class CompileResult:
+    """Compiled edges. Cells stay in ``ir/cells.parquet``; ``cells`` is empty."""
+
     cells: list[IrCell] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
     cell_edges: list[Any] = field(default_factory=list)
+    cell_count: int = 0
+    usage: object | None = None
 
 
 def as_edge(value: Edge | Mapping[str, Any]) -> Edge:

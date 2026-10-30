@@ -6,13 +6,37 @@ import time
 from pathlib import Path
 
 from finance_context.excel.a1 import parse_addr
-from finance_context.layout.detect import detect_layout
+from finance_context.formulas.models import as_edge
+from finance_context.layout.detect import _sheet_layout, detect_layout
 from finance_context.layout.models import Layout
+from finance_context.layout.timelines import link_workbook_timelines
 from finance_context.observability import log_event
 from finance_context.settings import Settings
-from finance_context.store.fs import read_parquet, write_json
+from finance_context.store.fs import read_parquet, read_parquet_dicts, write_json
 
 _PARSE_FACTS = ("style_indent", "outline_level", "col_outline_level")
+# Columns detect reads. Comment and AST stay in the parquet file.
+_LAYOUT_COLUMNS = (
+    "sheet",
+    "row",
+    "col",
+    "addr",
+    "formula_raw",
+    "formula_template",
+    "cached_value",
+    "hidden",
+    "number_format",
+)
+_FLAG_COLUMNS = ("sheet", "row", "col", "cached_value", "number_format")
+_RELATION_COLUMNS = (
+    "sheet",
+    "row",
+    "col",
+    "addr",
+    "formula_raw",
+    "formula_template",
+    "ast_json",
+)
 _LOGGER = logging.getLogger("finance_context.pipeline")
 
 
@@ -42,9 +66,6 @@ def layout_workbook(
     settings: Settings | None = None,
 ) -> Layout:
     chosen = settings if isinstance(settings, Settings) else Settings()
-    if cells is None:
-        cells = read_parquet(dest_dir / "ir" / "cells.parquet")
-    cells = _overlay_parse_facts(dest_dir, cells, columnar=chosen.layout_columnar_facts)
     if edges is None:
         edges = _read_edges(dest_dir)
     date1904 = False
@@ -72,22 +93,40 @@ def layout_workbook(
                 hidden_rows[name] = rows
             if "summary_below" in sheet:
                 summary_below[name] = bool(sheet.get("summary_below"))
-    cells = _overlay_merges(cells, meta)
     defined_names = None if meta is None else meta.get("defined_names")
-    layout = _timed_step(
-        "layout_detect",
-        "detect_layout done",
-        lambda: detect_layout(
-            cells,
-            date1904=date1904,
-            edges=edges,
-            hidden_sheets=hidden_sheets,
-            hidden_columns=hidden_columns,
-            hidden_rows=hidden_rows,
-            summary_below=summary_below,
-            defined_names=defined_names,
-        ),
-    )
+    if cells is None:
+        layout = _timed_step(
+            "layout_detect",
+            "detect_layout done",
+            lambda: _detect_by_sheet(
+                dest_dir,
+                date1904=date1904,
+                edges=edges,
+                hidden_sheets=hidden_sheets,
+                hidden_columns=hidden_columns,
+                hidden_rows=hidden_rows,
+                summary_below=summary_below,
+                defined_names=defined_names,
+                meta=meta,
+            ),
+        )
+    else:
+        cells = _overlay_parse_facts(dest_dir, cells, columnar=chosen.layout_columnar_facts)
+        cells = _overlay_merges(cells, meta)
+        layout = _timed_step(
+            "layout_detect",
+            "detect_layout done",
+            lambda: detect_layout(
+                cells,
+                date1904=date1904,
+                edges=edges,
+                hidden_sheets=hidden_sheets,
+                hidden_columns=hidden_columns,
+                hidden_rows=hidden_rows,
+                summary_below=summary_below,
+                defined_names=defined_names,
+            ),
+        )
     _timed_step(
         "layout_write",
         "layout.json write done",
@@ -98,6 +137,169 @@ def layout_workbook(
         ),
     )
     return layout
+
+
+def _detect_by_sheet(
+    dest_dir: Path,
+    *,
+    date1904: bool,
+    edges: list[dict] | None,
+    hidden_sheets: set[str],
+    hidden_columns: dict[str, set[int]],
+    hidden_rows: dict[str, set[int]] | None,
+    summary_below: dict[str, bool],
+    defined_names: list | None,
+    meta: dict | None,
+) -> Layout:
+    """One sheet in memory at a time. Shared timelines then read flag rows only."""
+    prepared = None if edges is None else [as_edge(edge) for edge in edges]
+    sheets = []
+    for name in _sheet_names(dest_dir / "ir" / "cells.parquet"):
+        sheet_cells = _read_layout_sheet(dest_dir, name, meta)
+        if not sheet_cells:
+            continue
+        sheets.append(
+            _sheet_layout(
+                name,
+                sheet_cells,
+                date1904=date1904,
+                edges=prepared,
+                hidden_sheets=hidden_sheets,
+                hidden_columns=hidden_columns,
+                hidden_rows=hidden_rows,
+                summary_below=summary_below,
+                defined_names=defined_names,
+            )
+        )
+        del sheet_cells
+    layout = Layout(sheets=sheets)
+    link_workbook_timelines(layout, _read_flag_cells(dest_dir, layout), date1904)
+    return layout
+
+
+def load_relation_cells(dest_dir: Path, layout: Layout) -> list[dict]:
+    """AST and formula text for layout rows. Other rows stay on disk."""
+    path = dest_dir / "ir" / "cells.parquet"
+    found: list[dict] = []
+    for sheet in layout.sheets:
+        rows = {row.row for block in sheet.blocks for row in block.rows}
+        found.extend(_rows_on_sheet(path, sheet.name, rows, _RELATION_COLUMNS))
+    return found
+
+
+def _sheet_names(path: Path) -> list[str]:
+    """First-seen sheet order, the same order as a full cell list."""
+    if not path.is_file():
+        return []
+    import pyarrow.parquet as pq
+
+    seen: list[str] = []
+    known: set[str] = set()
+    for batch in pq.ParquetFile(path).iter_batches(columns=["sheet"], batch_size=65536):
+        for name in batch.column(0).to_pylist():
+            if name in known:
+                continue
+            known.add(name)
+            seen.append(str(name))
+    return seen
+
+
+def _read_layout_sheet(dest_dir: Path, sheet: str, meta: dict | None) -> list[dict]:
+    path = dest_dir / "ir" / "cells.parquet"
+    if not path.is_file():
+        return []
+    cells = read_parquet_dicts(
+        path,
+        list(_LAYOUT_COLUMNS),
+        where="sheet = ?",
+        params=[sheet],
+    )
+    if not cells:
+        return []
+    cells = _overlay_sheet_facts(dest_dir, sheet, cells)
+    return _overlay_merges(cells, meta)
+
+
+def _read_flag_cells(dest_dir: Path, layout: Layout) -> list[dict]:
+    path = dest_dir / "ir" / "cells.parquet"
+    found: list[dict] = []
+    for sheet in layout.sheets:
+        rows = {
+            row.row
+            for block in sheet.blocks
+            if getattr(block, "kind", "timeline") == "timeline"
+            for row in block.rows
+            if row.kind == "flag"
+        }
+        found.extend(_rows_on_sheet(path, sheet.name, rows, _FLAG_COLUMNS))
+    return found
+
+
+def _rows_on_sheet(
+    path: Path, sheet: str, rows: set[int], columns: tuple[str, ...]
+) -> list[dict]:
+    if not rows or not path.is_file():
+        return []
+    return read_parquet_dicts(
+        path,
+        list(columns),
+        where="sheet = ? AND row IN (SELECT unnest(?::BIGINT[]))",
+        params=[sheet, [int(row) for row in rows]],
+    )
+
+
+def _overlay_sheet_facts(dest_dir: Path, sheet: str, cells: list[dict]) -> list[dict]:
+    """Copy indent and outline for this sheet. A missing column leaves cells unchanged."""
+    path = dest_dir / "raw" / "cells.parquet"
+    if not cells or not path.is_file():
+        return cells
+    import pyarrow.parquet as pq
+
+    columns = ["row", "col", *_PARSE_FACTS]
+    try:
+        schema = pq.read_schema(path)
+    except (OSError, ValueError):
+        return cells
+    if any(name not in schema.names for name in columns):
+        return cells
+    raw_rows = read_parquet_dicts(
+        path,
+        columns,
+        where=(
+            "sheet = ? AND ("
+            "COALESCE(style_indent, 0) > 0 OR "
+            "COALESCE(outline_level, 0) > 0 OR "
+            "COALESCE(col_outline_level, 0) > 0)"
+        ),
+        params=[sheet],
+    )
+    facts: dict[tuple[int, int], dict[str, int]] = {}
+    for raw in raw_rows:
+        picked: dict[str, int] = {}
+        for key in _PARSE_FACTS:
+            value = raw.get(key)
+            if not value:
+                continue
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                picked[key] = number
+        if picked:
+            facts[(int(raw.get("row") or 0), int(raw.get("col") or 0))] = picked
+    if not facts:
+        return cells
+    merged: list[dict] = []
+    for cell in cells:
+        extra = facts.get((int(cell.get("row") or 0), int(cell.get("col") or 0)))
+        if not extra:
+            merged.append(cell)
+            continue
+        updated = dict(cell)
+        updated.update(extra)
+        merged.append(updated)
+    return merged
 
 
 def _overlay_merges(cells: list[dict], meta: dict | None) -> list[dict]:

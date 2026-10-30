@@ -17,7 +17,7 @@ from finance_context.excel.models import (
     SheetInfo,
     WorkbookMeta,
 )
-from finance_context.excel.zip_guard import read_part
+from finance_context.excel.zip_guard import MAX_PART_BYTES, read_part
 
 NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_R_STRICT = "http://purl.oclc.org/ooxml/officeDocument/relationships"
@@ -266,6 +266,7 @@ def parse_ooxml(
 
 
 def _load_sst(zf: zipfile.ZipFile, wb_rels: dict[str, Rel]) -> list[str]:
+    """Shared strings by index. The XML tree is not kept beside the list."""
     part = next(
         (rel.target for rel in wb_rels.values() if rel.type.endswith("/sharedStrings")),
         "xl/sharedStrings.xml",
@@ -273,11 +274,34 @@ def _load_sst(zf: zipfile.ZipFile, wb_rels: dict[str, Rel]) -> list[str]:
     member = zip_member(zf, part)
     if member is None:
         return []
-    root = parse_xml(read_part(zf, member))
     out: list[str] = []
-    for si in children(root, "si"):
-        out.append("".join(node.text or "" for node in iter_local(si, "t")))
+    with zf.open(member) as raw_handle:
+        handle = _CappedReader(_StripBom(raw_handle), MAX_PART_BYTES)
+        context = etree.iterparse(
+            handle,
+            events=("end",),
+            resolve_entities=False,
+            no_network=True,
+            load_dtd=False,
+            huge_tree=False,
+        )
+        try:
+            for _event, el in context:
+                if local_name(el.tag) != "si":
+                    continue
+                out.append(_shared_text(el))
+                parent = el.getparent()
+                el.clear()
+                if parent is not None:
+                    while el.getprevious() is not None:
+                        del parent[0]
+        except etree.XMLSyntaxError as exc:
+            raise ContextError("zip_rejected", "invalid xml") from exc
     return out
+
+
+def _shared_text(el: etree._Element) -> str:
+    return "".join(node.text or "" for node in iter_local(el, "t"))
 
 
 def _load_styles(
@@ -396,7 +420,18 @@ def _parse_sheet(
     hidden_rows: list[int] = []
     pending: list[_PendingCell] = []
     presence: list[CellPresence] = []
+    runs = _BlankRuns()
     masters: dict[int, tuple[int, int, str]] = {}
+
+    def add_presence(col: int, start: int, end: int, kind: str) -> None:
+        presence.append(
+            CellPresence(
+                sheet=sheet.info.name,
+                addr=format_addr(col, start),
+                presence="populated" if kind == "populated" else "styled_blank",
+                row_end=end,
+            )
+        )
 
     sheet_data = find_child(root, "sheetData")
     if sheet_data is not None:
@@ -420,18 +455,17 @@ def _parse_sheet(
                     col_outline=col_outline,
                 )
                 if cell_presence is not None:
-                    presence.append(
-                        CellPresence(
-                            sheet=sheet.info.name,
-                            addr=cell_presence[0],
-                            presence=cell_presence[1],
-                        )
-                    )
+                    addr, kind = cell_presence
+                    col, row = parse_addr(addr)
+                    for item in _presence_events(runs, col, row, kind):
+                        add_presence(*item)
                 if built is None:
                     continue
                 pending.append(built)
                 if built.shared_si is not None and built.formula:
                     masters[built.shared_si] = (built.col, built.row, built.formula)
+        for item in _presence_events(runs, 0, 0, "finish"):
+            add_presence(*item)
 
     cells: list[RawCell] = []
     for item in pending:
@@ -642,6 +676,76 @@ def _cached_value(cell_el: etree._Element, sst: list[str]) -> str | None:
     return raw
 
 
+class _StripBom:
+    """Drop a leading UTF-8 BOM. iterparse does not."""
+
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+        self._first = True
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._handle.read(size)
+        if self._first:
+            self._first = False
+            if data.startswith(b"\xef\xbb\xbf"):
+                data = data[3:]
+        return data
+
+
+class _BlankRuns:
+    """Vertical runs of styled blanks.
+
+    shortcut: only consecutive rows in one column collapse, upgrade when a
+    checkerboard of blanks has to shrink too.
+    """
+
+    def __init__(self) -> None:
+        self._open: dict[int, list[int]] = {}
+
+    def blank(self, col: int, row: int) -> list[tuple[int, int, int]]:
+        run = self._open.get(col)
+        if run is None:
+            self._open[col] = [row, row]
+            return []
+        if row == run[1] + 1:
+            run[1] = row
+            return []
+        if run[0] <= row <= run[1]:
+            return []
+        closed = [(col, run[0], run[1])]
+        self._open[col] = [row, row]
+        return closed
+
+    def occupied(self, col: int, row: int) -> list[tuple[int, int, int]]:
+        run = self._open.get(col)
+        if run is None or row <= run[1]:
+            return []
+        del self._open[col]
+        return [(col, run[0], run[1])]
+
+    def finish(self) -> list[tuple[int, int, int]]:
+        closed = [(col, run[0], run[1]) for col, run in self._open.items()]
+        closed.sort()
+        self._open.clear()
+        return closed
+
+
+def _presence_events(
+    runs: _BlankRuns, col: int, row: int, kind: str
+) -> list[tuple[int, int, int, str]]:
+    """Closed runs, then this cell when it is populated. ``finish`` ends the sheet."""
+    if kind == "finish":
+        return [(item_col, start, end, "styled_blank") for item_col, start, end in runs.finish()]
+    if kind == "styled_blank":
+        closed = runs.blank(col, row)
+    else:
+        closed = runs.occupied(col, row)
+    out = [(item_col, start, end, "styled_blank") for item_col, start, end in closed]
+    if kind != "styled_blank":
+        out.append((col, row, row, "populated"))
+    return out
+
+
 class _CappedReader:
     """File-like wrapper that enforces the part-size cap while streaming."""
 
@@ -741,8 +845,6 @@ def _parse_sheet_stream(
     cells: _CellBatch,
     presence: _CellBatch,
 ) -> None:
-    from finance_context.excel.zip_guard import MAX_PART_BYTES
-
     member = zip_member(zf, sheet.part)
     if member is None:
         raise ContextError("zip_rejected", f"missing sheet {sheet.part}")
@@ -750,7 +852,8 @@ def _parse_sheet_stream(
     name = sheet.info.name
     hidden_rows: list[int] = []
     batch: list[tuple[Any, ...]] = []
-    presence_batch: list[tuple[str, str, str]] = []
+    presence_batch: list[tuple[str, str, str, int]] = []
+    runs = _BlankRuns()
     # si -> indexes still in ``batch``, and rows already handed to ``cells``.
     unresolved: dict[int, list[int]] = {}
     pending_flushed: dict[int, list[tuple[str, str, int, int]]] = {}
@@ -817,7 +920,14 @@ def _parse_sheet_stream(
                         col_outline=col_outline,
                     )
                     if cell_presence is not None:
-                        presence_batch.append((name, cell_presence[0], cell_presence[1]))
+                        addr, kind = cell_presence
+                        col, row = parse_addr(addr)
+                        for item_col, start, end, item_kind in _presence_events(
+                            runs, col, row, kind
+                        ):
+                            presence_batch.append(
+                                (name, format_addr(item_col, start), item_kind, end)
+                            )
                         if len(presence_batch) >= _FLUSH_ROWS:
                             flush_presence()
                     if built is None:
@@ -885,6 +995,8 @@ def _parse_sheet_stream(
         raise ContextError("zip_rejected", "invalid xml")
     if hidden_cols is None:
         hidden_cols = _hidden_cols(root)
+    for item_col, start, end, item_kind in _presence_events(runs, 0, 0, "finish"):
+        presence_batch.append((name, format_addr(item_col, start), item_kind, end))
     flush_cells()
     flush_presence()
     sheet.info.summary_below = _summary_below(root)

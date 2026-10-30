@@ -8,6 +8,9 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.errors import ContextError
 from finance_context.excel import parse_workbook
+from finance_context.formulas import compile_workbook
+from finance_context.formulas.csr import present_cell_count
+from finance_context.memory import load_presence, usage_for_book
 from finance_context.store.fs import read_parquet
 
 
@@ -385,6 +388,85 @@ def test_success_leaves_no_tmp_files(tmp_path: Path, dest: Path) -> None:
     parse_workbook(source, dest)
     tmps = [p for p in dest.rglob("*") if p.name.endswith(".tmp") or ".tmp." in p.name]
     assert tmps == []
+
+
+def test_value_cell_on_a_sheet_whose_name_starts_with_a_quote(tmp_path: Path) -> None:
+    from finance_context.excel.stage import PRESENCE_COLUMNS
+    from finance_context.memory import usage_from_presence
+    from finance_context.store.fs import write_parquet
+
+    path = tmp_path / "cell_presence.parquet"
+    write_parquet(
+        path,
+        PRESENCE_COLUMNS,
+        [
+            ("'Data", "A1", "styled_blank", 1),
+            ("'Data", "A3", "styled_blank", 3),
+            ("'Data", "B1", "populated", 1),
+            ("'Data", "B2", "populated", 2),
+        ],
+    )
+    presence = load_presence(path)
+    assert presence.get("'Data!B1") == "populated"
+    assert presence.get("'Data!A1") == "styled_blank"
+    assert presence.get("'Data!A2") is None
+    usage = usage_from_presence(presence)
+    assert usage.rows_by_col["'Data"][2] == ((1, 2),)
+    assert usage.rows_by_col["'Data"][1] == ((1, 1), (3, 3))
+
+
+def test_blank_above_an_open_run_is_kept() -> None:
+    from finance_context.excel.ooxml import _BlankRuns
+
+    runs = _BlankRuns()
+    assert runs.blank(1, 10) == []
+    assert runs.blank(1, 3) == [(1, 10, 10)]
+    assert runs.blank(1, 3) == []
+    assert runs.finish() == [(1, 3, 3)]
+
+
+def test_styled_blank_run_is_one_column_span(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "run.xlsx"
+    blanks = [CellSpec(addr=f"A{row}", style=1) for row in range(1, 4)]
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    *blanks,
+                    CellSpec(addr="B1", value="1"),
+                    CellSpec(addr="A5", style=1),
+                    CellSpec(addr="C1", style=1),
+                    CellSpec(addr="C2", value="2"),
+                    CellSpec(addr="C3", style=1),
+                    CellSpec(addr="D1", value="1", formula="A2"),
+                    CellSpec(addr="D2", value="1", formula="A4"),
+                ],
+            )
+        ],
+    )
+    parse_workbook(source, dest)
+    rows = read_parquet(dest / "raw" / "cell_presence.parquet")
+    by_addr = {row["addr"]: row for row in rows}
+    assert by_addr["A1"]["presence"] == "styled_blank"
+    assert by_addr["A1"]["row_end"] == 3
+    assert "A2" not in by_addr
+    assert by_addr["A5"]["row_end"] == 5
+    assert by_addr["C1"]["row_end"] == 1
+    assert by_addr["C2"]["presence"] == "populated"
+    assert by_addr["C3"]["presence"] == "styled_blank"
+    presence = load_presence(dest / "raw" / "cell_presence.parquet")
+    assert presence.get("P&L!A2") == "styled_blank"
+    assert presence.get("P&L!A4") is None
+    assert presence.get("P&L!C2") == "populated"
+    assert present_cell_count(usage_for_book(dest)) == 10
+    compile_workbook(dest)
+    edges = {row["target"]: row for row in read_parquet(dest / "ir" / "cell_edges.parquet")}
+    assert edges["P&L!A2"]["evidence"] == "styled_blank"
+    assert edges["P&L!A2"]["reason"] == "actual_blank_cell"
+    assert edges["P&L!A4"]["evidence"] == "omitted_by_excel"
+    assert edges["P&L!A4"]["reason"] == "actual_blank_cell"
 
 
 def test_cell_presence_splits_populated_and_styled_blank(tmp_path: Path, dest: Path) -> None:

@@ -12,6 +12,38 @@ from finance_context.formulas.models import IrCell, release_cell_asts
 from finance_context.formulas.stage import compile_schema_id
 
 
+def test_compile_reads_presence_once(tmp_path: Path, dest: Path, monkeypatch) -> None:
+    source = tmp_path / "once.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="1", formula="B1"),
+                    CellSpec(addr="B1", value="2"),
+                ],
+            )
+        ],
+    )
+    parse_workbook(source, dest)
+    from finance_context.formulas import stage as compile_stage
+    from finance_context.memory import load_presence
+
+    calls: list[Path] = []
+    real = load_presence
+
+    def spy(path: Path, **kwargs):
+        calls.append(Path(path))
+        return real(path, **kwargs)
+
+    monkeypatch.setattr(compile_stage, "load_presence", spy)
+    monkeypatch.setattr("finance_context.memory.load_presence", spy)
+    result = compile_workbook(dest)
+    assert len(calls) == 1
+    assert result.usage.rows_by_col["P&L"][2] == ((1, 1),)
+
+
 def test_compile_writes_ir_artifacts_and_templates(tmp_path: Path, dest: Path) -> None:
     source = tmp_path / "model.xlsx"
     build_xlsx(
@@ -38,7 +70,9 @@ def test_compile_writes_ir_artifacts_and_templates(tmp_path: Path, dest: Path) -
     assert by[("P&L", "D24")]["formula_template"] == "=Inputs!R[-19]C[0]"
     assert by[("P&L", "D24")]["unparsed"] is False
     assert any(e["kind"] == "cross_sheet" and e["target"] == "Inputs!D5" for e in edges)
-    assert result.cells and result.edges and result.cell_edges
+    assert result.cell_count == 3
+    assert not result.cells
+    assert result.edges and result.cell_edges
     assert (dest / "ir" / "cells.parquet").is_file()
     assert (dest / "ir" / "edges.parquet").is_file()
     assert (dest / "ir" / "cell_edges.parquet").is_file()

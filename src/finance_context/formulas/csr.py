@@ -73,14 +73,15 @@ def _rectangle(body: str) -> tuple[int, int, int, int] | None:
 
 @dataclass(frozen=True, slots=True)
 class SheetUsage:
-    """Cells that exist on each sheet, as sorted row lists per column and the reverse.
+    """Cells that exist on each sheet, as row runs per column.
 
     Sheet names compare case-insensitively. ``canonical`` maps the folded name to
     the spelling stored on the cell, which is the id ``known_nodes`` uses.
     """
 
-    rows_by_col: dict[str, dict[int, tuple[int, ...]]]
-    cols_by_row: dict[str, dict[int, tuple[int, ...]]]
+    # Column to inclusive row runs, sorted and non-overlapping. One styled
+    # rectangle is one run per column, not one integer per cell.
+    rows_by_col: dict[str, dict[int, tuple[tuple[int, int], ...]]]
     canonical: dict[str, str]
 
     def sheet_name(self, sheet: str) -> str:
@@ -117,33 +118,87 @@ def active_range_node_min_cells() -> int:
 
 def present_cell_count(usage: SheetUsage) -> int:
     """Present cells already indexed on ``usage``. No parquet read."""
-    return sum(len(rows) for columns in usage.rows_by_col.values() for rows in columns.values())
+    return sum(
+        end - start + 1
+        for columns in usage.rows_by_col.values()
+        for spans in columns.values()
+        for start, end in spans
+    )
 
 
 def sheet_usage(nodes: Iterable[str]) -> SheetUsage:
     """Index present cells. Whole-column expansion intersects this instead of empty rows."""
-    by_col: dict[str, dict[int, set[int]]] = {}
-    by_row: dict[str, dict[int, set[int]]] = {}
-    canonical: dict[str, str] = {}
+    spans: list[tuple[str, int, int, int]] = []
     for node in nodes:
         parsed = _node_coord(node)
         if parsed is None:
             continue
         sheet, col, row = parsed
+        spans.append((sheet, col, row, row))
+    return sheet_usage_spans(spans)
+
+
+def sheet_usage_spans(spans: Iterable[tuple[str, int, int, int]]) -> SheetUsage:
+    """Index ``(sheet, col, row_start, row_end)`` runs. Adjacent runs merge."""
+    by_col: dict[str, dict[int, list[tuple[int, int]]]] = {}
+    canonical: dict[str, str] = {}
+    for sheet, col, start, end in spans:
+        if start > end:
+            start, end = end, start
         canonical.setdefault(sheet.casefold(), sheet)
-        by_col.setdefault(sheet, {}).setdefault(col, set()).add(row)
-        by_row.setdefault(sheet, {}).setdefault(row, set()).add(col)
+        by_col.setdefault(sheet, {}).setdefault(col, []).append((start, end))
     return SheetUsage(
         rows_by_col={
-            sheet: {col: tuple(sorted(rows)) for col, rows in cols.items()}
+            sheet: {col: _merge_spans(items) for col, items in cols.items()}
             for sheet, cols in by_col.items()
-        },
-        cols_by_row={
-            sheet: {row: tuple(sorted(cols)) for row, cols in rows.items()}
-            for sheet, rows in by_row.items()
         },
         canonical=canonical,
     )
+
+
+def _merge_spans(items: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    if not items:
+        return ()
+    items.sort()
+    merged: list[tuple[int, int]] = [items[0]]
+    for start, end in items[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end + 1:
+            merged[-1] = (prev_start, max(prev_end, end))
+            continue
+        merged.append((start, end))
+    return tuple(merged)
+
+
+def _span_has(spans: Sequence[tuple[int, int]], row: int) -> bool:
+    if not spans:
+        return False
+    index = bisect.bisect_right(spans, (row, _EXCEL_MAX_ROW)) - 1
+    if index < 0:
+        return False
+    start, end = spans[index]
+    return start <= row <= end
+
+
+def _span_overlap(spans: Sequence[tuple[int, int]], lo: int, hi: int) -> int:
+    total = 0
+    for start, end in spans:
+        if end < lo:
+            continue
+        if start > hi:
+            break
+        total += min(end, hi) - max(start, lo) + 1
+    return total
+
+
+def _first_span_row(spans: Sequence[tuple[int, int]], lo: int, hi: int) -> int | None:
+    for start, end in spans:
+        if end < lo:
+            continue
+        if start > hi:
+            return None
+        return max(start, lo)
+    return None
 
 
 def _node_coord(node: str) -> tuple[str, int, int] | None:
@@ -168,62 +223,34 @@ def _whole_axis(c1: int, c2: int, r1: int, r2: int) -> bool:
     return whole_column or whole_row
 
 
-def _slice_sorted(values: Sequence[int], lo: int, hi: int) -> Sequence[int]:
-    if not values:
-        return ()
-    start = bisect.bisect_left(values, lo)
-    end = bisect.bisect_right(values, hi)
-    return values[start:end]
-
-
-def _count_span(values: Sequence[int], lo: int, hi: int) -> int:
-    if not values:
-        return 0
-    return bisect.bisect_right(values, hi) - bisect.bisect_left(values, lo)
-
-
 def _present_count(
     sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
 ) -> int:
     """How many present cells sit in the rectangle. No pair list is built."""
     sheet = usage.sheet_name(sheet)
-    width = c2 - c1 + 1
-    height = r2 - r1 + 1
-    if width <= height:
-        columns = usage.rows_by_col.get(sheet, {})
-        return sum(_count_span(columns.get(col, ()), r1, r2) for col in range(c1, c2 + 1))
-    rows = usage.cols_by_row.get(sheet, {})
+    columns = usage.rows_by_col.get(sheet, {})
     return sum(
-        _count_span(cols, c1, c2) for row, cols in rows.items() if r1 <= row <= r2
+        _span_overlap(spans, r1, r2)
+        for col, spans in columns.items()
+        if c1 <= col <= c2
     )
 
 
 def _first_present(
     sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
 ) -> tuple[int, int] | None:
-    """The first present cell of the rectangle, row then column, as (row, col).
-
-    Same as ``_present_pairs(...)[0]`` without listing the cells: one bisect
-    per column, or one per row for a rectangle wider than it is tall.
-    """
+    """The first present cell of the rectangle, row then column, as (row, col)."""
     sheet = usage.sheet_name(sheet)
     best: tuple[int, int] | None = None
-    width = c2 - c1 + 1
-    height = r2 - r1 + 1
-    if width <= height:
-        columns = usage.rows_by_col.get(sheet, {})
-        for col in range(c1, c2 + 1):
-            rows = columns.get(col, ())
-            slot = bisect.bisect_left(rows, r1)
-            if slot < len(rows) and rows[slot] <= r2 and (best is None or rows[slot] < best[0]):
-                best = (rows[slot], col)
-        return best
-    for row, cols in usage.cols_by_row.get(sheet, {}).items():
-        if not r1 <= row <= r2 or (best is not None and row >= best[0]):
+    columns = usage.rows_by_col.get(sheet, {})
+    for col, spans in columns.items():
+        if col < c1 or col > c2:
             continue
-        slot = bisect.bisect_left(cols, c1)
-        if slot < len(cols) and cols[slot] <= c2:
-            best = (row, cols[slot])
+        row = _first_span_row(spans, r1, r2)
+        if row is None:
+            continue
+        if best is None or row < best[0] or (row == best[0] and col < best[1]):
+            best = (row, col)
     return best
 
 
@@ -233,18 +260,16 @@ def _present_pairs(
     """Present cells inside the rectangle, row then column."""
     sheet = usage.sheet_name(sheet)
     found: list[tuple[int, int]] = []
-    width = c2 - c1 + 1
-    height = r2 - r1 + 1
-    if width <= height:
-        columns = usage.rows_by_col.get(sheet, {})
-        for col in range(c1, c2 + 1):
-            for row in _slice_sorted(columns.get(col, ()), r1, r2):
-                found.append((row, col))
-    else:
-        rows = usage.cols_by_row.get(sheet, {})
-        chosen = sorted(row for row in rows if r1 <= row <= r2)
-        for row in chosen:
-            for col in _slice_sorted(rows[row], c1, c2):
+    columns = usage.rows_by_col.get(sheet, {})
+    for col, spans in columns.items():
+        if col < c1 or col > c2:
+            continue
+        for start, end in spans:
+            lo = start if start > r1 else r1
+            hi = end if end < r2 else r2
+            if lo > hi:
+                continue
+            for row in range(lo, hi + 1):
                 found.append((row, col))
     found.sort()
     return found
@@ -584,28 +609,9 @@ def expand_cell_edges_column_batches(
     known = known_nodes or set()
     sheets = known_sheets or set()
     seen_cells = presence or {}
-    seen: set[int] = set()
-    ids: dict[str, int] = {}
-    id_box: list[int] = []
-    kinds: dict[str, int] = {}
     columns: dict[str, list[Any]] = {name: [] for name in _CELL_EDGE_COLUMNS}
     count = 0
     limit = batch_size if batch_size > 0 else 0
-
-    def node_id(text: str) -> int:
-        slot = ids.get(text)
-        if slot is None:
-            slot = len(id_box)
-            ids[text] = slot
-            id_box.append(slot)
-        return id_box[slot]
-
-    def kind_id(kind: str) -> int:
-        slot = kinds.get(kind)
-        if slot is None:
-            slot = len(kinds) + 1
-            kinds[kind] = slot
-        return slot
 
     def flush() -> None:
         nonlocal count
@@ -620,10 +626,6 @@ def expand_cell_edges_column_batches(
         for row in _edge_rows(edge, usage):
             target = _share(pool, row.target)
             source = _share(pool, row.source)
-            key = (node_id(source) << 40) | (node_id(target) << 8) | kind_id(row.kind)
-            if key in seen:
-                continue
-            seen.add(key)
             classified = _classified(row, target, known, sheets, seen_cells)
             columns["source"].append(source)
             columns["target"].append(target)
@@ -646,9 +648,6 @@ def expand_cell_edges_column_batches(
             if limit and len(columns["source"]) >= limit:
                 flush()
     flush()
-    seen.clear()
-    ids.clear()
-    id_box.clear()
     return count
 
 
