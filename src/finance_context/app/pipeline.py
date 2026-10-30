@@ -5,7 +5,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -846,7 +846,7 @@ def _stage(
     saved: tuple[str, ...],
     counts: dict[str, int] | None = None,
     settings: Settings | None = None,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     token = stage_var.set(stage)
     log_event(_LOGGER, logging.INFO, "stage_start", f"{stage} started", stage=stage)
     rss_in = rss_bytes()

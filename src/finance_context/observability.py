@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from datetime import UTC, datetime
@@ -118,7 +118,7 @@ def log_event(logger: logging.Logger, level: int, event: str, msg: str, **fields
 def bind_log_context(
     job_id: str | None = None,
     source_filename: str | None = None,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Attach the job id and workbook name to later log lines.
 
     A bind that is already active stays as it is. The inner call does not
