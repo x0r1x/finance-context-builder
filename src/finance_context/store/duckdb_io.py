@@ -471,12 +471,12 @@ def _export_body(
             _put_and_check(target, local, object_url(settings.minio_bucket, key))
             uploaded.append(key)
         _put_marker(target, settings.minio_bucket, marker_key, uploaded)
-    except Exception:
-        _LOGGER.warning("minio export failed for job %s", job_id)
+    except Exception as exc:
+        _LOGGER.warning("minio export failed for job %s: %s", job_id, exc)
         try:
             _put_marker(target, settings.minio_bucket, marker_key, [])
-        except Exception:
-            _LOGGER.warning("minio export failed for _complete.json")
+        except Exception as exc:
+            _LOGGER.warning("minio export failed for _complete.json: %s", exc)
         return _EXPORT_WARNING
     return None
 
