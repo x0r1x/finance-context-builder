@@ -609,28 +609,9 @@ def expand_cell_edges_column_batches(
     known = known_nodes or set()
     sheets = known_sheets or set()
     seen_cells = presence or {}
-    seen: set[int] = set()
-    ids: dict[str, int] = {}
-    id_box: list[int] = []
-    kinds: dict[str, int] = {}
     columns: dict[str, list[Any]] = {name: [] for name in _CELL_EDGE_COLUMNS}
     count = 0
     limit = batch_size if batch_size > 0 else 0
-
-    def node_id(text: str) -> int:
-        slot = ids.get(text)
-        if slot is None:
-            slot = len(id_box)
-            ids[text] = slot
-            id_box.append(slot)
-        return id_box[slot]
-
-    def kind_id(kind: str) -> int:
-        slot = kinds.get(kind)
-        if slot is None:
-            slot = len(kinds) + 1
-            kinds[kind] = slot
-        return slot
 
     def flush() -> None:
         nonlocal count
@@ -645,10 +626,6 @@ def expand_cell_edges_column_batches(
         for row in _edge_rows(edge, usage):
             target = _share(pool, row.target)
             source = _share(pool, row.source)
-            key = (node_id(source) << 40) | (node_id(target) << 8) | kind_id(row.kind)
-            if key in seen:
-                continue
-            seen.add(key)
             classified = _classified(row, target, known, sheets, seen_cells)
             columns["source"].append(source)
             columns["target"].append(target)
@@ -671,9 +648,6 @@ def expand_cell_edges_column_batches(
             if limit and len(columns["source"]) >= limit:
                 flush()
     flush()
-    seen.clear()
-    ids.clear()
-    id_box.clear()
     return count
 
 

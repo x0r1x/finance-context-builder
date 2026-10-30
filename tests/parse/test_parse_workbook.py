@@ -392,7 +392,7 @@ def test_success_leaves_no_tmp_files(tmp_path: Path, dest: Path) -> None:
 
 def test_value_cell_on_a_sheet_whose_name_starts_with_a_quote(tmp_path: Path) -> None:
     from finance_context.excel.stage import PRESENCE_COLUMNS
-    from finance_context.formulas.csr import sheet_usage_spans
+    from finance_context.memory import usage_from_presence
     from finance_context.store.fs import write_parquet
 
     path = tmp_path / "cell_presence.parquet"
@@ -401,12 +401,18 @@ def test_value_cell_on_a_sheet_whose_name_starts_with_a_quote(tmp_path: Path) ->
         PRESENCE_COLUMNS,
         [
             ("'Data", "A1", "styled_blank", 1),
+            ("'Data", "A3", "styled_blank", 3),
             ("'Data", "B1", "populated", 1),
             ("'Data", "B2", "populated", 2),
         ],
     )
-    usage = sheet_usage_spans(load_presence(path).present_spans())
+    presence = load_presence(path)
+    assert presence.get("'Data!B1") == "populated"
+    assert presence.get("'Data!A1") == "styled_blank"
+    assert presence.get("'Data!A2") is None
+    usage = usage_from_presence(presence)
     assert usage.rows_by_col["'Data"][2] == ((1, 2),)
+    assert usage.rows_by_col["'Data"][1] == ((1, 1), (3, 3))
 
 
 def test_blank_above_an_open_run_is_kept() -> None:
