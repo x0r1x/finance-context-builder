@@ -490,26 +490,50 @@ def _write_cell_edge_batches(
 
 
 def _keep_first_cell_edges(staged: Path, dest: Path, *, row_group_rows: int) -> int:
-    """First ``(source, target, kind)`` wins. ``seq`` is the write order."""
+    """First ``(source, target, kind)`` wins. ``seq`` is the write order.
+
+    Rows are written one group at a time. The whole edge table is not a Python list.
+    """
     from finance_context.store.duckdb_io import _quote_ident, limited_connection
 
     chosen = ", ".join(_quote_ident(name) for name, _dtype in IR_CELL_EDGE_COLUMNS)
+    query = f"""
+        SELECT {chosen} FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY source, target, kind ORDER BY seq
+            ) AS rn
+            FROM read_parquet(?)
+        )
+        WHERE rn = 1
+        ORDER BY seq
+    """
+    width = len(IR_CELL_EDGE_COLUMNS)
+
+    def columns_of(rows: list) -> list[list]:
+        return [[row[index] for row in rows] for index in range(width)]
+
     with limited_connection() as con:
-        rows = con.execute(
-            f"""
-            SELECT {chosen} FROM (
-                SELECT *, row_number() OVER (
-                    PARTITION BY source, target, kind ORDER BY seq
-                ) AS rn
-                FROM read_parquet(?)
-            )
-            WHERE rn = 1
-            ORDER BY seq
-            """,
-            [str(staged)],
-        ).fetchall()
-    write_parquet(dest, IR_CELL_EDGE_COLUMNS, rows, row_group_rows=row_group_rows)
-    return len(rows)
+        cursor = con.execute(query, [str(staged)])
+        if row_group_rows <= 0:
+            rows = cursor.fetchall()
+            write_parquet(dest, IR_CELL_EDGE_COLUMNS, rows, row_group_rows=0)
+            return len(rows)
+        first = cursor.fetchmany(row_group_rows)
+        second = cursor.fetchmany(row_group_rows)
+        if not second:
+            write_parquet(dest, IR_CELL_EDGE_COLUMNS, first, row_group_rows=row_group_rows)
+            return len(first)
+        count = len(first) + len(second)
+        with RowGroupWriter(dest, IR_CELL_EDGE_COLUMNS, row_group_rows) as writer:
+            writer.write_lists(columns_of(first))
+            writer.write_lists(columns_of(second))
+            while True:
+                batch = cursor.fetchmany(row_group_rows)
+                if not batch:
+                    break
+                count += len(batch)
+                writer.write_lists(columns_of(batch))
+        return count
 
 
 def _write_cell_edge_rows(dest_dir: Path, cell_edges: list, *, row_group_rows: int) -> None:

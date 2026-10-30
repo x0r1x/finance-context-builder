@@ -127,6 +127,8 @@ def _stream_index(
     names = [name for name, _dtype in INDEX_COLUMNS]
     source = book / "ir" / "cells.parquet"
     columns = ["sheet", "addr", "row", "col", "formula_raw", "cached_value"]
+    empty_ids = _empty_target_ids(cell_edge_path, cell_edges)
+    still_empty = set(empty_ids)
     with RowGroupWriter(path, INDEX_COLUMNS, row_group_rows) as writer:
         chunk: list[list[object]] = [[] for _ in names]
         if source.is_file():
@@ -162,6 +164,7 @@ def _stream_index(
                     for slot, item in enumerate(row):
                         chunk[slot].append(item)
                     count += 1
+                    still_empty.discard(node_id)
                     label_row = (sheet, row_n)
                     if label_row in circular:
                         bucket = circular_ids.setdefault(label_row, [])
@@ -170,26 +173,26 @@ def _stream_index(
                     if len(chunk[0]) >= 65536:
                         writer.write_lists(chunk)
                         chunk = [[] for _ in names]
+        for node_id in empty_ids:
+            if node_id not in still_empty:
+                continue
+            row = _empty_index_row(node_id, row_meta, period_by_cell)
+            for slot, item in enumerate(row):
+                chunk[slot].append(item)
+            count += 1
+            if len(chunk[0]) >= 65536:
+                writer.write_lists(chunk)
+                chunk = [[] for _ in names]
         if chunk[0]:
             writer.write_lists(chunk)
-    empty = _missing_empty_nodes(cell_edge_path, cell_edges, path)
-    if empty:
-        _append_index_rows(
-            path,
-            [_empty_index_row(node_id, row_meta, period_by_cell) for node_id in empty],
-        )
-        count += len(empty)
     return count, circular_ids
 
 
-def _missing_empty_nodes(
-    cell_edge_path: Path | None,
-    cell_edges: list | None,
-    index_path: Path,
-) -> list[str]:
+def _empty_target_ids(cell_edge_path: Path | None, cell_edges: list | None) -> list[str]:
+    """Empty range targets in first-seen order. Cells drop the ones they already cover."""
     if cell_edges is not None:
-        return _empty_range_nodes(cell_edges, _index_ids(index_path))
-    if cell_edge_path is None or not cell_edge_path.is_file() or not index_path.is_file():
+        return _empty_range_nodes(cell_edges, set())
+    if cell_edge_path is None or not cell_edge_path.is_file():
         return []
     from finance_context.store.duckdb_io import limited_connection
 
@@ -201,32 +204,12 @@ def _missing_empty_nodes(
                 FROM read_parquet(?)
                 WHERE status = 'empty' AND target IS NOT NULL AND target <> ''
             )
-            WHERE target NOT IN (SELECT node_id FROM read_parquet(?))
             QUALIFY row_number() OVER (PARTITION BY target ORDER BY ord) = 1
             ORDER BY ord
             """,
-            [str(cell_edge_path), str(index_path)],
+            [str(cell_edge_path)],
         ).fetchall()
     return [str(row[0]) for row in rows]
-
-
-def _index_ids(path: Path) -> set[str]:
-    import pyarrow.parquet as pq
-
-    if not path.is_file():
-        return set()
-    table = pq.read_table(path, columns=["node_id"])
-    return {str(item) for item in table.column(0).to_pylist() if item}
-
-
-def _append_index_rows(path: Path, rows: list[tuple[object, ...]]) -> None:
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    names = [name for name, _dtype in INDEX_COLUMNS]
-    extra = pa.Table.from_pylist([dict(zip(names, row, strict=True)) for row in rows])
-    current = pq.read_table(path)
-    pq.write_table(pa.concat_tables([current, extra], promote_options="default"), path)
 
 
 def build_formula_graph(
