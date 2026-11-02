@@ -94,7 +94,9 @@ class Settings(BaseSettings):
     parquet_row_group_rows: int = DEFAULT_PARQUET_ROW_GROUP_ROWS
     # Compile-local map of repeated node ids. Dropped after compile. Not sys.intern.
     compile_string_pool: bool = True
-    # Keep formula AST JSON zlib-compressed on the cell until relations run.
+    # zlib-compress formula AST JSON while a non-streaming compile holds cells
+    # in memory. Streaming compile writes each cell immediately and skips this.
+    # cells.parquet is plain JSON either way.
     compile_ast_zlib: bool = True
     # Column batches of cell edges, no second in-memory edge list, streamed graph files.
     graph_stream: bool = True

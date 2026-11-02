@@ -12,6 +12,7 @@ from finance_context.formulas.csr import (
     expand_cell_edges_column_batches,
 )
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
+from finance_context.formulas.known import KnownNodes
 from finance_context.formulas.models import (
     CompileResult,
     Edge,
@@ -164,11 +165,11 @@ def _compile_cells_loaded(
     engine: FormulaEngine,
     meta: dict,
     chosen: Settings,
-) -> tuple[list[IrCell], list[Edge], set[str], int, dict[str, str] | None]:
+) -> tuple[list[IrCell], list[Edge], KnownNodes, int, dict[str, str] | None]:
     raw_rows = read_parquet(raw_path)
     cells: list[IrCell] = []
     edges: list[Edge] = []
-    known: set[str] = set()
+    known = KnownNodes()
     formula_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
     for row, (parsed, release) in zip(raw_rows, _iter_parsed(engine, raw_rows), strict=True):
@@ -188,7 +189,7 @@ def _compile_cells_streaming(
     engine: FormulaEngine,
     meta: dict,
     chosen: Settings,
-) -> tuple[int, list[Edge], set[str], int, dict[str, str] | None]:
+) -> tuple[int, list[Edge], KnownNodes, int, dict[str, str] | None]:
     """Read raw cells in chunks and publish ``ir/cells.parquet`` from the batch.
 
     Each cell is written and dropped. Callers read the columns they need.
@@ -198,7 +199,7 @@ def _compile_cells_streaming(
     cells_path = dest_dir / "ir" / "cells.parquet"
     batch = DuckDBBatch(Path(str(cells_path) + ".build.duckdb"), IR_CELL_COLUMNS)
     edges: list[Edge] = []
-    known: set[str] = set()
+    known = KnownNodes()
     formula_count = 0
     cell_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
@@ -246,19 +247,23 @@ def _take_cell(
     *,
     pool: dict[str, str] | None,
     edges: list[Edge],
-    known: set[str],
+    known: KnownNodes,
     chosen: Settings,
 ) -> tuple[IrCell, bool]:
     added = bool(row.get("formula_raw"))
-    node_id = canonical_node_id(str(row["sheet"]), str(row["addr"]))
-    if pool is not None:
-        node_id = pool.setdefault(node_id, node_id)
-        if parsed is not None:
-            for edge in parsed.edges:
-                edge.source = pool.setdefault(edge.source, edge.source)
-                if edge.target:
-                    edge.target = pool.setdefault(edge.target, edge.target)
-    known.add(node_id)
+    sheet = row["sheet"]
+    addr = row["addr"]
+    sheet_s = sheet if isinstance(sheet, str) else str(sheet)
+    addr_s = addr if isinstance(addr, str) else str(addr)
+    # Value cells are only a membership bit. Their ids are not pooled.
+    if pool is not None and parsed is not None:
+        node_id = canonical_node_id(sheet_s, addr_s)
+        pool.setdefault(node_id, node_id)
+        for edge in parsed.edges:
+            edge.source = pool.setdefault(edge.source, edge.source)
+            if edge.target:
+                edge.target = pool.setdefault(edge.target, edge.target)
+    known.add(sheet_s, addr_s)
     template = None
     unparsed = False
     ast_json = None
@@ -267,18 +272,17 @@ def _take_cell(
         unparsed = parsed.unparsed
         if parsed.ast is not None:
             ast_json = json.dumps(parsed.ast, ensure_ascii=False)
-            if chosen.compile_ast_zlib:
+            # Streaming writes the cell before anything else can read the bytes.
+            if chosen.compile_ast_zlib and not chosen.parse_streaming:
                 ast_json = zlib.compress(ast_json.encode("utf-8"), 1)
         edges.extend(parsed.edges)
     release()
-    sheet = row["sheet"]
-    addr = row["addr"]
     return (
         IrCell(
-            sheet=sheet if isinstance(sheet, str) else str(sheet),
+            sheet=sheet_s,
             row=int(row["row"]),
             col=int(row["col"]),
-            addr=addr if isinstance(addr, str) else str(addr),
+            addr=addr_s,
             formula_raw=row.get("formula_raw"),
             formula_template=template,
             unparsed=unparsed,
@@ -445,10 +449,143 @@ class EdgeCount:
         return self._n > 0
 
 
+class _RepeatedSource(Exception):
+    """A cell id showed up again after another source. The inline dedup is wrong."""
+
+
+def _edge_sources_contiguous(edges: list[Edge]) -> bool:
+    """True when each source is one contiguous run, in edge order."""
+    seen: set[str] = set()
+    previous: str | None = None
+    started = False
+    for edge in edges:
+        source = edge.source
+        if started and source == previous:
+            continue
+        if source in seen:
+            return False
+        if started and previous is not None:
+            seen.add(previous)
+        previous = source
+        started = True
+    return True
+
+
+class _KeptEdgeWriter:
+    """First ``(source, target, kind)`` in emission order, written like the SQL path.
+
+    One source is one run, so the live key set is that run only. A source that
+    comes back later raises :class:`_RepeatedSource`; the caller uses the window.
+    Row groups match ``_keep_first_cell_edges``: one ``write_parquet`` when the
+    table fits in a group (or ``row_group_rows <= 0``), otherwise full groups of
+    ``row_group_rows`` through :class:`RowGroupWriter`.
+    """
+
+    def __init__(self, path: Path, row_group_rows: int) -> None:
+        self.path = path
+        self.row_group_rows = row_group_rows
+        self.names = [name for name, _dtype in IR_CELL_EDGE_COLUMNS]
+        self.width = len(self.names)
+        self.count = 0
+        self._buf: list[list] = [[] for _ in range(self.width)]
+        self._buf_n = 0
+        self._first: list[list] | None = None
+        self._writer: RowGroupWriter | None = None
+        self._source: str | None = None
+        self._pairs: set[tuple[str, str]] = set()
+        self._closed: set[str] = set()
+
+    def consume(self, columns: dict[str, list]) -> None:
+        incoming = [columns[name] for name in self.names]
+        sources = columns["source"]
+        targets = columns["target"]
+        kinds = columns["kind"]
+        for index in range(len(sources)):
+            source = sources[index]
+            if source != self._source:
+                if source in self._closed:
+                    raise _RepeatedSource(source)
+                if self._source is not None:
+                    self._closed.add(self._source)
+                self._source = source
+                self._pairs.clear()
+            key = (targets[index], kinds[index])
+            if key in self._pairs:
+                continue
+            self._pairs.add(key)
+            for col_index, column in enumerate(incoming):
+                self._buf[col_index].append(column[index])
+            self._buf_n += 1
+            self.count += 1
+            self._maybe_flush()
+
+    def _maybe_flush(self) -> None:
+        row_group_rows = self.row_group_rows
+        if row_group_rows <= 0 or self._buf_n < row_group_rows:
+            return
+        full = self._buf
+        self._buf = [[] for _ in range(self.width)]
+        self._buf_n = 0
+        if self._writer is not None:
+            self._writer.write_lists(full)
+            return
+        if self._first is None:
+            self._first = full
+            return
+        self._writer = RowGroupWriter(self.path, IR_CELL_EDGE_COLUMNS, row_group_rows)
+        self._writer.write_lists(self._first)
+        self._writer.write_lists(full)
+        self._first = None
+
+    def abort(self) -> None:
+        self._closed.clear()
+        self._pairs.clear()
+        self._buf = []
+        self._first = None
+        writer = self._writer
+        self._writer = None
+        if writer is not None and not writer._closed:
+            writer.__exit__(_RepeatedSource, _RepeatedSource(), None)
+
+    def finish(self) -> int:
+        self._closed.clear()
+        self._pairs.clear()
+        if self.count == 0:
+            write_parquet(self.path, IR_CELL_EDGE_COLUMNS, [], row_group_rows=self.row_group_rows)
+            return 0
+        if self._writer is None:
+            rows = _rows_from_columns(self._pending_columns())
+            row_group_rows = 0 if self.row_group_rows <= 0 else self.row_group_rows
+            write_parquet(self.path, IR_CELL_EDGE_COLUMNS, rows, row_group_rows=row_group_rows)
+            return self.count
+        if self._buf_n:
+            self._writer.write_lists(self._buf)
+        self._writer.close()
+        self._writer = None
+        return self.count
+
+    def _pending_columns(self) -> list[list]:
+        if self._first is None:
+            return self._buf
+        if self._buf_n == 0:
+            return self._first
+        merged = [list(column) for column in self._first]
+        for index, column in enumerate(self._buf):
+            merged[index].extend(column)
+        return merged
+
+
+def _rows_from_columns(columns: list[list]) -> list[tuple]:
+    if not columns or not columns[0]:
+        return []
+    width = len(columns)
+    return [tuple(columns[col][index] for col in range(width)) for index in range(len(columns[0]))]
+
+
 def _write_cell_edge_batches(
     dest_dir: Path,
     edges: list[Edge],
-    known: set[str],
+    known: set[str] | KnownNodes,
     *,
     sheets: set[str],
     presence: dict[str, str],
@@ -456,6 +593,60 @@ def _write_cell_edge_batches(
     pool: dict[str, str] | None,
     row_group_rows: int,
 ) -> EdgeCount:
+    if not _edge_sources_contiguous(edges):
+        return _write_cell_edges_via_window(
+            dest_dir,
+            edges,
+            known,
+            sheets=sheets,
+            presence=presence,
+            usage=usage,
+            pool=pool,
+            row_group_rows=row_group_rows,
+        )
+    path = dest_dir / "ir" / "cell_edges.parquet"
+    sink = _KeptEdgeWriter(path, row_group_rows)
+    try:
+        expand_cell_edges_column_batches(
+            edges,
+            known,
+            known_sheets=sheets,
+            presence=presence,
+            usage=usage,  # type: ignore[arg-type]
+            pool=pool,
+            consume=sink.consume,
+            batch_size=row_group_rows,
+        )
+        return EdgeCount(sink.finish())
+    except _RepeatedSource:
+        sink.abort()
+        return _write_cell_edges_via_window(
+            dest_dir,
+            edges,
+            known,
+            sheets=sheets,
+            presence=presence,
+            usage=usage,
+            pool=pool,
+            row_group_rows=row_group_rows,
+        )
+    except Exception:
+        sink.abort()
+        raise
+
+
+def _write_cell_edges_via_window(
+    dest_dir: Path,
+    edges: list[Edge],
+    known: set[str] | KnownNodes,
+    *,
+    sheets: set[str],
+    presence: dict[str, str],
+    usage: object,
+    pool: dict[str, str] | None,
+    row_group_rows: int,
+) -> EdgeCount:
+    """Global ``row_number`` dedup. Used when one source is not a single run."""
     path = dest_dir / "ir" / "cell_edges.parquet"
     staged = path.with_name("cell_edges.parquet.dup")
     names = [name for name, _dtype in IR_CELL_EDGE_COLUMNS]
@@ -627,5 +818,3 @@ def _write_object_batches(path, columns, objs, getters, row_group_rows: int) -> 
         for start in range(0, len(objs), row_group_rows):
             part = objs[start : start + row_group_rows]
             writer.write_lists([[getter(obj) for obj in part] for getter in getters])
-
-
