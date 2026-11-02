@@ -651,36 +651,20 @@ def _configure_s3(con: Any, settings: Settings | None) -> None:
     secret = ""
     if settings.minio_secret_key is not None:
         secret = settings.minio_secret_key.get_secret_value()
-    fields = [
-        "TYPE s3",
-        "KEY_ID ?",
-        "SECRET ?",
-        "REGION ?",
-        "ENDPOINT ?",
-        "URL_STYLE 'path'",
-        "USE_SSL ?",
-    ]
-    params: list[object] = [
-        settings.minio_access_key,
-        secret,
-        settings.minio_region,
-        endpoint,
-        use_ssl,
-    ]
-    token = ""
-    if settings.minio_session_token is not None:
-        token = settings.minio_session_token.get_secret_value()
-    if token:
-        fields.append("SESSION_TOKEN ?")
-        params.append(token)
-    if settings.minio_kms_key_id:
-        fields.append("KMS_KEY_ID ?")
-        params.append(settings.minio_kms_key_id)
     con.execute("INSTALL httpfs")
     con.execute("LOAD httpfs")
     con.execute(
-        "CREATE OR REPLACE SECRET (" + ", ".join(fields) + ")",
-        params,
+        """
+        CREATE OR REPLACE SECRET (
+            TYPE s3,
+            KEY_ID ?,
+            SECRET ?,
+            ENDPOINT ?,
+            URL_STYLE 'path',
+            USE_SSL ?
+        )
+        """,
+        [settings.minio_access_key, secret, endpoint, use_ssl],
     )
 
 
