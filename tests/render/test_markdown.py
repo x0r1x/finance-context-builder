@@ -23,6 +23,7 @@ from finance_context.models.context import (
 )
 from finance_context.render.graph import render_graph_markdown, render_trace_markdown
 from finance_context.render.markdown import (
+    _percent_amount,
     commit_renderer_stamp,
     refresh_context_markdown,
     render_markdown,
@@ -133,6 +134,12 @@ def test_markdown_matches_golden() -> None:
     assert "=RC[-1]" in rendered
     assert "Concept" not in rendered
     assert "Content completeness: 1.00 (1/1 layout rows)" in rendered
+
+
+def test_percent_amount_keeps_the_decimal_comma() -> None:
+    assert _percent_amount("0,12") == "12"
+    assert _percent_amount("0.12") == "12"
+    assert _percent_amount("inf") is None
 
 
 def test_percent_unit_shows_the_fraction_and_the_percent() -> None:

@@ -6,6 +6,9 @@ that list. They are not a second cell catalog.
 
 from __future__ import annotations
 
+import math
+
+from finance_context.layout.cells import parse_number
 from finance_context.vocab import ValueStatus
 
 SCALE_FACTORS: dict[str, int] = {
@@ -39,7 +42,9 @@ def normalize_value(text: str | None, factor: int | None) -> str | None:
 
     `factor is None` still parses scientific notation and float residue.
     A date or other non-number stays `None`. The cached `values[]` string
-    is left unchanged by the caller.
+    is left unchanged by the caller. A finite cache times `k` / `m` / `bn`
+    that leaves the float range is `None` too: an empty string would later
+    be read as magnitude 0.
     """
     if text in (None, ""):
         return None
@@ -47,7 +52,10 @@ def normalize_value(text: str | None, factor: int | None) -> str | None:
     if number is None:
         return None
     multiplier = 1 if factor in (None, 1) else factor
-    return format_number(number * multiplier)
+    scaled = number * multiplier
+    if not math.isfinite(scaled):
+        return None
+    return format_number(scaled)
 
 
 def normalize_series(values: list[str | None], factor: int | None) -> list[str | None]:
@@ -74,18 +82,21 @@ def _is_zero(text: str) -> bool:
 
 
 def _parse_number(text: str) -> float | None:
-    cleaned = text.strip().replace(" ", "").replace(",", "")
+    """Same number as layout: a comma is the decimal mark, grouping spaces drop.
+
+    A trailing percent sign is the unit, not part of the number.
+    """
+    cleaned = text.strip()
     if cleaned.endswith("%"):
-        cleaned = cleaned[:-1]
+        cleaned = cleaned[:-1].strip()
     if not cleaned:
         return None
-    try:
-        return float(cleaned)
-    except ValueError:
-        return None
+    return parse_number(cleaned)
 
 
 def format_number(number: float) -> str:
+    if not math.isfinite(number):
+        return ""
     if abs(number - round(number)) < 1e-9:
         return str(int(round(number)))
     return f"{number:.10f}".rstrip("0").rstrip(".")

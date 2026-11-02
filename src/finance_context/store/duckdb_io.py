@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -42,6 +43,8 @@ _SESSION = (
     "meta/meta.json",
 )
 _EXPORT_WARNING = "minio export failed"
+_HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
+_S3_LINE = re.compile(r"(?m)^([A-Z][A-Za-z0-9]+): ([^\r\n]{1,160})")
 _publish_held = threading.local()
 
 
@@ -472,15 +475,17 @@ def _export_body(
             uploaded.append(key)
         _put_marker(target, settings.minio_bucket, marker_key, uploaded)
     except Exception as exc:
-        _LOGGER.warning(
-            "minio export failed for job %s: %s", job_id, _without_secret(settings, exc)
-        )
-        try:
-            _put_marker(target, settings.minio_bucket, marker_key, [])
-        except Exception as exc:
-            _LOGGER.warning(
-                "minio export failed for _complete.json: %s", _without_secret(settings, exc)
-            )
+        status, detail = _s3_failure(exc)
+        _log_export_failure("minio export failed for job %s", job_id, detail=detail)
+        # A 403 will not clear the marker either. Skip the second PUT.
+        if status != 403:
+            try:
+                _put_marker(target, settings.minio_bucket, marker_key, [])
+            except Exception as clear_exc:
+                _log_export_failure(
+                    "minio export failed for _complete.json",
+                    detail=_s3_failure(clear_exc)[1],
+                )
         return _EXPORT_WARNING
     return None
 
@@ -563,6 +568,27 @@ def _http_404(exc: Exception) -> bool:
     return isinstance(exc, duckdb.HTTPException) and "HTTP 404" in str(exc)
 
 
+def _s3_failure(exc: BaseException) -> tuple[int | None, str | None]:
+    """HTTP status and one ``Code: message`` line. The DuckDB essay stays out."""
+    text = str(exc)
+    status_match = _HTTP_STATUS.search(text)
+    if status_match is None:
+        return None, None
+    status = int(status_match.group(1))
+    for code, message in _S3_LINE.findall(text):
+        if code == "HTTP":
+            continue
+        return status, f"HTTP {status} {code}: {message.strip()}"
+    return status, f"HTTP {status}"
+
+
+def _log_export_failure(template: str, *args: object, detail: str | None) -> None:
+    if detail is None:
+        _LOGGER.warning(template, *args)
+        return
+    _LOGGER.warning(template + ": %s", *args, detail)
+
+
 def _publish_lock_path(settings: Settings, job_id: str, local: Path, relative: str) -> Path:
     """Same content hash shares one bucket prefix, so the lock is the shared book."""
     book = shared_book_dir(settings.data_dir, job_id)
@@ -618,15 +644,8 @@ def _put_marker(store: ObjectStore, bucket: str, key: str, uploaded: list[str]) 
             raise OSError(f"size mismatch for {url}")
 
 
-def _without_secret(settings: Settings, exc: BaseException) -> str:
-    """DuckDB S3 errors can echo the secret key, so the log keeps the rest."""
-    text = str(exc)
-    secret = ""
-    if settings.minio_secret_key is not None:
-        secret = settings.minio_secret_key.get_secret_value()
-    if secret:
-        return text.replace(secret, "***")
-    return text
+# Image build installs httpfs here. The process only loads that file.
+_IMAGE_HTTPFS = Path("/app/.duckdb/extensions")
 
 
 def _configure_s3(con: Any, settings: Settings | None) -> None:
@@ -636,7 +655,11 @@ def _configure_s3(con: Any, settings: Settings | None) -> None:
     secret = ""
     if settings.minio_secret_key is not None:
         secret = settings.minio_secret_key.get_secret_value()
-    con.execute("SET extension_directory='/app/.duckdb/extensions'")
+    # Autoload would download a missing httpfs. The image already has the file.
+    con.execute("SET autoinstall_known_extensions=false")
+    con.execute("SET autoload_known_extensions=false")
+    if _IMAGE_HTTPFS.is_dir():
+        con.execute("SET extension_directories=[" + _sql_literal(str(_IMAGE_HTTPFS)) + "]")
     con.execute("LOAD httpfs")
     con.execute(
         """
@@ -650,13 +673,7 @@ def _configure_s3(con: Any, settings: Settings | None) -> None:
             USE_SSL ?
         )
         """,
-        [
-            settings.minio_access_key,
-            secret,
-            settings.minio_region,
-            endpoint,
-            use_ssl,
-        ],
+        [settings.minio_access_key, secret, settings.minio_region, endpoint, use_ssl],
     )
 
 

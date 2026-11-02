@@ -33,3 +33,9 @@ def test_serial_1904_system() -> None:
 
 def test_fractional_serial_uses_the_day() -> None:
     assert serial_to_date(44743.75) == date(2022, 7, 1)
+
+
+def test_non_finite_serial_is_not_a_date() -> None:
+    assert serial_to_date("inf") is None
+    assert serial_to_date("nan") is None
+    assert serial_to_date("1e400") is None

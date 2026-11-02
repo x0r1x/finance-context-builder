@@ -22,7 +22,7 @@ import re
 from collections import defaultdict
 
 from finance_context.excel.a1 import col_to_index
-from finance_context.layout.cells import _cell_at, _text
+from finance_context.layout.cells import _cell_at, _text, parse_number
 from finance_context.layout.models import AxisPeriod
 from finance_context.layout.periods import is_calendar_key, marker_token, normalize_header
 from finance_context.layout.units import is_unit_text
@@ -577,10 +577,7 @@ def _diff_or_ratio(own: float, left: float, right: float) -> bool:
 def _number(text: str | None) -> float | None:
     if text is None:
         return None
-    try:
-        return float(text.replace("\xa0", "").replace(" ", "").replace(",", "."))
-    except ValueError:
-        return None
+    return parse_number(text)
 
 
 def _close(left: float, right: float) -> bool:

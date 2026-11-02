@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from datetime import date, timedelta
 
@@ -40,7 +41,7 @@ def serial_to_date(serial: float | int | str, *, date1904: bool = False) -> date
         value = float(str(serial).replace(" ", "").replace(",", "."))
     except ValueError:
         return None
-    if value != value:  # NaN
+    if not math.isfinite(value):
         return None
     day = int(value)
     if date1904:
