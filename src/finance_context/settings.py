@@ -166,6 +166,10 @@ class Settings(BaseSettings):
     # Optional key prefix inside the bucket. Empty is books/{job_id}/...
     minio_prefix: str = ""
     minio_region: str = "us-east-1"
+    # Set only for temporary credentials. A static key leaves this empty.
+    minio_session_token: SecretStr | None = None
+    # Set only when the bucket requires an SSE-KMS key. Empty sends no header.
+    minio_kms_key_id: str = ""
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -330,17 +334,31 @@ class Settings(BaseSettings):
             raise ValueError(f"{name} must be a string")
         return value.strip()
 
-    @field_validator("minio_secret_key", mode="before")
+    @field_validator("minio_endpoint")
+    @classmethod
+    def minio_endpoint_is_a_host(cls, value: str) -> str:
+        if not value:
+            return value
+        parts = urlsplit(value)
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            raise ValueError("MINIO_ENDPOINT must start with http:// or https://")
+        if parts.username or parts.password:
+            raise ValueError("MINIO_ENDPOINT must not include credentials")
+        if parts.path not in {"", "/"} or parts.query or parts.fragment:
+            raise ValueError("MINIO_ENDPOINT must be a host and port, not a path")
+        return value
+
+    @field_validator("minio_secret_key", "minio_session_token", mode="before")
     @classmethod
     def empty_minio_secret(cls, value: object, info: ValidationInfo) -> object:
-        del info
+        name = info.field_name.upper()
         if value is None:
             return None
         if isinstance(value, SecretStr):
             return None if value.get_secret_value() == "" else value
         if isinstance(value, str):
             return None if value.strip() == "" else value.strip()
-        raise ValueError("MINIO_SECRET_KEY must be a string")
+        raise ValueError(f"{name} must be a string")
 
     @field_validator("minio_prefix", mode="before")
     @classmethod
@@ -369,6 +387,19 @@ class Settings(BaseSettings):
         token = value.strip()
         if any(char.isspace() for char in token):
             raise ValueError("MINIO_REGION must be a single token")
+        return token
+
+    @field_validator("minio_kms_key_id", mode="before")
+    @classmethod
+    def empty_minio_kms_key(cls, value: object, info: ValidationInfo) -> str:
+        del info
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError("MINIO_KMS_KEY_ID must be a string")
+        token = value.strip()
+        if any(char.isspace() for char in token) or "\\" in token:
+            raise ValueError("MINIO_KMS_KEY_ID must be a single token")
         return token
 
     @field_validator("queue_name", mode="before")

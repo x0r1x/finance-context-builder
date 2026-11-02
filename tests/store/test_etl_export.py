@@ -16,6 +16,7 @@ from finance_context.app.pipeline import Pipeline, _append_export_warning
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import (
     DuckDBBatch,
+    _configure_s3,
     export_succeeded_book,
     object_key,
     read_blob_bytes,
@@ -159,6 +160,47 @@ def test_partial_and_blank_minio_fields_fail_startup() -> None:
     settings = Settings(_env_file=None)
     assert settings.minio_configured() is False
     assert settings.minio_region == "us-east-1"
+    for bad in (
+        "minio:9000",
+        "https://s3.internal/s3",
+        "http://user:pass@minio:9000",
+        "http://minio:9000?x=1",
+    ):
+        with pytest.raises(ValidationError, match="MINIO_ENDPOINT"):
+            _minio(minio_endpoint=bad)
+    assert _minio(minio_endpoint="https://s3.internal:9000/").minio_endpoint == (
+        "https://s3.internal:9000/"
+    )
+
+
+def test_s3_secret_passes_token_and_kms_only_when_set() -> None:
+    class _Con:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def execute(self, sql: str, params: object = None) -> None:
+            self.calls.append((sql, params))
+
+    plain = _Con()
+    _configure_s3(plain, _minio())
+    sql, params = plain.calls[-1]
+    assert "SESSION_TOKEN" not in sql
+    assert "KMS_KEY_ID" not in sql
+    assert isinstance(params, list)
+
+    extra = _Con()
+    _configure_s3(
+        extra,
+        _minio(
+            minio_session_token="token-value",
+            minio_kms_key_id="arn:aws:kms:us-east-1:1:key/a",
+        ),
+    )
+    sql, params = extra.calls[-1]
+    assert "SESSION_TOKEN ?" in sql
+    assert "KMS_KEY_ID ?" in sql
+    assert isinstance(params, list)
+    assert params[-2:] == ["token-value", "arn:aws:kms:us-east-1:1:key/a"]
 
 
 def test_copy_failure_keeps_the_local_files_and_hides_the_secret(

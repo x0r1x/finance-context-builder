@@ -72,4 +72,6 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("MINIO_SECRET_KEY", "minio_secret_key"),
     EnvSpec("MINIO_PREFIX", "minio_prefix"),
     EnvSpec("MINIO_REGION", "minio_region"),
+    EnvSpec("MINIO_SESSION_TOKEN", "minio_session_token"),
+    EnvSpec("MINIO_KMS_KEY_ID", "minio_kms_key_id"),
 )

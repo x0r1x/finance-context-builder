@@ -25,6 +25,21 @@ def test_child_env_exports_the_minio_secret_value(monkeypatch: pytest.MonkeyPatc
     env = _child_env(settings)
     assert env["MINIO_SECRET_KEY"] == "minioadmin"
     assert env["MINIO_ENDPOINT"] == "http://minio:9000"
+    assert "MINIO_SESSION_TOKEN" not in env
+    assert env["MINIO_KMS_KEY_ID"] == ""
+    with_extra = _child_env(
+        Settings(
+            _env_file=None,
+            minio_endpoint="http://minio:9000",
+            minio_bucket="finance-context",
+            minio_access_key="minioadmin",
+            minio_secret_key="minioadmin",
+            minio_session_token="token-value",
+            minio_kms_key_id="arn:aws:kms:us-east-1:1:key/a",
+        )
+    )
+    assert with_extra["MINIO_SESSION_TOKEN"] == "token-value"
+    assert with_extra["MINIO_KMS_KEY_ID"] == "arn:aws:kms:us-east-1:1:key/a"
 
 
 def test_queue_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
