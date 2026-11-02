@@ -449,14 +449,56 @@ class EdgeCount:
         return self._n > 0
 
 
+# Low bits of a packed cell key. Kind is the cell-edge kind string, not a
+# coarser class: ``ref`` and ``range`` to the same target both stay.
+_KIND_CODE = {"ref": 1, "range": 2, "cross_sheet": 3, "external": 4, "dynamic": 5}
+_KIND_BITS = 4
+_ROW_BITS = 24
+_COL_BITS = 15  # 1..16384 is XFD; 15 bits still covers it
+_ROW_LIMIT = 1 << _ROW_BITS
+_COL_LIMIT = 1 << _COL_BITS
+
+
+def _pack_cell(target: str, sheet_ids: dict[str, int]) -> int | None:
+    """Positive key for a canonical ``Sheet!A1``, or None when the text is not one.
+
+    The key matches the target string. ``Sheet!$A$1`` and ``Sheet!A01`` do not
+    pack onto ``Sheet!A1``. A range node id contains ``:`` and does not pack.
+    """
+    if "!" not in target:
+        return None
+    sheet, body = target.rsplit("!", 1)
+    if ":" in body or "$" in body:
+        return None
+    try:
+        col, row = parse_addr(body)
+    except ValueError:
+        return None
+    if format_addr(col, row) != body or not (1 <= col < _COL_LIMIT and 1 <= row < _ROW_LIMIT):
+        return None
+    sheet_id = sheet_ids.get(sheet)
+    if sheet_id is None:
+        sheet_id = len(sheet_ids) + 1
+        sheet_ids[sheet] = sheet_id
+    return (
+        (sheet_id << (_COL_BITS + _ROW_BITS + _KIND_BITS))
+        | (col << (_ROW_BITS + _KIND_BITS))
+        | (row << _KIND_BITS)
+    )
+
+
 class _KeptEdgeWriter:
     """First ``(target, kind)`` of the current source, in emission order.
 
-    Each formula cell is one contiguous run, so the live key set is that run
-    only. A malformed sheet whose formula address comes back after another
-    formula starts a new run: a ``(source, target, kind)`` already written for
-    the first run is written again. Main's window dropped that repeat. Nothing
-    else about the row changes.
+    Each formula cell is one contiguous run. The live keys are one new set per
+    source: a packed int for a canonical cell id, or a negative int for any
+    other target text. The set is replaced when the source changes, so its size
+    follows the largest formula, not the book.
+
+    A malformed sheet whose formula address comes back after another formula
+    starts a new run: a ``(source, target, kind)`` already written for the first
+    run is written again. Main's window dropped that repeat. Nothing else about
+    the row changes.
 
     Parquet is still DuckDB ``COPY``. One ``write_parquet`` when the table fits
     in a group (or ``row_group_rows <= 0``). Otherwise full groups of
@@ -474,22 +516,61 @@ class _KeptEdgeWriter:
         self._first: list[list] | None = None
         self._writer: RowGroupWriter | None = None
         self._source: str | None = None
-        self._pairs: set[tuple[str, str]] = set()
+        self._keys: set[int] = set()
+        self._sheet_ids: dict[str, int] = {}
+        self._other_ids: dict[str, int] = {}
+        self._extra_kinds: dict[str, int] = {}
+        self._key_high = 0
+
+    def _new_keys(self) -> None:
+        self._key_high = max(self._key_high, len(self._keys))
+        self._keys = set()
+        self._sheet_ids = {}
+        self._other_ids = {}
+        self._extra_kinds = {}
+
+    def _kind_code(self, kind: str) -> int:
+        code = _KIND_CODE.get(kind)
+        if code is not None:
+            return code
+        found = self._extra_kinds.get(kind)
+        if found is not None:
+            return found
+        found = len(self._extra_kinds) + len(_KIND_CODE) + 1
+        self._extra_kinds[kind] = found
+        return found
+
+    def _key(self, target: str, kind: str) -> int:
+        kind_code = self._kind_code(kind)
+        packed = _pack_cell(target, self._sheet_ids)
+        if packed is not None and kind_code < (1 << _KIND_BITS):
+            return packed | kind_code
+        other = self._other_ids.get(target)
+        if other is None:
+            other = len(self._other_ids) + 1
+            self._other_ids[target] = other
+        return -((other << 8) | kind_code)
 
     def consume(self, columns: dict[str, list]) -> None:
         incoming = [columns[name] for name in self.names]
         sources = columns["source"]
         targets = columns["target"]
         kinds = columns["kind"]
+        keys = self._keys
+        source_now = self._source
         for index in range(len(sources)):
             source = sources[index]
-            if source != self._source:
+            if source != source_now:
+                self._new_keys()
+                keys = self._keys
+                source_now = source
                 self._source = source
-                self._pairs.clear()
-            key = (targets[index], kinds[index])
-            if key in self._pairs:
+            key = self._key(targets[index], kinds[index])
+            if key in keys:
                 continue
-            self._pairs.add(key)
+            keys.add(key)
+            if len(keys) > self._key_high:
+                self._key_high = len(keys)
             for col_index, column in enumerate(incoming):
                 self._buf[col_index].append(column[index])
             self._buf_n += 1
@@ -515,7 +596,7 @@ class _KeptEdgeWriter:
         self._first = None
 
     def abort(self) -> None:
-        self._pairs.clear()
+        self._new_keys()
         self._buf = []
         self._first = None
         writer = self._writer
@@ -524,7 +605,7 @@ class _KeptEdgeWriter:
             writer.__exit__(Exception, Exception(), None)
 
     def finish(self) -> int:
-        self._pairs.clear()
+        self._new_keys()
         if self.count == 0:
             write_parquet(self.path, IR_CELL_EDGE_COLUMNS, [], row_group_rows=self.row_group_rows)
             return 0

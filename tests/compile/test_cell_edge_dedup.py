@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import sys
+from itertools import islice
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
 
+from finance_context.formulas.csr import (
+    SheetUsage,
+    expand_cell_edges_column_batches,
+    expanded_edge_count,
+)
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.formulas.models import Edge
-from finance_context.formulas.stage import _write_cell_edge_batches
+from finance_context.formulas.stage import _KeptEdgeWriter, _write_cell_edge_batches
 from finance_context.store.fs import read_parquet
 
 
@@ -108,3 +115,113 @@ def test_empty_cell_edges_leave_no_dup(tmp_path: Path) -> None:
     path = _write(tmp_path / "empty", [], 8)
     assert read_parquet(path) == []
     assert not (tmp_path / "empty" / "ir" / "cell_edges.parquet.dup").exists()
+
+
+def test_packed_keys_match_source_target_kind(tmp_path: Path) -> None:
+    """First ``(source, target, kind)`` wins. Kind and target text both count.
+
+    ``S!$A$1`` is not the canonical id ``S!A1``, so both rows stay.
+    """
+    usage = SheetUsage(rows_by_col={"S": {}}, canonical={"s": "S"})
+    edges = [
+        Edge(kind="ref", source="S!B1", target="S!A1"),
+        Edge(kind="ref", source="S!B1", target="S!A1"),
+        Edge(kind="ref", source="S!B1", target="S!$A$1"),
+        Edge(kind="cross_sheet", source="S!B1", target="S!A1"),
+        Edge(kind="range", source="S!B1", target="S!A1"),
+        Edge(kind="ref", source="S!B1", target="Named"),
+        Edge(kind="ref", source="S!B1", target="Named"),
+        Edge(kind="range", source="S!B1", target="S!C1:C80"),
+    ]
+    expected: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    dest = tmp_path / "kinds"
+    dest.mkdir()
+    path = dest / "ir" / "cell_edges.parquet"
+    sink = _KeptEdgeWriter(path, 8)
+
+    def consume(columns: dict[str, list]) -> None:
+        for index in range(len(columns["source"])):
+            key = (columns["source"][index], columns["target"][index], columns["kind"][index])
+            if key in seen:
+                continue
+            seen.add(key)
+            expected.append(key)
+        sink.consume(columns)
+
+    expand_cell_edges_column_batches(
+        edges,
+        {"S!A1", "S!C1"},
+        known_sheets={"S"},
+        presence={},
+        usage=usage,
+        pool=None,
+        consume=consume,
+        batch_size=8,
+    )
+    assert all(isinstance(key, int) for key in sink._keys)
+    sink.finish()
+    kept = [(row["source"], row["target"], row["kind"]) for row in read_parquet(path)]
+    assert kept == expected
+    assert ("S!B1", "S!A1", "ref") in kept
+    assert ("S!B1", "S!$A$1", "ref") in kept
+    assert ("S!B1", "S!A1", "cross_sheet") in kept
+    assert ("S!B1", "S!A1", "range") in kept
+    assert ("S!B1", "Named", "ref") in kept
+    assert sum(1 for row in kept if row == ("S!B1", "S!A1", "ref")) == 1
+
+
+def test_huge_rectangle_is_one_range_node() -> None:
+    usage = SheetUsage(rows_by_col={"S": {}}, canonical={"s": "S"})
+    edge = Edge(kind="range", source="S!B1", target="S!A1:Z40000")
+    assert expanded_edge_count([edge], usage) == 1
+
+
+def test_million_edges_of_one_formula_bound_the_key_set(tmp_path: Path) -> None:
+    """One formula of 15,625 ranges of 64 cells: 1,000,000 expanded edges.
+
+    A rectangle bigger than ``RANGE_NODE_MIN_CELLS`` (64) is one range node, and
+    ``RANGE_EXPAND_CAP`` (2000) cuts a range that still expands. 64 is the
+    largest block main still expands on a sheet it knows. The next formula
+    replaces the set.
+    """
+    usage = SheetUsage(rows_by_col={"S": {}}, canonical={"s": "S"})
+    span = 64
+    count = 1_000_000 // span
+    edges = [
+        Edge(kind="range", source="S!B1", target=f"S!A{start}:A{start + span - 1}")
+        for start in range(1, count * span, span)
+    ]
+    assert expanded_edge_count(edges, usage) == 1_000_000
+    dest = tmp_path / "million"
+    dest.mkdir()
+    sink = _KeptEdgeWriter(dest / "ir" / "cell_edges.parquet", 65536)
+    expand_cell_edges_column_batches(
+        edges,
+        set(),
+        known_sheets={"S"},
+        presence={},
+        usage=usage,
+        pool={},
+        consume=sink.consume,
+        batch_size=65536,
+    )
+    assert len(sink._keys) == 1_000_000
+    assert sink._other_ids == {}
+    assert all(isinstance(key, int) and key > 0 for key in islice(sink._keys, 8))
+    sample = next(iter(sink._keys))
+    set_bytes = sys.getsizeof(sink._keys) + len(sink._keys) * sys.getsizeof(sample)
+    assert set_bytes < 80 * 1024 * 1024
+    expand_cell_edges_column_batches(
+        [Edge(kind="ref", source="S!B2", target="S!A1")],
+        set(),
+        known_sheets={"S"},
+        presence={},
+        usage=usage,
+        pool={},
+        consume=sink.consume,
+        batch_size=65536,
+    )
+    assert len(sink._keys) == 1
+    assert sink._key_high == 1_000_000
+    sink.abort()
