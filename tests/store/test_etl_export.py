@@ -17,6 +17,7 @@ from finance_context.settings import Settings
 from finance_context.store.duckdb_io import (
     _IMAGE_HTTPFS,
     DuckDBBatch,
+    DuckDBObjectStore,
     _configure_s3,
     _sql_literal,
     export_succeeded_book,
@@ -827,3 +828,91 @@ def test_compose_documents_minio_without_starting_it_in_production() -> None:
     assert "bitnamilegacy/" not in override
     assert "pgsty/" not in override
     assert dockerfile.index("USER app") < dockerfile.index("INSTALL httpfs")
+
+
+def test_blob_size_query_projects_size_only(tmp_path: Path) -> None:
+    path = tmp_path / "blob.bin"
+    path.write_bytes(b"abc")
+    import duckdb
+
+    from finance_context.store.duckdb_io import _OBJECT_SIZE_SQL
+
+    con = duckdb.connect()
+    try:
+        row = con.execute(f"EXPLAIN {_OBJECT_SIZE_SQL}", [str(path)]).fetchone()
+        text = "\n".join(str(cell) for cell in row)
+        assert "Projections: size" in text
+        assert "content" not in text
+        assert con.execute(_OBJECT_SIZE_SQL, [str(path)]).fetchone() == (3,)
+    finally:
+        con.close()
+
+
+def test_object_size_rejects_a_null_length(monkeypatch: pytest.MonkeyPatch) -> None:
+    from contextlib import contextmanager
+
+    from finance_context.store.duckdb_io import _OBJECT_SIZE_SQL
+
+    captured: list[str] = []
+
+    class _Cursor:
+        def fetchone(self) -> tuple[None]:
+            return (None,)
+
+    class _Con:
+        def execute(self, sql: str, params: object = None) -> _Cursor:
+            del params
+            captured.append(sql)
+            return _Cursor()
+
+    @contextmanager
+    def _conn():
+        yield _Con()
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.limited_connection", _conn)
+    monkeypatch.setattr("finance_context.store.duckdb_io._configure_s3", lambda con, settings: None)
+    store = DuckDBObjectStore(_minio())
+    with pytest.raises(OSError, match="missing object"):
+        store.size("s3://finance-context/books/job/raw/cells.parquet")
+    assert captured == [_OBJECT_SIZE_SQL]
+
+
+def test_export_logs_its_own_duration(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    caplog.set_level(logging.INFO, logger="finance_context.store")
+    assert (
+        export_succeeded_book(
+            _minio(),
+            job_id=_JOB,
+            book=book,
+            dest=dest,
+            store=_MemoryStore(),
+        )
+        is None
+    )
+    events = [getattr(record, "event", None) for record in caplog.records]
+    assert "export_start" in events
+    assert "export_done" in events
+    done = next(
+        record for record in caplog.records if getattr(record, "event", None) == "export_done"
+    )
+    assert done.ok is True
+    assert isinstance(done.duration_ms, int)
+    assert done.objects == len(_SHARED) + len(_SESSION)
+
+    caplog.clear()
+    assert (
+        export_succeeded_book(
+            Settings(_env_file=None),
+            job_id=_JOB,
+            book=book,
+            dest=dest,
+            store=_MemoryStore(),
+        )
+        is None
+    )
+    assert [getattr(record, "event", None) for record in caplog.records] == []
