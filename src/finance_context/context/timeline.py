@@ -4,6 +4,7 @@ import re
 from collections import Counter
 
 from finance_context.excel.dates import is_date_format
+from finance_context.layout.cells import parse_number
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis, is_series_column
 from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import (
@@ -83,11 +84,7 @@ def _period_warning_text(cell: dict, date1904: bool) -> str | None:
 
 
 def _plain_number(text: str) -> bool:
-    try:
-        float(text.replace(" ", "").replace(",", "."))
-    except ValueError:
-        return False
-    return True
+    return parse_number(text) is not None
 
 
 def _explicit_numeric_format(fmt: str) -> bool:
@@ -99,9 +96,8 @@ def _explicit_numeric_format(fmt: str) -> bool:
 
 def _displayed_number(value: str, fmt: str) -> str | None:
     """Excel's shown digits for a simple ``0`` / ``0.0`` / ``#,##0.00`` format."""
-    try:
-        number = float(value.replace(" ", "").replace(",", "."))
-    except ValueError:
+    number = parse_number(value)
+    if number is None:
         return None
     token = _FORMAT_NOISE.sub("", fmt.split(";", 1)[0])
     percent = "%" in token
@@ -282,8 +278,6 @@ def _flag_on(
     blob = (text or "").strip().replace(",", ".")
     if blob in {"1", "1.0", "true", "yes"}:
         return True
-    try:
-        return abs(float(blob) - 1.0) < 1e-9
-    except ValueError:
-        return False
+    number = parse_number(blob)
+    return number is not None and abs(number - 1.0) < 1e-9
 

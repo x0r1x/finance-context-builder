@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from finance_context.excel.a1 import col_to_index
-from finance_context.layout.cells import _cell_at, _text
+from finance_context.layout.cells import _cell_at, _text, parse_number
 from finance_context.layout.format_words import is_total_word
 from finance_context.layout.models import AxisPeriod
 
@@ -188,10 +188,7 @@ def _period_sum(cells: dict[int, dict], cols: set[int], date1904: bool) -> float
 def _number(text: str | None) -> float | None:
     if not text:
         return None
-    try:
-        return float(text.replace(" ", "").replace(",", "."))
-    except ValueError:
-        return None
+    return parse_number(text)
 
 
 def _close(left: float, right: float) -> bool:

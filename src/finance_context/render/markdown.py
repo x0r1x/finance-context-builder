@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from finance_context.context.measure import Measure
 from finance_context.context.series import format_number
 from finance_context.excel.a1 import index_to_col
+from finance_context.layout.cells import parse_number
 from finance_context.models.context import (
     BlockRow,
     ContextAxis,
@@ -459,22 +461,20 @@ def _cell_addr(row: BlockRow, period: dict) -> str:
 
 
 def _percent_amount(text: str) -> str | None:
-    cleaned = text.strip().replace(" ", "").replace(",", "")
-    if not cleaned:
+    number = parse_number(text)
+    if number is None:
         return None
-    try:
-        number = float(cleaned)
-    except ValueError:
+    scaled = number * 100
+    if not math.isfinite(scaled):
         return None
-    return format_number(number * 100)
+    return format_number(scaled)
 
 
 def _differs(text: str, normalized: str) -> bool:
     """Show the base-unit amount only when scale changes it, not when formatting does."""
-    try:
-        value = float(text.replace(",", ""))
-        base = float(normalized.replace(",", ""))
-    except ValueError:
+    value = parse_number(text)
+    base = parse_number(normalized)
+    if value is None or base is None:
         return normalized != text
     return abs(value - base) > 1e-9 * max(1.0, abs(value), abs(base))
 

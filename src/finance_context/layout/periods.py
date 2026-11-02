@@ -973,16 +973,13 @@ def _key_as_date(key: str) -> date | None:
 
 
 def _is_time_factor(raw: str) -> bool:
-    try:
-        value = float(raw.replace(" ", "").replace(",", "."))
-    except ValueError:
-        return False
-    return 0 < value < 1
+    from finance_context.layout.cells import parse_number
+
+    value = parse_number(raw)
+    return value is not None and 0 < value < 1
 
 
 def _is_int_token(raw: str) -> bool:
-    try:
-        value = float(raw.replace(" ", "").replace(",", "."))
-    except ValueError:
-        return False
-    return value == int(value)
+    from finance_context.layout.cells import parse_int
+
+    return parse_int(raw) is not None

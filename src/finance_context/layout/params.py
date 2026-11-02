@@ -4,6 +4,7 @@ import re
 from collections import Counter, defaultdict
 
 from finance_context.excel.a1 import format_addr, in_grid, index_to_col, parse_addr
+from finance_context.layout.cells import parse_number
 from finance_context.layout.format_words import header_role_map
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text, period_like_header
@@ -210,9 +211,11 @@ def _case_run(
         for cell in sorted(by_row[row.row], key=lambda item: int(item["col"])):
             col = int(cell["col"])
             text = _text(cell, date1904)
-            if col not in period_cols or not text or not _is_number(text):
+            if col not in period_cols or not text:
                 continue
-            value = float(text.replace(",", "."))
+            value = parse_number(text)
+            if value is None:
+                continue
             if value == len(run) + 1 and (not run or col == run[-1] + 1):
                 run.append(col)
             else:
@@ -1243,11 +1246,7 @@ def _text(cell: dict | None, date1904: bool) -> str | None:
 
 
 def _is_number(text: str) -> bool:
-    try:
-        float(text.replace(" ", "").replace(",", "."))
-    except ValueError:
-        return False
-    return True
+    return parse_number(text) is not None
 
 
 def _separate_value_keys(headers: list[AxisHeader]) -> list[AxisHeader]:
