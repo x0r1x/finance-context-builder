@@ -15,8 +15,10 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from finance_context.app.pipeline import Pipeline, _append_export_warning
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import (
+    _IMAGE_HTTPFS,
     DuckDBBatch,
     _configure_s3,
+    _sql_literal,
     export_succeeded_book,
     object_key,
     read_blob_bytes,
@@ -185,11 +187,43 @@ def test_s3_secret_passes_the_region() -> None:
 
     con = _Con()
     _configure_s3(con, _minio(minio_region="eu-central-1"))
+    sqls = [sql for sql, _params in con.calls]
+    assert sqls[0] == "SET autoinstall_known_extensions=false"
+    assert sqls[1] == "SET autoload_known_extensions=false"
+    assert "LOAD httpfs" in sqls
+    assert all("INSTALL" not in sql for sql in sqls)
+    assert all("SET extension_directory=" not in sql for sql in sqls)
+    if _IMAGE_HTTPFS.is_dir():
+        assert sqls[2].startswith("SET extension_directories=")
+        assert sqls[3] == "LOAD httpfs"
+    else:
+        assert all("extension_directories" not in sql for sql in sqls)
+        assert sqls[2] == "LOAD httpfs"
     sql, params = con.calls[-1]
     assert "REGION ?" in sql
     assert "SESSION_TOKEN" not in sql
     assert "KMS_KEY_ID" not in sql
     assert params == ["minioadmin", _SECRET, "eu-central-1", "minio:9000", False]
+
+
+def test_s3_secret_uses_the_image_extension_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("finance_context.store.duckdb_io._IMAGE_HTTPFS", tmp_path)
+
+    class _Con:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def execute(self, sql: str, params: object = None) -> None:
+            self.calls.append((sql, params))
+
+    con = _Con()
+    _configure_s3(con, _minio())
+    sqls = [sql for sql, _params in con.calls]
+    assert sqls[2] == "SET extension_directories=[" + _sql_literal(str(tmp_path)) + "]"
+    assert sqls[3] == "LOAD httpfs"
+    assert all("INSTALL" not in sql for sql in sqls)
 
 
 def test_copy_failure_keeps_the_local_files_and_hides_the_secret(

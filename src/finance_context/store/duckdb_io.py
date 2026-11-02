@@ -644,6 +644,10 @@ def _put_marker(store: ObjectStore, bucket: str, key: str, uploaded: list[str]) 
             raise OSError(f"size mismatch for {url}")
 
 
+# Image build installs httpfs here. The process only loads that file.
+_IMAGE_HTTPFS = Path("/app/.duckdb/extensions")
+
+
 def _configure_s3(con: Any, settings: Settings | None) -> None:
     if settings is None or not settings.minio_configured():
         raise RuntimeError("MINIO settings are empty")
@@ -651,7 +655,11 @@ def _configure_s3(con: Any, settings: Settings | None) -> None:
     secret = ""
     if settings.minio_secret_key is not None:
         secret = settings.minio_secret_key.get_secret_value()
-    con.execute("INSTALL httpfs")
+    # Autoload would download a missing httpfs. The image already has the file.
+    con.execute("SET autoinstall_known_extensions=false")
+    con.execute("SET autoload_known_extensions=false")
+    if _IMAGE_HTTPFS.is_dir():
+        con.execute("SET extension_directories=[" + _sql_literal(str(_IMAGE_HTTPFS)) + "]")
     con.execute("LOAD httpfs")
     con.execute(
         """
