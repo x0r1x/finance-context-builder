@@ -165,6 +165,8 @@ class Settings(BaseSettings):
     minio_secret_key: SecretStr | None = None
     # Optional key prefix inside the bucket. Empty is books/{job_id}/...
     minio_prefix: str = ""
+    # SigV4 region. Empty becomes us-east-1, which is what MinIO expects.
+    minio_region: str = "us-east-1"
 
     @field_validator("max_concurrent_jobs", mode="before")
     @classmethod
@@ -370,6 +372,19 @@ class Settings(BaseSettings):
         if any(part in {".", ".."} for part in parts):
             raise ValueError("MINIO_PREFIX must be a relative path")
         return "/".join(parts)
+
+    @field_validator("minio_region", mode="before")
+    @classmethod
+    def default_minio_region(cls, value: object, info: ValidationInfo) -> str:
+        del info
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "us-east-1"
+        if not isinstance(value, str):
+            raise ValueError("MINIO_REGION must be a string")
+        token = value.strip()
+        if any(char.isspace() for char in token):
+            raise ValueError("MINIO_REGION must be a single token")
+        return token
 
     @field_validator("queue_name", mode="before")
     @classmethod

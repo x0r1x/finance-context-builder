@@ -659,12 +659,13 @@ def _configure_s3(con: Any, settings: Settings | None) -> None:
             TYPE s3,
             KEY_ID ?,
             SECRET ?,
+            REGION ?,
             ENDPOINT ?,
             URL_STYLE 'path',
             USE_SSL ?
         )
         """,
-        [settings.minio_access_key, secret, endpoint, use_ssl],
+        [settings.minio_access_key, secret, settings.minio_region, endpoint, use_ssl],
     )
 
 

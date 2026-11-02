@@ -81,6 +81,7 @@ def _minio(**overrides: object) -> Settings:
         "minio_access_key": "minioadmin",
         "minio_secret_key": _SECRET,
         "minio_prefix": "team/a",
+        "minio_region": "us-east-1",
     }
     fields.update(overrides)
     return Settings(_env_file=None, **fields)  # type: ignore[arg-type]
@@ -158,6 +159,9 @@ def test_partial_and_blank_minio_fields_fail_startup() -> None:
         _minio(minio_prefix="team/../secret")
     settings = Settings(_env_file=None)
     assert settings.minio_configured() is False
+    assert settings.minio_region == "us-east-1"
+    assert _minio(minio_region="  ").minio_region == "us-east-1"
+    assert _minio(minio_region=" eu-central-1 ").minio_region == "eu-central-1"
     for bad in (
         "minio:9000",
         "https://s3.internal/s3",
@@ -171,7 +175,7 @@ def test_partial_and_blank_minio_fields_fail_startup() -> None:
     )
 
 
-def test_s3_secret_leaves_region_token_and_kms_to_duckdb() -> None:
+def test_s3_secret_passes_the_region() -> None:
     class _Con:
         def __init__(self) -> None:
             self.calls: list[tuple[str, object]] = []
@@ -180,12 +184,12 @@ def test_s3_secret_leaves_region_token_and_kms_to_duckdb() -> None:
             self.calls.append((sql, params))
 
     con = _Con()
-    _configure_s3(con, _minio())
+    _configure_s3(con, _minio(minio_region="eu-central-1"))
     sql, params = con.calls[-1]
-    assert "REGION" not in sql
+    assert "REGION ?" in sql
     assert "SESSION_TOKEN" not in sql
     assert "KMS_KEY_ID" not in sql
-    assert params == ["minioadmin", _SECRET, "minio:9000", False]
+    assert params == ["minioadmin", _SECRET, "eu-central-1", "minio:9000", False]
 
 
 def test_copy_failure_keeps_the_local_files_and_hides_the_secret(

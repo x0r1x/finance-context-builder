@@ -58,6 +58,7 @@ services:
       MINIO_BUCKET: finance-context
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
+      MINIO_REGION: us-east-1
     depends_on:
       minio-init:
         condition: service_completed_successfully

@@ -13,8 +13,8 @@ services:
     # JOB_TIMEOUT_SEC (defaults 300 and 3600) so a hung soffice fails the job
     # before the server stops the process.
     # Optional MinIO copy: MINIO_ENDPOINT, MINIO_BUCKET, MINIO_ACCESS_KEY,
-    # MINIO_SECRET_KEY, and MINIO_PREFIX. The endpoint is http:// or https://
-    # plus a host and port. Leave the first four
+    # MINIO_SECRET_KEY, MINIO_PREFIX, and MINIO_REGION. The endpoint is
+    # http:// or https:// plus a host and port. Leave the first four
     # unset and DuckDB stays on DATA_DIR. Set all four together in the env
     # file. This file does not start MinIO and does not interpolate MINIO_*.
     # The healthcheck only calls /healthz.
