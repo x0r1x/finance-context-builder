@@ -8,6 +8,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any, Protocol
 
 import pyarrow as pa
 
+from finance_context.observability import log_event
 from finance_context.settings import Settings
 from finance_context.store.paths import shared_book_dir
 
@@ -466,6 +468,15 @@ def _export_body(
     pairs.extend((dest / name, name) for name in _SESSION)
     marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
     uploaded: list[str] = []
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "export_start",
+        "minio export started",
+        objects=len(pairs),
+    )
+    started = time.monotonic()
+    warning: str | None = None
     try:
         _put_marker(target, settings.minio_bucket, marker_key, [])
         for local, relative in pairs:
@@ -487,8 +498,17 @@ def _export_body(
                     "minio export failed for _complete.json",
                     detail=_s3_failure(clear_exc)[1],
                 )
-        return _EXPORT_WARNING
-    return None
+        warning = _EXPORT_WARNING
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "export_done",
+        "minio export done",
+        duration_ms=int((time.monotonic() - started) * 1000),
+        objects=len(uploaded),
+        ok=warning is None,
+    )
+    return warning
 
 
 def _export_warning_recorded(local: Path, relative: str) -> bool:

@@ -875,3 +875,44 @@ def test_object_size_rejects_a_null_length(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(OSError, match="missing object"):
         store.size("s3://finance-context/books/job/raw/cells.parquet")
     assert captured == [_OBJECT_SIZE_SQL]
+
+
+def test_export_logs_its_own_duration(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    caplog.set_level(logging.INFO, logger="finance_context.store")
+    assert (
+        export_succeeded_book(
+            _minio(),
+            job_id=_JOB,
+            book=book,
+            dest=dest,
+            store=_MemoryStore(),
+        )
+        is None
+    )
+    events = [getattr(record, "event", None) for record in caplog.records]
+    assert "export_start" in events
+    assert "export_done" in events
+    done = next(
+        record for record in caplog.records if getattr(record, "event", None) == "export_done"
+    )
+    assert done.ok is True
+    assert isinstance(done.duration_ms, int)
+    assert done.objects == len(_SHARED) + len(_SESSION)
+
+    caplog.clear()
+    assert (
+        export_succeeded_book(
+            Settings(_env_file=None),
+            job_id=_JOB,
+            book=book,
+            dest=dest,
+            store=_MemoryStore(),
+        )
+        is None
+    )
+    assert [getattr(record, "event", None) for record in caplog.records] == []
