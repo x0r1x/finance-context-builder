@@ -43,6 +43,7 @@ _SESSION = (
     "meta/meta.json",
 )
 _EXPORT_WARNING = "minio export failed"
+_OBJECT_SIZE_SQL = "SELECT size FROM read_blob(?)"
 _HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
 _S3_LINE = re.compile(r"(?m)^([A-Z][A-Za-z0-9]+): ([^\r\n]{1,160})")
 _publish_held = threading.local()
@@ -520,10 +521,7 @@ class DuckDBObjectStore:
     def size(self, url: str) -> int:
         with limited_connection() as con:
             _configure_s3(con, self._settings)
-            row = con.execute(
-                "SELECT octet_length(content) FROM read_blob(?)",
-                [url],
-            ).fetchone()
+            row = con.execute(_OBJECT_SIZE_SQL, [url]).fetchone()
         if row is None or row[0] is None:
             raise OSError(f"missing object {url}")
         return int(row[0])
