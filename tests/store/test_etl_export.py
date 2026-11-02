@@ -16,6 +16,7 @@ from finance_context.app.pipeline import Pipeline, _append_export_warning
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import (
     DuckDBBatch,
+    _configure_s3,
     export_succeeded_book,
     object_key,
     read_blob_bytes,
@@ -53,11 +54,13 @@ class _MemoryStore:
     def __init__(self, *, fail: Exception | None = None, mismatch: bool = False) -> None:
         self.objects: dict[str, bytes] = {}
         self.order: list[str] = []
+        self.attempts = 0
         self.fail = fail
         self.mismatch = mismatch
         self.fail_on: str | None = None
 
     def put(self, local: Path, url: str) -> None:
+        self.attempts += 1
         if self.fail is not None:
             raise self.fail
         if self.fail_on is not None and self.fail_on in url:
@@ -157,6 +160,36 @@ def test_partial_and_blank_minio_fields_fail_startup() -> None:
     settings = Settings(_env_file=None)
     assert settings.minio_configured() is False
     assert settings.minio_region == "us-east-1"
+    assert _minio(minio_region="  ").minio_region == "us-east-1"
+    assert _minio(minio_region=" eu-central-1 ").minio_region == "eu-central-1"
+    for bad in (
+        "minio:9000",
+        "https://s3.internal/s3",
+        "http://user:pass@minio:9000",
+        "http://minio:9000?x=1",
+    ):
+        with pytest.raises(ValidationError, match="MINIO_ENDPOINT"):
+            _minio(minio_endpoint=bad)
+    assert _minio(minio_endpoint="https://s3.internal:9000/").minio_endpoint == (
+        "https://s3.internal:9000/"
+    )
+
+
+def test_s3_secret_passes_the_region() -> None:
+    class _Con:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def execute(self, sql: str, params: object = None) -> None:
+            self.calls.append((sql, params))
+
+    con = _Con()
+    _configure_s3(con, _minio(minio_region="eu-central-1"))
+    sql, params = con.calls[-1]
+    assert "REGION ?" in sql
+    assert "SESSION_TOKEN" not in sql
+    assert "KMS_KEY_ID" not in sql
+    assert params == ["minioadmin", _SECRET, "eu-central-1", "minio:9000", False]
 
 
 def test_copy_failure_keeps_the_local_files_and_hides_the_secret(
@@ -177,6 +210,7 @@ def test_copy_failure_keeps_the_local_files_and_hides_the_secret(
     assert warning == "minio export failed"
     assert _SECRET not in warning
     assert _SECRET not in caplog.text
+    assert store.attempts == 2
     assert store.order == []
     assert (dest / "meta" / "meta.json").is_file()
     mismatch = _MemoryStore(mismatch=True)
@@ -187,6 +221,59 @@ def test_copy_failure_keeps_the_local_files_and_hides_the_secret(
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
     assert mismatch.order == [prefix + "_complete.json", prefix + "_complete.json"]
     assert json.loads(mismatch.objects[prefix + "_complete.json"])["keys"] == []
+
+
+_DENIED = (
+    "HTTP Error: HTTP PUT error uploading to 's3://bucket/books/job/_complete.json' "
+    "(HTTP 403 Forbidden)\n\n"
+    "AccessDenied: Access Denied.\n\n"
+    "Authentication Failure - this is usually caused by invalid or missing credentials.\n"
+    "* Credentials are provided, but they did not work.\n"
+)
+
+
+def test_access_denied_is_logged_once_without_the_duckdb_essay(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore(fail=RuntimeError(_DENIED))
+    caplog.set_level(logging.WARNING, logger="finance_context.store")
+    assert (
+        export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store)
+        == "minio export failed"
+    )
+    assert store.attempts == 1
+    assert "HTTP 403 AccessDenied: Access Denied." in caplog.text
+    assert "Authentication Failure" not in caplog.text
+    assert "Credentials are provided" not in caplog.text
+    assert "minio export failed for _complete.json" not in caplog.text
+
+
+_SLOW = (
+    "HTTP Error: HTTP PUT error uploading to 's3://bucket/books/job/_complete.json' "
+    "(HTTP 500 Internal Server Error)\n\n"
+    "SlowDown: Please reduce your request rate.\n\n"
+    "Authentication Failure - this is usually caused by invalid or missing credentials.\n"
+)
+
+
+def test_http_500_retries_the_marker_and_logs_the_s3_code(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore(fail=RuntimeError(_SLOW))
+    caplog.set_level(logging.WARNING, logger="finance_context.store")
+    assert (
+        export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store)
+        == "minio export failed"
+    )
+    assert store.attempts == 2
+    assert "HTTP 500 SlowDown: Please reduce your request rate." in caplog.text
+    assert "Authentication Failure" not in caplog.text
 
 
 def test_local_read_blob_does_not_open_duckdb(

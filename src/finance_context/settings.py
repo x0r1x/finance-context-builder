@@ -165,6 +165,7 @@ class Settings(BaseSettings):
     minio_secret_key: SecretStr | None = None
     # Optional key prefix inside the bucket. Empty is books/{job_id}/...
     minio_prefix: str = ""
+    # SigV4 region. Empty becomes us-east-1, which is what MinIO expects.
     minio_region: str = "us-east-1"
 
     @field_validator("max_concurrent_jobs", mode="before")
@@ -329,6 +330,20 @@ class Settings(BaseSettings):
         if not isinstance(value, str):
             raise ValueError(f"{name} must be a string")
         return value.strip()
+
+    @field_validator("minio_endpoint")
+    @classmethod
+    def minio_endpoint_is_a_host(cls, value: str) -> str:
+        if not value:
+            return value
+        parts = urlsplit(value)
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            raise ValueError("MINIO_ENDPOINT must start with http:// or https://")
+        if parts.username or parts.password:
+            raise ValueError("MINIO_ENDPOINT must not include credentials")
+        if parts.path not in {"", "/"} or parts.query or parts.fragment:
+            raise ValueError("MINIO_ENDPOINT must be a host and port, not a path")
+        return value
 
     @field_validator("minio_secret_key", mode="before")
     @classmethod
