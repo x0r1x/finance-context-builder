@@ -498,7 +498,8 @@ class _KeptEdgeWriter:
     A malformed sheet whose formula address comes back after another formula
     starts a new run: a ``(source, target, kind)`` already written for the first
     run is written again. Main's window dropped that repeat. Nothing else about
-    the row changes.
+    the row changes. Parse counts that sheet in file order and context keeps
+    the one warning ahead of the 50-line cap.
 
     Parquet is still DuckDB ``COPY``. One ``write_parquet`` when the table fits
     in a group (or ``row_group_rows <= 0``). Otherwise full groups of

@@ -119,7 +119,14 @@ def build_context(
         hidden_warnings = _hidden_warnings(workbook_meta, cells)
     else:
         hidden_warnings = _hidden_warnings_from_indexes(workbook_meta, hidden_indexes)
-    warnings: list[str] = []
+    # One line per malformed sheet. First, so warnings[:50] cannot drop them
+    # behind per-block notes.
+    stored_order = workbook_meta.get("cell_order_warnings") or []
+    warnings: list[str] = (
+        [item for item in stored_order if isinstance(item, str) and item]
+        if isinstance(stored_order, list)
+        else []
+    )
     formula_count = 0
     missing_cached = 0
     unparsed = 0

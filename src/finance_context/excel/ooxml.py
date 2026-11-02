@@ -245,8 +245,9 @@ def parse_ooxml(
 
     cells: list[RawCell] = []
     presence: list[CellPresence] = []
+    order = _CellOrder()
     for sheet in sheets:
-        parsed, sheet_presence = _parse_sheet(zf, sheet, sst, formats, indents)
+        parsed, sheet_presence = _parse_sheet(zf, sheet, sst, formats, indents, order)
         cells.extend(parsed)
         presence.extend(sheet_presence)
 
@@ -261,6 +262,7 @@ def parse_ooxml(
         iterate=iterate,
         date1904=date1904,
         defined_names=names,
+        cell_order_warnings=order.warnings(),
     )
     return cells, meta, presence
 
@@ -402,12 +404,48 @@ def _local_sheet(local_sheet_id: str | None, sheet_names: list[str]) -> str | No
     return sheet_names[index]
 
 
+class _CellOrder:
+    """Last ``(row, col)`` of each sheet, in the order ``<c>`` elements are read.
+
+    Streaming and DOM both walk ``sheetData/row`` and then ``c`` in document
+    order. They do not sort. A kept cell is appended in that same order. A
+    styled blank is read here and is not stored as a cell. A ``<c>`` that is
+    not inside a row is not read. One pair per sheet, plus up to three samples.
+    """
+
+    def __init__(self) -> None:
+        self._last: dict[str, tuple[int, int]] = {}
+        self._counts: dict[str, int] = {}
+        self._samples: dict[str, list[str]] = {}
+
+    def see(self, sheet: str, col: int, row: int, addr: str) -> None:
+        previous = self._last.get(sheet)
+        self._last[sheet] = (row, col)
+        if previous is None or (row, col) > previous:
+            return
+        self._counts[sheet] = self._counts.get(sheet, 0) + 1
+        samples = self._samples.setdefault(sheet, [])
+        if len(samples) < 3:
+            samples.append(f"{sheet}!{addr}")
+
+    def warnings(self) -> list[str]:
+        lines: list[str] = []
+        for sheet, count in self._counts.items():
+            sample = ", ".join(self._samples[sheet])
+            lines.append(
+                f"{count} cell(s) out of order or repeated on sheet {sheet} "
+                f"(e.g. {sample}); duplicate formula edges possible"
+            )
+        return lines
+
+
 def _parse_sheet(
     zf: zipfile.ZipFile,
     sheet: _SheetParse,
     sst: list[str],
     formats: list[str | None],
     indents: list[int],
+    order: _CellOrder,
 ) -> tuple[list[RawCell], list[CellPresence]]:
     member = zip_member(zf, sheet.part)
     if member is None:
@@ -457,6 +495,7 @@ def _parse_sheet(
                 if cell_presence is not None:
                     addr, kind = cell_presence
                     col, row = parse_addr(addr)
+                    order.see(sheet.info.name, col, row, addr)
                     for item in _presence_events(runs, col, row, kind):
                         add_presence(*item)
                 if built is None:
@@ -822,8 +861,9 @@ def parse_ooxml_columns(
                 )
             )
     has_xlm = has_xlm or any("/macrosheets/" in path for path in nameset)
+    order = _CellOrder()
     for sheet in sheets:
-        _parse_sheet_stream(zf, sheet, sst, formats, indents, cells, presence)
+        _parse_sheet_stream(zf, sheet, sst, formats, indents, cells, presence, order)
     return WorkbookMeta(
         sheets=[sheet.info for sheet in sheets],
         has_vba=has_vba,
@@ -833,6 +873,7 @@ def parse_ooxml_columns(
         iterate=iterate,
         date1904=date1904,
         defined_names=names,
+        cell_order_warnings=order.warnings(),
     )
 
 
@@ -844,6 +885,7 @@ def _parse_sheet_stream(
     indents: list[int],
     cells: _CellBatch,
     presence: _CellBatch,
+    order: _CellOrder,
 ) -> None:
     member = zip_member(zf, sheet.part)
     if member is None:
@@ -922,6 +964,7 @@ def _parse_sheet_stream(
                     if cell_presence is not None:
                         addr, kind = cell_presence
                         col, row = parse_addr(addr)
+                        order.see(name, col, row, addr)
                         for item_col, start, end, item_kind in _presence_events(
                             runs, col, row, kind
                         ):

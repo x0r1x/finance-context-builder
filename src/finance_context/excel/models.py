@@ -51,6 +51,16 @@ class WorkbookMeta(BaseModel):
     iterate: bool = False
     date1904: bool = False
     defined_names: list[DefinedName] = Field(default_factory=list)
+    # One line per sheet whose cells are not strictly increasing in file order.
+    # Empty stays out of workbook.json, so an ordered book keeps the same bytes.
+    cell_order_warnings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("cell_order_warnings"):
+            data.pop("cell_order_warnings", None)
+        return data
 
 
 class CellPresence(BaseModel):
