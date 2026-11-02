@@ -78,6 +78,63 @@ def test_explicit_addresses_match_the_canonical_set() -> None:
     assert len(idx) == len(old) + 1
 
 
+def test_run_past_excel_max_row_still_contains_its_start() -> None:
+    far = KnownNodes()
+    far.add("S", "A1048576")
+    far.add("S", "A1048577")
+    assert "S!A1048576" in far
+    assert "S!A1048577" in far
+    assert len(far) == 2
+
+    block = KnownNodes()
+    for row in range(1_048_574, 1_048_578):
+        block.add("S", f"A{row}")
+    assert len(block) == 4
+    for row in range(1_048_574, 1_048_578):
+        assert f"S!A{row}" in block
+
+    mixed = KnownNodes()
+    for row in (100, 101, 102, 1_048_577):
+        mixed.add("S", f"A{row}")
+    assert "S!A100" in mixed
+    assert "S!A101" in mixed
+    assert "S!A102" in mixed
+    assert "S!A1048577" in mixed
+    assert "S!A103" not in mixed
+    assert "S!A1048576" not in mixed
+
+
+def test_last_grid_row_stays_a_ref_when_the_next_row_is_present(tmp_path: Path) -> None:
+    dest = tmp_path / "job"
+    dest.mkdir()
+    source = dest / "book.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="S",
+                cells=[
+                    CellSpec(addr="A1048576", value="1"),
+                    CellSpec(addr="A1048577", value="2"),
+                    CellSpec(addr="B1", value="3", formula="=A1048576+A1048577"),
+                ],
+            )
+        ],
+    )
+    settings = _settings(tmp_path)
+    parse_workbook(source, dest, settings=settings)
+    compile_workbook(dest, settings=settings)
+    rows = [
+        row
+        for row in read_parquet(dest / "ir" / "cell_edges.parquet")
+        if row["target"] == "S!A1048576"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["source"] == "S!B1"
+    assert rows[0]["status"] is None
+    assert rows[0]["evidence"] is None
+
+
 def test_randomized_membership_matches_canonical_ids() -> None:
     rng = random.Random(0x194A)
     sheets = ["P&L", "Data!Q1", "'Data", "O'Brien", "Q1 2025", "", "PL", "pl", "A!B!C"]

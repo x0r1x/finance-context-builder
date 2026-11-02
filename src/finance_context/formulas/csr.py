@@ -169,9 +169,16 @@ def _merge_spans(items: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
 
 
 def _span_has(spans: Sequence[tuple[int, int]], row: int) -> bool:
+    """True when ``row`` is inside a sorted, non-overlapping run.
+
+    The probe is the run's start. A probe of ``(row, 1_048_576)`` misses the
+    first row of a run whose end is past Excel's last row: that tuple sorts
+    after the probe, ``bisect_right`` returns 0, and the row is reported absent.
+    ``parse_addr`` and the OOXML reader both keep those rows.
+    """
     if not spans:
         return False
-    index = bisect.bisect_right(spans, (row, _EXCEL_MAX_ROW)) - 1
+    index = bisect.bisect_right(spans, row, key=lambda span: span[0]) - 1
     if index < 0:
         return False
     start, end = spans[index]
