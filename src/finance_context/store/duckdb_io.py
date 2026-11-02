@@ -472,11 +472,15 @@ def _export_body(
             uploaded.append(key)
         _put_marker(target, settings.minio_bucket, marker_key, uploaded)
     except Exception as exc:
-        _LOGGER.warning("minio export failed for job %s: %s", job_id, exc)
+        _LOGGER.warning(
+            "minio export failed for job %s: %s", job_id, _without_secret(settings, exc)
+        )
         try:
             _put_marker(target, settings.minio_bucket, marker_key, [])
         except Exception as exc:
-            _LOGGER.warning("minio export failed for _complete.json: %s", exc)
+            _LOGGER.warning(
+                "minio export failed for _complete.json: %s", _without_secret(settings, exc)
+            )
         return _EXPORT_WARNING
     return None
 
@@ -612,6 +616,17 @@ def _put_marker(store: ObjectStore, bucket: str, key: str, uploaded: list[str]) 
         store.put(path, url)
         if store.size(url) != path.stat().st_size:
             raise OSError(f"size mismatch for {url}")
+
+
+def _without_secret(settings: Settings, exc: BaseException) -> str:
+    """DuckDB S3 errors can echo the secret key, so the log keeps the rest."""
+    text = str(exc)
+    secret = ""
+    if settings.minio_secret_key is not None:
+        secret = settings.minio_secret_key.get_secret_value()
+    if secret:
+        return text.replace(secret, "***")
+    return text
 
 
 def _configure_s3(con: Any, settings: Settings | None) -> None:
