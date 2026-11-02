@@ -220,6 +220,31 @@ def test_access_denied_is_logged_once_without_the_duckdb_essay(
     assert "minio export failed for _complete.json" not in caplog.text
 
 
+_SLOW = (
+    "HTTP Error: HTTP PUT error uploading to 's3://bucket/books/job/_complete.json' "
+    "(HTTP 500 Internal Server Error)\n\n"
+    "SlowDown: Please reduce your request rate.\n\n"
+    "Authentication Failure - this is usually caused by invalid or missing credentials.\n"
+)
+
+
+def test_http_500_retries_the_marker_and_logs_the_s3_code(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore(fail=RuntimeError(_SLOW))
+    caplog.set_level(logging.WARNING, logger="finance_context.store")
+    assert (
+        export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store)
+        == "minio export failed"
+    )
+    assert store.attempts == 2
+    assert "HTTP 500 SlowDown: Please reduce your request rate." in caplog.text
+    assert "Authentication Failure" not in caplog.text
+
+
 def test_local_read_blob_does_not_open_duckdb(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
