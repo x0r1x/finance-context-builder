@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -42,6 +43,8 @@ _SESSION = (
     "meta/meta.json",
 )
 _EXPORT_WARNING = "minio export failed"
+_HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
+_S3_LINE = re.compile(r"(?m)^([A-Z][A-Za-z0-9]+): ([^\r\n]{1,160})")
 _publish_held = threading.local()
 
 
@@ -471,12 +474,18 @@ def _export_body(
             _put_and_check(target, local, object_url(settings.minio_bucket, key))
             uploaded.append(key)
         _put_marker(target, settings.minio_bucket, marker_key, uploaded)
-    except Exception:
-        _LOGGER.warning("minio export failed for job %s", job_id)
-        try:
-            _put_marker(target, settings.minio_bucket, marker_key, [])
-        except Exception:
-            _LOGGER.warning("minio export failed for _complete.json")
+    except Exception as exc:
+        status, detail = _s3_failure(exc)
+        _log_export_failure("minio export failed for job %s", job_id, detail=detail)
+        # A 403 will not clear the marker either. Skip the second PUT.
+        if status != 403:
+            try:
+                _put_marker(target, settings.minio_bucket, marker_key, [])
+            except Exception as clear_exc:
+                _log_export_failure(
+                    "minio export failed for _complete.json",
+                    detail=_s3_failure(clear_exc)[1],
+                )
         return _EXPORT_WARNING
     return None
 
@@ -557,6 +566,27 @@ def _http_404(exc: Exception) -> bool:
     import duckdb
 
     return isinstance(exc, duckdb.HTTPException) and "HTTP 404" in str(exc)
+
+
+def _s3_failure(exc: BaseException) -> tuple[int | None, str | None]:
+    """HTTP status and one ``Code: message`` line. The DuckDB essay stays out."""
+    text = str(exc)
+    status_match = _HTTP_STATUS.search(text)
+    if status_match is None:
+        return None, None
+    status = int(status_match.group(1))
+    for code, message in _S3_LINE.findall(text):
+        if code == "HTTP":
+            continue
+        return status, f"HTTP {status} {code}: {message.strip()}"
+    return status, f"HTTP {status}"
+
+
+def _log_export_failure(template: str, *args: object, detail: str | None) -> None:
+    if detail is None:
+        _LOGGER.warning(template, *args)
+        return
+    _LOGGER.warning(template + ": %s", *args, detail)
 
 
 def _publish_lock_path(settings: Settings, job_id: str, local: Path, relative: str) -> Path:
