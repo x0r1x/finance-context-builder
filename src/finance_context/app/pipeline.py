@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gc
 import json
 import logging
 import os
@@ -293,12 +292,6 @@ class Pipeline:
         set_stage("layout")
         if not (book / "layout" / "layout.json").is_file():
             layout_profile = {"cells": cell_count, "edges": len(ir_edges)}
-            # Layout only needs the per-sheet value column, which it reads
-            # from edges.parquet. Drop the edge objects before that scan.
-            ir_edges = None
-            if self.settings.job_malloc_trim:
-                gc.collect()
-                trim_process_heap()
             with _stage(
                 "layout",
                 root=book,
@@ -306,8 +299,7 @@ class Pipeline:
                 counts=layout_profile,
                 settings=self.settings,
             ):
-                layout = layout_workbook(book, settings=self.settings)
-            ir_edges = _read_formula_edges(book)
+                layout = layout_workbook(book, edges=ir_edges, settings=self.settings)
         else:
             _stage_reused("layout", root=book, saved=_LAYOUT_SAVED)
             _pause_layout_reuse()
@@ -792,33 +784,18 @@ def _wait_for_pause_release() -> None:
         time.sleep(0.05)
 
 
-def _read_formula_edges(dest_dir: Path) -> list:
-    """Formula edges in file order. One chunk of rows is a dict list, then edges."""
-    path = dest_dir / "ir" / "edges.parquet"
-    if not path.is_file():
-        return []
-    from finance_context.store.duckdb_io import _iter_parquet_rows
-
-    columns = ["source", "kind", "target", "unresolved", "truncated", "named"]
-    edges: list = []
-    for names, batch in _iter_parquet_rows(path, columns):
-        pos = {name: index for index, name in enumerate(names)}
-        for row in batch:
-            edges.append(as_edge({name: row[pos[name]] for name in names}))
-    return edges
-
-
 def _read_ir(
     dest_dir: Path, *, count_cell_edges: bool = False
 ) -> tuple[list, list | EdgeCount]:
-    edges = _read_formula_edges(dest_dir)
+    edges_path = dest_dir / "ir" / "edges.parquet"
+    edges = read_parquet(edges_path) if edges_path.is_file() else []
     cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
     if count_cell_edges and cell_edges_path.is_file():
         cell_edges: list | EdgeCount = EdgeCount(_parquet_rows(cell_edges_path))
     else:
         loaded = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
         cell_edges = [as_cell_edge(edge) for edge in loaded]
-    return edges, cell_edges
+    return [as_edge(edge) for edge in edges], cell_edges
 
 
 def _parquet_rows(path: Path) -> int:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping
 
 from finance_context.excel.a1 import format_addr, in_grid, index_to_col, parse_addr
 from finance_context.layout.cells import parse_number
@@ -32,12 +31,12 @@ def detect_params_block(
     sheet: str,
     by_row: dict[int, list[dict]],
     date1904: bool,
-    active_cols: dict[str, int] | None = None,
+    edges: list[dict] | None = None,
     defined_names: list | None = None,
 ) -> Block | None:
     if _looks_like_grid(by_row, date1904):
         return _grid_title_block(sheet, by_row, date1904)
-    roles = _column_roles(by_row, date1904, sheet, active_cols or {})
+    roles = _column_roles(by_row, date1904, sheet, edges or [])
     label_col = _label_column(by_row, date1904, roles)
     value_cols = [col for col, role in roles.items() if role == "value"]
     if not value_cols:
@@ -698,7 +697,7 @@ def _column_roles(
     by_row: dict[int, list[dict]],
     date1904: bool,
     sheet: str,
-    active_cols: dict[str, int],
+    edges: list[dict],
 ) -> dict[int, str]:
     header_votes: dict[int, Counter[str]] = defaultdict(Counter)
     numeric_counts: Counter[int] = Counter()
@@ -770,7 +769,7 @@ def _column_roles(
                 roles[col] = named
             elif len(text) <= 24:
                 roles[col] = "unknown"
-    graph_col = active_cols.get(sheet.casefold())
+    graph_col = _active_value_col(edges, sheet)
     if graph_col is not None and _column_caption(by_row, graph_col, date1904):
         roles[graph_col] = "value"
     return roles
@@ -1129,38 +1128,27 @@ def _is_same_row_total(formula: str, template: str, row: int) -> bool:
     return False
 
 
-def _edge_field(edge: object, name: str) -> object:
-    if isinstance(edge, Mapping):
-        return edge.get(name)
-    return getattr(edge, name, None)
-
-
-def active_value_columns(edges: Iterable[object]) -> dict[str, int]:
-    """Per sheet, the column cross-sheet edges hit most often, when that is at least twice."""
-    return active_value_columns_from_endpoints(
-        (str(_edge_field(edge, "source") or ""), str(_edge_field(edge, "target") or ""))
-        for edge in edges
-    )
-
-
-def active_value_columns_from_endpoints(pairs: Iterable[tuple[str, str]]) -> dict[str, int]:
-    counts: dict[str, Counter[int]] = {}
-    for source, target in pairs:
+def _active_value_col(edges: list[dict], sheet: str) -> int | None:
+    counts: Counter[int] = Counter()
+    prefix = sheet.casefold()
+    for edge in edges:
+        target = str(edge.target or "")
+        source = str(edge.source or "")
         parsed_t = _parse_sheet_addr(target)
         parsed_s = _parse_sheet_addr(source)
         if parsed_t is None or parsed_s is None:
             continue
         t_sheet, col, _row = parsed_t
         s_sheet, _s_col, _s_row = parsed_s
-        if s_sheet.casefold() == t_sheet.casefold():
+        if t_sheet.casefold() != prefix:
             continue
-        counts.setdefault(t_sheet.casefold(), Counter())[col] += 1
-    chosen: dict[str, int] = {}
-    for key, counter in counts.items():
-        col, n = counter.most_common(1)[0]
-        if n >= 2:
-            chosen[key] = col
-    return chosen
+        if s_sheet.casefold() == prefix:
+            continue
+        counts[col] += 1
+    if not counts:
+        return None
+    col, n = counts.most_common(1)[0]
+    return col if n >= 2 else None
 
 
 def _parse_sheet_addr(ref: str) -> tuple[str, int, int] | None:
