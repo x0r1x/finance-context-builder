@@ -16,7 +16,11 @@ from finance_context.formulas.csr import (
 )
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.formulas.models import Edge
-from finance_context.formulas.stage import _KeptEdgeWriter, _write_cell_edge_batches
+from finance_context.formulas.stage import (
+    IR_CELL_EDGE_COLUMNS,
+    _KeptEdgeWriter,
+    _write_cell_edge_batches,
+)
 from finance_context.store.fs import read_parquet
 
 
@@ -159,7 +163,10 @@ def test_packed_keys_match_source_target_kind(tmp_path: Path) -> None:
         consume=consume,
         batch_size=8,
     )
-    assert all(isinstance(key, int) for key in sink._keys)
+    ints = [key for key in sink._keys if isinstance(key, int)]
+    pairs = [key for key in sink._keys if isinstance(key, tuple)]
+    assert ints and all(key > 0 for key in ints)
+    assert pairs and all(len(key) == 2 and key[0] > 0 and key[1] > 0 for key in pairs)
     sink.finish()
     kept = [(row["source"], row["target"], row["kind"]) for row in read_parquet(path)]
     assert kept == expected
@@ -169,6 +176,48 @@ def test_packed_keys_match_source_target_kind(tmp_path: Path) -> None:
     assert ("S!B1", "S!A1", "range") in kept
     assert ("S!B1", "Named", "ref") in kept
     assert sum(1 for row in kept if row == ("S!B1", "S!A1", "ref")) == 1
+
+
+def test_many_kinds_on_one_source_keep_every_non_packable_edge(tmp_path: Path) -> None:
+    """More than 256 kinds cannot alias. A pair key has no bit field to overflow.
+
+    A canonical cell with a kind code of 16 or more uses that same pair, so it
+    stays distinct from the packed ``ref`` to the same address.
+    """
+    kinds = [f"k{index:03d}" for index in range(300)]
+    # k000 is the first extra kind (code 6). k010 is the 11th (code 16).
+    unique = [("S!B1", "NameA", kind) for kind in kinds]
+    unique.extend(("S!B1", "NameB", kind) for kind in kinds)
+    unique.append(("S!B1", "S!A1", "ref"))
+    unique.append(("S!B1", "S!A1", "k010"))
+    rows = [*unique, *unique]
+    columns = {name: [] for name, _dtype in IR_CELL_EDGE_COLUMNS}
+    for source, target, kind in rows:
+        columns["source"].append(source)
+        columns["target"].append(target)
+        columns["kind"].append(kind)
+        for name, dtype in IR_CELL_EDGE_COLUMNS:
+            if name in {"source", "target", "kind"}:
+                continue
+            columns[name].append(False if dtype == "BOOLEAN" else None)
+    dest = tmp_path / "kinds"
+    dest.mkdir()
+    path = dest / "ir" / "cell_edges.parquet"
+    sink = _KeptEdgeWriter(path, 0)
+    sink.consume(columns)
+    assert len(sink._keys) == len(unique)
+    packed = [key for key in sink._keys if isinstance(key, int)]
+    pairs = [key for key in sink._keys if isinstance(key, tuple)]
+    assert len(packed) == 1 and packed[0] > 0
+    assert len(pairs) == len(unique) - 1
+    assert sink._key("S!A1", "ref") == packed[0]
+    wide = sink._key("S!A1", "k010")
+    assert isinstance(wide, tuple) and wide in sink._keys
+    assert sink._key("NameA", "k000") in sink._keys
+    assert sink._key("NameB", "k299") in sink._keys
+    sink.finish()
+    kept = [(row["source"], row["target"], row["kind"]) for row in read_parquet(path)]
+    assert kept == unique
 
 
 def test_huge_rectangle_is_one_range_node() -> None:

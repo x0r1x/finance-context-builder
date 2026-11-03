@@ -491,9 +491,11 @@ class _KeptEdgeWriter:
     """First ``(target, kind)`` of the current source, in emission order.
 
     Each formula cell is one contiguous run. The live keys are one new set per
-    source: a packed int for a canonical cell id, or a negative int for any
-    other target text. The set is replaced when the source changes, so its size
-    follows the largest formula, not the book.
+    source: a packed positive int for a canonical cell id whose kind fits in
+    4 bits, or a ``(target id, kind code)`` pair for any other target or a
+    wider kind code. The pair is exact for every code and cannot equal a packed
+    int. The set is replaced when the source changes, so its size follows the
+    largest formula, not the book.
 
     A malformed sheet whose formula address comes back after another formula
     starts a new run: a ``(source, target, kind)`` already written for the first
@@ -517,7 +519,7 @@ class _KeptEdgeWriter:
         self._first: list[list] | None = None
         self._writer: RowGroupWriter | None = None
         self._source: str | None = None
-        self._keys: set[int] = set()
+        self._keys: set[int | tuple[int, int]] = set()
         self._sheet_ids: dict[str, int] = {}
         self._other_ids: dict[str, int] = {}
         self._extra_kinds: dict[str, int] = {}
@@ -541,16 +543,19 @@ class _KeptEdgeWriter:
         self._extra_kinds[kind] = found
         return found
 
-    def _key(self, target: str, kind: str) -> int:
+    def _key(self, target: str, kind: str) -> int | tuple[int, int]:
         kind_code = self._kind_code(kind)
         packed = _pack_cell(target, self._sheet_ids)
+        # Four kind bits sit under the packed cell. A wider code, or a target
+        # that is not a canonical cell, is a pair. A shifted int would let a
+        # large code spill into the target id and drop an edge.
         if packed is not None and kind_code < (1 << _KIND_BITS):
             return packed | kind_code
         other = self._other_ids.get(target)
         if other is None:
             other = len(self._other_ids) + 1
             self._other_ids[target] = other
-        return -((other << 8) | kind_code)
+        return (other, kind_code)
 
     def consume(self, columns: dict[str, list]) -> None:
         incoming = [columns[name] for name in self.names]
