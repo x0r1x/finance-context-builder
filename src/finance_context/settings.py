@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import re
 from pathlib import Path
@@ -8,6 +9,8 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from pydantic import SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from finance_context.observability import log_event
 
 DEFAULT_DATA_DIR = Path("data")
 # How many books run at once. The per-job RSS cap does not depend on this number.
@@ -26,6 +29,10 @@ DEFAULT_TRACE_RANGE_MEMBERS = 200
 DEFAULT_OOM_SCORE_ADJ = 1000
 # One parquet row group of this many rows. 0 keeps a single row group.
 DEFAULT_PARQUET_ROW_GROUP_ROWS = 65536
+# Per-connection DuckDB buffer-manager ceiling. Not process RSS.
+DEFAULT_DUCKDB_MEMORY_LIMIT = "256MB"
+# Spill cap for one DuckDB connection.
+DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE = "1GB"
 # glibc arenas for a spawned job child. None leaves an inherited value.
 DEFAULT_MALLOC_ARENA_MAX = 2
 # One directory segment. Length is SESSION_ID_MAX_LENGTH, not part of the pattern.
@@ -90,8 +97,14 @@ class Settings(BaseSettings):
     # json.dump instead of json.dumps for context.json and other job JSON.
     json_stream: bool = True
     # Raw, IR and graph parquet row-group size. 0 writes one group, matching the
-    # single-table bytes. One group of a large book does not fit DuckDB's 256MB.
+    # single-table bytes. One group of a large book does not fit duckdb_memory_limit.
     parquet_row_group_rows: int = DEFAULT_PARQUET_ROW_GROUP_ROWS
+    # Per-connection buffer-manager ceiling. Not process RSS. Two connections
+    # can be open at once (compile reader and writer).
+    duckdb_memory_limit: str = DEFAULT_DUCKDB_MEMORY_LIMIT
+    # Spill cap for that connection. The writer spills next to the build file;
+    # a scan spills into a private temp directory.
+    duckdb_max_temp_directory_size: str = DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE
     # Compile-local map of repeated node ids. Dropped after compile. Not sys.intern.
     compile_string_pool: bool = True
     # zlib-compress formula AST JSON while a non-streaming compile holds cells
@@ -290,6 +303,18 @@ class Settings(BaseSettings):
     def require_row_group_rows(cls, value: object, info: ValidationInfo) -> int:
         return _require_whole_int(value, info, minimum=0)
 
+    @field_validator("duckdb_memory_limit", "duckdb_max_temp_directory_size", mode="before")
+    @classmethod
+    def require_duckdb_size(cls, value: object, info: ValidationInfo) -> str:
+        name = (info.field_name or "size").upper()
+        message = f"{name} must be a DuckDB size greater than 0, such as 512MB, 1GB, or 1GiB"
+        if not isinstance(value, str):
+            raise ValueError(message)
+        token = value.strip()
+        if _duckdb_size_bytes(token) is None:
+            raise ValueError(message)
+        return token
+
     @field_validator("redis_url", mode="before")
     @classmethod
     def require_redis_url(cls, value: object, info: ValidationInfo) -> str:
@@ -474,6 +499,11 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def warn_when_duckdb_limit_exceeds_budget(self) -> Self:
+        _warn_duckdb_memory_limit(self)
+        return self
+
     def minio_configured(self) -> bool:
         """True when the four connection fields are set. The bucket is a second copy."""
         secret = ""
@@ -621,3 +651,82 @@ def _require_int(value: object, info: ValidationInfo, *, minimum: int) -> int:
     if info.field_name == "job_oom_score_adj" and number > 1000:
         raise ValueError(f"{name} must be from -1000 to 1000")
     return number
+
+
+# Decimal units are powers of 1000. Binary units are powers of 1024. One letter
+# follows the decimal unit, which is what DuckDB does for K, M, G, and T.
+_DUCKDB_SIZE = re.compile(
+    r"^(?P<number>\d+(?:\.\d*)?|\.\d+) *(?P<unit>[kmgt]i?b|[kmgt]|b)$",
+    re.IGNORECASE,
+)
+_DUCKDB_SIZE_UNITS = {
+    "b": 1,
+    "k": 10**3,
+    "kb": 10**3,
+    "kib": 2**10,
+    "m": 10**6,
+    "mb": 10**6,
+    "mib": 2**20,
+    "g": 10**9,
+    "gb": 10**9,
+    "gib": 2**30,
+    "t": 10**12,
+    "tb": 10**12,
+    "tib": 2**40,
+}
+_SETTINGS_LOGGER = logging.getLogger("finance_context.settings")
+_duckdb_limit_warned = False
+
+
+def _duckdb_size_bytes(value: str) -> int | None:
+    """Bytes of one positive DuckDB size, or None when the text is not one.
+
+    A fraction of a byte truncates. Zero and unlimited (``none``, ``-1``) are rejected.
+    """
+    match = _DUCKDB_SIZE.fullmatch(value.strip())
+    if match is None:
+        return None
+    number = float(match.group("number"))
+    if not math.isfinite(number) or number <= 0:
+        return None
+    amount = number * _DUCKDB_SIZE_UNITS[match.group("unit").lower()]
+    if not math.isfinite(amount) or amount < 1:
+        return None
+    return int(amount)
+
+
+def _warn_duckdb_memory_limit(settings: Settings) -> None:
+    """Warn once when two connections of this cap do not fit the job budget."""
+    global _duckdb_limit_warned
+    if _duckdb_limit_warned:
+        return
+    limit = _duckdb_size_bytes(settings.duckdb_memory_limit)
+    if limit is None:
+        return
+    from finance_context.memory import resolve_job_budget_bytes
+
+    budget = resolve_job_budget_bytes(
+        slots=settings.max_concurrent_jobs,
+        reserve_fraction=settings.job_memory_api_reserve_fraction,
+        override=settings.job_memory_budget_bytes,
+        ceiling=settings.job_memory_default_budget_bytes,
+    )
+    if budget is None:
+        budget = settings.job_memory_default_budget_bytes
+    # Compile keeps a reader and a writer open together.
+    if limit * 2 < budget:
+        return
+    _duckdb_limit_warned = True
+    log_event(
+        _SETTINGS_LOGGER,
+        logging.WARNING,
+        "duckdb_memory_limit",
+        (
+            f"DUCKDB_MEMORY_LIMIT {settings.duckdb_memory_limit} ({limit} bytes) "
+            f"is not clearly below the job memory budget ({budget} bytes); "
+            "two DuckDB connections can be open at once (compile reader and writer)"
+        ),
+        duckdb_memory_limit=settings.duckdb_memory_limit,
+        duckdb_memory_limit_bytes=limit,
+        job_memory_budget_bytes=budget,
+    )
