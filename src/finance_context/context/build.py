@@ -114,7 +114,13 @@ def build_context(
         timeline_warnings.extend(_period_warnings(book_dir / "ir" / "cells.parquet", date1904))
     axes_by_id = {axis.id: axis for axis in axes}
     reads = RangeReads()
-    precedents, dependents = row_adjacency(edges or [], limit=0, usage=usage, ranges=reads)
+    precedents, dependents = row_adjacency(
+        edges or [],
+        limit=0,
+        usage=usage,
+        ranges=reads,
+        rows=_consumed_rows(layout),
+    )
     if hidden_indexes is None:
         hidden_warnings = _hidden_warnings(workbook_meta, cells)
     else:
@@ -642,6 +648,16 @@ class _FormulaStats:
         self.unparsed = 0
         self.missing_addrs: list[str] = []
         self.unparsed_addrs: list[str] = []
+
+
+def _consumed_rows(layout: Layout) -> set[tuple[str, int]]:
+    """Layout rows whose formula neighbors are published. Axis headers are not."""
+    found: set[tuple[str, int]] = set()
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            for layout_row in block.rows:
+                found.add((sheet.name, int(layout_row.row)))
+    return found
 
 
 def _layout_rows(layout: Layout) -> dict[str, set[int]]:
