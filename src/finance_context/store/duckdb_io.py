@@ -22,6 +22,9 @@ from finance_context.store.paths import shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.store")
 _BATCH_ROWS = 2048
+# Not configurable: parquet row-group bytes must stay byte-identical, and memory
+# grows per thread while memory_limit does not cover every allocation.
+_DUCKDB_THREADS = 1
 _DUCK_TYPES = {"VARCHAR": "VARCHAR", "INTEGER": "BIGINT", "BOOLEAN": "BOOLEAN"}
 
 _SHARED = (
@@ -73,13 +76,11 @@ def object_url(bucket: str, key: str) -> str:
 
 def copy_arrow_parquet(table: pa.Table, dest: Path) -> None:
     """Write one Snappy parquet file. DuckDB flushes vectors of 2048 rows."""
-    import duckdb
-
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         dest.unlink()
     groups = max(table.num_rows, 1)
-    with duckdb.connect() as con:
+    with limited_connection() as con:
         con.register("batch", table)
         con.execute(
             "COPY (SELECT * FROM batch) TO ? "
@@ -106,14 +107,8 @@ class DuckDBBatch:
         import duckdb
 
         self._con = duckdb.connect(str(self._db))
-        tmp = _sql_literal(str(self._db) + ".tmp")
-        self._con.execute("SET memory_limit='256MB'")
-        self._con.execute(f"SET temp_directory={tmp}")
-        self._con.execute("SET max_temp_directory_size='1GB'")
-        self._con.execute("SET threads=1")
-        specs = ", ".join(
-            f"{_quote_ident(name)} {_DUCK_TYPES[dtype]}" for name, dtype in columns
-        )
+        _set_duckdb_limits(self._con, str(self._db) + ".tmp")
+        specs = ", ".join(f"{_quote_ident(name)} {_DUCK_TYPES[dtype]}" for name, dtype in columns)
         self._con.execute(f"CREATE TABLE t ({specs})")
 
     def add_rows(self, rows: Sequence[Sequence[Any]]) -> None:
@@ -529,7 +524,7 @@ class DuckDBObjectStore:
         self._settings = settings
 
     def put(self, local: Path, url: str) -> None:
-        # shortcut: whole-file read_blob under 256MB, fix when the object must land in MinIO
+        # shortcut: read_blob under duckdb_memory_limit, fix when the object must land in MinIO
         with limited_connection() as con:
             _configure_s3(con, self._settings)
             con.execute(
@@ -707,10 +702,11 @@ def _endpoint(value: str) -> tuple[str, bool]:
 
 @contextmanager
 def limited_connection() -> Iterator[Any]:
-    """One short DuckDB scan with a private temp directory.
+    """One DuckDB connection with the configured caps and a private temp directory.
 
-    ``memory_limit`` is the buffer-manager ceiling, the same 256MB the writer
-    already uses. It is not the process RSS.
+    ``memory_limit`` is the per-connection buffer-manager ceiling from
+    ``duckdb_memory_limit``. It is not process RSS. The temp directory is removed
+    when the connection closes.
     """
     import duckdb
 
@@ -718,15 +714,22 @@ def limited_connection() -> Iterator[Any]:
     con = None
     try:
         con = duckdb.connect()
-        con.execute("SET memory_limit='256MB'")
-        con.execute("SET threads=1")
-        con.execute(f"SET temp_directory={_sql_literal(tmp)}")
-        con.execute("SET max_temp_directory_size='1GB'")
+        _set_duckdb_limits(con, tmp)
         yield con
     finally:
         if con is not None:
             con.close()
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _set_duckdb_limits(con: Any, temp_directory: str) -> None:
+    settings = Settings()
+    con.execute(f"SET memory_limit={_sql_literal(settings.duckdb_memory_limit)}")
+    con.execute(f"SET temp_directory={_sql_literal(temp_directory)}")
+    con.execute(
+        f"SET max_temp_directory_size={_sql_literal(settings.duckdb_max_temp_directory_size)}"
+    )
+    con.execute(f"SET threads={_DUCKDB_THREADS}")
 
 
 def _quote_ident(name: str) -> str:
