@@ -316,8 +316,8 @@ class Pipeline:
             settings=self.settings,
         ):
             relation_cells = load_relation_cells(book, layout)
-            relation_profile["cells"] = len(relation_cells)
             relations = formula_relations(layout, relation_cells)
+            relation_profile["cells"] = relation_cells.count
             release_cell_asts(relation_cells)
         relation_cells = None
         edges = ir_edges
