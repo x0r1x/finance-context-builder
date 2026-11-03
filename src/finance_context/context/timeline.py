@@ -48,12 +48,19 @@ def build_axes(
     return axes, warnings
 
 
+# A cached number, not a header. ``13.2025`` and ``20202020`` are the exceptions
+# and stay on the full check. ``1.2072`` shown as ``1.2`` is this shape.
+_PLAIN_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+_MONTH_DOT_YEAR = re.compile(r"(?:0?\d|1\d)[./](?:19|20)\d{2}")
+_EMBEDDED_YEAR = re.compile(r"(?:19|20)\d{2}")
+
+
 def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
     out: list[str] = []
     seen: set[tuple[str, str]] = set()
     for cell in cells:
         text = _period_warning_text(cell, date1904)
-        if not text or not unparsed_period_shape(text):
+        if not _unparsed_period_warning(text):
             continue
         key = (str(cell.get("sheet")), text)
         if key in seen:
@@ -63,6 +70,23 @@ def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
     return out
 
 
+def _unparsed_period_warning(text: str | None) -> bool:
+    """Same answer as ``unparsed_period_shape`` for text a cell can display.
+
+    A plain number is not an unparsed period header. ``M.YYYY`` and two years
+    written as one integer are, so those still go through the full check.
+    """
+    if not text:
+        return False
+    if (
+        _PLAIN_NUMBER.fullmatch(text) is not None
+        and _MONTH_DOT_YEAR.fullmatch(text) is None
+        and len(_EMBEDDED_YEAR.findall(text)) < 2
+    ):
+        return False
+    return unparsed_period_shape(text)
+
+
 def _period_warning_text(cell: dict, date1904: bool) -> str | None:
     """Text a header warning may use.
 
@@ -70,14 +94,28 @@ def _period_warning_text(cell: dict, date1904: bool) -> str | None:
     ``1.2072`` with ``0.0`` is ``1.2``, not month 1 of 2072. Text such as
     ``Q5 2025`` and ``1.2025`` still uses the cell text.
     """
-    value = cell.get("cached_value")
+    return _period_warning_value(
+        cell.get("cached_value"),
+        cell.get("number_format"),
+        date1904,
+    )
+
+
+def _period_warning_value(value: object, number_format: object, date1904: bool) -> str | None:
     if value is None:
         return None
     raw = str(value)
-    fmt = cell.get("number_format")
-    if isinstance(fmt, str) and _explicit_numeric_format(fmt) and _plain_number(raw):
-        return _displayed_number(raw, fmt)
-    text = display_cell_text(raw, fmt if isinstance(fmt, str) else None, date1904=date1904)
+    if (
+        isinstance(number_format, str)
+        and _explicit_numeric_format(number_format)
+        and _plain_number(raw)
+    ):
+        return _displayed_number(raw, number_format)
+    text = display_cell_text(
+        raw,
+        number_format if isinstance(number_format, str) else None,
+        date1904=date1904,
+    )
     if text is None:
         return raw
     return text

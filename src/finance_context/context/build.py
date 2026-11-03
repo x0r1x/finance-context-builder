@@ -15,7 +15,11 @@ from finance_context.context.series import (
     scale_factor_for,
     value_status,
 )
-from finance_context.context.timeline import _period_warning_text, build_axes
+from finance_context.context.timeline import (
+    _period_warning_value,
+    _unparsed_period_warning,
+    build_axes,
+)
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.formulas.csr import SheetUsage
 from finance_context.layout.adjacency import RangeReads, row_adjacency
@@ -27,7 +31,6 @@ from finance_context.layout.periods import (
     display_cell_text,
     is_calendar_hit,
     period_like_header,
-    unparsed_period_shape,
 )
 from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
@@ -822,26 +825,24 @@ def _switch_rows(
 
 
 def _period_warnings(path: Path, date1904: bool) -> list[str]:
+    """Unparsed period headers in file order. One row is four column values, not a dict."""
     out: list[str] = []
     seen: set[tuple[str, str]] = set()
     for sheets, addrs, cached, formats in _iter_cell_columns(
         path, ["sheet", "addr", "cached_value", "number_format"]
     ):
         for index, value in enumerate(cached):
-            cell = {
-                "sheet": sheets[index],
-                "addr": addrs[index],
-                "cached_value": value,
-                "number_format": formats[index],
-            }
-            text = _period_warning_text(cell, date1904)
-            if not text or not unparsed_period_shape(text):
+            if value is None:
                 continue
-            key = (str(cell["sheet"]), text)
+            text = _period_warning_value(value, formats[index], date1904)
+            if not _unparsed_period_warning(text):
+                continue
+            sheet = sheets[index]
+            key = (str(sheet), text)
             if key in seen:
                 continue
             seen.add(key)
-            out.append(f"Unparsed period header {cell['sheet']}!{cell['addr']}: «{text}»")
+            out.append(f"Unparsed period header {sheet}!{addrs[index]}: «{text}»")
     return out
 
 
