@@ -7,8 +7,10 @@ from pathlib import Path
 
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
-from finance_context.app.pipeline import Pipeline, _stage, run_job_process
+import finance_context.app.pipeline as pipeline_mod
+from finance_context.app.pipeline import Pipeline, _emit_stage, _stage, run_job_process
 from finance_context.excel import parse_workbook
+from finance_context.jobqueue.progress import enable_progress, reset_progress
 from finance_context.observability import JsonFormatter
 from finance_context.settings import Settings
 
@@ -81,6 +83,58 @@ def test_run_job_process_emits_stage_done_on_stdout(tmp_path: Path, capsys, monk
     assert '"stage": "parse"' in captured
 
 
+def test_relations_stage_is_the_job_status(tmp_path: Path, dest: Path, monkeypatch) -> None:
+    source = _model(tmp_path / "model.xlsx")
+    target = dest / "source" / "source.xlsx"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(source.read_bytes())
+    seen: dict[str, object] = {}
+    real = pipeline_mod.formula_relations
+
+    def spy(layout, cells):
+        meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
+        seen["stage"] = meta["stage"]
+        seen["warnings"] = meta["warnings"]
+        return real(layout, cells)
+
+    monkeypatch.setattr(pipeline_mod, "formula_relations", spy)
+    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
+    pipeline.run(dest, job_id="job-test", source_filename="model.xlsx")
+    assert seen["stage"] == "relations"
+    assert seen["warnings"] == []
+
+
+def test_relations_keeps_the_open_layout_event(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    def record(settings, **fields):
+        events.append(fields)
+
+    monkeypatch.setattr("finance_context.app.pipeline.emit_progress", record)
+    token = enable_progress()
+    try:
+        settings = Settings(_env_file=None)
+        open_stage = _emit_stage(
+            settings, job_id="job-test", generation=0, stage="layout", open_stage=None
+        )
+        still = _emit_stage(
+            settings, job_id="job-test", generation=0, stage="relations", open_stage=open_stage
+        )
+        nxt = _emit_stage(
+            settings, job_id="job-test", generation=0, stage="graph", open_stage=still
+        )
+    finally:
+        reset_progress(token)
+    assert open_stage == "layout"
+    assert still == "layout"
+    assert nxt == "graph"
+    assert [(row["event"], row["stage"]) for row in events] == [
+        ("stage_start", "layout"),
+        ("stage_done", "layout"),
+        ("stage_start", "graph"),
+    ]
+
+
 def _log_lines(run) -> list[dict]:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
@@ -107,7 +161,19 @@ def test_pipeline_logs_each_stage_with_the_filename_and_saved_paths(
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
     first = _log_lines(lambda: pipeline.run(dest, job_id="job-test", source_filename="model.xlsx"))
     done = {row["stage"]: row for row in first if row["event"] == "stage_done"}
-    assert list(done) == ["parse", "compile", "layout", "graph", "build", "render"]
+    assert list(done) == [
+        "parse",
+        "compile",
+        "layout",
+        "relations",
+        "graph",
+        "build",
+        "render",
+    ]
+    assert done["relations"]["saved"] == []
+    assert isinstance(done["relations"]["cells"], int)
+    for key in ("duration_ms", "rss_in_mb", "rss_peak_mb", "rss_out_mb"):
+        assert key in done["relations"]
     for stage in done:
         assert any(row["event"] == "stage_start" and row["stage"] == stage for row in first)
         row = done[stage]

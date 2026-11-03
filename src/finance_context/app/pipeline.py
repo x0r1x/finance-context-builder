@@ -312,9 +312,19 @@ class Pipeline:
             layout = Layout.model_validate_json(
                 (book / "layout" / "layout.json").read_text(encoding="utf-8")
             )
-        relation_cells = load_relation_cells(book, layout)
-        relations = formula_relations(layout, relation_cells)
-        release_cell_asts(relation_cells)
+        set_stage("relations")
+        relation_profile: dict[str, int] = {}
+        with _stage(
+            "relations",
+            root=book,
+            saved=(),
+            counts=relation_profile,
+            settings=self.settings,
+        ):
+            relation_cells = load_relation_cells(book, layout)
+            relations = formula_relations(layout, relation_cells)
+            relation_profile["cells"] = relation_cells.count
+            release_cell_asts(relation_cells)
         relation_cells = None
         edges = ir_edges
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
@@ -705,7 +715,11 @@ def _emit_stage(
     stage: str,
     open_stage: str | None,
 ) -> str | None:
-    """Publish compile, layout, graph, and publish start/done. Return the open stage."""
+    """Publish compile, layout, graph, and publish start/done. Return the open stage.
+
+    ``relations`` stays on the open layout event, the same way build and render
+    stay on publish, so the stream does not gain a stage name.
+    """
     if not progress_enabled():
         return open_stage
     if stage == "parse":
@@ -722,6 +736,8 @@ def _emit_stage(
     mapped = {"compile": "compile", "layout": "layout", "graph": "graph"}.get(stage)
     if stage in {"build", "render"}:
         mapped = "publish"
+    if stage == "relations":
+        mapped = "layout"
     if mapped is None or mapped == open_stage:
         return open_stage
     if open_stage is not None:

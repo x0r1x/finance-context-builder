@@ -4,7 +4,7 @@
 
 The public graph is two files with the same facts: `graph.json` and `graph.md` (schema `1.7.0`). Cell-level edges and AST stay in `ir/*.parquet`. The model is `context.json` / `context.md`. Walking one cell is `GET .../graph/trace` and `GET .../graph/trace.md`, not a catalog of every cell. The graph is not merged into context.
 
-Code: `src/finance_context/graph/` (`stage.py`, `cycles.py`, `trace.py`), render in `src/finance_context/render/graph.py`, range expansion in `formulas/csr.py`. Pipeline: `parse → compile → layout → graph → build → render`.
+Code: `src/finance_context/graph/` (`stage.py`, `cycles.py`, `trace.py`), render in `src/finance_context/render/graph.py`, range expansion in `formulas/csr.py`. Pipeline: `parse → compile → layout → relations → graph → build → render`.
 
 Related documents: [overview](overview.md), [architecture](architecture.md), [slices](slices.md).
 

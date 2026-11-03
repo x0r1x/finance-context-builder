@@ -14,8 +14,9 @@ from finance_context.formulas import compile_workbook
 from finance_context.formulas.stage import IR_CELL_COLUMNS
 from finance_context.layout import layout_workbook
 from finance_context.layout import stage as layout_stage
+from finance_context.layout.relations import formula_relations, relation_period_cols
 from finance_context.observability import JsonFormatter, job_id_var, stage_var
-from finance_context.store.fs import write_cells_parquet, write_json, write_parquet
+from finance_context.store.fs import read_parquet, write_cells_parquet, write_json, write_parquet
 
 
 def test_layout_writes_json_registers_axes_and_no_findings(
@@ -371,3 +372,59 @@ def _ir_tuple(sheet: str, addr: str, value: str) -> tuple:
         None,
         None,
     )
+
+
+def test_relation_scan_matches_the_full_cell_list(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "model.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="P&L",
+                cells=[
+                    CellSpec(addr="A1", value="Item", type="s"),
+                    CellSpec(addr="B1", value="2023", type="s"),
+                    CellSpec(addr="C1", value="2024", type="s"),
+                    CellSpec(addr="A2", value="Revenue", type="s"),
+                    CellSpec(addr="B2", value="100"),
+                    CellSpec(addr="C2", value="110", formula="=B2+10"),
+                    CellSpec(addr="A3", value="Cost", type="s"),
+                    CellSpec(addr="B3", value="40"),
+                    CellSpec(addr="C3", value="30", formula="=B3-10"),
+                    CellSpec(addr="A4", value="Total", type="s"),
+                    CellSpec(addr="B4", value="140", formula="=SUM(B2:B3)"),
+                    CellSpec(addr="C4", value="140", formula="=SUM(C2:C3)"),
+                ],
+            )
+        ],
+        shared_strings=["Item", "2023", "2024", "Revenue", "Cost", "Total"],
+    )
+    parse_workbook(source, dest)
+    compile_workbook(dest)
+    layout = layout_workbook(dest)
+    full = read_parquet(dest / "ir" / "cells.parquet")
+    expected = formula_relations(layout, full)
+    scan = layout_stage.load_relation_cells(dest, layout)
+    found = formula_relations(layout, scan)
+    assert [item.model_dump() for item in found] == [item.model_dump() for item in expected]
+    assert found and found[0].kind == "aggregate"
+    rows: set[int] = set()
+    cols: set[int] = set()
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            picked = relation_period_cols(sheet, block)
+            if not picked:
+                continue
+            cols.update(picked)
+            rows.update(row.row for row in block.rows)
+    analysed = [
+        cell
+        for cell in full
+        if int(cell["row"]) in rows
+        and int(cell["col"]) in cols
+        and (cell.get("formula_raw") or cell.get("formula_template") or cell.get("ast_json"))
+    ]
+    assert scan.count == len(analysed)
+    assert scan.count < len(full)
+    assert list(scan) == []
+    assert scan.count == len(analysed)

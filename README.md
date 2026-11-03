@@ -82,7 +82,7 @@ curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.json" -o graph.json
 curl -sS "http://127.0.0.1:8080/v1/context-jobs/$ID/graph.md" -o graph.md
 ```
 
-Live progress is a Redis stream, then `GET /v1/context-jobs/$ID/events` (`text/event-stream`). The first SSE event is the current `meta.json`. Later events are `queued`, `running`, stage start and done (`compile`, `layout`, `graph`, `publish`), `succeeded`, `failed`, `queue_lost`, and a shared-cache `retry`. `meta.json` stays the source of truth. A Redis error while publishing does not fail the job. The stream closes after a terminal event. Resume with `Last-Event-ID`.
+Live progress is a Redis stream, then `GET /v1/context-jobs/$ID/events` (`text/event-stream`). The first SSE event is the current `meta.json`. Later events are `queued`, `running`, stage start and done (`compile`, `layout`, `graph`, `publish`), `succeeded`, `failed`, `queue_lost`, and a shared-cache `retry`. `meta.json` stays the source of truth. While formula-shape relations run, job status `stage` is `relations`. That value is additive. `/summary` needs `context.json` and `graph.json`. A first build writes those after this stage, so the route is 409 `report_not_ready` then. When the files are already on disk, `/summary` copies `meta.stage`. The stream does not gain an event for it: `relations` keeps the open `layout` event, the same way `build` and `render` share `publish`. `warnings` is unchanged. A Redis error while publishing does not fail the job. The stream closes after a terminal event. Resume with `Last-Event-ID`.
 
 ```bash
 curl -N "http://127.0.0.1:8080/v1/context-jobs/$ID/events"

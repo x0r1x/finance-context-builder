@@ -35,7 +35,7 @@ Formula IR and layout for the same workbook are shared: `$DATA_DIR/shared/books/
 
 ## Pipeline
 
-`parse → compile → layout → graph → build → render`.
+`parse → compile → layout → relations → graph → build → render`.
 
 The passport, the catalog, and observations are not in that sequence. They are read from `context.json` and `graph.json` that the job has already written.
 
