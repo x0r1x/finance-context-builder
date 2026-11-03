@@ -80,20 +80,15 @@ class _Formula:
         self.refs: list[str] = []
 
 
-def _formula_record(
-    sheet, row, col, addr, raw, row_meta, period_by_cell, share
-) -> tuple[str, _Formula]:
-    node = f"{sheet}!{addr}"
-    if share is not None:
-        node = share(node)
-    return node, _Formula(
+def _formula_record(sheet, row, col, addr, raw, row_meta, period_by_cell) -> tuple[str, _Formula]:
+    return f"{sheet}!{addr}", _Formula(
         str(raw),
         row_meta.get((str(sheet), int(row))),
         period_by_cell.get((str(sheet), int(col))),
     )
 
 
-def _load_formulas(book: Path, row_meta, period_by_cell, share=None) -> dict[str, _Formula]:
+def _load_formulas(book: Path, row_meta, period_by_cell) -> dict[str, _Formula]:
     """Formula rows only. Value cells stay in the parquet file."""
     import pyarrow.parquet as pq
 
@@ -119,13 +114,12 @@ def _load_formulas(book: Path, row_meta, period_by_cell, share=None) -> dict[str
                 formula,
                 row_meta,
                 period_by_cell,
-                share,
             )
             found[node] = rec
     return found
 
 
-def _formulas_from_cells(cells, row_meta, period_by_cell, share=None) -> dict[str, _Formula]:
+def _formulas_from_cells(cells, row_meta, period_by_cell) -> dict[str, _Formula]:
     found: dict[str, _Formula] = {}
     for cell in cells:
         raw = cell.get("formula_raw")
@@ -139,31 +133,23 @@ def _formulas_from_cells(cells, row_meta, period_by_cell, share=None) -> dict[st
             raw,
             row_meta,
             period_by_cell,
-            share,
         )
         found[node] = rec
     return found
 
 
-def _bind_refs(formulas: dict[str, _Formula], formula_edges, share=None) -> None:
+def _bind_refs(formulas: dict[str, _Formula], formula_edges) -> None:
     """Attach first-seen targets. A source with no formula cell still becomes a link."""
     for edge in formula_edges:
         source = str(edge.source or "")
         if not source:
             continue
-        if share is not None:
-            source = share(source)
         rec = formulas.get(source)
         if rec is None:
             rec = _Formula(None, None, None)
             formulas[source] = rec
         target = edge.target
-        if not target:
-            continue
-        text = str(target)
-        if share is not None:
-            text = share(text)
-        if text not in rec.refs:
+        if target and (text := str(target)) not in rec.refs:
             rec.refs.append(text)
 
 
@@ -324,21 +310,10 @@ def build_formula_graph(
         edges_path = book / "ir" / "edges.parquet"
         edges = read_parquet(edges_path) if edges_path.is_file() else []
     edges = [as_edge(edge) for edge in edges]
-    # One string object per node id. The pool dies with this call; survivors stay
-    # on the formulas and edges that still point at them.
-    share = _StrPool().share
-    _share_ends(edges, share)
     if not stream:
         if cell_edges is None or isinstance(cell_edges, EdgeCount):
-            loaded = read_parquet(cell_edge_path) if cell_edge_path.is_file() else []
-            cell_edges = [as_cell_edge(edge) for edge in loaded]
-        elif cell_edges and isinstance(cell_edges[0], tuple):
-            # Same list the caller still holds. Replace tuples so the old strings can drop.
-            for index, edge in enumerate(cell_edges):
-                cell_edges[index] = as_cell_edge(edge)
-        else:
-            cell_edges = [as_cell_edge(edge) for edge in cell_edges]
-        _share_ends(cell_edges, share)
+            cell_edges = read_parquet(cell_edge_path) if cell_edge_path.is_file() else []
+        cell_edges = [as_cell_edge(edge) for edge in cell_edges]
 
     row_meta = _row_meta(layout)
     period_by_cell, _period_index = _period_maps(layout)
@@ -353,7 +328,7 @@ def build_formula_graph(
             cell_edges if not stream else None,
             chosen.parquet_row_group_rows,
         )
-        formulas = _load_formulas(book, row_meta, period_by_cell, share)
+        formulas = _load_formulas(book, row_meta, period_by_cell)
         index_rows: list[tuple[object, ...]] = []
     else:
         index_rows = _index_rows(cells, row_meta, period_by_cell)
@@ -372,7 +347,7 @@ def build_formula_graph(
         )
         node_count = len(index_rows)
         circular_ids = None
-        formulas = _formulas_from_cells(cells, row_meta, period_by_cell, share)
+        formulas = _formulas_from_cells(cells, row_meta, period_by_cell)
 
     if stream:
         cycles, doc, iterate = _graph_from_parquet(
@@ -388,7 +363,6 @@ def build_formula_graph(
             stream_json=chosen.json_stream,
             node_count=node_count,
             circular_ids=circular_ids,
-            share=share,
         )
     else:
         period_of = _Periods(period_by_cell)
@@ -435,7 +409,7 @@ def build_formula_graph(
         doc = _summary(job_id, node_count, edges, enriched, cycles, iterate, hints)
         lags = _lags_by_source(enriched)
         _add_range_lags(lags, users, view, period_of)
-        _bind_refs(formulas, edges, share)
+        _bind_refs(formulas, edges)
         doc.links = _links_from_formulas(formulas, lags)
         if chosen.json_stream:
             _stream_graph_files(dest_dir, doc)
@@ -918,52 +892,13 @@ def _period_chain(source: str, target: str, lag: str, offset: int | None) -> boo
     return src is not None and tgt is not None and src[0] == tgt[0] and src[2] == tgt[2]
 
 
-class _StrPool:
-    """Reuse one object per node-id text. Not ``sys.intern``: that pool is process-wide."""
-
-    __slots__ = ("pool",)
+class _NodeIds:
+    __slots__ = ("map",)
 
     def __init__(self) -> None:
-        self.pool: dict[str, str] = {}
-
-    def share(self, text: str) -> str:
-        found = self.pool.get(text)
-        if found is None:
-            self.pool[text] = text
-            return text
-        return found
-
-
-def _share_ends(edges, share) -> None:
-    """Point each endpoint at the pooled string. A named tuple is replaced in the list."""
-    for index, edge in enumerate(edges):
-        source = edge.source
-        target = edge.target
-        new_source = share(str(source)) if source else source
-        new_target = share(str(target)) if target else target
-        if isinstance(edge, tuple):
-            if new_source is not source or new_target is not target:
-                edges[index] = edge._replace(
-                    source=new_source if source else source,
-                    target=new_target if target else target,
-                )
-            continue
-        if source and new_source is not source:
-            edge.source = new_source
-        if target and new_target is not target:
-            edge.target = new_target
-
-
-class _NodeIds:
-    __slots__ = ("map", "_share")
-
-    def __init__(self, share=None) -> None:
         self.map: dict[str, int] = {}
-        self._share = share
 
     def nid(self, text: str) -> int:
-        if self._share is not None:
-            text = self._share(text)
         slot = self.map.get(text)
         if slot is None:
             slot = len(self.map)
@@ -1098,7 +1033,6 @@ def _graph_from_parquet(
     stream_json: bool,
     node_count: int,
     circular_ids: dict[tuple[str, int], list[str]] | None,
-    share=None,
 ):
     """Enrich and classify from parquet row groups. The cell-edge list is not loaded."""
     import array
@@ -1119,7 +1053,7 @@ def _graph_from_parquet(
     lag_pool: dict[str, str] = {}
     view = _RangeView(book, formulas, period_by_cell)
     range_users: list[tuple[str, RangeNode]] = []
-    ids = _NodeIds(share)
+    ids = _NodeIds()
     src_ids = array.array("i")
     tgt_ids = array.array("i")
     flags = array.array("B")
@@ -1141,11 +1075,6 @@ def _graph_from_parquet(
             for index in range(width):
                 source = str(data["source"][index] or "")
                 target = str(data["target"][index] or "")
-                if share is not None:
-                    if source:
-                        source = share(source)
-                    if target:
-                        target = share(target)
                 node = view.node(target)
                 if node is not None:
                     offset, lag = view.offset_and_lag(source, node, period_of)
@@ -1241,7 +1170,7 @@ def _graph_from_parquet(
         iterate=iterate,
         circularity_hints=list(hints or []),
     )
-    _bind_refs(formulas, edges, share)
+    _bind_refs(formulas, edges)
     if stream_json:
         _stream_graph_files(dest_dir, doc, formulas, lag_groups)
     else:
