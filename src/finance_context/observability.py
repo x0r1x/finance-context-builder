@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import json
 import logging
+import logging.handlers
+import queue
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -66,6 +69,14 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+# Default stdout is written from a thread. The HTTP middleware logs on the
+# event loop, and a full pipe blocks the caller; asyncio counts that wait as
+# the callback. An explicit stream stays synchronous so a test can read it
+# before the next line.
+_log_listener: logging.handlers.QueueListener | None = None
+_log_listener_atexit = False
+
+
 def _build_handler(
     *,
     level: str,
@@ -81,24 +92,84 @@ def _build_handler(
     return handler
 
 
+def _stop_log_listener() -> None:
+    global _log_listener
+    listener = _log_listener
+    _log_listener = None
+    if listener is not None:
+        listener.stop()
+
+
+class _LiveStdoutHandler(logging.StreamHandler):
+    """Write to the process stdout at emit time.
+
+    pytest replaces ``sys.stdout`` for each test. A handler that kept the
+    stream from ``configure_logging`` would write into the previous test's
+    closed capture.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(sys.stdout)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stdout
+        super().emit(record)
+
+
+def flush_logs() -> None:
+    """Wait until queued stdout lines are written. A direct stream has nothing to flush."""
+    listener = _log_listener
+    if listener is None:
+        return
+    listener.queue.join()
+
+
+def _queue_handlers(formatter: logging.Formatter) -> tuple[logging.Handler, logging.Handler]:
+    global _log_listener, _log_listener_atexit
+    _stop_log_listener()
+    records: queue.Queue[logging.LogRecord] = queue.Queue()
+    writer = _LiveStdoutHandler()
+    writer.setFormatter(logging.Formatter("%(message)s"))
+    listener = logging.handlers.QueueListener(records, writer, respect_handler_level=True)
+    listener.start()
+    _log_listener = listener
+    if not _log_listener_atexit:
+        atexit.register(_stop_log_listener)
+        _log_listener_atexit = True
+    finance = logging.handlers.QueueHandler(records)
+    finance.setFormatter(formatter)
+    rq = logging.handlers.QueueHandler(records)
+    rq.setFormatter(formatter)
+    return finance, rq
+
+
 def configure_logging(
     *,
     level: str = "INFO",
     json_output: bool = True,
     stream: TextIO | None = None,
 ) -> None:
-    handler = _build_handler(level=level, json_output=json_output, stream=stream)
+    formatter_source = _build_handler(level=level, json_output=json_output, stream=stream)
     chosen = getattr(logging, level.upper(), logging.INFO)
+    if stream is None:
+        formatter = formatter_source.formatter
+        if formatter is None:
+            formatter = logging.Formatter("%(message)s")
+        finance_handler, rq_handler = _queue_handlers(formatter)
+    else:
+        _stop_log_listener()
+        finance_handler = formatter_source
+        rq_handler = _build_handler(level=level, json_output=json_output, stream=stream)
     root = logging.getLogger("finance_context")
     root.handlers.clear()
-    root.addHandler(handler)
+    root.addHandler(finance_handler)
     root.setLevel(chosen)
     root.propagate = False
     # RQ's setup_loghandlers adds color handlers only when no parent handler
     # exists. One JSON handler here covers rq.worker and rq.worker_pool.
     rq_logger = logging.getLogger("rq")
     rq_logger.handlers.clear()
-    rq_logger.addHandler(_build_handler(level=level, json_output=json_output, stream=stream))
+    rq_logger.addHandler(rq_handler)
     rq_logger.setLevel(chosen)
     rq_logger.propagate = False
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

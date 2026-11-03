@@ -14,7 +14,7 @@ from finance_context.api.state import AppContext
 from finance_context.app.pipeline import Pipeline
 from finance_context.errors import ContextError
 from finance_context.jobqueue.queue import RQJobQueue
-from finance_context.observability import configure_logging, log_event
+from finance_context.observability import configure_logging, flush_logs, log_event
 from finance_context.settings import Settings
 from finance_context.store.filesystem import ensure_data_dir_local
 from finance_context.store.paths import session_jobs_root
@@ -65,6 +65,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(ContextError, context_error_handler)
     app.include_router(router)
     _install_http_log(app)
+    # Startup warnings are queued. Hand them to stdout before the caller reads it.
+    flush_logs()
     return app
 
 

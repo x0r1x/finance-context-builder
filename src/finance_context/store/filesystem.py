@@ -218,6 +218,10 @@ def ensure_data_dir_local(
 
 def _log_unknown(path: Path) -> None:
     _LOGGER.warning("DATA_DIR filesystem type could not be detected for %s; continuing", path)
+    # Startup logs are queued. The caller reads stdout as soon as this returns.
+    from finance_context.observability import flush_logs
+
+    flush_logs()
 
 
 def _existing_anchor(path: Path) -> Path:
