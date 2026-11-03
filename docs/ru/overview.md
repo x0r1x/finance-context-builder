@@ -35,7 +35,7 @@ Formula IR и layout той же книги общие: `$DATA_DIR/shared/books/
 
 ## Пайплайн
 
-`parse → compile → layout → graph → build → render`.
+`parse → compile → layout → relations → graph → build → render`.
 
 Паспорт, каталог и наблюдения в эту последовательность не входят. Они читаются из уже записанных `context.json` и `graph.json`.
 
