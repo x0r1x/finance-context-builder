@@ -48,8 +48,9 @@ def build_axes(
     return axes, warnings
 
 
-# A cached number, not a header. ``13.2025`` and ``20202020`` are the exceptions
-# and stay on the full check. ``1.2072`` shown as ``1.2`` is this shape.
+# A cached ASCII number, not a header. ``13.2025`` and ``20202020`` are the
+# exceptions and stay on the full check. ``1.2072`` shown as ``1.2`` is this
+# shape. Fullwidth digits are not this shape: ``normalize_header`` folds them.
 _PLAIN_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _MONTH_DOT_YEAR = re.compile(r"(?:0?\d|1\d)[./](?:19|20)\d{2}")
 _EMBEDDED_YEAR = re.compile(r"(?:19|20)\d{2}")
@@ -73,13 +74,16 @@ def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
 def _unparsed_period_warning(text: str | None) -> bool:
     """Same answer as ``unparsed_period_shape`` for text a cell can display.
 
-    A plain number is not an unparsed period header. ``M.YYYY`` and two years
-    written as one integer are, so those still go through the full check.
+    A plain ASCII number is not an unparsed period header. ``M.YYYY`` and two
+    years written as one integer are, so those still go through the full check.
+    Other text does too: ``normalize_header`` folds fullwidth digits to ASCII
+    before that check, and this pattern does not.
     """
     if not text:
         return False
     if (
-        _PLAIN_NUMBER.fullmatch(text) is not None
+        text.isascii()
+        and _PLAIN_NUMBER.fullmatch(text) is not None
         and _MONTH_DOT_YEAR.fullmatch(text) is None
         and len(_EMBEDDED_YEAR.findall(text)) < 2
     ):

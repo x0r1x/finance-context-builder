@@ -43,6 +43,35 @@ def test_plain_numbers_match_the_full_shape_check() -> None:
         ), text
 
 
+def _fullwidth_digits(text: str) -> str:
+    return text.translate(str.maketrans("0123456789", "０１２３４５６７８９"))
+
+
+def test_unicode_digit_headers_match_the_full_shape_check(tmp_path: Path) -> None:
+    """Fullwidth digits fold in ``normalize_header``. The shortcut must not drop them."""
+    rows = [
+        ("S", "A1", _fullwidth_digits("1.2024"), None),
+        ("S", "A2", _fullwidth_digits("13.2025"), None),
+        ("S", "A3", _fullwidth_digits("12.2025"), None),
+        ("S", "A4", _fullwidth_digits("20202020"), None),
+        ("S", "A5", _fullwidth_digits("2024.2025"), None),
+        ("S", "A6", "１．２０２４", None),
+        ("S", "A7", "١٢.٢٠٢٥", None),
+        ("S", "A8", "٢٠٢٠٢٠٢٠", None),
+    ]
+    for _sheet, _addr, text, _fmt in rows:
+        assert _unparsed_period_warning(text) == unparsed_period_shape(text), text
+    path = tmp_path / "cells.parquet"
+    write_parquet(path, _COLUMNS, rows, row_group_rows=0)
+    assert _period_warnings(path, False) == [
+        "Unparsed period header S!A1: «１.２０２４»",
+        "Unparsed period header S!A2: «１３.２０２５»",
+        "Unparsed period header S!A4: «２０２０２０２０»",
+        "Unparsed period header S!A5: «２０２４.２０２５»",
+        "Unparsed period header S!A6: «１．２０２４»",
+    ]
+
+
 def test_period_warnings_follow_file_order(tmp_path: Path) -> None:
     rows = [
         ("S", "A1", "Q5 2025", None),
