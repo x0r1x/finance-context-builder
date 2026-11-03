@@ -104,6 +104,9 @@ def build_context(
         name: selector_rows(rows, date1904, defined_names=defined_names, sheet=name)
         for name, rows in by_sheet_row.items()
     }
+    # Selector rows are plain ints. The formula table is not read again.
+    by_sheet_row = None
+    switch_rows = None
     axes, timeline_warnings = build_axes(layout, cells, date1904=date1904)
     if formula_stats is not None and book_dir is not None:
         timeline_warnings = [
@@ -754,35 +757,46 @@ def _occupied_from_file(path: Path) -> tuple[dict[str, set[int]], dict[str, set[
 def _switch_rows(
     path: Path, defined_names: list | None
 ) -> dict[str, dict[int, list[dict]]]:
-    """Formula rows plus the constant cells those formulas name as switches."""
-    from finance_context.layout.params import _names_on_sheet, _switch_args
+    """INDEX, CHOOSE, and OFFSET formulas, plus the constants they name.
+
+    A SUM or a plain reference cannot select a column. Keeping one dict per
+    formula on the sheet does not change which rows ``selector_rows`` returns,
+    and those other formulas are what made this table large. A formula outside
+    the layout still counts: two of them are enough to mark a constant.
+    """
+    from finance_context.layout.params import _names_on_sheet, _switch_args, _switch_call
     from finance_context.store.fs import read_parquet_dicts
 
-    formulas: list[dict] = []
+    by_sheet: dict[str, dict[int, list[dict]]] = {}
+    wanted: dict[str, set[str]] = {}
+    names_by_sheet: dict[str, dict[str, str]] = {}
     for sheets, rows, cols, addrs, raw in _iter_cell_columns(
         path, ["sheet", "row", "col", "addr", "formula_raw"]
     ):
         for index, formula in enumerate(raw):
             if not formula:
                 continue
-            formulas.append(
+            text = str(formula)
+            if not _switch_call(text):
+                continue
+            sheet = str(sheets[index])
+            names = names_by_sheet.setdefault(sheet, _names_on_sheet(defined_names, sheet))
+            args = _switch_args(text, names)
+            if not args:
+                continue
+            row_n = int(rows[index])
+            by_sheet.setdefault(sheet, {}).setdefault(row_n, []).append(
                 {
                     "sheet": sheets[index],
-                    "row": int(rows[index]),
+                    "row": row_n,
                     "col": int(cols[index]),
                     "addr": addrs[index],
                     "formula_raw": formula,
                 }
             )
-    by_sheet: dict[str, dict[int, list[dict]]] = {}
-    wanted: dict[str, set[str]] = {}
-    names_by_sheet: dict[str, dict[str, str]] = {}
-    for cell in formulas:
-        sheet = str(cell["sheet"])
-        by_sheet.setdefault(sheet, {}).setdefault(cell["row"], []).append(cell)
-        names = names_by_sheet.setdefault(sheet, _names_on_sheet(defined_names, sheet))
-        for addr in _switch_args(str(cell["formula_raw"]), names):
-            wanted.setdefault(sheet, set()).add(addr.upper().replace("$", ""))
+            bucket = wanted.setdefault(sheet, set())
+            for addr in args:
+                bucket.add(addr.upper().replace("$", ""))
     if not path.is_file():
         return by_sheet
     for sheet, addrs in wanted.items():
