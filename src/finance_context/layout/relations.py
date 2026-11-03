@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from bisect import bisect_left
+from collections.abc import Iterable
 from typing import Protocol
 
 from pydantic import BaseModel, Field
 
 from finance_context.layout.formulas_shape import RowPattern, _pattern_for_row
-from finance_context.layout.models import Block, Layout, LayoutRow
+from finance_context.layout.models import Block, Layout, LayoutRow, SheetLayout
 from finance_context.layout.resolve import period_headers
 
 
@@ -19,41 +21,93 @@ class RowRelation(BaseModel):
 
 class _RelationBook(Protocol):
     row_index: dict[tuple[str, int], tuple[object, object]]
+    sheet_rows: dict[str, list[tuple[int, str]]]
 
     def row_key(self, sheet: str, row: int, block_id: str) -> str: ...
 
 
 class _CellIndex:
-    def __init__(self, layout: Layout, cells: list[dict]) -> None:
-        self.cells = {
-            (str(cell["sheet"]), int(cell["row"]), int(cell["col"])): cell for cell in cells
-        }
+    def __init__(self, layout: Layout) -> None:
         self.row_index: dict[tuple[str, int], tuple[Block, LayoutRow]] = {}
         for sheet in layout.sheets:
             for block in sheet.blocks:
                 for row in block.rows:
                     self.row_index[(sheet.name, row.row)] = (block, row)
+        buckets: dict[str, list[tuple[int, str]]] = {}
+        for (name, row_n), (block, _layout_row) in self.row_index.items():
+            block_id = getattr(block, "block_id", None)
+            if block_id:
+                buckets.setdefault(name, []).append((row_n, block_id))
+        for rows in buckets.values():
+            rows.sort()
+        self.sheet_rows = buckets
 
     def row_key(self, sheet: str, row: int, block_id: str) -> str:
         return f"{sheet}|{row}|{block_id}"
 
 
-def formula_relations(layout: Layout, cells: list[dict]) -> list[RowRelation]:
-    """Formula-shape relations for alias, aggregate, difference, and roll-forward."""
-    book = _CellIndex(layout, cells)
+class _RowCells:
+    """Cells of one sheet row. ``_pattern_for_row`` reads ``.cells`` and nothing else."""
+
+    def __init__(self, cells: dict[tuple[str, int, int], dict]) -> None:
+        self.cells = cells
+
+
+def relation_period_cols(sheet: SheetLayout, block: Block) -> list[int]:
+    """Columns ``formula_relations`` reads on this block."""
+    headers = period_headers(sheet, block)
+    if getattr(block, "kind", "timeline") == "params":
+        return [header.col for header in headers if header.role in {"value", "unknown"}]
+    return [header.col for header in headers]
+
+
+def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation]:
+    """Formula-shape relations for alias, aggregate, difference, and roll-forward.
+
+    Cells of one sheet row are contiguous, which is how ``ir/cells.parquet`` is
+    stored and how ``load_relation_cells`` yields them. The row is reduced to a
+    pattern and its AST strings are dropped before the next row.
+    """
+    book = _CellIndex(layout)
+    periods: dict[tuple[str, int], list[list[int]]] = {}
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            cols = relation_period_cols(sheet, block)
+            for layout_row in block.rows:
+                periods.setdefault((sheet.name, layout_row.row), []).append(cols)
+    patterns: dict[tuple[str, int, tuple[int, ...]], RowPattern] = {}
+    current: tuple[str, int] | None = None
+    bucket: list[dict] = []
+
+    def flush() -> None:
+        nonlocal current
+        if current is None:
+            return
+        colmap = {(current[0], current[1], int(cell["col"])): cell for cell in bucket}
+        view = _RowCells(colmap)
+        for cols in periods.get(current, ()):
+            patterns[(current[0], current[1], tuple(cols))] = _pattern_for_row(
+                view, current[0], current[1], cols
+            )
+        bucket.clear()
+        current = None
+
+    for cell in cells:
+        key = (str(cell["sheet"]), int(cell["row"]))
+        if key != current:
+            flush()
+            current = key
+        bucket.append(cell)
+    flush()
+
     relations: list[RowRelation] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            headers = period_headers(sheet, block)
-            period_cols = [header.col for header in headers]
-            if getattr(block, "kind", "timeline") == "params":
-                period_cols = [
-                    header.col
-                    for header in headers
-                    if header.role in {"value", "unknown"}
-                ]
+            keyed = tuple(relation_period_cols(sheet, block))
             for layout_row in block.rows:
-                pattern = _pattern_for_row(book, sheet.name, layout_row.row, period_cols)
+                pattern = patterns.get((sheet.name, layout_row.row, keyed))
+                if pattern is None:
+                    continue
                 relation = _relation_from_pattern(book, sheet.name, block, layout_row, pattern)
                 if relation is not None:
                     relations.append(relation)
@@ -61,15 +115,12 @@ def formula_relations(layout: Layout, cells: list[dict]) -> list[RowRelation]:
 
 
 def _member_keys_in_span(book: _RelationBook, sheet: str, lo: int, hi: int) -> list[str]:
-    found: list[tuple[int, str]] = []
-    for (name, row_n), (block, _layout_row) in book.row_index.items():
-        if name != sheet or row_n < lo or row_n > hi:
-            continue
-        block_id = getattr(block, "block_id", None)
-        if block_id:
-            found.append((row_n, block_id))
-    found.sort()
-    return [book.row_key(sheet, row_n, block_id) for row_n, block_id in found]
+    rows = book.sheet_rows.get(sheet)
+    if not rows:
+        return []
+    start = bisect_left(rows, (lo,))
+    stop = bisect_left(rows, (hi + 1,))
+    return [book.row_key(sheet, row_n, block_id) for row_n, block_id in rows[start:stop]]
 
 
 def _block_id(book: _RelationBook, sheet: str, row: int) -> str | None:
