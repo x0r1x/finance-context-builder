@@ -7,11 +7,13 @@ from pathlib import Path
 
 from finance_context.excel.a1 import parse_addr
 from finance_context.formulas.models import as_edge
+from finance_context.layout.cells import LayoutCell
 from finance_context.layout.detect import _sheet_layout, detect_layout
 from finance_context.layout.models import Layout
 from finance_context.layout.timelines import link_workbook_timelines
 from finance_context.observability import log_event
 from finance_context.settings import Settings
+from finance_context.store.duckdb_io import _iter_parquet_rows
 from finance_context.store.fs import read_parquet, read_parquet_dicts, write_json
 
 _PARSE_FACTS = ("style_indent", "outline_level", "col_outline_level")
@@ -204,20 +206,56 @@ def _sheet_names(path: Path) -> list[str]:
     return seen
 
 
-def _read_layout_sheet(dest_dir: Path, sheet: str, meta: dict | None) -> list[dict]:
+def _read_layout_sheet(dest_dir: Path, sheet: str, meta: dict | None) -> list:
     path = dest_dir / "ir" / "cells.parquet"
     if not path.is_file():
         return []
-    cells = read_parquet_dicts(
+    cells: list[LayoutCell] = []
+    for names, batch in _iter_parquet_rows(
         path,
         list(_LAYOUT_COLUMNS),
         where="sheet = ?",
         params=[sheet],
-    )
+    ):
+        pos = {name: index for index, name in enumerate(names)}
+        sheet_i = pos["sheet"]
+        row_i = pos["row"]
+        col_i = pos["col"]
+        addr_i = pos["addr"]
+        formula_i = pos["formula_raw"]
+        template_i = pos["formula_template"]
+        cached_i = pos["cached_value"]
+        hidden_i = pos["hidden"]
+        format_i = pos["number_format"]
+        for record in batch:
+            cells.append(
+                LayoutCell(
+                    record[sheet_i],
+                    record[row_i],
+                    record[col_i],
+                    record[addr_i],
+                    record[formula_i],
+                    record[template_i],
+                    record[cached_i],
+                    record[hidden_i],
+                    record[format_i],
+                )
+            )
     if not cells:
         return []
     cells = _overlay_sheet_facts(dest_dir, sheet, cells)
     return _overlay_merges(cells, meta)
+
+
+def _with_updates(cell, updates: dict):
+    """Apply overlay fields. A layout record is updated in place; a dict is copied."""
+    if isinstance(cell, LayoutCell):
+        for key, value in updates.items():
+            cell[key] = value
+        return cell
+    copied = dict(cell)
+    copied.update(updates)
+    return copied
 
 
 def _read_flag_cells(dest_dir: Path, layout: Layout) -> list[dict]:
@@ -290,15 +328,13 @@ def _overlay_sheet_facts(dest_dir: Path, sheet: str, cells: list[dict]) -> list[
             facts[(int(raw.get("row") or 0), int(raw.get("col") or 0))] = picked
     if not facts:
         return cells
-    merged: list[dict] = []
+    merged: list = []
     for cell in cells:
         extra = facts.get((int(cell.get("row") or 0), int(cell.get("col") or 0)))
         if not extra:
             merged.append(cell)
             continue
-        updated = dict(cell)
-        updated.update(extra)
-        merged.append(updated)
+        merged.append(_with_updates(cell, extra))
     return merged
 
 
@@ -324,16 +360,14 @@ def _overlay_merges(cells: list[dict], meta: dict | None) -> list[dict]:
                 spans[(name, row, col)] = end_col
     if not spans:
         return cells
-    updated: list[dict] = []
+    updated: list = []
     for cell in cells:
         key = (str(cell.get("sheet")), int(cell.get("row") or 0), int(cell.get("col") or 0))
         end_col = spans.get(key)
         if end_col is None:
             updated.append(cell)
             continue
-        copied = dict(cell)
-        copied["merge_end_col"] = end_col
-        updated.append(copied)
+        updated.append(_with_updates(cell, {"merge_end_col": end_col}))
     return updated
 
 
@@ -376,19 +410,17 @@ def _overlay_parse_facts(
             facts[(raw.get("sheet"), int(raw.get("row") or 0), int(raw.get("col") or 0))] = picked
     if not facts:
         return cells
-    merged: list[dict] = []
+    merged: list = []
     for cell in cells:
         extra = facts.get((cell.get("sheet"), int(cell.get("row") or 0), int(cell.get("col") or 0)))
         if not extra:
             merged.append(cell)
             continue
-        updated = dict(cell)
-        updated.update(extra)
-        merged.append(updated)
+        merged.append(_with_updates(cell, extra))
     return merged
 
 
-def _overlay_facts_columnar(dest_dir: Path, cells: list[dict]) -> list[dict]:
+def _overlay_facts_columnar(dest_dir: Path, cells: list[dict]) -> list:
     """Scan fact columns in Arrow and skip the dict list when every value is zero."""
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
@@ -436,15 +468,13 @@ def _overlay_facts_columnar(dest_dir: Path, cells: list[dict]) -> list[dict]:
             facts[(sheet, int(rows[index] or 0), int(cols[index] or 0))] = extra
     if not facts:
         return cells
-    merged: list[dict] = []
+    merged: list = []
     for cell in cells:
         extra = facts.get((cell.get("sheet"), int(cell.get("row") or 0), int(cell.get("col") or 0)))
         if not extra:
             merged.append(cell)
             continue
-        updated = dict(cell)
-        updated.update(extra)
-        merged.append(updated)
+        merged.append(_with_updates(cell, extra))
     return merged
 
 
