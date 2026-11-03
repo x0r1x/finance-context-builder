@@ -907,3 +907,78 @@ def test_axis_inputs_do_not_inherit_the_stub_check_formula() -> None:
     check = next(cell for cell in row.cells if cell.addr == "G179")
     assert check.cached_value == "0"
     assert check.role == "value"
+
+
+def _write_columns(path: object, columns: dict[str, list[object]]) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    pq.write_table(pa.table(columns), path)
+
+
+def test_switch_name_index_is_built_once_per_sheet(tmp_path, monkeypatch) -> None:
+    from finance_context.context.build import _switch_rows
+    from finance_context.layout import params
+
+    calls: list[str] = []
+    real = params._names_on_sheet
+
+    def counted(defined_names, sheet):
+        calls.append(sheet)
+        return real(defined_names, sheet)
+
+    monkeypatch.setattr(params, "_names_on_sheet", counted)
+    path = tmp_path / "cells.parquet"
+    _write_columns(
+        path,
+        {
+            "sheet": ["Balance", "Balance", "Balance", "Other"],
+            "row": [1, 2, 3, 2],
+            "col": [1, 4, 4, 4],
+            "addr": ["A1", "D2", "D3", "D2"],
+            "formula_raw": [None, "=INDEX(B2:C2,Pick)", "=D2+1", "=INDEX(B2:C2,Pick)"],
+        },
+    )
+    names = [{"name": "Pick", "formula": "Balance!$A$1", "sheet": None}]
+    grouped = _switch_rows(path, names)
+    assert calls == ["Balance", "Other"]
+    balance_addrs = {
+        cell["addr"]
+        for rows in grouped["Balance"].values()
+        for cell in rows
+    }
+    assert "A1" in balance_addrs
+    assert "D2" in balance_addrs
+
+
+def test_amount_cells_skip_the_period_parser(tmp_path, monkeypatch) -> None:
+    from finance_context.context.build import _period_warnings
+    from finance_context.layout import periods
+
+    seen: list[str] = []
+    real = periods.unparsed_period_shape
+
+    def counted(text):
+        seen.append(text)
+        return real(text)
+
+    monkeypatch.setattr(
+        "finance_context.context.build.unparsed_period_shape",
+        counted,
+    )
+    path = tmp_path / "cells.parquet"
+    _write_columns(
+        path,
+        {
+            "sheet": ["S", "S", "S", "S", "S", "S"],
+            "addr": ["A1", "A2", "A3", "B1", "B2", "B3"],
+            "cached_value": ["3456,78", "12.5%", "1.2072", "Q5 2025", "１.２０２４", "9М 2025"],
+            "number_format": ["#,##0.00", "0.0%", "0.0", "General", "General", "General"],
+        },
+    )
+    warnings = _period_warnings(path, False)
+    assert seen == ["1.2", "Q5 2025", "１.２０２４", "9М 2025"]
+    assert not any("3456,78" in warning or "12.5%" in warning for warning in warnings)
+    assert any("Q5 2025" in warning for warning in warnings)
+    assert any("１.２０２４" in warning for warning in warnings)
+    assert not any("1.2072" in warning or "1.2" in warning for warning in warnings)

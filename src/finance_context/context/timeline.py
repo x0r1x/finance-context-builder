@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 
 from finance_context.excel.dates import is_date_format
@@ -63,6 +64,45 @@ def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
     return out
 
 
+# Punctuation of a cached amount. Anything else can be a period header.
+_AMOUNT_CHARS = set(" \xa0\u202f\u2009,.'’+-−–—()%")
+
+
+def _might_be_unparsed_period(raw: str) -> bool:
+    """False when this cached text cannot become an unparsed-period warning.
+
+    The warning needs a letter, other header punctuation, or a 19xx/20xx year.
+    A plain amount has none of those, so the period parser can stay off it.
+    """
+    if not raw:
+        return False
+    window: list[str] = []
+    for char in raw:
+        if char.isdigit():
+            window.append(char)
+            if len(window) > 4:
+                del window[0]
+            if len(window) == 4 and _year_in_window(window):
+                return True
+            continue
+        window.clear()
+        if char not in _AMOUNT_CHARS:
+            return True
+    return False
+
+
+def _year_in_window(window: list[str]) -> bool:
+    """True when four digits are a year 1900–2099. ``12024`` still sees ``2024``."""
+    if all("0" <= char <= "9" for char in window):
+        year = int("".join(window))
+    else:
+        text = unicodedata.normalize("NFKC", "".join(window))
+        if len(text) != 4 or not text.isdigit():
+            return False
+        year = int(text)
+    return 1900 <= year <= 2099
+
+
 def _period_warning_text(cell: dict, date1904: bool) -> str | None:
     """Text a header warning may use.
 
@@ -74,6 +114,8 @@ def _period_warning_text(cell: dict, date1904: bool) -> str | None:
     if value is None:
         return None
     raw = str(value)
+    if not _might_be_unparsed_period(raw):
+        return None
     fmt = cell.get("number_format")
     if isinstance(fmt, str) and _explicit_numeric_format(fmt) and _plain_number(raw):
         return _displayed_number(raw, fmt)

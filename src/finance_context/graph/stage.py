@@ -196,7 +196,7 @@ def _empty_target_ids(cell_edge_path: Path | None, cell_edges: list | None) -> l
         return []
     from finance_context.store.duckdb_io import limited_connection
 
-    with limited_connection() as con:
+    with limited_connection(cell_edge_path) as con:
         rows = con.execute(
             """
             SELECT target FROM (

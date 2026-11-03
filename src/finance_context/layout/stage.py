@@ -15,6 +15,7 @@ from finance_context.settings import Settings
 from finance_context.store.fs import read_parquet, read_parquet_dicts, write_json
 
 _PARSE_FACTS = ("style_indent", "outline_level", "col_outline_level")
+_PARQUET_BATCH = 65536
 # Columns detect reads. Comment and AST stay in the parquet file.
 _LAYOUT_COLUMNS = (
     "sheet",
@@ -95,11 +96,19 @@ def layout_workbook(
                 summary_below[name] = bool(sheet.get("summary_below"))
     defined_names = None if meta is None else meta.get("defined_names")
     if cells is None:
+        names, groups, facts = _timed_step(
+            "layout_cells_read",
+            "layout cells read done",
+            lambda: _load_layout_cells(dest_dir),
+        )
         layout = _timed_step(
             "layout_detect",
             "detect_layout done",
-            lambda: _detect_by_sheet(
+            lambda: _detect_from_groups(
                 dest_dir,
+                names,
+                groups,
+                facts,
                 date1904=date1904,
                 edges=edges,
                 hidden_sheets=hidden_sheets,
@@ -139,8 +148,33 @@ def layout_workbook(
     return layout
 
 
-def _detect_by_sheet(
+def _load_layout_cells(
     dest_dir: Path,
+) -> tuple[list[str], dict[str, list[dict]], dict[str, dict[tuple[int, int], dict[str, int]]]]:
+    """One pass over IR cells and one pass over raw indent and outline facts."""
+    names, groups = _group_layout_cells(dest_dir / "ir" / "cells.parquet")
+    return names, groups, _group_raw_facts(dest_dir / "raw" / "cells.parquet")
+
+
+def _load_layout_sheet_cells(dest_dir: Path) -> tuple[list[str], dict[str, list[dict]]]:
+    """Cells ``_sheet_layout`` receives. The quality check hashes this."""
+    meta = None
+    meta_path = dest_dir / "raw" / "workbook.json"
+    if meta_path.is_file():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    names, groups, facts = _load_layout_cells(dest_dir)
+    ready = {
+        name: _overlay_merges(_apply_sheet_facts(groups[name], facts.get(name)), meta)
+        for name in names
+    }
+    return names, ready
+
+
+def _detect_from_groups(
+    dest_dir: Path,
+    names: list[str],
+    groups: dict[str, list[dict]],
+    facts: dict[str, dict[tuple[int, int], dict[str, int]]],
     *,
     date1904: bool,
     edges: list[dict] | None,
@@ -151,13 +185,14 @@ def _detect_by_sheet(
     defined_names: list | None,
     meta: dict | None,
 ) -> Layout:
-    """One sheet in memory at a time. Shared timelines then read flag rows only."""
+    """Lay out one sheet, then drop its cells. Shared timelines read flag rows only."""
     prepared = None if edges is None else [as_edge(edge) for edge in edges]
     sheets = []
-    for name in _sheet_names(dest_dir / "ir" / "cells.parquet"):
-        sheet_cells = _read_layout_sheet(dest_dir, name, meta)
+    for name in names:
+        sheet_cells = _apply_sheet_facts(groups.pop(name), facts.pop(name, None))
         if not sheet_cells:
             continue
+        sheet_cells = _overlay_merges(sheet_cells, meta)
         sheets.append(
             _sheet_layout(
                 name,
@@ -172,9 +207,36 @@ def _detect_by_sheet(
             )
         )
         del sheet_cells
+    groups.clear()
+    facts.clear()
     layout = Layout(sheets=sheets)
     link_workbook_timelines(layout, _read_flag_cells(dest_dir, layout), date1904)
     return layout
+
+
+def _group_layout_cells(path: Path) -> tuple[list[str], dict[str, list[dict]]]:
+    """Layout columns in one scan. Sheet order is first-seen file order.
+
+    Cells of a sheet stay in file order when a later row group returns to it.
+    Comment and AST columns stay in the file.
+    """
+    if not path.is_file():
+        return [], {}
+    import pyarrow.parquet as pq
+
+    names: list[str] = []
+    groups: dict[str, list[dict]] = {}
+    columns = list(_LAYOUT_COLUMNS)
+    for batch in pq.ParquetFile(path).iter_batches(columns=columns, batch_size=_PARQUET_BATCH):
+        for cell in batch.to_pylist():
+            name = str(cell["sheet"])
+            bucket = groups.get(name)
+            if bucket is None:
+                bucket = []
+                groups[name] = bucket
+                names.append(name)
+            bucket.append(cell)
+    return names, groups
 
 
 def load_relation_cells(dest_dir: Path, layout: Layout) -> list[dict]:
@@ -195,7 +257,7 @@ def _sheet_names(path: Path) -> list[str]:
 
     seen: list[str] = []
     known: set[str] = set()
-    for batch in pq.ParquetFile(path).iter_batches(columns=["sheet"], batch_size=65536):
+    for batch in pq.ParquetFile(path).iter_batches(columns=["sheet"], batch_size=_PARQUET_BATCH):
         for name in batch.column(0).to_pylist():
             if name in known:
                 continue
@@ -273,22 +335,87 @@ def _overlay_sheet_facts(dest_dir: Path, sheet: str, cells: list[dict]) -> list[
         ),
         params=[sheet],
     )
+    return _apply_sheet_facts(cells, _facts_from_rows(raw_rows))
+
+
+def _group_raw_facts(path: Path) -> dict[str, dict[tuple[int, int], dict[str, int]]]:
+    """Positive indent and outline levels from one raw scan, keyed by sheet."""
+    if not path.is_file():
+        return {}
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    columns = ["sheet", "row", "col", *_PARSE_FACTS]
+    try:
+        schema = pq.read_schema(path)
+    except (OSError, ValueError):
+        return {}
+    if any(name not in schema.names for name in columns):
+        return {}
+    table = pq.read_table(path, columns=columns)
+    mask = None
+    for key in _PARSE_FACTS:
+        filled = pc.fill_null(table.column(key), 0)
+        positive = pc.greater(filled, 0)
+        mask = positive if mask is None else pc.or_kleene(mask, positive)
+    matched = int(pc.sum(pc.fill_null(mask, False)).as_py() or 0)
+    if matched == 0:
+        del table
+        return {}
+    picked = table.filter(mask)
+    del table
+    sheets = picked.column("sheet").to_pylist()
+    rows = picked.column("row").to_pylist()
+    cols = picked.column("col").to_pylist()
+    fact_cols = {key: picked.column(key).to_pylist() for key in _PARSE_FACTS}
+    del picked
+    grouped: dict[str, dict[tuple[int, int], dict[str, int]]] = {}
+    for index, sheet in enumerate(sheets):
+        raw = {"row": rows[index], "col": cols[index]}
+        for key in _PARSE_FACTS:
+            raw[key] = fact_cols[key][index]
+        extra = _picked_facts(raw)
+        if not extra:
+            continue
+        name = str(sheet)
+        bucket = grouped.get(name)
+        if bucket is None:
+            bucket = {}
+            grouped[name] = bucket
+        bucket[(int(raw.get("row") or 0), int(raw.get("col") or 0))] = extra
+    return grouped
+
+
+def _facts_from_rows(raw_rows: list[dict]) -> dict[tuple[int, int], dict[str, int]] | None:
     facts: dict[tuple[int, int], dict[str, int]] = {}
     for raw in raw_rows:
-        picked: dict[str, int] = {}
-        for key in _PARSE_FACTS:
-            value = raw.get(key)
-            if not value:
-                continue
-            try:
-                number = int(value)
-            except (TypeError, ValueError):
-                continue
-            if number > 0:
-                picked[key] = number
-        if picked:
-            facts[(int(raw.get("row") or 0), int(raw.get("col") or 0))] = picked
-    if not facts:
+        extra = _picked_facts(raw)
+        if extra:
+            facts[(int(raw.get("row") or 0), int(raw.get("col") or 0))] = extra
+    return facts or None
+
+
+def _picked_facts(raw: dict) -> dict[str, int]:
+    picked: dict[str, int] = {}
+    for key in _PARSE_FACTS:
+        value = raw.get(key)
+        if not value:
+            continue
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            picked[key] = number
+    return picked
+
+
+def _apply_sheet_facts(
+    cells: list[dict],
+    facts: dict[tuple[int, int], dict[str, int]] | None,
+) -> list[dict]:
+    """Copy positive facts onto cells. No facts leaves the list as it is."""
+    if not cells or not facts:
         return cells
     merged: list[dict] = []
     for cell in cells:

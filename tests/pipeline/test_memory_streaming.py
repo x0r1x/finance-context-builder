@@ -189,6 +189,24 @@ def test_trim_is_safe() -> None:
     assert trim_process_heap() in {True, False}
 
 
+def test_trim_ignores_a_libc_that_cannot_be_opened(monkeypatch) -> None:
+    import finance_context.memory as memory
+
+    def refuse(_name: object) -> None:
+        raise TypeError("no libc")
+
+    old_resolved = memory._trim_resolved
+    old_fn = memory._trim_fn
+    monkeypatch.setattr(memory.ctypes, "CDLL", refuse)
+    memory._trim_resolved = False
+    memory._trim_fn = None
+    try:
+        assert memory.trim_process_heap() is False
+    finally:
+        memory._trim_resolved = old_resolved
+        memory._trim_fn = old_fn
+
+
 def test_streamed_json_matches_dumps(tmp_path: Path) -> None:
     from finance_context.store.fs import write_json
 

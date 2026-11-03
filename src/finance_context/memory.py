@@ -84,7 +84,7 @@ def trim_process_heap() -> bool:
         try:
             libc = ctypes.CDLL(None)
             fn = getattr(libc, "malloc_trim", None)
-        except (OSError, AttributeError):
+        except (OSError, AttributeError, TypeError):
             fn = None
         if fn is not None:
             fn.argtypes = [ctypes.c_size_t]
@@ -95,7 +95,7 @@ def trim_process_heap() -> bool:
         return False
     try:
         return bool(fn(0))  # type: ignore[operator]
-    except (OSError, AttributeError):
+    except (OSError, AttributeError, TypeError):
         return False
 
 

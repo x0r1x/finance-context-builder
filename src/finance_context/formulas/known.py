@@ -63,6 +63,13 @@ class KnownNodes:
             return True
         return any(columns for columns in self._rows.values())
 
+    def clear(self) -> None:
+        self._open.clear()
+        self._closed.clear()
+        self._literals.clear()
+        self._rows.clear()
+        self._ready = False
+
     def _touch(self, sheet: str, col: int, row: int) -> None:
         key = (sheet, col)
         run = self._open.get(key)
