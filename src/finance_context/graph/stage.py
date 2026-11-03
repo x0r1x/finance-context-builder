@@ -896,46 +896,49 @@ def _cycles_packed(
     if not id_of:
         return []
     nodes = sorted(id_of)
-    rank = {id_of[name]: index for index, name in enumerate(nodes)}
+    n = len(nodes)
+    # slot -> index in `nodes`. An array, not a dict of every node.
+    rank = np.empty(n, dtype=np.int32)
+    rank[np.fromiter((id_of[name] for name in nodes), dtype=np.int32, count=n)] = np.arange(
+        n, dtype=np.int32
+    )
     n_edges = len(src_ids)
-    rows = np.fromiter((rank[i] for i in src_ids), dtype=np.int32, count=n_edges)
-    cols = np.fromiter((rank[i] for i in tgt_ids), dtype=np.int32, count=n_edges)
+    if n_edges:
+        rows = rank[np.asarray(src_ids, dtype=np.int32)]
+        cols = rank[np.asarray(tgt_ids, dtype=np.int32)]
+    else:
+        rows = np.empty(0, dtype=np.int32)
+        cols = np.empty(0, dtype=np.int32)
     data = np.ones(n_edges, dtype=np.uint8)
-    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(len(nodes), len(nodes)), dtype=np.uint8)
+    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.uint8)
     _n_comp, labels = connected_components(matrix, directed=True, connection="strong")
-    order: list[int] = []
-    members: dict[int, list[str]] = {}
-    for name, label_raw in zip(nodes, labels, strict=True):
-        label = int(label_raw)
-        bucket = members.get(label)
-        if bucket is None:
-            members[label] = [name]
-            order.append(label)
-        else:
-            bucket.append(name)
+    del matrix
     sizes = np.bincount(labels)
     all_period: dict[int, bool] = {}
     saw: set[int] = set()
     self_loop: set[int] = set()
-    same = labels[rows] == labels[cols]
-    for pos_raw in np.flatnonzero(same):
-        pos = int(pos_raw)
-        label = int(labels[rows[pos]])
-        if sizes[label] < 2 and int(rows[pos]) != int(cols[pos]):
-            continue
-        if flags[pos] == _STRUCTURAL:
-            continue
-        saw.add(label)
-        if int(rows[pos]) == int(cols[pos]):
-            self_loop.add(label)
-        bit = bool(flags[pos])
-        previous = all_period.get(label)
-        all_period[label] = bit if previous is None else previous and bit
+    if n_edges:
+        same = labels[rows] == labels[cols]
+        for pos_raw in np.flatnonzero(same):
+            pos = int(pos_raw)
+            label = int(labels[rows[pos]])
+            if sizes[label] < 2 and int(rows[pos]) != int(cols[pos]):
+                continue
+            if flags[pos] == _STRUCTURAL:
+                continue
+            saw.add(label)
+            if int(rows[pos]) == int(cols[pos]):
+                self_loop.add(label)
+            bit = bool(flags[pos])
+            previous = all_period.get(label)
+            all_period[label] = bit if previous is None else previous and bit
+        del same
+    del rows, cols
     if extra is not None:
 
-        def label_of(name: str) -> int | None:
+        def label_of(name: str, _labels=labels, _rank=rank) -> int | None:
             slot = id_of.get(name)
-            return None if slot is None else int(labels[rank[slot]])
+            return None if slot is None else int(_labels[int(_rank[slot])])
 
         for label, bit, is_self in extra(label_of):
             saw.add(label)
@@ -943,6 +946,21 @@ def _cycles_packed(
                 self_loop.add(label)
             previous = all_period.get(label)
             all_period[label] = bit if previous is None else previous and bit
+    del rank
+    # Member lists only for components that can be cycles. Singletons stay in `labels`.
+    order: list[int] = []
+    members: dict[int, list[str]] = {}
+    for name, label_raw in zip(nodes, labels, strict=True):
+        label = int(label_raw)
+        if sizes[label] < 2 and label not in self_loop:
+            continue
+        bucket = members.get(label)
+        if bucket is None:
+            members[label] = [name]
+            order.append(label)
+        else:
+            bucket.append(name)
+    del nodes, labels, sizes
     cycles: list[CycleRecord] = []
     seq = 1
     for label in order:
