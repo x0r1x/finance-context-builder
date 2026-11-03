@@ -259,6 +259,30 @@ def test_layout_workbook_logs_cells_read_detect_and_write(tmp_path: Path) -> Non
         assert row["duration_ms"] >= 0
 
 
+def test_one_pass_spills_each_sheet_before_the_next_is_loaded(tmp_path: Path) -> None:
+    dest = tmp_path / "book"
+    write_parquet(
+        dest / "ir" / "cells.parquet",
+        IR_CELL_COLUMNS,
+        [
+            _ir_tuple("Two", "A1", "Title"),
+            _ir_tuple("One", "A1", "Item"),
+            _ir_tuple("Two", "B1", "2024"),
+        ],
+    )
+    names, sheets = layout_stage._group_layout_cells(dest / "ir" / "cells.parquet")
+    try:
+        assert names == ["Two", "One"]
+        assert sheets._dir.parent == dest / "ir"
+        assert all(path.is_file() for paths in sheets._parts.values() for path in paths)
+        loaded = sheets.pop("Two")
+        assert [cell["addr"] for cell in loaded] == ["A1", "B1"]
+        assert sheets._parts["One"]
+        assert all(path.is_file() for path in sheets._parts["One"])
+    finally:
+        sheets.close()
+
+
 def test_one_pass_cells_match_per_sheet_reads_when_sheets_interleave(tmp_path: Path) -> None:
     dest = tmp_path / "book"
     write_parquet(

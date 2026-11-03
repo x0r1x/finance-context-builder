@@ -58,6 +58,17 @@ def test_spill_cap_stays_one_gibibyte_when_the_volume_cannot_be_read(tmp_path, m
     assert _spill_limit_setting(tmp_path, "1GB", _GIB) == "1GB"
 
 
+def test_rounded_spill_under_the_floor_keeps_the_setting(tmp_path, monkeypatch):
+    floor = 1_000_000_000
+    monkeypatch.setattr(
+        duckdb_io.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=floor + _GIB + 1),
+    )
+    assert _spill_limit_bytes(tmp_path, floor) > floor
+    assert _spill_limit_setting(tmp_path, "1GB", floor) == "1GB"
+
+
 def test_two_gibibyte_cap_is_reported_as_gigabytes(tmp_path, monkeypatch):
     monkeypatch.setattr(
         duckdb_io.shutil, "disk_usage", lambda _path: SimpleNamespace(free=100 * _GIB)

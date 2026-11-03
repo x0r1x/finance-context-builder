@@ -396,6 +396,25 @@ def test_unpublished_axis_note_is_not_a_context_warning() -> None:
     assert all("orphan" not in warning for warning in warnings)
 
 
+def test_spaced_year_still_warns_and_a_plain_amount_does_not() -> None:
+    from finance_context.context.timeline import _unparsed_period_warnings
+
+    cells = [
+        {"sheet": "Модель", "addr": "F1", "cached_value": "1.20 24"},
+        {"sheet": "Модель", "addr": "G1", "cached_value": "1.2024"},
+        {"sheet": "Модель", "addr": "H1", "cached_value": "20 24-20 25"},
+        {"sheet": "Модель", "addr": "I1", "cached_value": "20\xa024-20\xa025"},
+        {"sheet": "Модель", "addr": "J1", "cached_value": "1 234,56"},
+        {"sheet": "Модель", "addr": "K1", "cached_value": "10"},
+    ]
+    warnings = _unparsed_period_warnings(cells, False)
+    assert any("F1" in item and "1.20 24" in item for item in warnings)
+    assert any("G1" in item and "1.2024" in item for item in warnings)
+    assert any("H1" in item and "20 24-20 25" in item for item in warnings)
+    assert any("I1" in item for item in warnings)
+    assert all("J1" not in item and "K1" not in item for item in warnings)
+
+
 def test_unparsed_period_header_warns_without_becoming_a_period() -> None:
     cells = _ru_timeline(("Выручка", ["1", "2", "3", "4"]))
     cells.append(_c("Модель", "F1", "Q5 2025"))

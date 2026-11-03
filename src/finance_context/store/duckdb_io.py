@@ -807,9 +807,18 @@ def _spill_limit_setting(anchor: Path, floor_text: str, floor: int) -> str:
     if size == floor:
         return floor_text
     gibibyte = 1 << 30
+    mebibyte = 1 << 20
     if size % gibibyte == 0:
-        return f"{size // gibibyte}GiB"
-    return f"{size // (1 << 20)}MiB"
+        rounded = size
+        text = f"{size // gibibyte}GiB"
+    else:
+        rounded = (size // mebibyte) * mebibyte
+        text = f"{size // mebibyte}MiB"
+    # ``1GB`` is 1e9 bytes. Rounding the byte cap down to a whole MiB can
+    # land under that floor and fail a sort the setting already allowed.
+    if rounded < floor:
+        return floor_text
+    return text
 
 
 @contextmanager

@@ -66,6 +66,9 @@ def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
 
 # Punctuation of a cached amount. Anything else can be a period header.
 _AMOUNT_CHARS = set(" \xa0\u202f\u2009,.'’+-−–—()%")
+# Header normalization deletes these between digits (`1.20 24` → `1.2024`).
+# They must not wipe a year that is still being accumulated.
+_YEAR_GAP = frozenset(" \xa0\u202f\u2009")
 
 
 def _might_be_unparsed_period(raw: str) -> bool:
@@ -73,6 +76,8 @@ def _might_be_unparsed_period(raw: str) -> bool:
 
     The warning needs a letter, other header punctuation, or a 19xx/20xx year.
     A plain amount has none of those, so the period parser can stay off it.
+    A space inside the year stays out of the window and does not clear it.
+    ``1 234,56`` still has no 1900–2099 run.
     """
     if not raw:
         return False
@@ -84,6 +89,8 @@ def _might_be_unparsed_period(raw: str) -> bool:
                 del window[0]
             if len(window) == 4 and _year_in_window(window):
                 return True
+            continue
+        if char in _YEAR_GAP:
             continue
         window.clear()
         if char not in _AMOUNT_CHARS:

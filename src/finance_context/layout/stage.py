@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -152,30 +154,38 @@ def layout_workbook(
 
 def _load_layout_cells(
     dest_dir: Path,
-) -> tuple[list[str], dict[str, list[dict]], dict[str, dict[tuple[int, int], dict[str, int]]]]:
+) -> tuple[list[str], _SheetSpill, dict[str, dict[tuple[int, int], dict[str, int]]]]:
     """One pass over IR cells and one pass over raw indent and outline facts."""
-    names, groups = _group_layout_cells(dest_dir / "ir" / "cells.parquet")
-    return names, groups, _group_raw_facts(dest_dir / "raw" / "cells.parquet")
+    names, sheets = _group_layout_cells(dest_dir / "ir" / "cells.parquet")
+    try:
+        facts = _group_raw_facts(dest_dir / "raw" / "cells.parquet")
+    except Exception:
+        sheets.close()
+        raise
+    return names, sheets, facts
 
 
-def _load_layout_sheet_cells(dest_dir: Path) -> tuple[list[str], dict[str, list[dict]]]:
+def _load_layout_sheet_cells(dest_dir: Path) -> tuple[list[str], dict[str, list]]:
     """Cells ``_sheet_layout`` receives. The quality check hashes this."""
     meta = None
     meta_path = dest_dir / "raw" / "workbook.json"
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    names, groups, facts = _load_layout_cells(dest_dir)
-    ready = {
-        name: _overlay_merges(_apply_sheet_facts(groups[name], facts.get(name)), meta)
-        for name in names
-    }
+    names, sheets, facts = _load_layout_cells(dest_dir)
+    try:
+        ready = {
+            name: _overlay_merges(_apply_sheet_facts(sheets.pop(name), facts.get(name)), meta)
+            for name in names
+        }
+    finally:
+        sheets.close()
     return names, ready
 
 
 def _detect_from_groups(
     dest_dir: Path,
     names: list[str],
-    groups: dict[str, list[dict]],
+    groups: _SheetSpill,
     facts: dict[str, dict[tuple[int, int], dict[str, int]]],
     *,
     date1904: bool,
@@ -190,55 +200,134 @@ def _detect_from_groups(
     """Lay out one sheet, then drop its cells. Shared timelines read flag rows only."""
     prepared = None if edges is None else [as_edge(edge) for edge in edges]
     sheets = []
-    for name in names:
-        sheet_cells = _apply_sheet_facts(groups.pop(name), facts.pop(name, None))
-        if not sheet_cells:
-            continue
-        sheet_cells = _overlay_merges(sheet_cells, meta)
-        sheets.append(
-            _sheet_layout(
-                name,
-                sheet_cells,
-                date1904=date1904,
-                edges=prepared,
-                hidden_sheets=hidden_sheets,
-                hidden_columns=hidden_columns,
-                hidden_rows=hidden_rows,
-                summary_below=summary_below,
-                defined_names=defined_names,
+    try:
+        for name in names:
+            sheet_cells = _apply_sheet_facts(groups.pop(name), facts.pop(name, None))
+            if not sheet_cells:
+                continue
+            sheet_cells = _overlay_merges(sheet_cells, meta)
+            sheets.append(
+                _sheet_layout(
+                    name,
+                    sheet_cells,
+                    date1904=date1904,
+                    edges=prepared,
+                    hidden_sheets=hidden_sheets,
+                    hidden_columns=hidden_columns,
+                    hidden_rows=hidden_rows,
+                    summary_below=summary_below,
+                    defined_names=defined_names,
+                )
             )
+            del sheet_cells
+        facts.clear()
+        layout = Layout(sheets=sheets)
+        link_workbook_timelines(layout, _read_flag_cells(dest_dir, layout), date1904)
+        return layout
+    finally:
+        groups.close()
+
+
+class _SheetSpill:
+    """One parquet scan. Each batch is flushed to disk, one sheet loaded on ``pop``."""
+
+    def __init__(self, anchor: Path | None = None) -> None:
+        self.names: list[str] = []
+        directory = None
+        if anchor is not None:
+            parent = anchor if anchor.is_dir() else anchor.parent
+            if parent.is_dir():
+                directory = parent
+        # Beside the workbook, not on a memory-backed temp disk.
+        self._dir = Path(tempfile.mkdtemp(prefix=".layout-sheets-", dir=directory))
+        self._seen: set[str] = set()
+        self._parts: dict[str, list[Path]] = {}
+        self._seq = 0
+
+    def write_batch(self, batch) -> None:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        import pyarrow.parquet as pq
+
+        order: list[str] = []
+        known: set[str] = set()
+        for value in batch.column("sheet").to_pylist():
+            name = str(value)
+            if name in known:
+                continue
+            known.add(name)
+            order.append(name)
+        for name in order:
+            if name not in self._seen:
+                self._seen.add(name)
+                self.names.append(name)
+                self._parts[name] = []
+            part = batch.filter(pc.equal(batch.column("sheet"), name))
+            if part.num_rows == 0:
+                continue
+            path = self._dir / f"{self._seq}.parquet"
+            self._seq += 1
+            pq.write_table(pa.Table.from_batches([part]), path)
+            self._parts[name].append(path)
+
+    def pop(self, name: str) -> list[LayoutCell]:
+        paths = self._parts.pop(name, [])
+        cells: list[LayoutCell] = []
+        try:
+            for path in paths:
+                cells.extend(_layout_cells_from_parquet(path))
+        finally:
+            for path in paths:
+                path.unlink(missing_ok=True)
+        return cells
+
+    def close(self) -> None:
+        self._parts.clear()
+        shutil.rmtree(self._dir, ignore_errors=True)
+
+
+def _layout_cells_from_parquet(path: Path) -> list[LayoutCell]:
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path, columns=list(_LAYOUT_COLUMNS))
+    columns = {name: table.column(name).to_pylist() for name in _LAYOUT_COLUMNS}
+    count = table.num_rows
+    del table
+    return [
+        LayoutCell(
+            columns["sheet"][index],
+            columns["row"][index],
+            columns["col"][index],
+            columns["addr"][index],
+            columns["formula_raw"][index],
+            columns["formula_template"][index],
+            columns["cached_value"][index],
+            columns["hidden"][index],
+            columns["number_format"][index],
         )
-        del sheet_cells
-    groups.clear()
-    facts.clear()
-    layout = Layout(sheets=sheets)
-    link_workbook_timelines(layout, _read_flag_cells(dest_dir, layout), date1904)
-    return layout
+        for index in range(count)
+    ]
 
 
-def _group_layout_cells(path: Path) -> tuple[list[str], dict[str, list[dict]]]:
+def _group_layout_cells(path: Path) -> tuple[list[str], _SheetSpill]:
     """Layout columns in one scan. Sheet order is first-seen file order.
 
     Cells of a sheet stay in file order when a later row group returns to it.
-    Comment and AST columns stay in the file.
+    Each sheet is a temp file until ``pop``. Comment and AST columns stay unread.
     """
+    spill = _SheetSpill(path.parent)
     if not path.is_file():
-        return [], {}
+        return [], spill
     import pyarrow.parquet as pq
 
-    names: list[str] = []
-    groups: dict[str, list[dict]] = {}
-    columns = list(_LAYOUT_COLUMNS)
-    for batch in pq.ParquetFile(path).iter_batches(columns=columns, batch_size=_PARQUET_BATCH):
-        for cell in batch.to_pylist():
-            name = str(cell["sheet"])
-            bucket = groups.get(name)
-            if bucket is None:
-                bucket = []
-                groups[name] = bucket
-                names.append(name)
-            bucket.append(cell)
-    return names, groups
+    try:
+        columns = list(_LAYOUT_COLUMNS)
+        for batch in pq.ParquetFile(path).iter_batches(columns=columns, batch_size=_PARQUET_BATCH):
+            spill.write_batch(batch)
+    except Exception:
+        spill.close()
+        raise
+    return spill.names, spill
 
 
 def load_relation_cells(dest_dir: Path, layout: Layout) -> list[dict]:
