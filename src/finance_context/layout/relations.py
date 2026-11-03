@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Iterable
 from typing import Protocol
 
@@ -20,6 +21,7 @@ class RowRelation(BaseModel):
 
 class _RelationBook(Protocol):
     row_index: dict[tuple[str, int], tuple[object, object]]
+    sheet_rows: dict[str, list[tuple[int, str]]]
 
     def row_key(self, sheet: str, row: int, block_id: str) -> str: ...
 
@@ -31,6 +33,14 @@ class _CellIndex:
             for block in sheet.blocks:
                 for row in block.rows:
                     self.row_index[(sheet.name, row.row)] = (block, row)
+        buckets: dict[str, list[tuple[int, str]]] = {}
+        for (name, row_n), (block, _layout_row) in self.row_index.items():
+            block_id = getattr(block, "block_id", None)
+            if block_id:
+                buckets.setdefault(name, []).append((row_n, block_id))
+        for rows in buckets.values():
+            rows.sort()
+        self.sheet_rows = buckets
 
     def row_key(self, sheet: str, row: int, block_id: str) -> str:
         return f"{sheet}|{row}|{block_id}"
@@ -105,15 +115,12 @@ def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation
 
 
 def _member_keys_in_span(book: _RelationBook, sheet: str, lo: int, hi: int) -> list[str]:
-    found: list[tuple[int, str]] = []
-    for (name, row_n), (block, _layout_row) in book.row_index.items():
-        if name != sheet or row_n < lo or row_n > hi:
-            continue
-        block_id = getattr(block, "block_id", None)
-        if block_id:
-            found.append((row_n, block_id))
-    found.sort()
-    return [book.row_key(sheet, row_n, block_id) for row_n, block_id in found]
+    rows = book.sheet_rows.get(sheet)
+    if not rows:
+        return []
+    start = bisect_left(rows, (lo,))
+    stop = bisect_left(rows, (hi + 1,))
+    return [book.row_key(sheet, row_n, block_id) for row_n, block_id in rows[start:stop]]
 
 
 def _block_id(book: _RelationBook, sheet: str, row: int) -> str | None:
