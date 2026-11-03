@@ -406,13 +406,24 @@ def test_spaced_year_still_warns_and_a_plain_amount_does_not() -> None:
         {"sheet": "Модель", "addr": "I1", "cached_value": "20\xa024-20\xa025"},
         {"sheet": "Модель", "addr": "J1", "cached_value": "1 234,56"},
         {"sheet": "Модель", "addr": "K1", "cached_value": "10"},
+        {"sheet": "Модель", "addr": "L1", "cached_value": "01.02.24 03.04.24"},
+        {"sheet": "Модель", "addr": "M1", "cached_value": "01.02.24-03.04.24"},
+        {"sheet": "Модель", "addr": "N1", "cached_value": "01.02.24 – 03.04.24"},
+        {"sheet": "Модель", "addr": "O1", "cached_value": "1.2.24 3.4.24"},
+        {"sheet": "Модель", "addr": "P1", "cached_value": "01/02/24 03/04/24"},
+        {"sheet": "Модель", "addr": "Q1", "cached_value": "12.34.56.78"},
     ]
     warnings = _unparsed_period_warnings(cells, False)
     assert any("F1" in item and "1.20 24" in item for item in warnings)
     assert any("G1" in item and "1.2024" in item for item in warnings)
     assert any("H1" in item and "20 24-20 25" in item for item in warnings)
     assert any("I1" in item for item in warnings)
-    assert all("J1" not in item and "K1" not in item for item in warnings)
+    assert any("L1" in item and "01.02.24 03.04.24" in item for item in warnings)
+    assert any("M1" in item and "01.02.24-03.04.24" in item for item in warnings)
+    assert any("N1" in item and "01.02.24 – 03.04.24" in item for item in warnings)
+    assert any("O1" in item and "1.2.24 3.4.24" in item for item in warnings)
+    assert any("P1" in item and "01/02/24 03/04/24" in item for item in warnings)
+    assert all("J1" not in item and "K1" not in item and "Q1" not in item for item in warnings)
 
 
 def test_unparsed_period_header_warns_without_becoming_a_period() -> None:

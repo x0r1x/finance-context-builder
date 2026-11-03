@@ -1,4 +1,8 @@
-"""DuckDB spill stays inside a 4 GiB pod: 256MB, one thread, at most 2 GiB of disk."""
+"""DuckDB spill stays inside a 4 GiB pod: 256MB, one thread, at most 2 GiB each.
+
+The free-space raise is shared across the configured concurrent jobs. One job
+on a large disk may still reach 2 GiB. Four jobs on a 4 GiB volume stay at the floor.
+"""
 
 from __future__ import annotations
 
@@ -35,18 +39,32 @@ def _parse_size(value: object) -> float:
 
 
 @pytest.mark.parametrize(
-    ("free", "expected"),
+    ("free", "slots", "expected"),
     [
-        (100 * _GIB, 2 * _GIB),
-        (4 * _GIB, 2 * _GIB),
-        (int(2.5 * _GIB), int(1.5 * _GIB)),
-        (int(1.5 * _GIB), _GIB),
-        (_GIB // 2, _GIB),
+        (100 * _GIB, 4, 2 * _GIB),
+        (4 * _GIB, 4, _GIB),
+        (4 * _GIB, 1, 2 * _GIB),
+        (int(2.5 * _GIB), 4, _GIB),
+        (int(2.5 * _GIB), 1, int(1.5 * _GIB)),
+        (int(1.5 * _GIB), 4, _GIB),
+        (_GIB // 2, 4, _GIB),
     ],
 )
-def test_spill_cap_fits_a_four_gigabyte_pod(tmp_path: Path, monkeypatch, free: int, expected: int):
+def test_spill_cap_fits_a_four_gigabyte_pod(
+    tmp_path: Path, monkeypatch, free: int, slots: int, expected: int
+):
     monkeypatch.setattr(duckdb_io.shutil, "disk_usage", lambda _path: SimpleNamespace(free=free))
-    assert _spill_limit_bytes(tmp_path, _GIB) == expected
+    assert _spill_limit_bytes(tmp_path, _GIB, slots) == expected
+
+
+def test_spill_share_follows_the_configured_job_slots(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        duckdb_io.shutil, "disk_usage", lambda _path: SimpleNamespace(free=4 * _GIB)
+    )
+    monkeypatch.setattr(duckdb_io, "_spill_job_slots", lambda: 4)
+    assert _spill_limit_bytes(tmp_path, _GIB) == _GIB
+    monkeypatch.setattr(duckdb_io, "_spill_job_slots", lambda: 1)
+    assert _spill_limit_bytes(tmp_path, _GIB) == 2 * _GIB
 
 
 def test_spill_cap_stays_one_gibibyte_when_the_volume_cannot_be_read(tmp_path, monkeypatch):
@@ -65,8 +83,8 @@ def test_rounded_spill_under_the_floor_keeps_the_setting(tmp_path, monkeypatch):
         "disk_usage",
         lambda _path: SimpleNamespace(free=floor + _GIB + 1),
     )
-    assert _spill_limit_bytes(tmp_path, floor) > floor
-    assert _spill_limit_setting(tmp_path, "1GB", floor) == "1GB"
+    assert _spill_limit_bytes(tmp_path, floor, slots=1) > floor
+    assert _spill_limit_setting(tmp_path, "1GB", floor, slots=1) == "1GB"
 
 
 def test_two_gibibyte_cap_is_reported_as_gigabytes(tmp_path, monkeypatch):

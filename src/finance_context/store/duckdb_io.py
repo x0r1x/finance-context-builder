@@ -52,9 +52,9 @@ _OBJECT_SIZE_SQL = "SELECT size FROM read_blob(?)"
 _HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
 _S3_LINE = re.compile(r"(?m)^([A-Z][A-Za-z0-9]+): ([^\r\n]{1,160})")
 _publish_held = threading.local()
-# The pod is 4 GiB and 4 CPUs. One job is capped near 2 GiB so the API can
-# keep the other half. A spill beside the book may rise to this, and stops
-# there: a 16 GiB temp would fill that pod if the volume is memory-backed.
+# One connection may spill up to 2 GiB. The free-space raise is split across
+# max_concurrent_jobs first, so two builds cannot each take a 4 GiB volume.
+# A configured floor is never lowered. A 16 GiB temp would fill a memory-backed pod.
 _SPILL_CEILING_BYTES = 2 << 30
 # Kept free before the cap is raised, so the output file still has room.
 _SPILL_RESERVE_BYTES = 1 << 30
@@ -777,16 +777,23 @@ def _endpoint(value: str) -> tuple[str, bool]:
     return parts.netloc, parts.scheme == "https"
 
 
-def _spill_limit_bytes(anchor: Path, floor: int) -> int:
-    """How many bytes DuckDB may spill beside ``anchor``.
+def _spill_job_slots() -> int:
+    """How many builds may spill at once. The setting, not whoever has started."""
+    return max(1, Settings().max_concurrent_jobs)
+
+
+def _spill_limit_bytes(anchor: Path, floor: int, slots: int | None = None) -> int:
+    """How many bytes one connection may spill beside ``anchor``.
 
     ``floor`` is ``duckdb_max_temp_directory_size``. A large sort hits that cap
     while the buffer manager is still inside ``duckdb_memory_limit``. When the
     volume can hold the spill and still keep 1 GiB free, the cap rises, at most
-    to 2 GiB. A configured cap above 2 GiB stays as configured. A tighter
-    volume, or a volume that cannot be measured, keeps the setting.
+    to 2 GiB, and that free space is shared across ``slots`` jobs. A configured
+    cap above 2 GiB stays as configured. A tighter volume, a share below the
+    floor, or a volume that cannot be measured, keeps the setting.
     """
     ceiling = max(floor, _SPILL_CEILING_BYTES)
+    jobs = _spill_job_slots() if slots is None else max(1, slots)
     probe = anchor if anchor.is_dir() else anchor.parent
     if not probe.exists():
         probe = probe.parent
@@ -799,11 +806,16 @@ def _spill_limit_bytes(anchor: Path, floor: int) -> int:
     roomy = free - _SPILL_RESERVE_BYTES
     if roomy < floor:
         return floor
-    return min(ceiling, roomy)
+    share = roomy // jobs
+    if share < floor:
+        return floor
+    return min(ceiling, share)
 
 
-def _spill_limit_setting(anchor: Path, floor_text: str, floor: int) -> str:
-    size = _spill_limit_bytes(anchor, floor)
+def _spill_limit_setting(
+    anchor: Path, floor_text: str, floor: int, slots: int | None = None
+) -> str:
+    size = _spill_limit_bytes(anchor, floor, slots)
     if size == floor:
         return floor_text
     gibibyte = 1 << 30

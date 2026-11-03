@@ -9,6 +9,7 @@ from finance_context.layout.cells import parse_number
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis, is_series_column
 from finance_context.layout.normalize import normalize_label
 from finance_context.layout.periods import (
+    _has_two_short_dates,
     display_cell_text,
     is_calendar_key,
     unparsed_period_shape,
@@ -77,7 +78,7 @@ def _might_be_unparsed_period(raw: str) -> bool:
     The warning needs a letter, other header punctuation, or a 19xx/20xx year.
     A plain amount has none of those, so the period parser can stay off it.
     A space inside the year stays out of the window and does not clear it.
-    ``1 234,56`` still has no 1900–2099 run.
+    ``1 234,56`` still has no 1900–2099 run. Two ``dd.mm.yy`` pieces are not an amount.
     """
     if not raw:
         return False
@@ -95,7 +96,7 @@ def _might_be_unparsed_period(raw: str) -> bool:
         window.clear()
         if char not in _AMOUNT_CHARS:
             return True
-    return False
+    return raw.count(".") >= 4 and _has_two_short_dates(raw)
 
 
 def _year_in_window(window: list[str]) -> bool:

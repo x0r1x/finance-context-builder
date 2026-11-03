@@ -249,22 +249,22 @@ class _SheetSpill:
         import pyarrow.compute as pc
         import pyarrow.parquet as pq
 
-        order: list[str] = []
-        known: set[str] = set()
-        for value in batch.column("sheet").to_pylist():
-            name = str(value)
-            if name in known:
+        sheet = batch.column("sheet")
+        order: list[tuple[object, str]] = []
+        known: set[object] = set()
+        for value in sheet.to_pylist():
+            if value is None or value in known:
                 continue
-            known.add(name)
-            order.append(name)
-        for name in order:
+            known.add(value)
+            order.append((value, str(value)))
+        for value, name in order:
+            part = batch.filter(pc.equal(sheet, value))
+            if part.num_rows == 0:
+                continue
             if name not in self._seen:
                 self._seen.add(name)
                 self.names.append(name)
                 self._parts[name] = []
-            part = batch.filter(pc.equal(batch.column("sheet"), name))
-            if part.num_rows == 0:
-                continue
             path = self._dir / f"{self._seq}.parquet"
             self._seq += 1
             pq.write_table(pa.Table.from_batches([part]), path)
