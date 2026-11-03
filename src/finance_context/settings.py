@@ -499,11 +499,6 @@ class Settings(BaseSettings):
             )
         return self
 
-    @model_validator(mode="after")
-    def warn_when_duckdb_limit_exceeds_budget(self) -> Self:
-        _warn_duckdb_memory_limit(self)
-        return self
-
     def minio_configured(self) -> bool:
         """True when the four connection fields are set. The bucket is a second copy."""
         secret = ""

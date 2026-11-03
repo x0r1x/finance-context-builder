@@ -363,6 +363,8 @@ def _log_effective_memory(settings: Settings, budget: int) -> None:
         parse_streaming=settings.parse_streaming,
         json_stream=settings.json_stream,
         parquet_row_group_rows=settings.parquet_row_group_rows,
+        duckdb_memory_limit=settings.duckdb_memory_limit,
+        duckdb_max_temp_directory_size=settings.duckdb_max_temp_directory_size,
         compile_string_pool=settings.compile_string_pool,
         compile_ast_zlib=settings.compile_ast_zlib,
         graph_stream=settings.graph_stream,

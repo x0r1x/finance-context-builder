@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -134,34 +136,69 @@ def test_duckdb_size_examples_load(value: str) -> None:
     assert settings.duckdb_max_temp_directory_size == value.strip()
 
 
-def test_duckdb_memory_limit_warns_when_two_connections_do_not_fit(
-    caplog: pytest.LogCaptureFixture,
+def _logger_state(name: str) -> tuple[list[logging.Handler], int, bool]:
+    logger = logging.getLogger(name)
+    return list(logger.handlers), logger.level, logger.propagate
+
+
+def _restore_logger(
+    name: str, handlers: list[logging.Handler], level: int, propagate: bool
+) -> None:
+    logger = logging.getLogger(name)
+    logger.handlers.clear()
+    logger.handlers.extend(handlers)
+    logger.setLevel(level)
+    logger.propagate = propagate
+
+
+def test_duckdb_memory_limit_warns_once_after_logging_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from finance_context import settings as settings_mod
+    from finance_context.observability import configure_logging
 
-    settings_mod._duckdb_limit_warned = False
-    caplog.set_level(logging.WARNING, logger="finance_context.settings")
     # 256MB is 256_000_000 bytes. Two connections need 512_000_000.
-    Settings(
-        duckdb_memory_limit="256MB",
-        job_memory_budget_bytes=512_000_000,
-        _env_file=None,
-    )
-    assert any(getattr(record, "event", None) == "duckdb_memory_limit" for record in caplog.records)
-    assert "not clearly below" in caplog.text
-    assert "compile reader" in caplog.text
-    caplog.clear()
-    Settings(
-        duckdb_memory_limit="256MB",
-        job_memory_budget_bytes=512_000_000,
-        _env_file=None,
-    )
-    assert caplog.records == []
-
+    monkeypatch.setenv("DUCKDB_MEMORY_LIMIT", "256MB")
+    monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", "512000000")
     settings_mod._duckdb_limit_warned = False
-    Settings(
-        duckdb_memory_limit="256MB",
-        job_memory_budget_bytes=512_000_001,
-        _env_file=None,
-    )
-    assert caplog.records == []
+    saved = {name: _logger_state(name) for name in ("finance_context", "rq")}
+    seen: list[logging.LogRecord] = []
+    early = logging.Handler()
+    early.emit = seen.append  # type: ignore[method-assign]
+    logging.getLogger("finance_context.settings").addHandler(early)
+    try:
+        Settings(_env_file=None)
+        assert seen == []
+        assert settings_mod._duckdb_limit_warned is False
+        logging.getLogger("finance_context.settings").removeHandler(early)
+
+        buf = io.StringIO()
+        configure_logging(level="INFO", json_output=True, stream=buf)
+        lines = [line for line in buf.getvalue().splitlines() if line]
+        assert len(lines) == 1
+        payload = json.loads(lines[0])
+        assert payload["event"] == "duckdb_memory_limit"
+        assert payload["level"] == "WARNING"
+        assert payload["logger"] == "finance_context.settings"
+        assert "not clearly below" in payload["msg"]
+        assert "compile reader" in payload["msg"]
+        assert payload["duckdb_memory_limit"] == "256MB"
+        assert payload["duckdb_memory_limit_bytes"] == 256_000_000
+        assert payload["job_memory_budget_bytes"] == 512_000_000
+        assert settings_mod._duckdb_limit_warned is True
+
+        again = io.StringIO()
+        configure_logging(level="INFO", json_output=True, stream=again)
+        assert again.getvalue() == ""
+
+        settings_mod._duckdb_limit_warned = False
+        monkeypatch.setenv("JOB_MEMORY_BUDGET_BYTES", "512000001")
+        quiet = io.StringIO()
+        configure_logging(level="INFO", json_output=True, stream=quiet)
+        assert quiet.getvalue() == ""
+        assert settings_mod._duckdb_limit_warned is False
+    finally:
+        logging.getLogger("finance_context.settings").removeHandler(early)
+        settings_mod._duckdb_limit_warned = False
+        for name, state in saved.items():
+            _restore_logger(name, *state)
