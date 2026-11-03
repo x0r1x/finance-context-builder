@@ -80,9 +80,7 @@ def test_absolute_and_range_anchors_are_kept() -> None:
     engine = FormulaEngine(locale_hint="en")
     parsed = engine.parse("=$C$9+Construction!E19", sheet="Amortization", addr="E8")
     known = {"Amortization!E8", "Amortization!C9", "Construction!E19"}
-    rows = expand_cell_edges(
-        parsed.edges, known, known_sheets={"Amortization", "Construction"}
-    )
+    rows = expand_cell_edges(parsed.edges, known, known_sheets={"Amortization", "Construction"})
     by_target = {row.target: row for row in rows}
     absolute = by_target["Amortization!C9"]
     assert absolute.abs_col is True
@@ -163,10 +161,8 @@ def test_broken_defined_name_stays_unresolved() -> None:
     assert rows[0].dangling_reason != "empty_ref"
 
 
-def test_batched_duplicate_edge_keeps_the_first(tmp_path) -> None:
+def test_batched_expansion_emits_duplicate_edges() -> None:
     from finance_context.formulas.csr import expand_cell_edges_column_batches
-    from finance_context.formulas.stage import IR_CELL_EDGE_COLUMNS, _keep_first_cell_edges
-    from finance_context.store.fs import read_parquet, write_parquet
 
     edge = Edge(kind="ref", source="P&L!A1", target="P&L!B1")
     seen: list[int] = []
@@ -182,22 +178,6 @@ def test_batched_duplicate_edge_keeps_the_first(tmp_path) -> None:
     )
     assert count == 2
     assert seen == [1, 1]
-    blank = [None] * (len(IR_CELL_EDGE_COLUMNS) - 3)
-    staged = tmp_path / "dup.parquet"
-    final = tmp_path / "edges.parquet"
-    write_parquet(
-        staged,
-        [*IR_CELL_EDGE_COLUMNS, ("seq", "INTEGER")],
-        [
-            ("P&L!A1", "P&L!B1", "ref", *blank, 1),
-            ("P&L!A1", "P&L!B1", "ref", *blank, 2),
-        ],
-    )
-    assert _keep_first_cell_edges(staged, final, row_group_rows=0) == 1
-    rows = read_parquet(final)
-    assert len(rows) == 1
-    assert rows[0]["source"] == "P&L!A1"
-    assert rows[0]["target"] == "P&L!B1"
 
 
 def test_external_defined_name_is_not_unresolved() -> None:

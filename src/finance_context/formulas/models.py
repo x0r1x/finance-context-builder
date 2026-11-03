@@ -134,7 +134,7 @@ def as_ir_cell(value: IrCell | Mapping[str, Any]) -> IrCell:
 
 
 def ast_json_text(value: str | bytes | None) -> str | None:
-    """Plain AST JSON. In-memory cells may hold zlib bytes until relations run."""
+    """Plain AST JSON. A non-streaming compile may hold zlib bytes until parquet write."""
     if value is None:
         return None
     if isinstance(value, bytes):

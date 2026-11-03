@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Protocol
 
 from finance_context.excel.a1 import col_to_index, format_addr, index_to_col
 from finance_context.formulas.models import Edge
@@ -40,9 +40,7 @@ def split_sheet_ref(target: str) -> tuple[str, str]:
 
 def _rectangle(body: str) -> tuple[int, int, int, int] | None:
     """Inclusive column/row bounds of a range body, or None when it is not a range."""
-    cells_range = re.fullmatch(
-        r"\$?([A-Za-z]+)\$?(\d+):\$?([A-Za-z]+)\$?(\d+)", body, re.I
-    )
+    cells_range = re.fullmatch(r"\$?([A-Za-z]+)\$?(\d+):\$?([A-Za-z]+)\$?(\d+)", body, re.I)
     if cells_range:
         c1 = col_to_index(cells_range.group(1))
         r1 = int(cells_range.group(2))
@@ -171,9 +169,16 @@ def _merge_spans(items: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
 
 
 def _span_has(spans: Sequence[tuple[int, int]], row: int) -> bool:
+    """True when ``row`` is inside a sorted, non-overlapping run.
+
+    The probe is the run's start. A probe of ``(row, 1_048_576)`` misses the
+    first row of a run whose end is past Excel's last row: that tuple sorts
+    after the probe, ``bisect_right`` returns 0, and the row is reported absent.
+    ``parse_addr`` and the OOXML reader both keep those rows.
+    """
     if not spans:
         return False
-    index = bisect.bisect_right(spans, (row, _EXCEL_MAX_ROW)) - 1
+    index = bisect.bisect_right(spans, row, key=lambda span: span[0]) - 1
     if index < 0:
         return False
     start, end = spans[index]
@@ -223,17 +228,11 @@ def _whole_axis(c1: int, c2: int, r1: int, r2: int) -> bool:
     return whole_column or whole_row
 
 
-def _present_count(
-    sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage
-) -> int:
+def _present_count(sheet: str, c1: int, c2: int, r1: int, r2: int, usage: SheetUsage) -> int:
     """How many present cells sit in the rectangle. No pair list is built."""
     sheet = usage.sheet_name(sheet)
     columns = usage.rows_by_col.get(sheet, {})
-    return sum(
-        _span_overlap(spans, r1, r2)
-        for col, spans in columns.items()
-        if c1 <= col <= c2
-    )
+    return sum(_span_overlap(spans, r1, r2) for col, spans in columns.items() if c1 <= col <= c2)
 
 
 def _first_present(
@@ -357,9 +356,7 @@ def present_pairs(node: RangeNode, usage: SheetUsage) -> list[tuple[int, int]]:
     return _present_pairs(node.sheet, node.c1, node.c2, node.r1, node.r2, usage)
 
 
-def expansion_count(
-    target: str, cap: int | None = None, usage: SheetUsage | None = None
-) -> int:
+def expansion_count(target: str, cap: int | None = None, usage: SheetUsage | None = None) -> int:
     """How many cells expand_range would emit. A whole column is not materialised."""
     cap = active_range_cap() if cap is None else cap
     try:
@@ -432,9 +429,7 @@ def expand_range(
     return _take(sheet, c1, c2, r1, r2, cap)
 
 
-def _take(
-    sheet: str, c1: int, c2: int, r1: int, r2: int, cap: int
-) -> tuple[list[str], bool]:
+def _take(sheet: str, c1: int, c2: int, r1: int, r2: int, cap: int) -> tuple[list[str], bool]:
     out: list[str] = []
     truncated = False
     for row in range(r1, r2 + 1):
@@ -521,9 +516,17 @@ def _share(pool: dict[str, str] | None, text: str) -> str:
     return pool.setdefault(text, text)
 
 
+class NodeMembers(Protocol):
+    """``set`` of canonical ids, or the compile row-run index. ``in`` / ``len`` / bool."""
+
+    def __contains__(self, item: object) -> bool: ...
+
+    def __len__(self) -> int: ...
+
+
 def expand_cell_edges(
     edges: list[Edge],
-    known_nodes: set[str] | None = None,
+    known_nodes: NodeMembers | None = None,
     *,
     known_sheets: set[str] | None = None,
     presence: dict[str, str] | None = None,
@@ -592,7 +595,7 @@ _CELL_EDGE_COLUMNS = (
 
 def expand_cell_edges_column_batches(
     edges: list[Edge],
-    known_nodes: set[str] | None = None,
+    known_nodes: NodeMembers | None = None,
     *,
     consume: Any,
     known_sheets: set[str] | None = None,
@@ -655,7 +658,7 @@ def classify_member(
     target: str,
     *,
     kind: str,
-    known: set[str],
+    known: NodeMembers,
     sheets: set[str],
     unresolved: bool,
     presence: dict[str, str] | None = None,
@@ -732,7 +735,7 @@ _UNCLASSIFIED = MemberStatus(None, False, None, None, None)
 def _classified(
     row: _EdgeRow,
     target: str,
-    known: set[str],
+    known: NodeMembers,
     sheets: set[str],
     presence: dict[str, str],
 ) -> MemberStatus:
@@ -791,9 +794,7 @@ def _edge_rows(edge: Edge, usage: SheetUsage | None) -> Iterable[_EdgeRow]:
         )
 
 
-def _expanded_targets(
-    edge: Edge, usage: SheetUsage | None = None
-) -> list[tuple[str, bool, bool]]:
+def _expanded_targets(edge: Edge, usage: SheetUsage | None = None) -> list[tuple[str, bool, bool]]:
     if not edge.target:
         return []
     if edge.kind == "range" and not edge.unresolved and "!" in edge.target:

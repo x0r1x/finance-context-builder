@@ -12,6 +12,7 @@ from finance_context.formulas.csr import (
     expand_cell_edges_column_batches,
 )
 from finance_context.formulas.engine import FormulaEngine, shift_parsed
+from finance_context.formulas.known import KnownNodes
 from finance_context.formulas.models import (
     CompileResult,
     Edge,
@@ -164,11 +165,11 @@ def _compile_cells_loaded(
     engine: FormulaEngine,
     meta: dict,
     chosen: Settings,
-) -> tuple[list[IrCell], list[Edge], set[str], int, dict[str, str] | None]:
+) -> tuple[list[IrCell], list[Edge], KnownNodes, int, dict[str, str] | None]:
     raw_rows = read_parquet(raw_path)
     cells: list[IrCell] = []
     edges: list[Edge] = []
-    known: set[str] = set()
+    known = KnownNodes()
     formula_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
     for row, (parsed, release) in zip(raw_rows, _iter_parsed(engine, raw_rows), strict=True):
@@ -188,7 +189,7 @@ def _compile_cells_streaming(
     engine: FormulaEngine,
     meta: dict,
     chosen: Settings,
-) -> tuple[int, list[Edge], set[str], int, dict[str, str] | None]:
+) -> tuple[int, list[Edge], KnownNodes, int, dict[str, str] | None]:
     """Read raw cells in chunks and publish ``ir/cells.parquet`` from the batch.
 
     Each cell is written and dropped. Callers read the columns they need.
@@ -198,7 +199,7 @@ def _compile_cells_streaming(
     cells_path = dest_dir / "ir" / "cells.parquet"
     batch = DuckDBBatch(Path(str(cells_path) + ".build.duckdb"), IR_CELL_COLUMNS)
     edges: list[Edge] = []
-    known: set[str] = set()
+    known = KnownNodes()
     formula_count = 0
     cell_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
@@ -246,19 +247,23 @@ def _take_cell(
     *,
     pool: dict[str, str] | None,
     edges: list[Edge],
-    known: set[str],
+    known: KnownNodes,
     chosen: Settings,
 ) -> tuple[IrCell, bool]:
     added = bool(row.get("formula_raw"))
-    node_id = canonical_node_id(str(row["sheet"]), str(row["addr"]))
-    if pool is not None:
-        node_id = pool.setdefault(node_id, node_id)
-        if parsed is not None:
-            for edge in parsed.edges:
-                edge.source = pool.setdefault(edge.source, edge.source)
-                if edge.target:
-                    edge.target = pool.setdefault(edge.target, edge.target)
-    known.add(node_id)
+    sheet = row["sheet"]
+    addr = row["addr"]
+    sheet_s = sheet if isinstance(sheet, str) else str(sheet)
+    addr_s = addr if isinstance(addr, str) else str(addr)
+    # Value cells are only a membership bit. Their ids are not pooled.
+    if pool is not None and parsed is not None:
+        node_id = canonical_node_id(sheet_s, addr_s)
+        pool.setdefault(node_id, node_id)
+        for edge in parsed.edges:
+            edge.source = pool.setdefault(edge.source, edge.source)
+            if edge.target:
+                edge.target = pool.setdefault(edge.target, edge.target)
+    known.add(sheet_s, addr_s)
     template = None
     unparsed = False
     ast_json = None
@@ -267,18 +272,17 @@ def _take_cell(
         unparsed = parsed.unparsed
         if parsed.ast is not None:
             ast_json = json.dumps(parsed.ast, ensure_ascii=False)
-            if chosen.compile_ast_zlib:
+            # Streaming writes the cell before anything else can read the bytes.
+            if chosen.compile_ast_zlib and not chosen.parse_streaming:
                 ast_json = zlib.compress(ast_json.encode("utf-8"), 1)
         edges.extend(parsed.edges)
     release()
-    sheet = row["sheet"]
-    addr = row["addr"]
     return (
         IrCell(
-            sheet=sheet if isinstance(sheet, str) else str(sheet),
+            sheet=sheet_s,
             row=int(row["row"]),
             col=int(row["col"]),
-            addr=addr if isinstance(addr, str) else str(addr),
+            addr=addr_s,
             formula_raw=row.get("formula_raw"),
             formula_template=template,
             unparsed=unparsed,
@@ -445,10 +449,205 @@ class EdgeCount:
         return self._n > 0
 
 
+# Low bits of a packed cell key. Kind is the cell-edge kind string, not a
+# coarser class: ``ref`` and ``range`` to the same target both stay.
+_KIND_CODE = {"ref": 1, "range": 2, "cross_sheet": 3, "external": 4, "dynamic": 5}
+_KIND_BITS = 4
+_ROW_BITS = 24
+_COL_BITS = 15  # 1..16384 is XFD; 15 bits still covers it
+_ROW_LIMIT = 1 << _ROW_BITS
+_COL_LIMIT = 1 << _COL_BITS
+
+
+def _pack_cell(target: str, sheet_ids: dict[str, int]) -> int | None:
+    """Positive key for a canonical ``Sheet!A1``, or None when the text is not one.
+
+    The key matches the target string. ``Sheet!$A$1`` and ``Sheet!A01`` do not
+    pack onto ``Sheet!A1``. A range node id contains ``:`` and does not pack.
+    """
+    if "!" not in target:
+        return None
+    sheet, body = target.rsplit("!", 1)
+    if ":" in body or "$" in body:
+        return None
+    try:
+        col, row = parse_addr(body)
+    except ValueError:
+        return None
+    if format_addr(col, row) != body or not (1 <= col < _COL_LIMIT and 1 <= row < _ROW_LIMIT):
+        return None
+    sheet_id = sheet_ids.get(sheet)
+    if sheet_id is None:
+        sheet_id = len(sheet_ids) + 1
+        sheet_ids[sheet] = sheet_id
+    return (
+        (sheet_id << (_COL_BITS + _ROW_BITS + _KIND_BITS))
+        | (col << (_ROW_BITS + _KIND_BITS))
+        | (row << _KIND_BITS)
+    )
+
+
+class _KeptEdgeWriter:
+    """First ``(target, kind)`` of the current source, in emission order.
+
+    Each formula cell is one contiguous run. The live keys are one new set per
+    source: a packed positive int for a canonical cell id whose kind fits in
+    4 bits, or a ``(target id, kind code)`` pair for any other target or a
+    wider kind code. The pair is exact for every code and cannot equal a packed
+    int. The set is replaced when the source changes, so its size follows the
+    largest formula, not the book.
+
+    A malformed sheet whose formula address comes back after another formula
+    starts a new run: a ``(source, target, kind)`` already written for the first
+    run is written again. Main's window dropped that repeat. Nothing else about
+    the row changes. Parse counts that sheet in file order and context keeps
+    the one warning ahead of the 50-line cap.
+
+    Parquet is still DuckDB ``COPY``. One ``write_parquet`` when the table fits
+    in a group (or ``row_group_rows <= 0``). Otherwise full groups of
+    ``row_group_rows`` go through :class:`RowGroupWriter`.
+    """
+
+    def __init__(self, path: Path, row_group_rows: int) -> None:
+        self.path = path
+        self.row_group_rows = row_group_rows
+        self.names = [name for name, _dtype in IR_CELL_EDGE_COLUMNS]
+        self.width = len(self.names)
+        self.count = 0
+        self._buf: list[list] = [[] for _ in range(self.width)]
+        self._buf_n = 0
+        self._first: list[list] | None = None
+        self._writer: RowGroupWriter | None = None
+        self._source: str | None = None
+        self._keys: set[int | tuple[int, int]] = set()
+        self._sheet_ids: dict[str, int] = {}
+        self._other_ids: dict[str, int] = {}
+        self._extra_kinds: dict[str, int] = {}
+        self._key_high = 0
+
+    def _new_keys(self) -> None:
+        self._key_high = max(self._key_high, len(self._keys))
+        self._keys = set()
+        self._sheet_ids = {}
+        self._other_ids = {}
+        self._extra_kinds = {}
+
+    def _kind_code(self, kind: str) -> int:
+        code = _KIND_CODE.get(kind)
+        if code is not None:
+            return code
+        found = self._extra_kinds.get(kind)
+        if found is not None:
+            return found
+        found = len(self._extra_kinds) + len(_KIND_CODE) + 1
+        self._extra_kinds[kind] = found
+        return found
+
+    def _key(self, target: str, kind: str) -> int | tuple[int, int]:
+        kind_code = self._kind_code(kind)
+        packed = _pack_cell(target, self._sheet_ids)
+        # Four kind bits sit under the packed cell. A wider code, or a target
+        # that is not a canonical cell, is a pair. A shifted int would let a
+        # large code spill into the target id and drop an edge.
+        if packed is not None and kind_code < (1 << _KIND_BITS):
+            return packed | kind_code
+        other = self._other_ids.get(target)
+        if other is None:
+            other = len(self._other_ids) + 1
+            self._other_ids[target] = other
+        return (other, kind_code)
+
+    def consume(self, columns: dict[str, list]) -> None:
+        incoming = [columns[name] for name in self.names]
+        sources = columns["source"]
+        targets = columns["target"]
+        kinds = columns["kind"]
+        keys = self._keys
+        source_now = self._source
+        for index in range(len(sources)):
+            source = sources[index]
+            if source != source_now:
+                self._new_keys()
+                keys = self._keys
+                source_now = source
+                self._source = source
+            key = self._key(targets[index], kinds[index])
+            if key in keys:
+                continue
+            keys.add(key)
+            if len(keys) > self._key_high:
+                self._key_high = len(keys)
+            for col_index, column in enumerate(incoming):
+                self._buf[col_index].append(column[index])
+            self._buf_n += 1
+            self.count += 1
+            self._maybe_flush()
+
+    def _maybe_flush(self) -> None:
+        row_group_rows = self.row_group_rows
+        if row_group_rows <= 0 or self._buf_n < row_group_rows:
+            return
+        full = self._buf
+        self._buf = [[] for _ in range(self.width)]
+        self._buf_n = 0
+        if self._writer is not None:
+            self._writer.write_lists(full)
+            return
+        if self._first is None:
+            self._first = full
+            return
+        self._writer = RowGroupWriter(self.path, IR_CELL_EDGE_COLUMNS, row_group_rows)
+        self._writer.write_lists(self._first)
+        self._writer.write_lists(full)
+        self._first = None
+
+    def abort(self) -> None:
+        self._new_keys()
+        self._buf = []
+        self._first = None
+        writer = self._writer
+        self._writer = None
+        if writer is not None and not writer._closed:
+            writer.__exit__(Exception, Exception(), None)
+
+    def finish(self) -> int:
+        self._new_keys()
+        if self.count == 0:
+            write_parquet(self.path, IR_CELL_EDGE_COLUMNS, [], row_group_rows=self.row_group_rows)
+            return 0
+        if self._writer is None:
+            rows = _rows_from_columns(self._pending_columns())
+            row_group_rows = 0 if self.row_group_rows <= 0 else self.row_group_rows
+            write_parquet(self.path, IR_CELL_EDGE_COLUMNS, rows, row_group_rows=row_group_rows)
+            return self.count
+        if self._buf_n:
+            self._writer.write_lists(self._buf)
+        self._writer.close()
+        self._writer = None
+        return self.count
+
+    def _pending_columns(self) -> list[list]:
+        if self._first is None:
+            return self._buf
+        if self._buf_n == 0:
+            return self._first
+        merged = [list(column) for column in self._first]
+        for index, column in enumerate(self._buf):
+            merged[index].extend(column)
+        return merged
+
+
+def _rows_from_columns(columns: list[list]) -> list[tuple]:
+    if not columns or not columns[0]:
+        return []
+    width = len(columns)
+    return [tuple(columns[col][index] for col in range(width)) for index in range(len(columns[0]))]
+
+
 def _write_cell_edge_batches(
     dest_dir: Path,
     edges: list[Edge],
-    known: set[str],
+    known: set[str] | KnownNodes,
     *,
     sheets: set[str],
     presence: dict[str, str],
@@ -457,19 +656,8 @@ def _write_cell_edge_batches(
     row_group_rows: int,
 ) -> EdgeCount:
     path = dest_dir / "ir" / "cell_edges.parquet"
-    staged = path.with_name("cell_edges.parquet.dup")
-    names = [name for name, _dtype in IR_CELL_EDGE_COLUMNS]
-    staged_columns = [*IR_CELL_EDGE_COLUMNS, ("seq", "INTEGER")]
-    seq = 0
-    with RowGroupWriter(staged, staged_columns, row_group_rows) as writer:
-
-        def consume(columns: dict[str, list]) -> None:
-            nonlocal seq
-            width = len(columns["source"])
-            seqs = list(range(seq, seq + width))
-            seq += width
-            writer.write_lists([columns[name] for name in names] + [seqs])
-
+    sink = _KeptEdgeWriter(path, row_group_rows)
+    try:
         expand_cell_edges_column_batches(
             edges,
             known,
@@ -477,63 +665,13 @@ def _write_cell_edge_batches(
             presence=presence,
             usage=usage,  # type: ignore[arg-type]
             pool=pool,
-            consume=consume,
+            consume=sink.consume,
             batch_size=row_group_rows,
         )
-    if seq == 0:
-        staged.unlink(missing_ok=True)
-        write_parquet(path, IR_CELL_EDGE_COLUMNS, [], row_group_rows=row_group_rows)
-        return EdgeCount(0)
-    count = _keep_first_cell_edges(staged, path, row_group_rows=row_group_rows)
-    staged.unlink(missing_ok=True)
-    return EdgeCount(count)
-
-
-def _keep_first_cell_edges(staged: Path, dest: Path, *, row_group_rows: int) -> int:
-    """First ``(source, target, kind)`` wins. ``seq`` is the write order.
-
-    Rows are written one group at a time. The whole edge table is not a Python list.
-    """
-    from finance_context.store.duckdb_io import _quote_ident, limited_connection
-
-    chosen = ", ".join(_quote_ident(name) for name, _dtype in IR_CELL_EDGE_COLUMNS)
-    query = f"""
-        SELECT {chosen} FROM (
-            SELECT *, row_number() OVER (
-                PARTITION BY source, target, kind ORDER BY seq
-            ) AS rn
-            FROM read_parquet(?)
-        )
-        WHERE rn = 1
-        ORDER BY seq
-    """
-    width = len(IR_CELL_EDGE_COLUMNS)
-
-    def columns_of(rows: list) -> list[list]:
-        return [[row[index] for row in rows] for index in range(width)]
-
-    with limited_connection() as con:
-        cursor = con.execute(query, [str(staged)])
-        if row_group_rows <= 0:
-            rows = cursor.fetchall()
-            write_parquet(dest, IR_CELL_EDGE_COLUMNS, rows, row_group_rows=0)
-            return len(rows)
-        first = cursor.fetchmany(row_group_rows)
-        second = cursor.fetchmany(row_group_rows)
-        if not second:
-            write_parquet(dest, IR_CELL_EDGE_COLUMNS, first, row_group_rows=row_group_rows)
-            return len(first)
-        count = len(first) + len(second)
-        with RowGroupWriter(dest, IR_CELL_EDGE_COLUMNS, row_group_rows) as writer:
-            writer.write_lists(columns_of(first))
-            writer.write_lists(columns_of(second))
-            while True:
-                batch = cursor.fetchmany(row_group_rows)
-                if not batch:
-                    break
-                count += len(batch)
-                writer.write_lists(columns_of(batch))
-        return count
+        return EdgeCount(sink.finish())
+    except Exception:
+        sink.abort()
+        raise
 
 
 def _write_cell_edge_rows(dest_dir: Path, cell_edges: list, *, row_group_rows: int) -> None:
@@ -627,5 +765,3 @@ def _write_object_batches(path, columns, objs, getters, row_group_rows: int) -> 
         for start in range(0, len(objs), row_group_rows):
             part = objs[start : start + row_group_rows]
             writer.write_lists([[getter(obj) for obj in part] for getter in getters])
-
-
