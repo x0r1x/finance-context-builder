@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import time
 from pathlib import Path
 
 from finance_context.excel.a1 import parse_addr
-from finance_context.formulas.models import as_edge
 from finance_context.layout.cells import LayoutCell
 from finance_context.layout.detect import _sheet_layout, detect_layout
 from finance_context.layout.models import Layout
+from finance_context.layout.params import active_value_columns, active_value_columns_from_endpoints
 from finance_context.layout.timelines import link_workbook_timelines
+from finance_context.memory import trim_process_heap
 from finance_context.observability import log_event
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import _iter_parquet_rows
@@ -68,8 +70,17 @@ def layout_workbook(
     settings: Settings | None = None,
 ) -> Layout:
     chosen = settings if isinstance(settings, Settings) else Settings()
+    # Layout keeps one column per sheet. The edge list is not used again here.
     if edges is None:
-        edges = _read_edges(dest_dir)
+        active_cols = active_value_columns_from_endpoints(
+            _edge_endpoints(dest_dir / "ir" / "edges.parquet")
+        )
+    else:
+        active_cols = active_value_columns(edges)
+    edges = None
+    if chosen.job_malloc_trim:
+        gc.collect()
+        trim_process_heap()
     date1904 = False
     hidden_sheets: set[str] = set()
     hidden_columns: dict[str, set[int]] = {}
@@ -103,7 +114,7 @@ def layout_workbook(
             lambda: _detect_by_sheet(
                 dest_dir,
                 date1904=date1904,
-                edges=edges,
+                active_cols=active_cols,
                 hidden_sheets=hidden_sheets,
                 hidden_columns=hidden_columns,
                 hidden_rows=hidden_rows,
@@ -121,7 +132,7 @@ def layout_workbook(
             lambda: detect_layout(
                 cells,
                 date1904=date1904,
-                edges=edges,
+                active_cols=active_cols,
                 hidden_sheets=hidden_sheets,
                 hidden_columns=hidden_columns,
                 hidden_rows=hidden_rows,
@@ -141,11 +152,23 @@ def layout_workbook(
     return layout
 
 
+def _edge_endpoints(path: Path):
+    """Source and target of each formula edge, one row group chunk at a time."""
+    if not path.is_file():
+        return
+    for names, batch in _iter_parquet_rows(path, ["source", "target"]):
+        pos = {name: index for index, name in enumerate(names)}
+        source_i = pos["source"]
+        target_i = pos["target"]
+        for row in batch:
+            yield str(row[source_i] or ""), str(row[target_i] or "")
+
+
 def _detect_by_sheet(
     dest_dir: Path,
     *,
     date1904: bool,
-    edges: list[dict] | None,
+    active_cols: dict[str, int],
     hidden_sheets: set[str],
     hidden_columns: dict[str, set[int]],
     hidden_rows: dict[str, set[int]] | None,
@@ -154,7 +177,6 @@ def _detect_by_sheet(
     meta: dict | None,
 ) -> Layout:
     """One sheet in memory at a time. Shared timelines then read flag rows only."""
-    prepared = None if edges is None else [as_edge(edge) for edge in edges]
     sheets = []
     for name in _sheet_names(dest_dir / "ir" / "cells.parquet"):
         sheet_cells = _read_layout_sheet(dest_dir, name, meta)
@@ -165,7 +187,7 @@ def _detect_by_sheet(
                 name,
                 sheet_cells,
                 date1904=date1904,
-                edges=prepared,
+                active_cols=active_cols,
                 hidden_sheets=hidden_sheets,
                 hidden_columns=hidden_columns,
                 hidden_rows=hidden_rows,
@@ -478,8 +500,3 @@ def _overlay_facts_columnar(dest_dir: Path, cells: list[dict]) -> list:
     return merged
 
 
-def _read_edges(dest_dir: Path) -> list[dict]:
-    path = dest_dir / "ir" / "edges.parquet"
-    if not path.is_file():
-        return []
-    return read_parquet(path)

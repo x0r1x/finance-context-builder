@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from finance_context.formulas.models import as_edge
 from finance_context.layout.axes import _axis_candidates, _table_groups
 from finance_context.layout.cells import _is_number, _text
 from finance_context.layout.models import (
@@ -12,6 +11,7 @@ from finance_context.layout.models import (
     TimeAxis,
 )
 from finance_context.layout.params import (
+    active_value_columns,
     attach_orphan_switches,
     carve_params_regions,
     detect_params_block,
@@ -37,11 +37,12 @@ def detect_layout(
     hidden_rows: dict[str, set[int]] | None = None,
     summary_below: dict[str, bool] | None = None,
     defined_names: list | None = None,
+    active_cols: dict[str, int] | None = None,
 ) -> Layout:
     hidden = hidden_sheets or set()
     columns = hidden_columns or {}
     below = summary_below or {}
-    edges = None if edges is None else [as_edge(edge) for edge in edges]
+    cols = active_value_columns(edges or []) if active_cols is None else active_cols
     by_sheet: dict[str, list[dict]] = {}
     order: list[str] = []
     for cell in cells:
@@ -57,7 +58,7 @@ def detect_layout(
             name,
             by_sheet[name],
             date1904=date1904,
-            edges=edges,
+            active_cols=cols,
             hidden_sheets=hidden,
             hidden_columns=columns,
             hidden_rows=hidden_rows,
@@ -76,7 +77,7 @@ def _sheet_layout(
     sheet_cells: list[dict],
     *,
     date1904: bool,
-    edges: list[dict] | None,
+    active_cols: dict[str, int],
     hidden_sheets: set[str],
     hidden_columns: dict[str, set[int]],
     hidden_rows: dict[str, set[int]] | None,
@@ -89,7 +90,7 @@ def _sheet_layout(
         name,
         sheet_cells,
         date1904,
-        edges,
+        active_cols,
         hidden_cols=set(hidden_columns.get(name, ())),
         hidden_row_ids=row_ids,
         summary_below=summary_below.get(name, True),
@@ -102,7 +103,7 @@ def _blocks_for_sheet(
     sheet: str,
     cells: list[dict],
     date1904: bool,
-    edges: list[dict] | None = None,
+    active_cols: dict[str, int] | None = None,
     hidden_cols: set[int] | None = None,
     hidden_row_ids: set[int] | None = None,
     summary_below: bool = True,
@@ -182,7 +183,7 @@ def _blocks_for_sheet(
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
     if not blocks:
-        extra = detect_params_block(sheet, by_row, date1904, edges, defined_names)
+        extra = detect_params_block(sheet, by_row, date1904, active_cols, defined_names)
         if extra is not None:
             blocks.append(extra)
     attach_orphan_switches(sheet, blocks, by_row, date1904, defined_names)
