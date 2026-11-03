@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pytest
 from pydantic import ValidationError
 
 from finance_context.settings import Settings
-from finance_context.store.duckdb_io import DuckDBBatch, limited_connection
+from finance_context.store.duckdb_io import DuckDBBatch, copy_arrow_parquet, limited_connection
 
 _LIMIT_NAMES = ("memory_limit", "max_temp_directory_size")
 
 
 def _current(con: Any, name: str) -> object:
-    row = con.execute(f"SELECT current_setting('{name}')").fetchone()
-    assert row is not None
-    return row[0]
+    rows = con.execute(f"SELECT current_setting('{name}')").fetchall()
+    assert rows
+    return rows[0][0]
 
 
 def _applied(name: str, value: str) -> object:
@@ -39,8 +42,8 @@ def _assert_both(tmp_path: Path, memory: str, temp: str) -> None:
     batch = DuckDBBatch(tmp_path / "batch.duckdb", (("addr", "VARCHAR"),))
     try:
         assert _current(batch._con, "memory_limit") == expected["memory_limit"]
-        assert _current(batch._con, "max_temp_directory_size") == (
-            expected["max_temp_directory_size"]
+        assert (
+            _current(batch._con, "max_temp_directory_size") == (expected["max_temp_directory_size"])
         )
         assert _current(batch._con, "threads") == 1
     finally:
@@ -59,6 +62,32 @@ def test_defaults_reach_both_connections(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert settings.duckdb_memory_limit == "256MB"
     assert settings.duckdb_max_temp_directory_size == "1GB"
     _assert_both(tmp_path, "256MB", "1GB")
+
+
+def test_copy_arrow_parquet_reports_configured_caps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DUCKDB_MEMORY_LIMIT", "512MB")
+    monkeypatch.setenv("DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "2GB")
+    seen: dict[str, object] = {}
+    real = limited_connection
+
+    @contextmanager
+    def _record() -> Iterator[Any]:
+        with real() as con:
+            seen["memory_limit"] = _current(con, "memory_limit")
+            seen["max_temp_directory_size"] = _current(con, "max_temp_directory_size")
+            seen["threads"] = _current(con, "threads")
+            yield con
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.limited_connection", _record)
+    dest = tmp_path / "out.parquet"
+    copy_arrow_parquet(pa.table({"addr": ["A1"], "n": [1]}), dest)
+    assert dest.is_file()
+    assert seen["memory_limit"] == _applied("memory_limit", "512MB")
+    assert seen["max_temp_directory_size"] == _applied("max_temp_directory_size", "2GB")
+    assert seen["threads"] == 1
 
 
 def test_env_override_reaches_both_connections(

@@ -76,13 +76,11 @@ def object_url(bucket: str, key: str) -> str:
 
 def copy_arrow_parquet(table: pa.Table, dest: Path) -> None:
     """Write one Snappy parquet file. DuckDB flushes vectors of 2048 rows."""
-    import duckdb
-
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         dest.unlink()
     groups = max(table.num_rows, 1)
-    with duckdb.connect() as con:
+    with limited_connection() as con:
         con.register("batch", table)
         con.execute(
             "COPY (SELECT * FROM batch) TO ? "
@@ -110,9 +108,7 @@ class DuckDBBatch:
 
         self._con = duckdb.connect(str(self._db))
         _set_duckdb_limits(self._con, str(self._db) + ".tmp")
-        specs = ", ".join(
-            f"{_quote_ident(name)} {_DUCK_TYPES[dtype]}" for name, dtype in columns
-        )
+        specs = ", ".join(f"{_quote_ident(name)} {_DUCK_TYPES[dtype]}" for name, dtype in columns)
         self._con.execute(f"CREATE TABLE t ({specs})")
 
     def add_rows(self, rows: Sequence[Sequence[Any]]) -> None:
@@ -706,10 +702,11 @@ def _endpoint(value: str) -> tuple[str, bool]:
 
 @contextmanager
 def limited_connection() -> Iterator[Any]:
-    """One short DuckDB scan with a private temp directory.
+    """One DuckDB connection with the configured caps and a private temp directory.
 
     ``memory_limit`` is the per-connection buffer-manager ceiling from
-    ``duckdb_memory_limit``, the same value the writer uses. It is not process RSS.
+    ``duckdb_memory_limit``. It is not process RSS. The temp directory is removed
+    when the connection closes.
     """
     import duckdb
 
