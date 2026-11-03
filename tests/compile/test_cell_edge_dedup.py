@@ -75,20 +75,28 @@ def test_duplicate_refs_collapse_inside_one_source(tmp_path: Path, row_group_row
     assert len(rows) < len(_edges())
 
 
-def test_one_group_write_does_not_open_the_scan_connection(
+def test_one_group_write_uses_the_capped_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A single row group is one DuckDB ``COPY`` via ``write_parquet``.
+    """A single row group is one DuckDB COPY through ``limited_connection``."""
+    from contextlib import contextmanager
 
-    Several groups still stitch through ``limited_connection`` inside
-    ``RowGroupWriter``. That connection is the parquet stitch.
-    """
+    from finance_context.store import duckdb_io
 
-    def boom(*_args, **_kwargs):
-        raise AssertionError("limited_connection")
+    calls = 0
+    real = duckdb_io.limited_connection
 
-    monkeypatch.setattr("finance_context.store.duckdb_io.limited_connection", boom)
-    _write(tmp_path / "one", _edges(), 0)
+    @contextmanager
+    def _count():
+        nonlocal calls
+        calls += 1
+        with real() as con:
+            yield con
+
+    monkeypatch.setattr(duckdb_io, "limited_connection", _count)
+    path = _write(tmp_path / "one", _edges(), 0)
+    assert calls == 1
+    assert path.is_file()
 
 
 def test_repeated_formula_address_keeps_a_key_main_would_drop(tmp_path: Path) -> None:

@@ -29,6 +29,8 @@ from finance_context.observability import (
     source_filename_var,
 )
 from finance_context.settings import (
+    DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+    DEFAULT_DUCKDB_MEMORY_LIMIT,
     DEFAULT_MEMORY_BUDGET_BYTES,
     DEFAULT_RANGE_EXPAND_CAP,
     Settings,
@@ -621,6 +623,8 @@ def test_effective_memory_settings_are_logged_once(monkeypatch, caplog) -> None:
         "parse_streaming",
         "json_stream",
         "parquet_row_group_rows",
+        "duckdb_memory_limit",
+        "duckdb_max_temp_directory_size",
         "compile_string_pool",
         "compile_ast_zlib",
         "graph_stream",
@@ -643,6 +647,8 @@ def test_effective_memory_settings_are_logged_once(monkeypatch, caplog) -> None:
         assert key not in payload
     assert payload["malloc_arena_max"] == 2
     assert payload["budget_bytes"] == DEFAULT_MEMORY_BUDGET_BYTES
+    assert payload["duckdb_memory_limit"] == DEFAULT_DUCKDB_MEMORY_LIMIT
+    assert payload["duckdb_max_temp_directory_size"] == DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE
 
 
 def test_range_cap_env_truncates_in_the_child(tmp_path: Path, monkeypatch) -> None:

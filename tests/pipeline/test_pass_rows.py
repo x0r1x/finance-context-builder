@@ -59,6 +59,15 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
     compiles: list[int] = []
     import finance_context.app.pipeline as pipeline_mod
     import finance_context.formulas.stage as formula_mod
+    import finance_context.layout.stage as layout_stage
+
+    real_group = layout_stage._group_layout_cells
+
+    def spy_group(path: Path):
+        column_reads.append(Path(path).as_posix())
+        return real_group(path)
+
+    monkeypatch.setattr(layout_stage, "_group_layout_cells", spy_group)
 
     real_compile = formula_mod.compile_workbook
 

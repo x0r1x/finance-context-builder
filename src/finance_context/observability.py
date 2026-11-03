@@ -102,6 +102,10 @@ def configure_logging(
     rq_logger.setLevel(chosen)
     rq_logger.propagate = False
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # cli and create_app build Settings before this handler exists.
+    from finance_context.settings import Settings, _warn_duckdb_memory_limit
+
+    _warn_duckdb_memory_limit(Settings())
 
 
 def log_event(logger: logging.Logger, level: int, event: str, msg: str, **fields: object) -> None:

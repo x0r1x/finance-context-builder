@@ -17,11 +17,14 @@ from typing import Any, Protocol
 import pyarrow as pa
 
 from finance_context.observability import log_event
-from finance_context.settings import Settings
+from finance_context.settings import Settings, _duckdb_size_bytes
 from finance_context.store.paths import shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.store")
 _BATCH_ROWS = 2048
+# Not configurable: parquet row-group bytes must stay byte-identical, and memory
+# grows per thread while memory_limit does not cover every allocation.
+_DUCKDB_THREADS = 1
 _DUCK_TYPES = {"VARCHAR": "VARCHAR", "INTEGER": "BIGINT", "BOOLEAN": "BOOLEAN"}
 
 _SHARED = (
@@ -49,12 +52,9 @@ _OBJECT_SIZE_SQL = "SELECT size FROM read_blob(?)"
 _HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
 _S3_LINE = re.compile(r"(?m)^([A-Z][A-Za-z0-9]+): ([^\r\n]{1,160})")
 _publish_held = threading.local()
-# A sort that needs more than this used to raise OutOfMemoryException while the
-# buffer manager was still inside its 256MB. That is the historical floor.
-_SPILL_FLOOR_BYTES = 1 << 30
 # The pod is 4 GiB and 4 CPUs. One job is capped near 2 GiB so the API can
-# keep the other half. Spill is disk beside the book, and it stops at 2 GiB:
-# a 16 GiB temp would fill that pod if the volume is memory-backed.
+# keep the other half. A spill beside the book may rise to this, and stops
+# there: a 16 GiB temp would fill that pod if the volume is memory-backed.
 _SPILL_CEILING_BYTES = 2 << 30
 # Kept free before the cap is raised, so the output file still has room.
 _SPILL_RESERVE_BYTES = 1 << 30
@@ -82,13 +82,11 @@ def object_url(bucket: str, key: str) -> str:
 
 def copy_arrow_parquet(table: pa.Table, dest: Path) -> None:
     """Write one Snappy parquet file. DuckDB flushes vectors of 2048 rows."""
-    import duckdb
-
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         dest.unlink()
     groups = max(table.num_rows, 1)
-    with duckdb.connect() as con:
+    with limited_connection() as con:
         con.register("batch", table)
         con.execute(
             "COPY (SELECT * FROM batch) TO ? "
@@ -115,10 +113,9 @@ class DuckDBBatch:
         import duckdb
 
         self._con = duckdb.connect(str(self._db))
-        _apply_scan_limits(self._con, Path(str(self._db) + ".tmp"))
-        specs = ", ".join(
-            f"{_quote_ident(name)} {_DUCK_TYPES[dtype]}" for name, dtype in columns
-        )
+        temp = Path(str(self._db) + ".tmp")
+        _set_duckdb_limits(self._con, str(temp), anchor=temp)
+        specs = ", ".join(f"{_quote_ident(name)} {_DUCK_TYPES[dtype]}" for name, dtype in columns)
         self._con.execute(f"CREATE TABLE t ({specs})")
 
     def add_rows(self, rows: Sequence[Sequence[Any]]) -> None:
@@ -539,7 +536,7 @@ class DuckDBObjectStore:
         self._settings = settings
 
     def put(self, local: Path, url: str) -> None:
-        # shortcut: whole-file read_blob under 256MB, fix when the object must land in MinIO
+        # shortcut: read_blob under duckdb_memory_limit, fix when the object must land in MinIO
         with limited_connection() as con:
             _configure_s3(con, self._settings)
             con.execute(
@@ -715,60 +712,49 @@ def _endpoint(value: str) -> tuple[str, bool]:
     return parts.netloc, parts.scheme == "https"
 
 
-def _spill_limit_bytes(anchor: Path) -> int:
+def _spill_limit_bytes(anchor: Path, floor: int) -> int:
     """How many bytes DuckDB may spill beside ``anchor``.
 
-    The floor is 1 GiB, which is what every scan used before. A large sort
-    hits that cap and DuckDB raises ``OutOfMemoryException`` even though the
-    256MB buffer manager is not the process RSS. When the volume can hold the
-    spill and still keep 1 GiB free, the cap rises, at most to 2 GiB. That is
-    the headroom of a 4 GiB pod whose job is already allowed 2 GiB of RAM.
-    A tighter volume keeps the old 1 GiB cap.
+    ``floor`` is ``duckdb_max_temp_directory_size``. A large sort hits that cap
+    while the buffer manager is still inside ``duckdb_memory_limit``. When the
+    volume can hold the spill and still keep 1 GiB free, the cap rises, at most
+    to 2 GiB. A configured cap above 2 GiB stays as configured. A tighter
+    volume, or a volume that cannot be measured, keeps the setting.
     """
+    ceiling = max(floor, _SPILL_CEILING_BYTES)
     probe = anchor if anchor.is_dir() else anchor.parent
     if not probe.exists():
         probe = probe.parent
     try:
         free = shutil.disk_usage(probe).free
     except OSError:
-        return _SPILL_FLOOR_BYTES
-    if free < _SPILL_FLOOR_BYTES:
-        return _SPILL_FLOOR_BYTES
+        return floor
+    if free < floor:
+        return floor
     roomy = free - _SPILL_RESERVE_BYTES
-    if roomy < _SPILL_FLOOR_BYTES:
-        return _SPILL_FLOOR_BYTES
-    return min(_SPILL_CEILING_BYTES, roomy)
+    if roomy < floor:
+        return floor
+    return min(ceiling, roomy)
 
 
-def _apply_scan_limits(con: Any, temp_dir: Path) -> None:
-    """One DuckDB thread and a 256MB buffer manager.
-
-    The pod has four CPUs and 4 GiB. Those CPUs are shared with the API, and
-    one thread per CPU multiplies the sort. The buffer manager stays at 256MB
-    so this scan cannot spend the job's 2 GiB by itself. Rows that do not fit
-    spill beside ``temp_dir``.
-    """
-    con.execute("SET memory_limit='256MB'")
-    con.execute("SET threads=1")
-    con.execute(f"SET temp_directory={_sql_literal(str(temp_dir))}")
-    con.execute(f"SET max_temp_directory_size='{_spill_limit_setting(temp_dir)}'")
-
-
-def _spill_limit_setting(anchor: Path) -> str:
-    size = _spill_limit_bytes(anchor)
+def _spill_limit_setting(anchor: Path, floor_text: str, floor: int) -> str:
+    size = _spill_limit_bytes(anchor, floor)
+    if size == floor:
+        return floor_text
     gibibyte = 1 << 30
     if size % gibibyte == 0:
-        return f"{size // gibibyte}GB"
-    return f"{size // (1 << 20)}MB"
+        return f"{size // gibibyte}GiB"
+    return f"{size // (1 << 20)}MiB"
 
 
 @contextmanager
 def limited_connection(anchor: Path | None = None) -> Iterator[Any]:
-    """One short DuckDB scan with a private temp directory.
+    """One DuckDB connection with the configured caps and a private temp directory.
 
-    ``memory_limit`` is the buffer-manager ceiling, 256MB, not the process RSS
-    and not the pod's 4 GiB. Spill files sit next to ``anchor`` when the scan
-    has a local file, so a memory-backed ``/tmp`` is not the cap.
+    ``memory_limit`` is the per-connection buffer-manager ceiling from
+    ``duckdb_memory_limit``. It is not process RSS. Spill files sit next to
+    ``anchor`` when the scan has a local file, so a memory-backed ``/tmp`` is
+    not the cap. The temp directory is removed when the connection closes.
     """
     import duckdb
 
@@ -782,12 +768,25 @@ def limited_connection(anchor: Path | None = None) -> Iterator[Any]:
     con = None
     try:
         con = duckdb.connect()
-        _apply_scan_limits(con, tmp)
+        _set_duckdb_limits(con, str(tmp), anchor=anchor)
         yield con
     finally:
         if con is not None:
             con.close()
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _set_duckdb_limits(con: Any, temp_directory: str, *, anchor: Path | None = None) -> None:
+    settings = Settings()
+    temp_cap = settings.duckdb_max_temp_directory_size
+    if anchor is not None:
+        floor = _duckdb_size_bytes(temp_cap)
+        if floor is not None:
+            temp_cap = _spill_limit_setting(anchor, temp_cap, floor)
+    con.execute(f"SET memory_limit={_sql_literal(settings.duckdb_memory_limit)}")
+    con.execute(f"SET temp_directory={_sql_literal(temp_directory)}")
+    con.execute(f"SET max_temp_directory_size={_sql_literal(temp_cap)}")
+    con.execute(f"SET threads={_DUCKDB_THREADS}")
 
 
 def _quote_ident(name: str) -> str:

@@ -33,6 +33,8 @@ ENV_SPECS: tuple[EnvSpec, ...] = (
     EnvSpec("PARSE_STREAMING", "parse_streaming"),
     EnvSpec("JSON_STREAM", "json_stream"),
     EnvSpec("PARQUET_ROW_GROUP_ROWS", "parquet_row_group_rows"),
+    EnvSpec("DUCKDB_MEMORY_LIMIT", "duckdb_memory_limit"),
+    EnvSpec("DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "duckdb_max_temp_directory_size"),
     EnvSpec("COMPILE_STRING_POOL", "compile_string_pool"),
     EnvSpec("COMPILE_AST_ZLIB", "compile_ast_zlib"),
     EnvSpec("GRAPH_STREAM", "graph_stream"),
