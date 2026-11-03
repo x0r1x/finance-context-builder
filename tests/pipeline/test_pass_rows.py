@@ -56,6 +56,19 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
         monkeypatch.setattr(f"{module}.read_parquet", spy)
         monkeypatch.setattr(f"{module}.read_parquet_dicts", spy_columns, raising=False)
 
+    import finance_context.layout.stage as layout_stage
+    import finance_context.store.duckdb_io as duckdb_io
+
+    real_iter = duckdb_io._iter_parquet_rows
+
+    def spy_iter(path: Path, columns, **kwargs):
+        column_reads.append(Path(path).as_posix())
+        return real_iter(path, columns, **kwargs)
+
+    # Layout and the edge reload stream batches instead of building a dict list.
+    monkeypatch.setattr(duckdb_io, "_iter_parquet_rows", spy_iter)
+    monkeypatch.setattr(layout_stage, "_iter_parquet_rows", spy_iter)
+
     compiles: list[int] = []
     import finance_context.app.pipeline as pipeline_mod
     import finance_context.formulas.stage as formula_mod
