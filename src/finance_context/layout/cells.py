@@ -4,6 +4,77 @@ import math
 
 from finance_context.layout.periods import display_cell_text
 
+# Fields detection and the sheet overlays read. A dict of these is ~270 bytes;
+# slots keep the per-cell record near 150 so a full sheet does not pay both.
+_LAYOUT_FIELDS = (
+    "sheet",
+    "row",
+    "col",
+    "addr",
+    "formula_raw",
+    "formula_template",
+    "cached_value",
+    "hidden",
+    "number_format",
+    "merge_end_col",
+    "style_indent",
+    "outline_level",
+    "col_outline_level",
+)
+_LAYOUT_FIELD_SET = frozenset(_LAYOUT_FIELDS)
+
+
+class LayoutCell:
+    """One layout cell. Dict-style reads, slot storage."""
+
+    __slots__ = _LAYOUT_FIELDS
+
+    def __init__(
+        self,
+        sheet: object,
+        row: object,
+        col: object,
+        addr: object,
+        formula_raw: object = None,
+        formula_template: object = None,
+        cached_value: object = None,
+        hidden: object = None,
+        number_format: object = None,
+        merge_end_col: object = None,
+        style_indent: object = None,
+        outline_level: object = None,
+        col_outline_level: object = None,
+    ) -> None:
+        self.sheet = sheet
+        self.row = row
+        self.col = col
+        self.addr = addr
+        self.formula_raw = formula_raw
+        self.formula_template = formula_template
+        self.cached_value = cached_value
+        self.hidden = hidden
+        self.number_format = number_format
+        self.merge_end_col = merge_end_col
+        self.style_indent = style_indent
+        self.outline_level = outline_level
+        self.col_outline_level = col_outline_level
+
+    def get(self, key: str, default: object = None) -> object:
+        if key not in _LAYOUT_FIELD_SET:
+            return default
+        return getattr(self, key)
+
+    def __getitem__(self, key: str) -> object:
+        if key not in _LAYOUT_FIELD_SET:
+            raise KeyError(key)
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: object) -> None:
+        if key not in _LAYOUT_FIELD_SET:
+            raise KeyError(key)
+        setattr(self, key, value)
+
+
 # Ordinary space, non-breaking space, narrow no-break space.
 _IGNORED_SPACE = str.maketrans("", "", " \xa0\u202f")
 

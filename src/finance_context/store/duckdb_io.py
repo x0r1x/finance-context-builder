@@ -237,14 +237,24 @@ def read_parquet_column_tuples(path: Path, columns: list[str]) -> list[tuple[Any
     return [tuple(row) for row in rows]
 
 
-def read_parquet_dicts(
+# One fetch chunk. Not a row cap: the scan continues until the file ends.
+_PARQUET_FETCH_ROWS = 65536
+# Last value of these columns is reused per col. The maps stay sheet-width.
+_COLUMN_SHARE = ("formula_template", "number_format")
+
+
+def _iter_parquet_rows(
     path: Path,
     columns: list[str],
     *,
     where: str | None = None,
     params: list[Any] | None = None,
-) -> list[dict[str, Any]]:
-    """Read named columns. ``where`` is SQL with ``?`` placeholders, not cell text."""
+) -> Iterator[tuple[list[str], list[tuple[Any, ...]]]]:
+    """Stream named columns. Equal sheet/row and per-column templates share objects.
+
+    Cells are stored row by row, so the previous sheet and row are the values
+    to reuse. ``formula_template`` and ``number_format`` repeat down a column.
+    """
     selected = ", ".join(_quote_ident(name) for name in columns)
     sql = f"SELECT {selected} FROM read_parquet(?)"
     bind: list[Any] = [str(path)]
@@ -254,7 +264,62 @@ def read_parquet_dicts(
     with limited_connection() as con:
         cursor = con.execute(sql, bind)
         names = [item[0] for item in cursor.description]
-        return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+        pos = {name: index for index, name in enumerate(names)}
+        sheet_i = pos.get("sheet")
+        row_i = pos.get("row")
+        col_i = pos.get("col")
+        cached = [pos[name] for name in _COLUMN_SHARE if name in pos]
+        last_sheet = None
+        last_row = None
+        last_by: dict[int, dict[Any, Any]] = {index: {} for index in cached}
+        while True:
+            fetched = cursor.fetchmany(_PARQUET_FETCH_ROWS)
+            if not fetched:
+                break
+            batch: list[tuple[Any, ...]] = []
+            for record in fetched:
+                vals = list(record)
+                if sheet_i is not None:
+                    value = vals[sheet_i]
+                    if value == last_sheet:
+                        vals[sheet_i] = last_sheet
+                    else:
+                        last_sheet = value
+                if row_i is not None:
+                    value = vals[row_i]
+                    if value == last_row:
+                        vals[row_i] = last_row
+                    else:
+                        last_row = value
+                if col_i is not None:
+                    col = vals[col_i]
+                    for index in cached:
+                        value = vals[index]
+                        if value is None:
+                            continue
+                        column_cache = last_by[index]
+                        previous = column_cache.get(col)
+                        if previous == value:
+                            vals[index] = previous
+                        else:
+                            column_cache[col] = value
+                batch.append(tuple(vals))
+            del fetched
+            yield names, batch
+
+
+def read_parquet_dicts(
+    path: Path,
+    columns: list[str],
+    *,
+    where: str | None = None,
+    params: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Read named columns. ``where`` is SQL with ``?`` placeholders, not cell text."""
+    found: list[dict[str, Any]] = []
+    for names, batch in _iter_parquet_rows(path, columns, where=where, params=params):
+        found.extend(dict(zip(names, row, strict=True)) for row in batch)
+    return found
 
 
 def read_blob_bytes(uri: str, settings: Settings | None = None) -> bytes:

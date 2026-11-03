@@ -66,14 +66,36 @@ class _Periods:
         return self._columns.get((parsed[0], parsed[1]), default)
 
 
-def _formula_cells(book: Path) -> list[dict]:
+class _Formula:
+    """One graph link: the formula text, its layout identity, and its refs."""
+
+    __slots__ = ("formula", "row_key", "period_id", "refs")
+
+    def __init__(
+        self, formula: str | None, row_key: str | None, period_id: str | None
+    ) -> None:
+        self.formula = formula
+        self.row_key = row_key
+        self.period_id = period_id
+        self.refs: list[str] = []
+
+
+def _formula_record(sheet, row, col, addr, raw, row_meta, period_by_cell) -> tuple[str, _Formula]:
+    return f"{sheet}!{addr}", _Formula(
+        str(raw),
+        row_meta.get((str(sheet), int(row))),
+        period_by_cell.get((str(sheet), int(col))),
+    )
+
+
+def _load_formulas(book: Path, row_meta, period_by_cell) -> dict[str, _Formula]:
     """Formula rows only. Value cells stay in the parquet file."""
     import pyarrow.parquet as pq
 
     path = book / "ir" / "cells.parquet"
     if not path.is_file():
-        return []
-    found: list[dict] = []
+        return {}
+    found: dict[str, _Formula] = {}
     columns = ["sheet", "row", "col", "addr", "formula_raw"]
     for batch in pq.ParquetFile(path).iter_batches(columns=columns, batch_size=65536):
         raw = batch.column(4).to_pylist()
@@ -84,16 +106,69 @@ def _formula_cells(book: Path) -> list[dict]:
         for index, formula in enumerate(raw):
             if not formula:
                 continue
-            found.append(
-                {
-                    "sheet": sheets[index],
-                    "row": rows[index],
-                    "col": cols[index],
-                    "addr": addrs[index],
-                    "formula_raw": formula,
-                }
+            node, rec = _formula_record(
+                sheets[index],
+                rows[index],
+                cols[index],
+                addrs[index],
+                formula,
+                row_meta,
+                period_by_cell,
             )
+            found[node] = rec
     return found
+
+
+def _formulas_from_cells(cells, row_meta, period_by_cell) -> dict[str, _Formula]:
+    found: dict[str, _Formula] = {}
+    for cell in cells:
+        raw = cell.get("formula_raw")
+        if not raw:
+            continue
+        node, rec = _formula_record(
+            cell["sheet"],
+            cell["row"],
+            cell["col"],
+            cell["addr"],
+            raw,
+            row_meta,
+            period_by_cell,
+        )
+        found[node] = rec
+    return found
+
+
+def _bind_refs(formulas: dict[str, _Formula], formula_edges) -> None:
+    """Attach first-seen targets. A source with no formula cell still becomes a link."""
+    for edge in formula_edges:
+        source = str(edge.source or "")
+        if not source:
+            continue
+        rec = formulas.get(source)
+        if rec is None:
+            rec = _Formula(None, None, None)
+            formulas[source] = rec
+        target = edge.target
+        if target and (text := str(target)) not in rec.refs:
+            rec.refs.append(text)
+
+
+def _links_from_formulas(formulas: dict[str, _Formula], lags: dict | None) -> list[FormulaLink]:
+    lags = lags or {}
+    links: list[FormulaLink] = []
+    for cell in sorted(formulas):
+        rec = formulas[cell]
+        links.append(
+            FormulaLink(
+                cell=cell,
+                formula=rec.formula,
+                formula_class=classify_formula(rec.formula, rec.refs, lags.get(cell)),
+                refs=rec.refs,
+                row_key=rec.row_key,
+                period_id=rec.period_id,
+            )
+        )
+    return links
 
 
 def _circular_rows(layout: Layout) -> dict[tuple[str, int], str]:
@@ -253,7 +328,7 @@ def build_formula_graph(
             cell_edges if not stream else None,
             chosen.parquet_row_group_rows,
         )
-        cells = _formula_cells(book)
+        formulas = _load_formulas(book, row_meta, period_by_cell)
         index_rows: list[tuple[object, ...]] = []
     else:
         index_rows = _index_rows(cells, row_meta, period_by_cell)
@@ -272,6 +347,7 @@ def build_formula_graph(
         )
         node_count = len(index_rows)
         circular_ids = None
+        formulas = _formulas_from_cells(cells, row_meta, period_by_cell)
 
     if stream:
         cycles, doc, iterate = _graph_from_parquet(
@@ -279,10 +355,9 @@ def build_formula_graph(
             book,
             job_id,
             layout,
-            cells,
+            formulas,
             edges,
             index_rows,
-            row_meta,
             period_by_cell,
             cell_edge_path,
             stream_json=chosen.json_stream,
@@ -291,7 +366,7 @@ def build_formula_graph(
         )
     else:
         period_of = _Periods(period_by_cell)
-        view = _RangeView(book, cells, period_by_cell)
+        view = _RangeView(book, formulas, period_by_cell)
         enriched = [_enrich_edge(edge, period_of, view) for edge in cell_edges]
         write_parquet(
             dest_dir / "graph" / "edges.parquet",
@@ -334,7 +409,8 @@ def build_formula_graph(
         doc = _summary(job_id, node_count, edges, enriched, cycles, iterate, hints)
         lags = _lags_by_source(enriched)
         _add_range_lags(lags, users, view, period_of)
-        doc.links = _formula_links(cells, edges, row_meta, period_by_cell, lags=lags)
+        _bind_refs(formulas, edges)
+        doc.links = _links_from_formulas(formulas, lags)
         if chosen.json_stream:
             _stream_graph_files(dest_dir, doc)
         else:
@@ -568,55 +644,6 @@ def _lags_by_source(cell_edges: list[CellEdge]) -> dict[str, list[str]]:
     return grouped
 
 
-def _formula_links(
-    cells: list[dict],
-    formula_edges: list[Edge],
-    row_meta: dict[tuple[str, int], str],
-    period_by_cell: dict[tuple[str, int], str],
-    cell_edges: list[CellEdge] | None = None,
-    lags: dict[str, list[str]] | None = None,
-) -> list[FormulaLink]:
-    formula_by_node: dict[str, str] = {}
-    identity: dict[str, tuple[str | None, str | None]] = {}
-    for cell in cells:
-        raw = cell.get("formula_raw")
-        if not raw:
-            continue
-        node = f"{cell['sheet']}!{cell['addr']}"
-        formula_by_node[node] = str(raw)
-        meta = row_meta.get((str(cell["sheet"]), int(cell["row"])))
-        period = period_by_cell.get((str(cell["sheet"]), int(cell["col"])))
-        identity[node] = (meta, period)
-    grouped: dict[str, list[str]] = {}
-    for edge in formula_edges:
-        source = str(edge.source or "")
-        if not source:
-            continue
-        refs = grouped.setdefault(source, [])
-        target = edge.target
-        if target and str(target) not in refs:
-            refs.append(str(target))
-    for node in formula_by_node:
-        grouped.setdefault(node, [])
-    if lags is None:
-        lags = _lags_by_source(cell_edges or [])
-    links: list[FormulaLink] = []
-    for cell, refs in sorted(grouped.items()):
-        row_key, period_id = identity.get(cell, (None, None))
-        formula = formula_by_node.get(cell)
-        links.append(
-            FormulaLink(
-                cell=cell,
-                formula=formula,
-                formula_class=classify_formula(formula, refs, lags.get(cell)),
-                refs=refs,
-                row_key=row_key,
-                period_id=period_id,
-            )
-        )
-    return links
-
-
 class _RangeView:
     """Range nodes as the graph stage sees them, built only when a book has one.
 
@@ -625,9 +652,9 @@ class _RangeView:
     cells (for cycles) come from its bounds and the book's cells.
     """
 
-    def __init__(self, book: Path, cells: list[dict], period_by_cell: dict) -> None:
+    def __init__(self, book: Path, formulas: dict[str, _Formula], period_by_cell: dict) -> None:
         self._book = book
-        self._cells = cells
+        self._formulas = formulas
         self._period_by_cell = period_by_cell
         self._nodes: dict[str, RangeNode | None] = {}
         self._grid: CellGrid | None = None
@@ -659,7 +686,7 @@ class _RangeView:
     def hops(self) -> RangeHops:
         if self._hops is None:
             self._hops = RangeHops(
-                f"{cell['sheet']}!{cell['addr']}" for cell in self._cells if cell.get("formula_raw")
+                node for node, rec in self._formulas.items() if rec.formula
             )
         return self._hops
 
@@ -896,46 +923,49 @@ def _cycles_packed(
     if not id_of:
         return []
     nodes = sorted(id_of)
-    rank = {id_of[name]: index for index, name in enumerate(nodes)}
+    n = len(nodes)
+    # slot -> index in `nodes`. An array, not a dict of every node.
+    rank = np.empty(n, dtype=np.int32)
+    rank[np.fromiter((id_of[name] for name in nodes), dtype=np.int32, count=n)] = np.arange(
+        n, dtype=np.int32
+    )
     n_edges = len(src_ids)
-    rows = np.fromiter((rank[i] for i in src_ids), dtype=np.int32, count=n_edges)
-    cols = np.fromiter((rank[i] for i in tgt_ids), dtype=np.int32, count=n_edges)
+    if n_edges:
+        rows = rank[np.asarray(src_ids, dtype=np.int32)]
+        cols = rank[np.asarray(tgt_ids, dtype=np.int32)]
+    else:
+        rows = np.empty(0, dtype=np.int32)
+        cols = np.empty(0, dtype=np.int32)
     data = np.ones(n_edges, dtype=np.uint8)
-    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(len(nodes), len(nodes)), dtype=np.uint8)
+    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.uint8)
     _n_comp, labels = connected_components(matrix, directed=True, connection="strong")
-    order: list[int] = []
-    members: dict[int, list[str]] = {}
-    for name, label_raw in zip(nodes, labels, strict=True):
-        label = int(label_raw)
-        bucket = members.get(label)
-        if bucket is None:
-            members[label] = [name]
-            order.append(label)
-        else:
-            bucket.append(name)
+    del matrix
     sizes = np.bincount(labels)
     all_period: dict[int, bool] = {}
     saw: set[int] = set()
     self_loop: set[int] = set()
-    same = labels[rows] == labels[cols]
-    for pos_raw in np.flatnonzero(same):
-        pos = int(pos_raw)
-        label = int(labels[rows[pos]])
-        if sizes[label] < 2 and int(rows[pos]) != int(cols[pos]):
-            continue
-        if flags[pos] == _STRUCTURAL:
-            continue
-        saw.add(label)
-        if int(rows[pos]) == int(cols[pos]):
-            self_loop.add(label)
-        bit = bool(flags[pos])
-        previous = all_period.get(label)
-        all_period[label] = bit if previous is None else previous and bit
+    if n_edges:
+        same = labels[rows] == labels[cols]
+        for pos_raw in np.flatnonzero(same):
+            pos = int(pos_raw)
+            label = int(labels[rows[pos]])
+            if sizes[label] < 2 and int(rows[pos]) != int(cols[pos]):
+                continue
+            if flags[pos] == _STRUCTURAL:
+                continue
+            saw.add(label)
+            if int(rows[pos]) == int(cols[pos]):
+                self_loop.add(label)
+            bit = bool(flags[pos])
+            previous = all_period.get(label)
+            all_period[label] = bit if previous is None else previous and bit
+        del same
+    del rows, cols
     if extra is not None:
 
-        def label_of(name: str) -> int | None:
+        def label_of(name: str, _labels=labels, _rank=rank) -> int | None:
             slot = id_of.get(name)
-            return None if slot is None else int(labels[rank[slot]])
+            return None if slot is None else int(_labels[int(_rank[slot])])
 
         for label, bit, is_self in extra(label_of):
             saw.add(label)
@@ -943,6 +973,21 @@ def _cycles_packed(
                 self_loop.add(label)
             previous = all_period.get(label)
             all_period[label] = bit if previous is None else previous and bit
+    del rank
+    # Member lists only for components that can be cycles. Singletons stay in `labels`.
+    order: list[int] = []
+    members: dict[int, list[str]] = {}
+    for name, label_raw in zip(nodes, labels, strict=True):
+        label = int(label_raw)
+        if sizes[label] < 2 and label not in self_loop:
+            continue
+        bucket = members.get(label)
+        if bucket is None:
+            members[label] = [name]
+            order.append(label)
+        else:
+            bucket.append(name)
+    del nodes, labels, sizes
     cycles: list[CycleRecord] = []
     seq = 1
     for label in order:
@@ -979,10 +1024,9 @@ def _graph_from_parquet(
     book,
     job_id,
     layout,
-    cells,
+    formulas,
     edges,
     index_rows,
-    row_meta,
     period_by_cell,
     path: Path,
     *,
@@ -1007,7 +1051,7 @@ def _graph_from_parquet(
     truncated_seen: set[str] = set()
     lag_groups: dict[str, list[str]] = {}
     lag_pool: dict[str, str] = {}
-    view = _RangeView(book, cells, period_by_cell)
+    view = _RangeView(book, formulas, period_by_cell)
     range_users: list[tuple[str, RangeNode]] = []
     ids = _NodeIds()
     src_ids = array.array("i")
@@ -1126,11 +1170,11 @@ def _graph_from_parquet(
         iterate=iterate,
         circularity_hints=list(hints or []),
     )
-    grouped, identity, formula_by_node = _link_inputs(cells, edges, row_meta, period_by_cell)
+    _bind_refs(formulas, edges)
     if stream_json:
-        _stream_graph_files(dest_dir, doc, grouped, identity, formula_by_node, lag_groups)
+        _stream_graph_files(dest_dir, doc, formulas, lag_groups)
     else:
-        doc.links = _formula_links(cells, edges, row_meta, period_by_cell, lags=lag_groups)
+        doc.links = _links_from_formulas(formulas, lag_groups)
         write_json(
             dest_dir / "graph" / "graph.json",
             doc.model_dump(mode="json", by_alias=True),
@@ -1143,53 +1187,23 @@ def _graph_from_parquet(
     return cycles, doc, iterate
 
 
-def _link_inputs(cells, formula_edges, row_meta, period_by_cell):
-    formula_by_node: dict[str, str] = {}
-    identity: dict[str, tuple[str | None, str | None]] = {}
-    for cell in cells:
-        raw = cell.get("formula_raw")
-        if not raw:
-            continue
-        node = f"{cell['sheet']}!{cell['addr']}"
-        formula_by_node[node] = str(raw)
-        meta = row_meta.get((str(cell["sheet"]), int(cell["row"])))
-        period = period_by_cell.get((str(cell["sheet"]), int(cell["col"])))
-        identity[node] = (meta, period)
-    grouped: dict[str, list[str]] = {}
-    for edge in formula_edges:
-        source = str(edge.source or "")
-        if not source:
-            continue
-        refs = grouped.setdefault(source, [])
-        target = edge.target
-        if target and str(target) not in refs:
-            refs.append(str(target))
-    for node in formula_by_node:
-        grouped.setdefault(node, [])
-    return grouped, identity, formula_by_node
-
-
 def _stream_graph_files(
     dest_dir,
     doc: GraphDocument,
-    grouped: dict[str, list[str]] | None = None,
-    identity: dict | None = None,
-    formula_by_node: dict | None = None,
+    formulas: dict[str, _Formula] | None = None,
     lags: dict | None = None,
 ) -> None:
     """Write graph.json with json.dump. Links are streamed when the caller kept them columnar."""
     from finance_context.render.graph import _cell, render_graph_markdown
 
-    if grouped is None:
+    if formulas is None:
         payload = doc.model_dump(mode="json", by_alias=True)
         write_json(dest_dir / "graph" / "graph.json", payload, stream=True)
         markdown = render_graph_markdown(doc)
         atomic_write_bytes(dest_dir / "graph" / "graph.md", markdown.encode("utf-8"))
         return
-    identity = identity or {}
-    formula_by_node = formula_by_node or {}
     lags = lags or {}
-    n_links = len(grouped)
+    n_links = len(formulas)
     head = doc.model_dump(mode="json", by_alias=True)
     head["links"] = _LINKS_SLOT
     text = json.dumps(head, ensure_ascii=False, indent=2)
@@ -1211,18 +1225,16 @@ def _stream_graph_files(
             else:
                 json_file.write("[\n")
                 first = True
-                for cell in sorted(grouped):
-                    refs = grouped.pop(cell)
-                    row_key, period_id = identity.get(cell, (None, None))
-                    formula = formula_by_node.get(cell)
-                    formula_class = classify_formula(formula, refs, lags.get(cell))
+                for cell in sorted(formulas):
+                    rec = formulas.pop(cell)
+                    formula_class = classify_formula(rec.formula, rec.refs, lags.get(cell))
                     item = {
                         "cell": cell,
-                        "formula": formula,
+                        "formula": rec.formula,
                         "formula_class": formula_class,
-                        "refs": refs,
-                        "row_key": row_key,
-                        "period_id": period_id,
+                        "refs": rec.refs,
+                        "row_key": rec.row_key,
+                        "period_id": rec.period_id,
                     }
                     body = json.dumps(item, ensure_ascii=False, indent=2).replace("\n", "\n    ")
                     json_file.write(("" if first else ",\n") + "    " + body)
@@ -1232,11 +1244,11 @@ def _stream_graph_files(
                         + " | ".join(
                             [
                                 _cell(cell),
-                                _cell(row_key or ""),
-                                _cell(period_id or ""),
+                                _cell(rec.row_key or ""),
+                                _cell(rec.period_id or ""),
                                 _cell(formula_class or ""),
-                                _cell(formula or ""),
-                                _cell(", ".join(refs)),
+                                _cell(rec.formula or ""),
+                                _cell(", ".join(rec.refs)),
                             ]
                         )
                         + " |\n"
