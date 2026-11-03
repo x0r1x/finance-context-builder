@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from finance_context.excel.a1 import parse_addr
 from finance_context.formulas.models import as_edge
 from finance_context.layout.cells import LayoutCell
 from finance_context.layout.detect import _sheet_layout, detect_layout
-from finance_context.layout.models import Layout
+from finance_context.layout.models import Layout, SheetLayout
+from finance_context.layout.relations import relation_period_cols
 from finance_context.layout.timelines import link_workbook_timelines
 from finance_context.observability import log_event
 from finance_context.settings import Settings
@@ -179,14 +181,61 @@ def _detect_by_sheet(
     return layout
 
 
-def load_relation_cells(dest_dir: Path, layout: Layout) -> list[dict]:
-    """AST and formula text for layout rows. Other rows stay on disk."""
-    path = dest_dir / "ir" / "cells.parquet"
-    found: list[dict] = []
-    for sheet in layout.sheets:
-        rows = {row.row for block in sheet.blocks for row in block.rows}
-        found.extend(_rows_on_sheet(path, sheet.name, rows, _RELATION_COLUMNS))
-    return found
+def load_relation_cells(dest_dir: Path, layout: Layout) -> _RelationCells:
+    """Period-column formula cells. Other cells, and their AST text, stay on disk.
+
+    The scan is one pass. A row's strings live only until ``formula_relations``
+    reduces that row. Value cells are not read: the pattern never looks at them.
+    """
+    return _RelationCells(dest_dir, layout)
+
+
+class _RelationCells:
+    """One ordered pass over the cells ``formula_relations`` looks up."""
+
+    def __init__(self, dest_dir: Path, layout: Layout) -> None:
+        self._dest = dest_dir
+        self._layout = layout
+        self.count = 0
+        self._used = False
+
+    def __iter__(self) -> Iterator[dict]:
+        if self._used:
+            return
+        self._used = True
+        path = self._dest / "ir" / "cells.parquet"
+        if not path.is_file():
+            return
+        columns = list(_RELATION_COLUMNS)
+        where = (
+            "sheet = ? AND row IN (SELECT unnest(?::BIGINT[])) "
+            "AND col IN (SELECT unnest(?::BIGINT[])) "
+            "AND (formula_raw IS NOT NULL OR formula_template IS NOT NULL "
+            "OR ast_json IS NOT NULL)"
+        )
+        for sheet in self._layout.sheets:
+            rows, cols = _relation_targets(sheet)
+            if not rows or not cols:
+                continue
+            params: list[object] = [sheet.name, sorted(rows), sorted(cols)]
+            for names, batch in _iter_parquet_rows(path, columns, where=where, params=params):
+                for record in batch:
+                    self.count += 1
+                    yield dict(zip(names, record, strict=True))
+                del batch
+
+
+def _relation_targets(sheet: SheetLayout) -> tuple[set[int], set[int]]:
+    rows: set[int] = set()
+    cols: set[int] = set()
+    for block in sheet.blocks:
+        picked = relation_period_cols(sheet, block)
+        if not picked:
+            continue
+        cols.update(picked)
+        for row in block.rows:
+            rows.add(row.row)
+    return rows, cols
 
 
 def _sheet_names(path: Path) -> list[str]:
