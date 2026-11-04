@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tests.helpers.published import attach_streamed_rows
 
 from finance_context.app.pipeline import Pipeline
 from finance_context.settings import Settings
@@ -27,7 +28,9 @@ def test_real_models_produce_context(tmp_path: Path, workbook: Path) -> None:
     (dest / "source" / "source.xlsx").parent.mkdir(parents=True, exist_ok=True)
     (dest / "source" / "source.xlsx").write_bytes(workbook.read_bytes())
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
-    doc = pipeline.run(dest, job_id=workbook.stem, source_filename=workbook.name)
+    doc = attach_streamed_rows(
+        pipeline.run(dest, job_id=workbook.stem, source_filename=workbook.name)
+    )
     assert (dest / "raw" / "workbook.json").is_file()
     assert (dest / "context" / "context.json").is_file()
     assert (dest / "context" / "context.md").is_file()

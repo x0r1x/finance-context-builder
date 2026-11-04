@@ -10,6 +10,7 @@ Examples::
     uv run python scripts/gen_synthetic.py outline /tmp/outline.xlsx
     uv run python scripts/gen_synthetic.py sumif 10000 /tmp/sumif10k.xlsx
     uv run python scripts/gen_synthetic.py text 200000 /tmp/text200k.xlsx --strlen 64
+    uv run python scripts/gen_synthetic.py block 500000 /tmp/block500k.xlsx
 """
 
 from __future__ import annotations
@@ -18,10 +19,12 @@ import argparse
 from pathlib import Path
 
 from tests.fixtures.synthetic.books import (
+    BLOCK_PERIODS,
     DENSE_COLUMNS,
     REL_PERIODS,
     SERIES_PERIODS,
     TEXT_STRLEN,
+    block,
     dense,
     hops,
     hops_tl,
@@ -69,6 +72,10 @@ def main(argv: list[str] | None = None) -> int:
     text_cmd.add_argument("--strlen", type=int, default=TEXT_STRLEN)
     text_cmd.add_argument("--seed", type=int, default=1)
 
+    block_cmd = sub.add_parser("block", help="one block of labels, years, and a few formulas")
+    _rows_out(block_cmd)
+    block_cmd.add_argument("--periods", type=int, default=BLOCK_PERIODS)
+
     args = parser.parse_args(argv)
     written = _write(args)
     print(written)
@@ -98,6 +105,8 @@ def _write(args: argparse.Namespace) -> Path:
         return sumif(args.path, args.rows)
     if shape == "text":
         return text(args.path, args.rows, strlen=args.strlen, seed=args.seed)
+    if shape == "block":
+        return block(args.path, args.rows, periods=args.periods)
     raise AssertionError(shape)
 
 

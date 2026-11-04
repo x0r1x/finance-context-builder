@@ -6,7 +6,7 @@ from datetime import date
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
-from finance_context.layout.cells import _cell_at, _text, parse_int, parse_number
+from finance_context.layout.cells import _cell_at, _is_number, _text, parse_int, parse_number
 from finance_context.layout.markers import DerivedScan, apply_axis_markers
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
 from finance_context.layout.periods import (
@@ -369,6 +369,33 @@ def _cols_connected(left: int, right: int, hidden_cols: set[int]) -> bool:
     return all(col in hidden_cols for col in range(left + 1, right))
 
 
+def _visible_text_matches(
+    row_cells: list[dict],
+    date1904: bool,
+    pattern: re.Pattern[str],
+    *,
+    normalized: bool,
+) -> bool:
+    """True when a visible, non-numeric cell matches ``pattern``.
+
+    ``normalized`` uses ``match`` on the header fold, which is how a relative
+    label is recognized. A flag word uses ``search`` on the cell text.
+    """
+    for cell in row_cells:
+        if cell.get("hidden"):
+            continue
+        text = _text(cell, date1904)
+        if not text or _is_number(text):
+            continue
+        if normalized:
+            raw = normalize_header(text)
+            if raw and pattern.match(raw):
+                return True
+        elif pattern.search(text):
+            return True
+    return False
+
+
 def _relative_run(
     row_cells: list[dict],
     date1904: bool,
@@ -377,11 +404,22 @@ def _relative_run(
     min_len: int,
     hidden_cols: set[int] | None = None,
 ) -> list[tuple[int, int]]:
-    label = _row_label(row_cells, date1904)
+    # The resolved label is one visible non-number cell. Neither check can
+    # succeed when no such cell matches, and finding that out does not parse
+    # the label as a header.
+    if require_label and not _visible_text_matches(
+        row_cells, date1904, _RELATIVE_LABEL, normalized=True
+    ):
+        return []
+    label = None
+    if _visible_text_matches(row_cells, date1904, _FLAG_LABEL, normalized=False):
+        label = _row_label(row_cells, date1904)
+        if label and _FLAG_LABEL.search(label):
+            return []
+    elif require_label:
+        label = _row_label(row_cells, date1904)
     raw = normalize_header(label)
     if require_label and (not raw or not _RELATIVE_LABEL.match(raw)):
-        return []
-    if label and _FLAG_LABEL.search(label):
         return []
     seq: list[tuple[int, int]] = []
     for cell in sorted(row_cells, key=lambda item: int(item["col"])):

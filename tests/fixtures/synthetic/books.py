@@ -21,6 +21,8 @@ bytes. The shapes:
   ad-hoc ``gen2.py`` sheet).
 - ``text`` — unique shared strings (the ad-hoc ``gen_sst.py`` sheet).
   ``s50k`` / ``s100k`` / ``s200k`` and ``text200k`` are row counts.
+- ``block`` — one sheet, one header, one axis, ``rows`` labels and numeric
+  period columns, plus a few ``=1+1`` formulas. ``block500k`` is 500,000 rows.
 
 The short window-SUM grid and the calc-column SUMIF sheet from the other
 ad-hoc scripts are the same idea as ``sumif`` at a different width. The
@@ -42,6 +44,9 @@ DENSE_COLUMNS = 200
 TEXT_STRLEN = 64
 # gen_sst.py seed. The word list is copied from that script.
 TEXT_SEED = 1
+BLOCK_PERIODS = 3
+# The first data rows carry a formula. The rest of the column is a number.
+BLOCK_FORMULAS = 3
 _TEXT_WORDS = (
     "выручка себестоимость прибыль расходы налог амортизация капитал долг "
     "кредит процент запасы аренда персонал маркетинг логистика revenue cost "
@@ -199,6 +204,40 @@ def text(path: Path, rows: int, *, strlen: int = TEXT_STRLEN, seed: int = TEXT_S
                 line.number(3, excel_row)
                 line.number(4, excel_row + 1)
                 line.number(5, excel_row + 2)
+    return path
+
+
+def block(path: Path, rows: int, *, periods: int = BLOCK_PERIODS) -> Path:
+    """One timeline block: ``rows`` labels, numeric years, and a few formulas.
+
+    Column A is ``Line {n}``. The next ``periods`` columns are years ``2020``
+    onward. The first ``BLOCK_FORMULAS`` data rows store ``=1+1`` in the first
+    year, cached as 2. Every other value is the row number plus 10,000. A bare
+    integer in 1900–2099 repeated across the year columns is a second header,
+    and the row number itself lands in that range, so the offset keeps the
+    sheet one block.
+    """
+    _require_positive(rows, periods)
+    if periods > 80:
+        raise ValueError("block year headers run from 2020 through 2099")
+    formulas = min(BLOCK_FORMULAS, rows)
+    with Book(path, "Model") as book:
+        with book.row(1) as header:
+            header.string(1, "Line")
+            for offset in range(periods):
+                header.string(offset + 2, str(2020 + offset))
+        for index in range(rows):
+            excel_row = index + 2
+            with book.row(excel_row) as line:
+                line.string(1, f"Line {excel_row}")
+                for col in range(2, periods + 2):
+                    if index < formulas and col == 2:
+                        line.formula(col, "=1+1", cached=2)
+                    else:
+                        # +10000 stays outside 1900–2099. The row number alone
+                        # is a bare year, and the same year in every period
+                        # column is a header, which would split the block.
+                        line.number(col, excel_row + 10_000)
     return path
 
 

@@ -7,13 +7,14 @@ import sys
 import tracemalloc
 from pathlib import Path
 
+from tests.helpers.published import published_context as build_context
+
 from finance_context.context.build import (
     _BUILD_FIELDS,
     _BuildCell,
     _formula_stats,
     _layout_rows,
     _layout_value_cells,
-    build_context,
 )
 from finance_context.context.timeline import build_axes
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout

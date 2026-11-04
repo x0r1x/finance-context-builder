@@ -11,6 +11,7 @@ from pathlib import Path
 
 import xlsxwriter
 from tests.helpers.parquet import load_parquet
+from tests.helpers.published import attach_streamed_rows
 
 from finance_context.app.pipeline import Pipeline
 from finance_context.excel import parse_workbook
@@ -89,7 +90,10 @@ def test_russian_model_keeps_cross_sheet_formulas_and_ruble_scale(
     # Revenue and opex read one input each per year.
     assert graph["kinds"]["cross_sheet"] == 2 * len(YEARS)
 
-    rows = {row.label: row for block in doc.blocks for row in block.rows if row.sheet == "Модель"}
+    published = attach_streamed_rows(doc)
+    rows = {
+        row.label: row for block in published.blocks for row in block.rows if row.sheet == "Модель"
+    }
     revenue = rows["Выручка"]
     assert revenue.hints.unit == "money"
     assert revenue.hints.currency == "RUB"

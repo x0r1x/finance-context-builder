@@ -178,7 +178,8 @@ _ORDINAL_TOKEN = re.compile(r"^[1-4]\s*[-–—−]?\s*(?:[еЕйЙ]|[оеОЕ]{
 _MARKER_GLUE = re.compile(rf"((?:19|20)\d{{2}})\s+({_MARKER_SUFFIX})(?!\S)")
 
 
-def normalize_header(text: str | None) -> str | None:
+def _collapse_header(text: str | None) -> str | None:
+    """NFKC, one space, joined digits. Lookalike folding comes after the prose check."""
     if text is None:
         return None
     raw = unicodedata.normalize("NFKC", str(text))
@@ -187,7 +188,13 @@ def normalize_header(text: str | None) -> str | None:
     if not raw:
         return None
     raw = _join_digits_inside_one_number(raw)
-    raw = _MARKER_GLUE.sub(r"\1\2", raw)
+    return _MARKER_GLUE.sub(r"\1\2", raw)
+
+
+def normalize_header(text: str | None) -> str | None:
+    raw = _collapse_header(text)
+    if not raw:
+        return None
     return " ".join(_fold_period_token(token) for token in raw.split(" "))
 
 
@@ -246,19 +253,88 @@ def _fold_period_token(token: str) -> str:
 _CLASSIFY_CACHE = 1 << 16
 
 
+# A repeated header is short. A unique row label is not, and caching it evicts
+# the headers the next row looks up again.
+_CLASSIFY_CACHED_LEN = 40
+
+
+def _stable_letters(text: str) -> bool:
+    """ASCII plus Cyrillic. NFKC does not change those, so the word split is final."""
+    for char in text:
+        code = ord(char)
+        if code < 128 or 0x0400 <= code <= 0x04FF:
+            continue
+        return False
+    return True
+
+
+def _too_many_outside_words(text: str) -> bool:
+    """The cheap form of ``_prose_blocks_calendar`` for an already-stable string.
+
+    ``str.split`` collapses whitespace the way the header fold does. A token
+    with a digit, or a month or quarter word, can sit in the date. The rest is
+    the residual, and a residual stops at three words or 24 characters.
+    """
+    outside = 0
+    length = 0
+    for token in text.split():
+        if _HAS_DIGIT.search(token) or "/" in token:
+            continue
+        stem = token.casefold().replace("ё", "е").strip(".,;:[]«»\"'()")
+        if not stem or _calendar_stem(stem):
+            continue
+        outside += 1
+        length += len(stem) + (outside > 1)
+        if outside > 3 or length > 24:
+            return True
+    return False
+
+
+def _prose_blocks_calendar(collapsed: str) -> bool:
+    """True when the leftover words cannot be the short tail of one date.
+
+    A hit is one calendar span plus a residual of at most three words and 24
+    characters. A token that cannot sit in that span stays in the residual, so
+    too many of them (or too long a tail) is not a header. Folding does not
+    change this: a word without a digit is not a lookalike period code.
+    """
+    outside = [token for token in _scan_tokens(collapsed) if not _can_sit_in_calendar(token)]
+    if len(outside) > 3:
+        return True
+    return len(_clean_residual(" ".join(outside))) > 24
+
+
 def classify_header(text: str | None) -> PeriodHit | None:
-    raw = normalize_header(text)
-    if not raw:
+    # Short headers are the cached path. The prose check is only for a unique
+    # label, which is longer than the cache key and would evict those headers.
+    long = isinstance(text, str) and len(text) > _CLASSIFY_CACHED_LEN
+    if long and _stable_letters(text) and _too_many_outside_words(text):
         return None
+    if long:
+        collapsed = _collapse_header(text)
+        if not collapsed or _prose_blocks_calendar(collapsed):
+            return None
+        raw = " ".join(_fold_period_token(token) for token in collapsed.split(" "))
+    else:
+        raw = normalize_header(text)
+        if raw is None:
+            return None
+    if len(raw) > _CLASSIFY_CACHED_LEN:
+        return _match_header(raw)
     return _classify(raw)
+
+
+def _match_header(raw: str) -> PeriodHit | None:
+    """One normalized header. ``_classify`` stores the short ones."""
+    if any(matches_entry(raw, entry) for entry in STUB_WORDS):
+        return PeriodHit(kind="stub", period_key="stub", explicit_role=True)
+    return _one_calendar(raw)
 
 
 @lru_cache(maxsize=_CLASSIFY_CACHE)
 def _classify(raw: str) -> PeriodHit | None:
-    """``classify_header`` of one normalized header."""
-    if any(matches_entry(raw, entry) for entry in STUB_WORDS):
-        return PeriodHit(kind="stub", period_key="stub", explicit_role=True)
-    return _one_calendar(raw)
+    """``classify_header`` of one short normalized header."""
+    return _match_header(raw)
 
 
 # Every pattern reachable from _match_calendar_text requires a digit (a year or a date).
@@ -366,17 +442,95 @@ def period_like_header(text: str | None) -> bool:
     return _MODEL_PERIOD.fullmatch(raw) is not None
 
 
+# A token with no digit can still sit inside a date: a month name, a quarter
+# or half or year word, a roman quarter, an ordinal, or the dash between them.
+# ``п/г`` has neither a digit nor a word from those lists.
+_CALENDAR_TOKEN = frozenset(
+    {
+        "fy",
+        "q",
+        "h",
+        "н",
+        "п",
+        "i",
+        "ii",
+        "iii",
+        "iv",
+        "й",
+        "ый",
+        "ой",
+        "е",
+        "ое",
+        "-",
+        "–",
+        "—",
+        "−",
+    }
+)
+
+
+@lru_cache(maxsize=1)
+def _month_stems() -> frozenset[str]:
+    return frozenset(month_numbers())
+
+
+def _can_sit_in_calendar(token: str) -> bool:
+    """True when ``token`` can occur inside one ``_match_calendar_text`` hit.
+
+    A window that contains anything else cannot be that hit, so the scan
+    does not try it. The check is the same word list the matcher confirms.
+    Digits are not cached: a row number is unique, a word repeats.
+    """
+    if _HAS_DIGIT.search(token) or "/" in token:
+        return True
+    stem = token.casefold().replace("ё", "е").strip(".")
+    return _calendar_stem(stem)
+
+
+@lru_cache(maxsize=128)
+def _calendar_stem(stem: str) -> bool:
+    """Repeated prose words miss the date list once, then stay a lookup."""
+    if stem in _CALENDAR_TOKEN or stem in _month_stems():
+        return True
+    return bool(stem) and (
+        accepts(QUARTER_WORDS, stem)
+        or accepts(HALF_WORDS, stem)
+        or accepts(YEAR_WORDS, stem)
+    )
+
+
 def _one_calendar(raw: str) -> PeriodHit | None:
     """One date, plus any short residual around it. Two dates are a comparison."""
-    direct = _match_calendar_text(raw)
-    if direct is not None and is_calendar_key(direct.period_key):
-        return direct
     tokens = _scan_tokens(raw)
+    if not tokens:
+        return None
+    usable = [_can_sit_in_calendar(token) for token in tokens]
+    # The whole string is a date only when every token can sit in one.
+    if all(usable):
+        direct = _match_calendar_text(raw)
+        if direct is not None and is_calendar_key(direct.period_key):
+            return direct
     spans: list[tuple[int, int, PeriodHit]] = []
     index = 0
-    while index < len(tokens):
+    limit = len(tokens)
+    while index < limit:
+        if not usable[index]:
+            index += 1
+            continue
+        end_limit = index + 1
+        while end_limit < limit and usable[end_limit]:
+            end_limit += 1
+        last_digit = -1
+        for cursor in range(index, end_limit):
+            if _HAS_DIGIT.search(tokens[cursor]):
+                last_digit = cursor
+        # A run of words has no date. _match_calendar_text rejects it.
+        if last_digit < index:
+            index = end_limit
+            continue
         found: tuple[int, int, PeriodHit] | None = None
-        for end in range(len(tokens), index, -1):
+        # ``end`` is exclusive and must keep the rightmost digit in the window.
+        for end in range(end_limit, last_digit, -1):
             hit = _match_calendar_text(" ".join(tokens[index:end]))
             if hit is not None and is_calendar_key(hit.period_key):
                 found = (index, end, hit)
@@ -863,6 +1017,8 @@ def _part_token(raw: str) -> HeaderAtom | None:
 
 def _part_of_year(raw: str) -> tuple[str, int, str | None, str | None] | None:
     """Quarter ("Q") or half ("H") header: grain, its number, the year if any, a marker suffix."""
+    if _PART_MARKER.search(raw) is None:
+        return None
     cyr = _CYRILLIC_HALF.fullmatch(raw)
     if cyr is not None:
         return "H", int(cyr.group("num")), cyr.group("year"), cyr.group("sfx")
@@ -962,8 +1118,18 @@ def _compose_mark(atoms: list[HeaderAtom]) -> tuple[ColumnKind, str | None, bool
     return "period", None, False
 
 
+# Every form in ``_part_of_year`` contains one of these. Prose that does not
+# is not a quarter or a half, so the token-span scan has nothing to find.
+_PART_MARKER = re.compile(
+    r"q\s*[1-4]|[1-4]\s*q|[hн]\s*[12]|[12]\s*[hн]|кв|quarter|полугод|half|пол|[12]\s*п",
+    re.IGNORECASE,
+)
+
+
 def _part_with_residual(raw: str) -> HeaderAtom | None:
     """``План I кв.`` keeps the quarter and the leftover text. The year comes later."""
+    if _PART_MARKER.search(raw) is None:
+        return None
     tokens = _scan_tokens(raw)
     if len(tokens) < 2:
         return None

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+import sys
 
+from finance_context.excel.a1 import format_addr
 from finance_context.layout.periods import display_cell_text
 
 # Fields detection and the sheet overlays read. A dict of these is ~270 bytes;
@@ -45,10 +47,13 @@ class LayoutCell:
         outline_level: object = None,
         col_outline_level: object = None,
     ) -> None:
-        self.sheet = sheet
+        # One sheet name for the whole book. A derived address is not stored:
+        # ``format_addr(col, row)`` rebuilds it, and the parquet string matched
+        # that form. An address that does not match stays on the slot.
+        self.sheet = sys.intern(sheet) if isinstance(sheet, str) else sheet
         self.row = row
         self.col = col
-        self.addr = addr
+        self.addr = _kept_addr(addr, row, col)
         self.formula_raw = formula_raw
         self.formula_template = formula_template
         self.cached_value = cached_value
@@ -59,15 +64,27 @@ class LayoutCell:
         self.outline_level = outline_level
         self.col_outline_level = col_outline_level
 
+    def _value(self, key: str) -> object:
+        if key != "addr":
+            return getattr(self, key)
+        stored = self.addr
+        if stored is not None:
+            return stored
+        row = self.row
+        col = self.col
+        if row is None or col is None:
+            return None
+        return format_addr(int(col), int(row))
+
     def get(self, key: str, default: object = None) -> object:
         if key not in _LAYOUT_FIELD_SET:
             return default
-        return getattr(self, key)
+        return self._value(key)
 
     def __getitem__(self, key: str) -> object:
         if key not in _LAYOUT_FIELD_SET:
             raise KeyError(key)
-        return getattr(self, key)
+        return self._value(key)
 
     def __setitem__(self, key: str, value: object) -> None:
         if key not in _LAYOUT_FIELD_SET:
@@ -76,15 +93,25 @@ class LayoutCell:
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, LayoutCell):
-            return all(getattr(self, key) == getattr(other, key) for key in _LAYOUT_FIELDS)
+            return all(self._value(key) == other._value(key) for key in _LAYOUT_FIELDS)
         if isinstance(other, dict):
-            return {key: getattr(self, key) for key in _LAYOUT_FIELDS} == {
+            return {key: self._value(key) for key in _LAYOUT_FIELDS} == {
                 key: other.get(key) for key in _LAYOUT_FIELDS
             }
         return NotImplemented
 
     def __contains__(self, key: object) -> bool:
-        return key in _LAYOUT_FIELD_SET and getattr(self, key) is not None
+        return key in _LAYOUT_FIELD_SET and self._value(key) is not None
+
+
+def _kept_addr(addr: object, row: object, col: object) -> object:
+    """Keep an address only when it is not ``format_addr(col, row)``."""
+    if addr is None or row is None or col is None:
+        return addr
+    derived = format_addr(int(col), int(row))
+    if addr == derived:
+        return None
+    return addr
 
 
 # Ordinary space, non-breaking space, narrow no-break space.

@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import xlsxwriter
+from tests.helpers.published import attach_streamed_rows
 
 from finance_context.app.pipeline import Pipeline
 from finance_context.settings import Settings
@@ -37,10 +38,12 @@ def test_text_numbers_do_not_abort_the_build(tmp_path: Path) -> None:
     sheet.write_string(7, 1, "inf")
     book.close()
 
-    document = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None)).run(
-        tmp_path / "job",
-        job_id="job",
-        source_filename="book.xlsx",
+    document = attach_streamed_rows(
+        Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None)).run(
+            tmp_path / "job",
+            job_id="job",
+            source_filename="book.xlsx",
+        )
     )
     assert document.meta.status == "succeeded"
     assert document.blocks

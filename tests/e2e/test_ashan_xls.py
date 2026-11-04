@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 
 import pytest
+from tests.helpers.published import attach_streamed_rows
 
 from finance_context.adapters.soffice import SofficeConverter
 from finance_context.app.pipeline import Pipeline
@@ -52,7 +53,9 @@ def _build(root: Path, workbook: Path, source: str) -> tuple[Path, ContextDocume
     dest.mkdir()
     (dest / source).write_bytes(workbook.read_bytes())
     pipeline = Pipeline(Settings(data_dir=root / "data", _env_file=None))
-    doc = pipeline.run(dest, job_id=dest.name, source_filename=workbook.name)
+    doc = attach_streamed_rows(
+        pipeline.run(dest, job_id=dest.name, source_filename=workbook.name)
+    )
     return dest, doc
 
 

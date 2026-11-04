@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from tests.helpers.converter import FakeConverter
 from tests.helpers.ole2 import XLS_STREAMS, write_ole2
+from tests.helpers.published import attach_streamed_rows
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 from finance_context.app.pipeline import Pipeline, run_job_process
@@ -50,7 +51,8 @@ def test_legacy_xls_is_converted_before_parse(tmp_path: Path, dest: Path) -> Non
     assert (dest / "source" / "source.xlsx").is_file()
     assert (dest / "source.xls").is_file()
     assert converter.calls == [dest / "source.xls"]
-    labels = {row.label for block in doc.blocks for row in block.rows}
+    published = attach_streamed_rows(doc)
+    labels = {row.label for block in published.blocks for row in block.rows}
     assert "Revenue" in labels
 
 

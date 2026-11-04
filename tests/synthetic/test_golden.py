@@ -16,7 +16,16 @@ import os
 from pathlib import Path
 
 import pytest
-from tests.fixtures.synthetic import GENERATOR_REV, cached_workbook, hops, outline, rel, sumif, text
+from tests.fixtures.synthetic import (
+    GENERATOR_REV,
+    block,
+    cached_workbook,
+    hops,
+    outline,
+    rel,
+    sumif,
+    text,
+)
 from tests.synthetic.support import artifact_hashes, run_book
 
 _GOLDEN = Path(__file__).resolve().parent / "golden" / "hashes.json"
@@ -29,6 +38,7 @@ _CASES: dict[str, tuple[object, str]] = {
     "sumif10k": (lambda path: sumif(path, 10_000), "sumif10k.xlsx"),
     "outline": (lambda path: outline(path), "outline.xlsx"),
     "text100": (lambda path: text(path, 100), "text100.xlsx"),
+    "block8": (lambda path: block(path, 8), "block8.xlsx"),
 }
 
 

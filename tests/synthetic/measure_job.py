@@ -18,7 +18,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from tests.fixtures.synthetic import dense, hops_tl, rel, series, text  # noqa: E402
+from tests.fixtures.synthetic import block, dense, hops_tl, rel, series, text  # noqa: E402
 from tests.synthetic.support import run_book  # noqa: E402
 
 BOOKS: dict[str, tuple[object, str]] = {
@@ -27,6 +27,7 @@ BOOKS: dict[str, tuple[object, str]] = {
     "dense2m": (lambda path: dense(path, 10_000), "dense2m.xlsx"),
     "series10k": (lambda path: series(path, 10_000), "series10k.xlsx"),
     "text200k": (lambda path: text(path, 200_000), "text200k.xlsx"),
+    "block500k": (lambda path: block(path, 500_000), "block500k.xlsx"),
 }
 
 

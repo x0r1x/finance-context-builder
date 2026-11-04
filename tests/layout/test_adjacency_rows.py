@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from finance_context.context.build import build_context
+from tests.helpers.published import published_context as build_context
+
 from finance_context.formulas.csr import sheet_usage
 from finance_context.formulas.models import Edge
 from finance_context.layout.adjacency import RangeReads, row_adjacency
