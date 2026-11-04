@@ -11,38 +11,38 @@ layout stay under 180s: the parent walk those books used to do took about
 RSS headroom is ``1.5 × measured + 50 MiB``, rounded up to 50 MiB. When a
 build was measured at or under 1200 MiB, that ceiling is clipped to 1536 so
 a build that crosses the product memory budget fails. The clip applies only
-when that formula is above 1536. ``dense2m`` (976 → 1550) and ``text200k``
-(1099 → 1700) are clipped to 1536. ``hops100k`` (731 → 1150) is already
-under the budget, so it keeps 1150.
+when that formula is above 1536. ``dense2m`` (976 → 1550) is clipped to 1536.
+``hops100k`` (575 → 950), ``text200k`` (719 → 1150) and the unclipped part of
+``block500k`` (1023 → 1600, then clipped to 1536) stay on that formula.
 
-``text200k`` layout took 314s. Rows whose values are ``n, n+1, n+2`` inside
-1900–2099 are bare-year headers, and layout scans the sheet once per such
-header. The ceiling is three times that cost. ``dense2m`` layout peaked at
-1050 MiB; 1650 still fails that peak, and its build ceiling is the 1536
-budget. ``block500k`` is one 500,000-row block. Its build measured 1030 MiB
-and its render 526, so both ceilings stay at or under the 1536 MiB product
-budget. Layout of that book peaked at 1361 MiB and is not part of the budget.
+``text200k`` layout took 65s. Rows whose values are ``n, n+1, n+2`` inside
+1900–2099 are bare-year headers, and layout still walks those bands, but a
+long label is not scanned as a date. ``dense2m`` layout peaked at 1050 MiB;
+1650 still fails that peak, and its build ceiling is the 1536 budget.
+``block500k`` is one 500,000-row block. Its build measured 1023 MiB and its
+render 509, so both ceilings stay at or under the 1536 MiB product budget.
+Layout of that book peaked at 1172 MiB and is not part of the budget.
 
 Measured ``duration_ms`` / ``rss_peak_mb``:
 
 - rel20k (123s, ru_maxrss 884 MiB): parse 20191/249, compile 25179/322,
   layout 30165/884, relations 4031/390, graph 21618/626, build 17924/856,
   render 3237/748.
-- hops100k (75s, ru_maxrss 731 MiB): parse 5519/226, compile 6912/277,
-  layout 22739/438, relations 1928/422, graph 6115/503, build 29843/731,
-  render 1313/695. Remeasured after row models became slots dataclasses.
+- hops100k (63s, ru_maxrss 575 MiB): parse 5509/227, compile 6770/282,
+  layout 15291/412, relations 1815/422, graph 5914/500, build 26493/575,
+  render 31/448. Remeasured after header scans skipped long labels.
 - series10k (41s, ru_maxrss 514 MiB): parse 4157/215, compile 12172/338,
   layout 5966/410, relations 1301/368, graph 9082/440, build 6625/514,
   render 715/450. Remeasured after every series cache stayed a finite float.
 - dense2m (152s, ru_maxrss 1050 MiB): parse 27376/244, compile 15629/256,
   layout 73487/1050, relations 46/324, graph 4421/363, build 24137/976,
   render 5031/699. Remeasured after row models became slots dataclasses.
-- text200k (507s, ru_maxrss 1103 MiB): parse 16948/371, compile 9198/302,
-  layout 313903/866, relations 590/530, graph 2914/527, build 155166/1099,
-  render 3650/927. Remeasured after row models became slots dataclasses.
-- block500k (374s, ru_maxrss 1361 MiB): parse 32290/296, compile 15520/251,
-  layout 137755/1361, relations 891/743, graph 6029/642, build 176454/1030,
-  render 127/526. One block, streamed rows, cells read per block.
+- text200k (179s, ru_maxrss 758 MiB): parse 16863/372, compile 8943/301,
+  layout 65235/758, relations 664/506, graph 2951/489, build 79848/719,
+  render 167/454. Remeasured after header scans skipped long labels.
+- block500k (295s, ru_maxrss 1172 MiB): parse 30745/295, compile 14910/257,
+  layout 97627/1172, relations 1610/745, graph 5331/629, build 140356/1023,
+  render 112/509. One block, streamed rows, cells read per block.
 """
 
 from __future__ import annotations
@@ -69,11 +69,11 @@ _CEILINGS: dict[str, dict[str, tuple[int, int]]] = {
     "hops100k": {
         "parse": (21_000, 400),
         "compile": (22_000, 500),
-        "layout": (69_000, 750),
+        "layout": (46_000, 700),
         "relations": (17_000, 700),
-        "graph": (22_000, 850),
-        "build": (90_000, 1150),
-        "render": (17_000, 1100),
+        "graph": (21_000, 800),
+        "build": (80_000, 950),
+        "render": (16_000, 750),
     },
     "series10k": {
         "parse": (20_000, 400),
@@ -95,21 +95,21 @@ _CEILINGS: dict[str, dict[str, tuple[int, int]]] = {
     },
     "text200k": {
         "parse": (51_000, 650),
-        "compile": (28_000, 550),
-        "layout": (942_000, 1350),
+        "compile": (27_000, 550),
+        "layout": (196_000, 1200),
         "relations": (16_000, 850),
-        "graph": (18_000, 850),
-        "build": (466_000, 1536),
-        "render": (19_000, 1450),
+        "graph": (18_000, 800),
+        "build": (240_000, 1150),
+        "render": (16_000, 750),
     },
-    # Build 1030 and render 526 stay inside the 1536 MiB budget.
+    # Build 1023 clips 1600 to 1536. Render 509 stays inside that budget.
     "block500k": {
-        "parse": (97_000, 500),
-        "compile": (47_000, 450),
-        "layout": (414_000, 2100),
-        "relations": (16_000, 1200),
-        "graph": (19_000, 1050),
-        "build": (530_000, 1536),
+        "parse": (93_000, 500),
+        "compile": (45_000, 450),
+        "layout": (293_000, 1850),
+        "relations": (17_000, 1200),
+        "graph": (21_000, 1000),
+        "build": (422_000, 1536),
         "render": (16_000, 850),
     },
 }
