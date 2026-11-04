@@ -377,6 +377,9 @@ def _data_rows(
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
     out: list[LayoutRow] = []
+    # Non-unit rows, indents strictly increasing. The nearest shallower row is
+    # the top of this stack, so a flat table does not rescan every earlier row.
+    parent_stack: list[LayoutRow] = []
     outlines: list[int] = []
     section_stack: list[LayoutRow] = [seed] if seed is not None else []
     for row_n in band_rows:
@@ -433,13 +436,7 @@ def _data_rows(
             while section_stack and section_stack[-1].indent > indent:
                 section_stack.pop()
         section_path = [item.label for item in section_stack]
-        parent_row = None
-        for prev in reversed(out):
-            if is_unit_text(prev.label):
-                continue
-            if prev.indent < indent:
-                parent_row = prev.row
-                break
+        parent_row = _indent_parent(parent_stack, indent)
         # A fact in the same column as its section header has no shallower indent.
         # section_path already kept that header; parent_row should name it too.
         if parent_row is None and section_stack and kind != "abstract":
@@ -475,11 +472,26 @@ def _data_rows(
         )
         out.append(item)
         outlines.append(outline)
+        if not unit_caption:
+            while parent_stack and parent_stack[-1].indent >= indent:
+                parent_stack.pop()
+            parent_stack.append(item)
         if kind == "abstract" and not is_unit_text(label):
             section_stack.append(item)
     if any(level > 0 for level in outlines):
         _apply_outline_parents(out, outlines, summary_below)
     return out
+
+
+def _indent_parent(stack: list[LayoutRow], indent: int) -> int | None:
+    """Nearest earlier non-unit row whose indent is strictly smaller.
+
+    ``stack`` holds those rows in sheet order and its indents rise.
+    """
+    for prev in reversed(stack):
+        if prev.indent < indent:
+            return prev.row
+    return None
 
 
 def _style_indent(cell: dict) -> int:
