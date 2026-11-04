@@ -189,6 +189,8 @@ uv run pytest
 uv run ruff check src tests
 ```
 
+Push and pull-request CI runs `uv run pytest -m 'not slow'`. A plain `uv run pytest` still includes slow tests; run that set with `uv run pytest -m slow`, or start the **slow** workflow in Actions (manual only).
+
 With the HTTP server **already running** in another terminal, `scripts/run.sh` calls `check-service.sh` then `run-context-job.sh` and writes the run under `out/<timestamp>/`:
 
 ```text
