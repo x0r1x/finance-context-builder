@@ -400,6 +400,14 @@ def _inflight_response(
         raise _JobStillRunning
     if _abandoned_started(ctx, rq_id, dest, stored, status):
         return None
+    # meta.json is already failed, but RQ stays ``started`` until the horse
+    # returns from perform_job. Dedup would hand that stale failure back.
+    # Wait until the id leaves the inflight registries, then relaunch. A horse
+    # that is still holding its lock after the grace is a live run.
+    if _recorded_failure(stored) and _still_inflight(status, dest):
+        if _wait_until_clear(ctx, rq_id, dest) or _recorded_failure_clear(dest, stored, status):
+            return None
+        raise _JobStillRunning
     if not _still_inflight(status, dest):
         return None
     if rebuild:
@@ -422,6 +430,33 @@ def _failed_queue_lost(stored: dict | None) -> bool:
         and stored.get("status") == "failed"
         and stored.get("error") == "queue_lost"
     )
+
+
+def _recorded_failure(stored: dict | None) -> bool:
+    """The horse already stored a terminal failure other than ``queue_lost``.
+
+    ``queue_lost`` is written by GET and keeps the corpse rules. Any other
+    ``failed`` meta means the work has stopped. An RQ id that is still
+    ``started`` is that horse leaving ``perform_job``, not a live run.
+    """
+    return (
+        isinstance(stored, dict)
+        and stored.get("status") == "failed"
+        and stored.get("error") != "queue_lost"
+    )
+
+
+def _recorded_failure_clear(dest: Path, stored: dict | None, status: str | None) -> bool:
+    """True when a recorded failure can be deleted and enqueued again.
+
+    The run lock and the horse lock must be free. A held horse lock is the
+    worker that just wrote the failure and may still save the RQ hash.
+    """
+    if not _recorded_failure(stored) or run_lock_busy(dest):
+        return False
+    if status not in INFLIGHT_STATUSES:
+        return True
+    return horse_owner_alive(dest, _disk_generation(stored)) is False
 
 
 def _queue_lost_corpse(dest: Path, stored: dict | None, status: str | None) -> bool | None:
@@ -565,7 +600,7 @@ def _enqueue_or_reuse(
     busy = run_lock_busy(dest) or (
         status in INFLIGHT_STATUSES and not _started_without_child(status, dest, stored)
     )
-    if corpse is not True and busy:
+    if corpse is not True and busy and not _recorded_failure_clear(dest, stored, status):
         if rebuild or publisher_changed(stored):
             raise _JobStillRunning
         return _dedup(ctx, job_id, dest)
