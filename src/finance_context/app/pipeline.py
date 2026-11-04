@@ -412,7 +412,9 @@ class Pipeline:
                 usage=book_usage(),
             )
             build_profile["formulas"] = doc.workbook.formula_count
-            edges = ir_edges = relations = None
+            # Render reads the context document. Drop layout before this stage
+            # trims so those pages are not still resident.
+            edges = ir_edges = relations = layout = None
             _write_sorted_json(
                 dest_dir / "context" / "context.json",
                 _context_json(doc),
