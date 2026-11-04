@@ -10,33 +10,33 @@ layout stay under 180s: the parent walk those books used to do took about
 
 RSS headroom is ``1.5 × measured + 50 MiB``, rounded up to 50 MiB. When a
 build was measured at or under 1200 MiB, that ceiling is clipped to 1536 so
-a build that crosses the product memory budget fails. ``hops100k`` build
-(1885) and ``text200k`` build (3251) and render (2238) are already over
-1536; their ceilings sit above the measurement and are not a product limit.
+a build that crosses the product memory budget fails. ``hops100k``,
+``dense2m``, and ``text200k`` builds are at or under 1200, so those ceilings
+are the 1536 budget.
 
-``text200k`` layout took 789s. Rows whose values are ``n, n+1, n+2`` inside
+``text200k`` layout took 314s. Rows whose values are ``n, n+1, n+2`` inside
 1900–2099 are bare-year headers, and layout scans the sheet once per such
 header. The ceiling is three times that cost. ``dense2m`` layout peaked at
-1066 MiB (the earlier run was about 2184); 1650 still fails that peak, and
-its build ceiling is the 1536 budget.
+1050 MiB; 1650 still fails that peak, and its build ceiling is the 1536
+budget.
 
 Measured ``duration_ms`` / ``rss_peak_mb``:
 
 - rel20k (123s, ru_maxrss 884 MiB): parse 20191/249, compile 25179/322,
   layout 30165/884, relations 4031/390, graph 21618/626, build 17924/856,
   render 3237/748.
-- hops100k (81s, ru_maxrss 2169 MiB): parse 5776/227, compile 7337/276,
-  layout 22967/532, relations 2265/518, graph 6308/598, build 33436/1885,
-  render 1428/1301.
+- hops100k (75s, ru_maxrss 731 MiB): parse 5519/226, compile 6912/277,
+  layout 22739/438, relations 1928/422, graph 6115/503, build 29843/731,
+  render 1313/695. Remeasured after row models became slots dataclasses.
 - series10k (41s, ru_maxrss 514 MiB): parse 4157/215, compile 12172/338,
   layout 5966/410, relations 1301/368, graph 9082/440, build 6625/514,
   render 715/450. Remeasured after every series cache stayed a finite float.
-- dense2m (152s, ru_maxrss 1066 MiB): parse 28252/243, compile 16040/255,
-  layout 75415/1066, relations 52/336, graph 4607/370, build 21245/1044,
-  render 5066/788.
-- text200k (984s, ru_maxrss 3933 MiB): parse 16715/371, compile 9016/290,
-  layout 789109/1054, relations 373/723, graph 2640/703, build 157237/3251,
-  render 4000/2238.
+- dense2m (152s, ru_maxrss 1050 MiB): parse 27376/244, compile 15629/256,
+  layout 73487/1050, relations 46/324, graph 4421/363, build 24137/976,
+  render 5031/699. Remeasured after row models became slots dataclasses.
+- text200k (507s, ru_maxrss 1103 MiB): parse 16948/371, compile 9198/302,
+  layout 313903/866, relations 590/530, graph 2914/527, build 155166/1099,
+  render 3650/927. Remeasured after row models became slots dataclasses.
 """
 
 from __future__ import annotations
@@ -62,12 +62,12 @@ _CEILINGS: dict[str, dict[str, tuple[int, int]]] = {
     },
     "hops100k": {
         "parse": (21_000, 400),
-        "compile": (23_000, 500),
-        "layout": (69_000, 850),
-        "relations": (18_000, 850),
-        "graph": (22_000, 950),
-        "build": (101_000, 2900),
-        "render": (17_000, 2050),
+        "compile": (22_000, 500),
+        "layout": (69_000, 750),
+        "relations": (17_000, 700),
+        "graph": (22_000, 850),
+        "build": (90_000, 1536),
+        "render": (17_000, 1100),
     },
     "series10k": {
         "parse": (20_000, 400),
@@ -79,22 +79,22 @@ _CEILINGS: dict[str, dict[str, tuple[int, int]]] = {
         "render": (16_000, 750),
     },
     "dense2m": {
-        "parse": (85_000, 450),
-        "compile": (49_000, 450),
-        "layout": (227_000, 1650),
-        "relations": (16_000, 600),
-        "graph": (20_000, 650),
-        "build": (64_000, 1536),
-        "render": (21_000, 1250),
+        "parse": (83_000, 450),
+        "compile": (47_000, 450),
+        "layout": (221_000, 1650),
+        "relations": (16_000, 550),
+        "graph": (20_000, 600),
+        "build": (73_000, 1536),
+        "render": (21_000, 1100),
     },
     "text200k": {
         "parse": (51_000, 650),
-        "compile": (28_000, 500),
-        "layout": (2_368_000, 1650),
-        "relations": (16_000, 1150),
-        "graph": (18_000, 1150),
-        "build": (472_000, 4950),
-        "render": (19_000, 3450),
+        "compile": (28_000, 550),
+        "layout": (942_000, 1350),
+        "relations": (16_000, 850),
+        "graph": (18_000, 850),
+        "build": (466_000, 1536),
+        "render": (19_000, 1450),
     },
 }
 
