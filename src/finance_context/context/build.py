@@ -84,6 +84,7 @@ def build_context(
     defined_names = list(workbook_meta.get("defined_names") or [])
     formula_stats: _FormulaStats | None = None
     hidden_indexes = None
+    cell_path: Path | None = None
     if cells is None:
         if book_dir is None:
             raise ValueError("build_context needs cells or book_dir")
@@ -110,14 +111,16 @@ def build_context(
     # Selector rows are plain ints. The formula table is not read again.
     by_sheet_row = None
     switch_rows = None
-    axes, timeline_warnings = build_axes(layout, cells, date1904=date1904)
-    if formula_stats is not None and book_dir is not None:
-        timeline_warnings = [
-            warning
-            for warning in timeline_warnings
-            if not warning.startswith("Unparsed period header ")
-        ]
-        timeline_warnings.extend(_period_warnings(book_dir / "ir" / "cells.parquet", date1904))
+    # Layout cells on the file path have no addr. The cell scan would warn
+    # with a blank address and is discarded; the file scan is the one kept.
+    axes, timeline_warnings = build_axes(
+        layout,
+        cells,
+        date1904=date1904,
+        period_warnings=cell_path is None,
+    )
+    if cell_path is not None:
+        timeline_warnings.extend(_period_warnings(cell_path, date1904))
     axes_by_id = {axis.id: axis for axis in axes}
     reads = RangeReads()
     precedents, dependents = row_adjacency(
@@ -683,19 +686,16 @@ def _layout_rows(layout: Layout) -> dict[str, set[int]]:
     return {name: rows for name, rows in found.items() if rows}
 
 
-# Fields the file path reads back. A dict of these is what made build the peak
-# on a wide book; slots match LayoutCell.
+# Fields the file path reads back. addr, formula_raw, and unparsed stay on disk:
+# period warnings and formula counts scan the file, and this path never reads them.
 _BUILD_FIELDS = (
     "sheet",
     "row",
     "col",
-    "addr",
-    "formula_raw",
     "formula_template",
     "cached_value",
     "hidden",
     "number_format",
-    "unparsed",
 )
 _BUILD_FIELD_SET = frozenset(_BUILD_FIELDS)
 
@@ -710,24 +710,18 @@ class _BuildCell:
         sheet: object,
         row: object,
         col: object,
-        addr: object,
-        formula_raw: object,
         formula_template: object,
         cached_value: object,
         hidden: object,
         number_format: object,
-        unparsed: object,
     ) -> None:
         self.sheet = sheet
         self.row = row
         self.col = col
-        self.addr = addr
-        self.formula_raw = formula_raw
         self.formula_template = formula_template
         self.cached_value = cached_value
         self.hidden = hidden
         self.number_format = number_format
-        self.unparsed = unparsed
 
     def get(self, key: str, default: object = None) -> object:
         if key not in _BUILD_FIELD_SET:

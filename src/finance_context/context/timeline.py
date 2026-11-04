@@ -26,7 +26,13 @@ def build_axes(
     cells: list,
     *,
     date1904: bool = False,
+    period_warnings: bool = True,
 ) -> tuple[list[ContextAxis], list[str]]:
+    """Published axes, their notes, and unparsed period headers.
+
+    ``period_warnings`` is false when the caller scans the workbook file
+    itself. Layout cells on that path do not carry ``addr``.
+    """
     by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
     published = _published_axis_ids(layout)
     timeline_of = _timeline_of(layout)
@@ -41,7 +47,7 @@ def build_axes(
                 continue
             built.timeline_id = timeline_of.get(built.id, built.id)
             axes.append(built)
-    warnings = _unparsed_period_warnings(cells, date1904)
+    warnings = _unparsed_period_warnings(cells, date1904) if period_warnings else []
     for sheet in layout.sheets:
         for axis in sheet.axes:
             if axis.id not in published:

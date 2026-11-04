@@ -8,6 +8,7 @@ import tracemalloc
 from pathlib import Path
 
 from finance_context.context.build import (
+    _BUILD_FIELDS,
     _BuildCell,
     _layout_rows,
     _layout_value_cells,
@@ -28,7 +29,7 @@ _COLUMNS = (
     ("number_format", "VARCHAR"),
     ("unparsed", "BOOLEAN"),
 )
-_BUILD_COLUMNS = [name for name, _kind in _COLUMNS]
+_BUILD_COLUMNS = list(_BUILD_FIELDS)
 
 
 def _layout(rows: int = 2) -> Layout:
@@ -80,16 +81,18 @@ def test_build_cell_is_smaller_than_the_cell_dict() -> None:
         "sheet": "S",
         "row": 300,
         "col": 2,
-        "addr": "B300",
-        "formula_raw": "=1+1",
         "formula_template": "=1+1",
         "cached_value": "2",
         "hidden": False,
         "number_format": "0.00",
-        "unparsed": False,
     }
-    assert sys.getsizeof(_BuildCell(**raw)) < sys.getsizeof(raw)
-    assert _BuildCell(**raw).get("missing", "nope") == "nope"
+    record = _BuildCell(**raw)
+    assert sys.getsizeof(record) < sys.getsizeof(raw)
+    assert "addr" not in _BuildCell.__slots__
+    assert "formula_raw" not in _BuildCell.__slots__
+    assert "unparsed" not in _BuildCell.__slots__
+    assert record.get("addr") is None
+    assert record.get("missing", "nope") == "nope"
 
 
 def test_layout_value_cells_match_dicts(tmp_path: Path) -> None:
@@ -168,3 +171,90 @@ def test_layout_value_cells_peak_below_dicts(tmp_path: Path) -> None:
     finally:
         tracemalloc.stop()
     assert slot_peak * 10 < dict_peak * 9
+
+
+def test_layout_value_cells_do_not_read_unused_columns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "cells.parquet"
+    _write(path, 2)
+    seen: list[list[str]] = []
+    import finance_context.store.duckdb_io as duckdb_io
+
+    real = duckdb_io._iter_parquet_rows
+
+    def spy(file_path, columns, **kwargs):
+        seen.append(list(columns))
+        return real(file_path, columns, **kwargs)
+
+    monkeypatch.setattr(duckdb_io, "_iter_parquet_rows", spy)
+    records = _layout_value_cells(path, _layout(2))
+    assert records
+    assert seen
+    loaded = set(seen[0])
+    assert "addr" not in loaded
+    assert "formula_raw" not in loaded
+    assert "unparsed" not in loaded
+
+
+def test_file_build_matches_cells_when_addr_stays_on_disk(tmp_path: Path) -> None:
+    """Period warnings and formula lines still come from the file, not the slots."""
+    rows = [
+        ("S", 1, 1, "A1", None, None, "Item", False, None, False),
+        ("S", 1, 2, "B1", None, None, "2024", False, None, False),
+        ("S", 1, 3, "C1", None, None, "Q5 2025", False, None, False),
+        ("S", 2, 1, "A2", None, None, "Section", False, None, False),
+        ("S", 2, 2, "B2", "=???", None, None, False, None, True),
+        ("S", 3, 1, "A3", None, None, "Revenue", False, None, False),
+        ("S", 3, 2, "B3", "=???", None, None, False, None, True),
+        ("S", 4, 1, "A4", None, None, "Cost", False, None, False),
+        ("S", 4, 2, "B4", "=1+1", "=1+1", None, False, None, False),
+        ("S", 5, 1, "A5", None, None, "Other", False, None, False),
+        ("S", 5, 2, "B5", "=1+1", "=1+1", "2", False, "0", False),
+    ]
+    book = tmp_path / "book"
+    (book / "ir").mkdir(parents=True)
+    path = book / "ir" / "cells.parquet"
+    write_parquet(path, _COLUMNS, rows, row_group_rows=0)
+    layout = Layout(
+        sheets=[
+            SheetLayout(
+                name="S",
+                blocks=[
+                    Block(
+                        block_id="S!r1",
+                        label_col=1,
+                        axis=Axis(
+                            id="S!r1",
+                            row=1,
+                            headers=[
+                                AxisHeader(col=2, text="2024", kind="period", period_key="2024")
+                            ],
+                        ),
+                        rows=[
+                            LayoutRow(row=2, label="Section", kind="abstract"),
+                            LayoutRow(row=3, label="Revenue", kind="fact"),
+                            LayoutRow(row=4, label="Cost", kind="fact"),
+                            LayoutRow(row=5, label="Other", kind="fact"),
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    meta = {"sheets": [{"name": "S"}]}
+    dicts = read_parquet_dicts(path, [name for name, _kind in _COLUMNS])
+    from_file = build_context(
+        job_id="same", workbook_meta=meta, layout=layout, book_dir=book
+    )
+    from_cells = build_context(
+        job_id="same", workbook_meta=meta, layout=layout, cells=dicts
+    )
+    assert from_file.model_dump(mode="json") == from_cells.model_dump(mode="json")
+    assert "Unparsed period header S!C1: «Q5 2025»" in from_file.warnings
+    assert "2 unparsed formula(s) (e.g. S!B2, S!B3)" in from_file.warnings
+    assert (
+        "2 formula cell(s) missing cached values (e.g. S!B3, S!B4)" in from_file.warnings
+    )
+    assert from_file.workbook.missing_cached_values == 3
+    assert from_file.workbook.formula_count == 4
