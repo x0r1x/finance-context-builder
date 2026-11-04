@@ -153,7 +153,7 @@ def _parse_text(text: str) -> Measure:
     if not text.strip():
         return Measure()
     currency = currency_code_from_text(text)
-    scale = _scale_from(text)
+    scale = _scale_from(text, currency)
     unit = _unit_from(text, currency)
     per = None
     if unit == "money":
@@ -252,7 +252,7 @@ def _iso_scale(text: str) -> str | None:
     return None
 
 
-def _scale_from(text: str) -> str | None:
+def _scale_from(text: str, currency: str | None) -> str | None:
     blob = text.casefold().strip()
     # The row *is* the multiplier (`Thousand` = 1000), not an amount in thousands.
     if _MULTIPLIER_WORD.fullmatch(blob):
@@ -265,11 +265,12 @@ def _scale_from(text: str) -> str | None:
         return "m"
     if _RU_MILLIONS.search(blob):
         return "m"
-    if currency_code_from_text(text) and _MILLIONS.search(text):
+    # `currency` is the code `_parse_text` already read from this same string.
+    if currency and _MILLIONS.search(text):
         return "m"
     if re.search(r"\bthousands?\b", blob) or re.search(r"(^|[^a-z])k[£$€₽]|[£$€₽]k\b", blob):
         return "k"
-    if currency_code_from_text(text) and _THOUSANDS.search(text):
+    if currency and _THOUSANDS.search(text):
         return "k"
     if _RU_THOUSANDS.search(blob):
         return "k"
