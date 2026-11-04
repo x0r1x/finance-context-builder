@@ -23,11 +23,20 @@ _FORMAT_NOISE = re.compile(r"\[[^\]]*\]|\"[^\"]*\"|\\.|[*_]")
 
 def build_axes(
     layout: Layout,
-    cells: list[dict],
+    cells: list,
     *,
     date1904: bool = False,
+    by_addr: dict | None = None,
+    period_warnings: bool = True,
 ) -> tuple[list[ContextAxis], list[str]]:
-    by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+    """Published axes, their notes, and unparsed period headers.
+
+    ``by_addr`` is the caller's ``(sheet, row, col)`` map when it already has
+    one. ``period_warnings`` is false when the caller scans the workbook file
+    itself. Layout cells on that path do not carry ``addr``.
+    """
+    if by_addr is None:
+        by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
     published = _published_axis_ids(layout)
     timeline_of = _timeline_of(layout)
     axes: list[ContextAxis] = []
@@ -41,7 +50,7 @@ def build_axes(
                 continue
             built.timeline_id = timeline_of.get(built.id, built.id)
             axes.append(built)
-    warnings = _unparsed_period_warnings(cells, date1904)
+    warnings = _unparsed_period_warnings(cells, date1904) if period_warnings else []
     for sheet in layout.sheets:
         for axis in sheet.axes:
             if axis.id not in published:
@@ -50,7 +59,7 @@ def build_axes(
     return axes, warnings
 
 
-def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
+def _unparsed_period_warnings(cells: list, date1904: bool) -> list[str]:
     out: list[str] = []
     seen: set[tuple[str, str]] = set()
     for cell in cells:

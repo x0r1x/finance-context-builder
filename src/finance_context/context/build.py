@@ -82,14 +82,13 @@ def build_context(
     relations = list(relations or [])
     date1904 = bool(workbook_meta.get("date1904"))
     defined_names = list(workbook_meta.get("defined_names") or [])
-    formula_stats: _FormulaStats | None = None
     hidden_indexes = None
+    cell_path: Path | None = None
     if cells is None:
         if book_dir is None:
             raise ValueError("build_context needs cells or book_dir")
         cell_path = book_dir / "ir" / "cells.parquet"
         cells = _layout_value_cells(cell_path, layout)
-        formula_stats = _formula_stats(cell_path)
         hidden_indexes = _occupied_from_file(cell_path)
         switch_rows = _switch_rows(cell_path, defined_names)
         cell_total = _file_rows(cell_path)
@@ -110,14 +109,17 @@ def build_context(
     # Selector rows are plain ints. The formula table is not read again.
     by_sheet_row = None
     switch_rows = None
-    axes, timeline_warnings = build_axes(layout, cells, date1904=date1904)
-    if formula_stats is not None and book_dir is not None:
-        timeline_warnings = [
-            warning
-            for warning in timeline_warnings
-            if not warning.startswith("Unparsed period header ")
-        ]
-        timeline_warnings.extend(_period_warnings(book_dir / "ir" / "cells.parquet", date1904))
+    # Layout cells on the file path have no addr. The cell scan would warn
+    # with a blank address and is discarded; the file scan is the one kept.
+    axes, timeline_warnings = build_axes(
+        layout,
+        cells,
+        date1904=date1904,
+        by_addr=by_addr,
+        period_warnings=cell_path is None,
+    )
+    if cell_path is not None:
+        timeline_warnings.extend(_period_warnings(cell_path, date1904))
     axes_by_id = {axis.id: axis for axis in axes}
     reads = RangeReads()
     precedents, dependents = row_adjacency(
@@ -139,31 +141,6 @@ def build_context(
         if isinstance(stored_order, list)
         else []
     )
-    formula_count = 0
-    missing_cached = 0
-    unparsed = 0
-    missing_addrs: list[str] = []
-    unparsed_addrs: list[str] = []
-    if formula_stats is None:
-        for cell in cells:
-            if cell.get("formula_raw"):
-                formula_count += 1
-                if cell.get("cached_value") is None:
-                    missing_cached += 1
-                    missing_addrs.append(f"{cell['sheet']}!{cell['addr']}")
-                if cell.get("unparsed"):
-                    unparsed += 1
-                    unparsed_addrs.append(f"{cell['sheet']}!{cell['addr']}")
-    else:
-        formula_count = formula_stats.formula_count
-        missing_cached = formula_stats.missing_cached
-        unparsed = formula_stats.unparsed
-        missing_addrs = formula_stats.missing_addrs
-        unparsed_addrs = formula_stats.unparsed_addrs
-    if unparsed_addrs:
-        sample = ", ".join(unparsed_addrs[:3])
-        warnings.append(f"{len(unparsed_addrs)} unparsed formula(s) (e.g. {sample})")
-
     not_applicable: set[str] = set()
     blocks: list[FinancialBlock] = []
     for sheet in layout.sheets:
@@ -309,6 +286,18 @@ def build_context(
                 )
             )
 
+    if cell_path is None:
+        formula_stats = _count_formula_cells(cells, not_applicable)
+    else:
+        formula_stats = _formula_stats(cell_path, not_applicable)
+    formula_count = formula_stats.formula_count
+    missing_cached = formula_stats.missing_cached
+    unparsed = formula_stats.unparsed
+    # Same place as before the block loop: that loop does not append warnings.
+    if unparsed:
+        sample = ", ".join(formula_stats.unparsed_addrs[:_WARNING_SAMPLE])
+        warnings.append(f"{unparsed} unparsed formula(s) (e.g. {sample})")
+
     document_rows = [row for block in blocks for row in block.rows]
     expected_rows = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
     if len(document_rows) != expected_rows:
@@ -316,11 +305,12 @@ def build_context(
             f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
         )
     warnings.extend(timeline_warnings)
-    missing_values = [addr for addr in missing_addrs if addr not in not_applicable]
-    if missing_values:
-        sample = ", ".join(missing_values[:3])
+    if formula_stats.missing_values:
+        sample = ", ".join(formula_stats.missing_addrs[:_WARNING_SAMPLE])
         extra = f" (e.g. {sample})" if sample else ""
-        warnings.append(f"{len(missing_values)} formula cell(s) missing cached values{extra}")
+        warnings.append(
+            f"{formula_stats.missing_values} formula cell(s) missing cached values{extra}"
+        )
     if graph is not None and graph.dangling:
         warnings.append(
             f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
@@ -647,13 +637,46 @@ def _no_axis_warning(sheet: str, row: int, headers: list[AxisHeader]) -> str:
     )
 
 
+# The warning text shows three examples. Counts stay complete.
+_WARNING_SAMPLE = 3
+
+
 class _FormulaStats:
     def __init__(self) -> None:
         self.formula_count = 0
         self.missing_cached = 0
         self.unparsed = 0
+        self.missing_values = 0
         self.missing_addrs: list[str] = []
         self.unparsed_addrs: list[str] = []
+
+
+def _remember(sample: list[str], addr: str) -> None:
+    if len(sample) < _WARNING_SAMPLE:
+        sample.append(addr)
+
+
+def _count_formula_cells(cells: list, not_applicable: set[str]) -> _FormulaStats:
+    """Formula totals for cells already in memory. Samples stop at three."""
+    stats = _FormulaStats()
+    for cell in cells:
+        if not cell.get("formula_raw"):
+            continue
+        stats.formula_count += 1
+        missing = cell.get("cached_value") is None
+        flag = bool(cell.get("unparsed"))
+        if not missing and not flag:
+            continue
+        addr = f"{cell['sheet']}!{cell['addr']}"
+        if missing:
+            stats.missing_cached += 1
+            if addr not in not_applicable:
+                stats.missing_values += 1
+                _remember(stats.missing_addrs, addr)
+        if flag:
+            stats.unparsed += 1
+            _remember(stats.unparsed_addrs, addr)
+    return stats
 
 
 def _consumed_rows(layout: Layout) -> set[tuple[str, int]]:
@@ -683,33 +706,73 @@ def _layout_rows(layout: Layout) -> dict[str, set[int]]:
     return {name: rows for name, rows in found.items() if rows}
 
 
-def _layout_value_cells(path: Path, layout: Layout) -> list[dict]:
-    from finance_context.store.fs import read_parquet_dicts
+# Fields the file path reads back. addr, formula_raw, and unparsed stay on disk:
+# period warnings and formula counts scan the file, and this path never reads them.
+_BUILD_FIELDS = (
+    "sheet",
+    "row",
+    "col",
+    "formula_template",
+    "cached_value",
+    "hidden",
+    "number_format",
+)
+_BUILD_FIELD_SET = frozenset(_BUILD_FIELDS)
+
+
+class _BuildCell:
+    """One layout value cell. Dict-style reads, slot storage."""
+
+    __slots__ = _BUILD_FIELDS
+
+    def __init__(
+        self,
+        sheet: object,
+        row: object,
+        col: object,
+        formula_template: object,
+        cached_value: object,
+        hidden: object,
+        number_format: object,
+    ) -> None:
+        self.sheet = sheet
+        self.row = row
+        self.col = col
+        self.formula_template = formula_template
+        self.cached_value = cached_value
+        self.hidden = hidden
+        self.number_format = number_format
+
+    def get(self, key: str, default: object = None) -> object:
+        if key not in _BUILD_FIELD_SET:
+            return default
+        return getattr(self, key)
+
+    def __getitem__(self, key: str) -> object:
+        if key not in _BUILD_FIELD_SET:
+            raise KeyError(key)
+        return getattr(self, key)
+
+
+def _layout_value_cells(path: Path, layout: Layout) -> list[_BuildCell]:
+    from finance_context.store.duckdb_io import _iter_parquet_rows
 
     if not path.is_file():
         return []
-    columns = [
-        "sheet",
-        "row",
-        "col",
-        "addr",
-        "formula_raw",
-        "formula_template",
-        "cached_value",
-        "hidden",
-        "number_format",
-        "unparsed",
-    ]
-    found: list[dict] = []
+    columns = list(_BUILD_FIELDS)
+    found: list[_BuildCell] = []
+    where = "sheet = ? AND row IN (SELECT unnest(?::BIGINT[]))"
     for sheet, rows in _layout_rows(layout).items():
-        found.extend(
-            read_parquet_dicts(
-                path,
-                columns,
-                where="sheet = ? AND row IN (SELECT unnest(?::BIGINT[]))",
-                params=[sheet, [int(row) for row in rows]],
-            )
-        )
+        for names, batch in _iter_parquet_rows(
+            path,
+            columns,
+            where=where,
+            params=[sheet, [int(row) for row in rows]],
+        ):
+            if list(names) != columns:
+                raise ValueError(f"cells.parquet columns {names} != {columns}")
+            for record in batch:
+                found.append(_BuildCell(*record))
     return found
 
 
@@ -722,7 +785,8 @@ def _iter_cell_columns(path: Path, columns: list[str]):
         yield [batch.column(index).to_pylist() for index in range(len(columns))]
 
 
-def _formula_stats(path: Path) -> _FormulaStats:
+def _formula_stats(path: Path, not_applicable: set[str]) -> _FormulaStats:
+    """Formula totals for the file. Samples stop at three addresses."""
     stats = _FormulaStats()
     for sheets, addrs, formulas, cached, flags in _iter_cell_columns(
         path, ["sheet", "addr", "formula_raw", "cached_value", "unparsed"]
@@ -731,13 +795,19 @@ def _formula_stats(path: Path) -> _FormulaStats:
             if not formula:
                 continue
             stats.formula_count += 1
+            missing = cached[index] is None
+            flag = bool(flags[index])
+            if not missing and not flag:
+                continue
             addr = f"{sheets[index]}!{addrs[index]}"
-            if cached[index] is None:
+            if missing:
                 stats.missing_cached += 1
-                stats.missing_addrs.append(addr)
-            if flags[index]:
+                if addr not in not_applicable:
+                    stats.missing_values += 1
+                    _remember(stats.missing_addrs, addr)
+            if flag:
                 stats.unparsed += 1
-                stats.unparsed_addrs.append(addr)
+                _remember(stats.unparsed_addrs, addr)
     return stats
 
 
