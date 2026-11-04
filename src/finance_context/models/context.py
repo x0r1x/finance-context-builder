@@ -4,7 +4,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_serializer
 
-from finance_context.models.shared_fields import SharedFieldsSet
 from finance_context.vocab import ValueStatus
 
 SCHEMA_VERSION = "1.14.0"
@@ -23,7 +22,7 @@ class SourceRef(BaseModel):
         return f"{self.sheet}!{self.addr}"
 
 
-class NumericSummary(SharedFieldsSet):
+class NumericSummary(BaseModel):
     first: str | None = None
     last: str | None = None
     minimum: str | None = None
@@ -32,14 +31,14 @@ class NumericSummary(SharedFieldsSet):
     n: int = 0
 
 
-class RowHints(SharedFieldsSet):
+class RowHints(BaseModel):
     unit: str | None = None
     unit_per: str | None = None
     currency: str | None = None
     scale: str | None = None
 
 
-class RoleCell(SharedFieldsSet):
+class RoleCell(BaseModel):
     """A cell left of the ruler. `header` is the caption above it (Start, End, Live Case)."""
 
     addr: str
@@ -57,7 +56,7 @@ class RoleCell(SharedFieldsSet):
         return data
 
 
-class RowSeries(SharedFieldsSet):
+class RowSeries(BaseModel):
     """Values of one row on one axis. Aligned to that axis's periods."""
 
     axis_id: str
@@ -69,7 +68,7 @@ class RowSeries(SharedFieldsSet):
     normalized_values: list[str | None] = Field(default_factory=list)
 
 
-class BlockRow(SharedFieldsSet):
+class BlockRow(BaseModel):
     """One layout line. Lives only inside its block."""
 
     row_key: str
