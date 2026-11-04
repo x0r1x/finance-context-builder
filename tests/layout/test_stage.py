@@ -11,11 +11,12 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from finance_context.excel import parse_workbook
 from finance_context.excel.a1 import parse_addr
 from finance_context.formulas import compile_workbook
+from finance_context.formulas.stage import IR_CELL_COLUMNS
 from finance_context.layout import layout_workbook
 from finance_context.layout import stage as layout_stage
 from finance_context.layout.relations import formula_relations, relation_period_cols
 from finance_context.observability import JsonFormatter, job_id_var, stage_var
-from finance_context.store.fs import read_parquet, write_cells_parquet
+from finance_context.store.fs import read_parquet, write_cells_parquet, write_json, write_parquet
 
 
 def test_layout_writes_json_registers_axes_and_no_findings(
@@ -77,7 +78,7 @@ def test_layout_writes_json_registers_axes_and_no_findings(
     assert "Check" in checks
 
 
-def test_layout_drops_one_sheet_before_reading_the_next(
+def test_layout_drops_one_sheet_before_laying_out_the_next(
     tmp_path: Path, dest: Path, monkeypatch
 ) -> None:
     source = tmp_path / "two.xlsx"
@@ -108,22 +109,23 @@ def test_layout_drops_one_sheet_before_reading_the_next(
     parse_workbook(source, dest)
     compile_workbook(dest)
     held: list[weakref.ReferenceType[list]] = []
-    real = layout_stage._read_layout_sheet
+    real = layout_stage._overlay_merges
 
     class _SheetCells(list):
         pass
 
-    def spy(dest_dir, sheet, meta):
+    def spy(cells, meta):
         if held:
             assert held[-1]() is None
-        rows = _SheetCells(real(dest_dir, sheet, meta))
+        rows = _SheetCells(real(cells, meta))
         held.append(weakref.ref(rows))
         return rows
 
-    monkeypatch.setattr(layout_stage, "_read_layout_sheet", spy)
+    monkeypatch.setattr(layout_stage, "_overlay_merges", spy)
     layout = layout_workbook(dest)
     assert [sheet.name for sheet in layout.sheets] == ["One", "Two"]
     assert len(held) == 2
+    assert held[-1]() is None
     assert "ast_json" not in layout_stage._LAYOUT_COLUMNS
     assert "comment" not in layout_stage._LAYOUT_COLUMNS
     assert "comment" not in layout_stage._RELATION_COLUMNS
@@ -175,7 +177,13 @@ def _ir(sheet: str, addr: str, value: str) -> dict:
     }
 
 
-def _raw(cell: dict, *, style_indent: int = 0) -> dict:
+def _raw(
+    cell: dict,
+    *,
+    style_indent: int = 0,
+    outline_level: int = 0,
+    col_outline_level: int = 0,
+) -> dict:
     return {
         "sheet": cell["sheet"],
         "row": cell["row"],
@@ -189,8 +197,8 @@ def _raw(cell: dict, *, style_indent: int = 0) -> dict:
         "shared_si": None,
         "shared_master": False,
         "style_indent": style_indent,
-        "outline_level": 0,
-        "col_outline_level": 0,
+        "outline_level": outline_level,
+        "col_outline_level": col_outline_level,
     }
 
 
@@ -250,6 +258,120 @@ def test_layout_workbook_logs_cells_read_detect_and_write(tmp_path: Path) -> Non
         assert row["stage"] == "layout"
         assert isinstance(row["duration_ms"], int)
         assert row["duration_ms"] >= 0
+
+
+def test_one_pass_spills_each_sheet_before_the_next_is_loaded(tmp_path: Path) -> None:
+    dest = tmp_path / "book"
+    write_parquet(
+        dest / "ir" / "cells.parquet",
+        IR_CELL_COLUMNS,
+        [
+            _ir_tuple("Two", "A1", "Title"),
+            _ir_tuple("One", "A1", "Item"),
+            _ir_tuple("Two", "B1", "2024"),
+        ],
+    )
+    names, sheets = layout_stage._group_layout_cells(dest / "ir" / "cells.parquet")
+    try:
+        assert names == ["Two", "One"]
+        assert sheets._dir.parent == dest / "ir"
+        assert all(path.is_file() for paths in sheets._parts.values() for path in paths)
+        loaded = sheets.pop("Two")
+        assert [cell["addr"] for cell in loaded] == ["A1", "B1"]
+        assert sheets._parts["One"]
+        assert all(path.is_file() for path in sheets._parts["One"])
+    finally:
+        sheets.close()
+
+
+def test_one_pass_cells_match_per_sheet_reads_when_sheets_interleave(tmp_path: Path) -> None:
+    dest = tmp_path / "book"
+    write_parquet(
+        dest / "ir" / "cells.parquet",
+        IR_CELL_COLUMNS,
+        [
+            _ir_tuple("Two", "A1", "Title"),
+            _ir_tuple("One", "A1", "Item"),
+            _ir_tuple("Two", "B1", "2024"),
+            _ir_tuple("One", "A2", "Revenue"),
+            _ir_tuple("Two", "A2", "Cost"),
+            _ir_tuple("One", "B2", "10"),
+        ],
+    )
+    write_cells_parquet(
+        dest / "raw" / "cells.parquet",
+        [
+            _raw(_ir("Two", "A1", "Title")),
+            _raw(_ir("One", "A1", "Item"), style_indent=0),
+            _raw(_ir("Two", "B1", "2024"), style_indent=-1),
+            _raw(_ir("One", "A2", "Revenue"), style_indent=2),
+            _raw(_ir("Two", "A2", "Cost"), outline_level=1, col_outline_level=3),
+            _raw(_ir("One", "B2", "10")),
+        ],
+    )
+    write_json(
+        dest / "raw" / "workbook.json",
+        {"date1904": False, "sheets": [{"name": "Two", "merges": ["A1:C1"]}, {"name": "One"}]},
+    )
+    meta = json.loads((dest / "raw" / "workbook.json").read_text(encoding="utf-8"))
+    names = layout_stage._sheet_names(dest / "ir" / "cells.parquet")
+    per_sheet = {name: layout_stage._read_layout_sheet(dest, name, meta) for name in names}
+    passed_names, passed = layout_stage._load_layout_sheet_cells(dest)
+
+    assert names == ["Two", "One"]
+    assert passed_names == names
+    assert passed == per_sheet
+    assert passed["Two"][0]["merge_end_col"] == 3
+    assert passed["One"][1]["style_indent"] == 2
+    assert "style_indent" not in passed["One"][0]
+    assert passed["Two"][2]["outline_level"] == 1
+    assert passed["Two"][2]["col_outline_level"] == 3
+    assert "style_indent" not in passed["Two"][1]
+
+
+def test_one_pass_leaves_cells_unchanged_without_fact_columns(tmp_path: Path) -> None:
+    dest = tmp_path / "book"
+    write_parquet(
+        dest / "ir" / "cells.parquet",
+        IR_CELL_COLUMNS,
+        [_ir_tuple("P&L", "A1", "Item"), _ir_tuple("P&L", "B1", "2024")],
+    )
+    write_parquet(
+        dest / "raw" / "cells.parquet",
+        (
+            ("sheet", "VARCHAR"),
+            ("row", "INTEGER"),
+            ("col", "INTEGER"),
+            ("addr", "VARCHAR"),
+            ("cached_value", "VARCHAR"),
+        ),
+        [("P&L", 1, 1, "A1", "Item"), ("P&L", 1, 2, "B1", "2024")],
+    )
+    meta: dict = {"sheets": [{"name": "P&L"}]}
+    write_json(dest / "raw" / "workbook.json", meta)
+    per_sheet = layout_stage._read_layout_sheet(dest, "P&L", meta)
+    names, passed = layout_stage._load_layout_sheet_cells(dest)
+    assert names == ["P&L"]
+    assert passed["P&L"] == per_sheet
+    assert "style_indent" not in passed["P&L"][0]
+
+
+def _ir_tuple(sheet: str, addr: str, value: str) -> tuple:
+    cell = _ir(sheet, addr, value)
+    return (
+        cell["sheet"],
+        cell["row"],
+        cell["col"],
+        cell["addr"],
+        None,
+        None,
+        False,
+        value,
+        False,
+        None,
+        None,
+        None,
+    )
 
 
 def test_relation_scan_matches_the_full_cell_list(tmp_path: Path, dest: Path) -> None:

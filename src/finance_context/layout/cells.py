@@ -74,6 +74,18 @@ class LayoutCell:
             raise KeyError(key)
         setattr(self, key, value)
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, LayoutCell):
+            return all(getattr(self, key) == getattr(other, key) for key in _LAYOUT_FIELDS)
+        if isinstance(other, dict):
+            return {key: getattr(self, key) for key in _LAYOUT_FIELDS} == {
+                key: other.get(key) for key in _LAYOUT_FIELDS
+            }
+        return NotImplemented
+
+    def __contains__(self, key: object) -> bool:
+        return key in _LAYOUT_FIELD_SET and getattr(self, key) is not None
+
 
 # Ordinary space, non-breaking space, narrow no-break space.
 _IGNORED_SPACE = str.maketrans("", "", " \xa0\u202f")

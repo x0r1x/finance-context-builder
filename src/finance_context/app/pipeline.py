@@ -50,7 +50,13 @@ from finance_context.memory import (
     usage_for_book,
 )
 from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
-from finance_context.observability import bind_log_context, configure_logging, log_event, stage_var
+from finance_context.observability import (
+    bind_log_context,
+    configure_logging,
+    flush_logs,
+    log_event,
+    stage_var,
+)
 from finance_context.render.markdown import (
     commit_renderer_stamp,
     refresh_context_markdown,
@@ -556,6 +562,7 @@ def _run_pipeline_child(
         finally:
             # In-process tests call this too. A leftover deadline would outlive the job.
             _clear_child_watchdog()
+            flush_logs()
 
 
 def execute_job(

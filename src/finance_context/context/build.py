@@ -764,7 +764,12 @@ def _switch_rows(
     for cell in formulas:
         sheet = str(cell["sheet"])
         by_sheet.setdefault(sheet, {}).setdefault(cell["row"], []).append(cell)
-        names = names_by_sheet.setdefault(sheet, _names_on_sheet(defined_names, sheet))
+        # The index is the same for every formula on a sheet. setdefault would
+        # still build it each time, because the argument is evaluated first.
+        names = names_by_sheet.get(sheet)
+        if names is None:
+            names = _names_on_sheet(defined_names, sheet)
+            names_by_sheet[sheet] = names
         for addr in _switch_args(str(cell["formula_raw"]), names):
             wanted.setdefault(sheet, set()).add(addr.upper().replace("$", ""))
     if not path.is_file():

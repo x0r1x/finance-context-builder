@@ -186,9 +186,41 @@ def normalize_header(text: str | None) -> str | None:
     raw = re.sub(r"\s+", " ", raw).strip()
     if not raw:
         return None
-    raw = re.sub(r"(?<=\d)\s+(?=\d)", "", raw)
+    raw = _join_digits_inside_one_number(raw)
     raw = _MARKER_GLUE.sub(r"\1\2", raw)
     return " ".join(_fold_period_token(token) for token in raw.split(" "))
+
+
+# A finished dd.mm.yy / dd.mm.yyyy. The space after it belongs to the next date.
+_SHORT_DATE_EDGE = re.compile(r"(?:^|[^\d./])\d{1,2}[./]\d{1,2}[./](?:\d{4}|\d{2})$")
+_SHORT_DATE = re.compile(r"(?<!\d)\d{1,2}[./]\d{1,2}[./](?:\d{4}|\d{2})(?!\d)")
+
+
+def _join_digits_inside_one_number(text: str) -> str:
+    """Drop spaces that split one number. ``1.20 24`` becomes ``1.2024``.
+
+    A finished short date keeps the gap, so ``01.02.24 03.04.24`` stays two dates.
+    """
+
+    def join(match: re.Match[str]) -> str:
+        if _SHORT_DATE_EDGE.search(text[: match.start()]):
+            return match.group(0)
+        return ""
+
+    return re.sub(r"(?<=\d)\s+(?=\d)", join, text)
+
+
+def _has_two_short_dates(text: str) -> bool:
+    """True when two pieces are real ``dd.mm.yy`` or ``dd.mm.yyyy`` dates."""
+    found = 0
+    for match in _SHORT_DATE.finditer(text):
+        hit = _match_calendar_text(match.group(0))
+        if hit is None or not is_calendar_key(hit.period_key):
+            continue
+        found += 1
+        if found == 2:
+            return True
+    return False
 
 
 def _fold_period_token(token: str) -> str:
@@ -428,6 +460,8 @@ def many_dates(text: str | None) -> bool:
     direct = _match_calendar_text(raw)
     if direct is not None and is_calendar_key(direct.period_key):
         return False
+    if _has_two_short_dates(raw):
+        return True
     tokens = _scan_tokens(raw)
     count = 0
     index = 0
