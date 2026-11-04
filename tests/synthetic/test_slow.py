@@ -10,9 +10,10 @@ layout stay under 180s: the parent walk those books used to do took about
 
 RSS headroom is ``1.5 × measured + 50 MiB``, rounded up to 50 MiB. When a
 build was measured at or under 1200 MiB, that ceiling is clipped to 1536 so
-a build that crosses the product memory budget fails. ``hops100k``,
-``dense2m``, and ``text200k`` builds are at or under 1200, so those ceilings
-are the 1536 budget.
+a build that crosses the product memory budget fails. The clip applies only
+when that formula is above 1536. ``dense2m`` (976 → 1550) and ``text200k``
+(1099 → 1700) are clipped to 1536. ``hops100k`` (731 → 1150) is already
+under the budget, so it keeps 1150.
 
 ``text200k`` layout took 314s. Rows whose values are ``n, n+1, n+2`` inside
 1900–2099 are bare-year headers, and layout scans the sheet once per such
@@ -71,7 +72,7 @@ _CEILINGS: dict[str, dict[str, tuple[int, int]]] = {
         "layout": (69_000, 750),
         "relations": (17_000, 700),
         "graph": (22_000, 850),
-        "build": (90_000, 1536),
+        "build": (90_000, 1150),
         "render": (17_000, 1100),
     },
     "series10k": {

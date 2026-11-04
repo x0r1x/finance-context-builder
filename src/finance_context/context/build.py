@@ -9,8 +9,8 @@ from pathlib import Path
 
 from finance_context.context.assemble import (
     _SERIES_KINDS,
-    _hints_for,
     _relations_for_block,
+    _resolved_hints,
     _row_for_layout,
 )
 from finance_context.context.series import (
@@ -434,7 +434,21 @@ def _stream_one_block(
                     headers=hint_headers,
                     by_addr=block_cells,
                 )
-                hints = _hints_for(layout_row, unit_text, number_formats=formats)
+                unit_from_cell = next(
+                    (
+                        item.cached_value
+                        for item in role_cells
+                        if item.role == "unit"
+                    ),
+                    None,
+                )
+                hints = _resolved_hints(
+                    layout_row,
+                    unit_text,
+                    unit_from_cell=unit_from_cell,
+                    number_formats=formats,
+                )
+                series_unit = hints.unit
                 series: list[RowSeries] = []
                 for axis_id, headers in views:
                     row_headers = headers
@@ -485,7 +499,7 @@ def _stream_one_block(
                     numeric_summary=first.numeric_summary if first else None,
                     hints=hints,
                     role_cells=role_cells,
-                    series_unit=hints.unit,
+                    series_unit=series_unit,
                     series=series,
                 )
                 for (_axis_id, headers), item in zip(views, series, strict=False):
