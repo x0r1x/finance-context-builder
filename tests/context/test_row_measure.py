@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.published import attach_streamed_rows
+
 from finance_context.context import assemble
 from finance_context.context.build import build_context
 from finance_context.context.measure import Measure
@@ -60,11 +62,13 @@ def test_each_row_label_is_parsed_once(monkeypatch) -> None:
         _cell("D7", "0.03", "0.00%"),
     ]
     layout = detect_layout(cells)
-    doc = build_context(
-        job_id="once",
-        workbook_meta={"sheets": []},
-        cells=cells,
-        layout=layout,
+    doc = attach_streamed_rows(
+        build_context(
+            job_id="once",
+            workbook_meta={"sheets": []},
+            cells=cells,
+            layout=layout,
+        )
     )
     rows = [row for block in doc.blocks for row in block.rows]
     assert seen == [row.label for row in rows]
