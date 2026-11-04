@@ -261,7 +261,8 @@ def _classify(raw: str) -> PeriodHit | None:
     return _one_calendar(raw)
 
 
-# Every pattern in _match_calendar_text includes a year or a date.
+# Every pattern reachable from _match_calendar_text requires a digit (a year or a date).
+# test_calendar_match_requires_a_digit
 _HAS_DIGIT = re.compile(r"\d")
 
 

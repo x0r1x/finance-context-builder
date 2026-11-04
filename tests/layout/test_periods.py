@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
+
 import pytest
 
 from finance_context.layout.format_words import is_total_word
@@ -9,6 +12,7 @@ from finance_context.layout.periods import (
     classify_header,
     compose_period,
     infer_grain,
+    many_dates,
     marker_token,
 )
 
@@ -226,6 +230,65 @@ def test_quarter_and_half_tokens_without_a_year(
     atom = classify_atom(text)
     assert atom is not None
     assert (atom.kind, atom.quarter, atom.half) == (kind, quarter, half)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Январь",
+        "January",
+        "Jan.",
+        "января",
+        "первый квартал",
+        "итого за год",
+        "YTD",
+        "FY",
+        "год",
+    ],
+)
+def test_digit_free_header_is_not_a_period(text: str) -> None:
+    assert classify_header(text) is None
+    assert many_dates(text) is False
+
+
+@pytest.mark.parametrize(
+    ("text", "kind", "quarter", "half"),
+    [
+        ("I квартал", "quarter_token", 1, None),
+        ("IV кв.", "quarter_token", 4, None),
+        ("II полугодие", "half_token", None, 2),
+    ],
+)
+def test_roman_period_words_stay_yearless_atoms(
+    text: str, kind: str, quarter: int | None, half: int | None
+) -> None:
+    assert classify_header(text) is None
+    atom = classify_atom(text)
+    assert atom is not None
+    assert atom.year is None
+    assert (atom.kind, atom.quarter, atom.half) == (kind, quarter, half)
+
+
+@pytest.mark.parametrize(
+    ("text", "period_key"),
+    [
+        ("январь 2025", "2025-01"),
+        ("FY25", "2025"),
+        ("Q1 2025", "2025Q1"),
+    ],
+)
+def test_dated_headers_still_parse(text: str, period_key: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert hit.period_key == period_key
+
+
+def test_calendar_match_requires_a_digit() -> None:
+    source = Path(inspect.getfile(classify_header)).read_text(encoding="utf-8")
+    assignment = source.index("_HAS_DIGIT = re.compile")
+    comment = source[source.rfind("\n\n", 0, assignment) : assignment]
+    assert "requires a digit" in comment
+    assert "test_calendar_match_requires_a_digit" in comment
 
 
 def test_year_row_over_half_tokens_composes_half_keys() -> None:
