@@ -106,9 +106,9 @@ def test_fresh_compile_is_not_reread_and_stamp_skips_compile(
 
     real_stats = context_build._formula_stats
 
-    def spy_stats(path: Path):
+    def spy_stats(path: Path, not_applicable: set[str]):
         scanned.append(Path(path).as_posix())
-        return real_stats(path)
+        return real_stats(path, not_applicable)
 
     monkeypatch.setattr(context_build, "_formula_stats", spy_stats)
     pipeline.run(dest, job_id="job-pass", source_filename="model.xlsx")

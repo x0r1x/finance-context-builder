@@ -10,6 +10,7 @@ from pathlib import Path
 from finance_context.context.build import (
     _BUILD_FIELDS,
     _BuildCell,
+    _formula_stats,
     _layout_rows,
     _layout_value_cells,
     build_context,
@@ -258,3 +259,62 @@ def test_file_build_matches_cells_when_addr_stays_on_disk(tmp_path: Path) -> Non
     )
     assert from_file.workbook.missing_cached_values == 3
     assert from_file.workbook.formula_count == 4
+
+
+def test_formula_stats_keeps_three_addresses(tmp_path: Path) -> None:
+    rows = [
+        ("S", index, 1, f"A{index}", "=1+1", None, None, False, None, True)
+        for index in range(1, 101)
+    ]
+    path = tmp_path / "cells.parquet"
+    write_parquet(path, _COLUMNS, rows, row_group_rows=0)
+    excluded = {f"S!A{index}" for index in range(1, 6)}
+    stats = _formula_stats(path, excluded)
+    assert stats.formula_count == 100
+    assert stats.missing_cached == 100
+    assert stats.unparsed == 100
+    assert stats.missing_values == 95
+    assert stats.missing_addrs == ["S!A6", "S!A7", "S!A8"]
+    assert stats.unparsed_addrs == ["S!A1", "S!A2", "S!A3"]
+
+
+def test_formula_stats_peak_stays_under_the_address_list(tmp_path: Path) -> None:
+    """Keeping every missing address traced more than the three-example scan.
+
+    Same file and the same column scan. tracemalloc. The extra list is what
+    build used to hold until the warning was formatted.
+    """
+    from finance_context.context.build import _iter_cell_columns
+
+    count = 20_000
+    rows = [
+        ("S", index, 1, f"A{index}", "=1+1", None, None, False, None, False)
+        for index in range(1, count + 1)
+    ]
+    path = tmp_path / "cells.parquet"
+    write_parquet(path, _COLUMNS, rows, row_group_rows=0)
+    gc.collect()
+    tracemalloc.start()
+    try:
+        stats = _formula_stats(path, set())
+        assert stats.missing_cached == count
+        assert stats.missing_addrs == ["S!A1", "S!A2", "S!A3"]
+        _current, stats_peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    del stats
+    gc.collect()
+    tracemalloc.start()
+    try:
+        kept: list[str] = []
+        for sheets, addresses, formulas, cached, _flags in _iter_cell_columns(
+            path, ["sheet", "addr", "formula_raw", "cached_value", "unparsed"]
+        ):
+            for index, formula in enumerate(formulas):
+                if formula and cached[index] is None:
+                    kept.append(f"{sheets[index]}!{addresses[index]}")
+        assert len(kept) == count
+        _current, list_peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert stats_peak < list_peak

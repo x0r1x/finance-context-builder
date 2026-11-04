@@ -82,7 +82,6 @@ def build_context(
     relations = list(relations or [])
     date1904 = bool(workbook_meta.get("date1904"))
     defined_names = list(workbook_meta.get("defined_names") or [])
-    formula_stats: _FormulaStats | None = None
     hidden_indexes = None
     cell_path: Path | None = None
     if cells is None:
@@ -90,7 +89,6 @@ def build_context(
             raise ValueError("build_context needs cells or book_dir")
         cell_path = book_dir / "ir" / "cells.parquet"
         cells = _layout_value_cells(cell_path, layout)
-        formula_stats = _formula_stats(cell_path)
         hidden_indexes = _occupied_from_file(cell_path)
         switch_rows = _switch_rows(cell_path, defined_names)
         cell_total = _file_rows(cell_path)
@@ -142,31 +140,6 @@ def build_context(
         if isinstance(stored_order, list)
         else []
     )
-    formula_count = 0
-    missing_cached = 0
-    unparsed = 0
-    missing_addrs: list[str] = []
-    unparsed_addrs: list[str] = []
-    if formula_stats is None:
-        for cell in cells:
-            if cell.get("formula_raw"):
-                formula_count += 1
-                if cell.get("cached_value") is None:
-                    missing_cached += 1
-                    missing_addrs.append(f"{cell['sheet']}!{cell['addr']}")
-                if cell.get("unparsed"):
-                    unparsed += 1
-                    unparsed_addrs.append(f"{cell['sheet']}!{cell['addr']}")
-    else:
-        formula_count = formula_stats.formula_count
-        missing_cached = formula_stats.missing_cached
-        unparsed = formula_stats.unparsed
-        missing_addrs = formula_stats.missing_addrs
-        unparsed_addrs = formula_stats.unparsed_addrs
-    if unparsed_addrs:
-        sample = ", ".join(unparsed_addrs[:3])
-        warnings.append(f"{len(unparsed_addrs)} unparsed formula(s) (e.g. {sample})")
-
     not_applicable: set[str] = set()
     blocks: list[FinancialBlock] = []
     for sheet in layout.sheets:
@@ -312,6 +285,18 @@ def build_context(
                 )
             )
 
+    if cell_path is None:
+        formula_stats = _count_formula_cells(cells, not_applicable)
+    else:
+        formula_stats = _formula_stats(cell_path, not_applicable)
+    formula_count = formula_stats.formula_count
+    missing_cached = formula_stats.missing_cached
+    unparsed = formula_stats.unparsed
+    # Same place as before the block loop: that loop does not append warnings.
+    if unparsed:
+        sample = ", ".join(formula_stats.unparsed_addrs[:_WARNING_SAMPLE])
+        warnings.append(f"{unparsed} unparsed formula(s) (e.g. {sample})")
+
     document_rows = [row for block in blocks for row in block.rows]
     expected_rows = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
     if len(document_rows) != expected_rows:
@@ -319,11 +304,12 @@ def build_context(
             f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
         )
     warnings.extend(timeline_warnings)
-    missing_values = [addr for addr in missing_addrs if addr not in not_applicable]
-    if missing_values:
-        sample = ", ".join(missing_values[:3])
+    if formula_stats.missing_values:
+        sample = ", ".join(formula_stats.missing_addrs[:_WARNING_SAMPLE])
         extra = f" (e.g. {sample})" if sample else ""
-        warnings.append(f"{len(missing_values)} formula cell(s) missing cached values{extra}")
+        warnings.append(
+            f"{formula_stats.missing_values} formula cell(s) missing cached values{extra}"
+        )
     if graph is not None and graph.dangling:
         warnings.append(
             f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
@@ -650,13 +636,46 @@ def _no_axis_warning(sheet: str, row: int, headers: list[AxisHeader]) -> str:
     )
 
 
+# The warning text shows three examples. Counts stay complete.
+_WARNING_SAMPLE = 3
+
+
 class _FormulaStats:
     def __init__(self) -> None:
         self.formula_count = 0
         self.missing_cached = 0
         self.unparsed = 0
+        self.missing_values = 0
         self.missing_addrs: list[str] = []
         self.unparsed_addrs: list[str] = []
+
+
+def _remember(sample: list[str], addr: str) -> None:
+    if len(sample) < _WARNING_SAMPLE:
+        sample.append(addr)
+
+
+def _count_formula_cells(cells: list, not_applicable: set[str]) -> _FormulaStats:
+    """Formula totals for cells already in memory. Samples stop at three."""
+    stats = _FormulaStats()
+    for cell in cells:
+        if not cell.get("formula_raw"):
+            continue
+        stats.formula_count += 1
+        missing = cell.get("cached_value") is None
+        flag = bool(cell.get("unparsed"))
+        if not missing and not flag:
+            continue
+        addr = f"{cell['sheet']}!{cell['addr']}"
+        if missing:
+            stats.missing_cached += 1
+            if addr not in not_applicable:
+                stats.missing_values += 1
+                _remember(stats.missing_addrs, addr)
+        if flag:
+            stats.unparsed += 1
+            _remember(stats.unparsed_addrs, addr)
+    return stats
 
 
 def _consumed_rows(layout: Layout) -> set[tuple[str, int]]:
@@ -765,7 +784,8 @@ def _iter_cell_columns(path: Path, columns: list[str]):
         yield [batch.column(index).to_pylist() for index in range(len(columns))]
 
 
-def _formula_stats(path: Path) -> _FormulaStats:
+def _formula_stats(path: Path, not_applicable: set[str]) -> _FormulaStats:
+    """Formula totals for the file. Samples stop at three addresses."""
     stats = _FormulaStats()
     for sheets, addrs, formulas, cached, flags in _iter_cell_columns(
         path, ["sheet", "addr", "formula_raw", "cached_value", "unparsed"]
@@ -774,13 +794,19 @@ def _formula_stats(path: Path) -> _FormulaStats:
             if not formula:
                 continue
             stats.formula_count += 1
+            missing = cached[index] is None
+            flag = bool(flags[index])
+            if not missing and not flag:
+                continue
             addr = f"{sheets[index]}!{addrs[index]}"
-            if cached[index] is None:
+            if missing:
                 stats.missing_cached += 1
-                stats.missing_addrs.append(addr)
-            if flags[index]:
+                if addr not in not_applicable:
+                    stats.missing_values += 1
+                    _remember(stats.missing_addrs, addr)
+            if flag:
                 stats.unparsed += 1
-                stats.unparsed_addrs.append(addr)
+                _remember(stats.unparsed_addrs, addr)
     return stats
 
 
