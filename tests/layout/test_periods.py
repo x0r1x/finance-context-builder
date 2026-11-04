@@ -734,3 +734,29 @@ def test_role_word_with_a_dot_after_the_year_is_a_marker(
         marker,
         True,
     )
+
+
+def test_three_residual_words_stay_a_header_and_a_fourth_does_not() -> None:
+    three = "абвг абвг абвг 1-й квартал 2025 года"
+    four = "абвг абвг абвг абвг 1-й квартал 2025 года"
+    hit = classify_header(three)
+    assert hit is not None and hit.period_key == "2025Q1"
+    assert classify_header(four) is None
+    assert classify_header("1 п/г 2025") is not None
+
+
+def test_a_long_label_is_not_a_header_and_does_not_evict_one() -> None:
+    """Unique row text stays out of the header cache, so ``2020`` still hits."""
+    from finance_context.layout.periods import _classify
+
+    _classify.cache_clear()
+    assert classify_header("2020") is not None
+    label = "Статья 19001 выручка себестоимость прибыль расходы налог"
+    assert classify_header(label) is None
+    assert classify_atom(label) is None
+    assert classify_atom("План I кв.") is not None
+    before = _classify.cache_info().hits
+    for index in range(1000):
+        classify_header(f"{label} {index} амортизация капитал долг кредит")
+    assert classify_header("2020") is not None
+    assert _classify.cache_info().hits > before
