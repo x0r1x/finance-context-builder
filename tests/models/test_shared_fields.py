@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from finance_context.layout.models import LayoutRow, RowCell
 from finance_context.models.context import (
     BlockRow,
     NumericSummary,
@@ -82,42 +81,6 @@ def test_model_copy_does_not_mutate_the_shared_set() -> None:
     validated = RowSeries.model_validate({"axis_id": "years", "formula": "=C1"})
     assert validated.model_fields_set == {"axis_id", "formula"}
     assert validated.__pydantic_fields_set__ is copied.__pydantic_fields_set__
-
-
-def test_layout_assignment_does_not_mutate_the_shared_set() -> None:
-    first = LayoutRow(row=1, label="Revenue")
-    second = LayoutRow(row=2, label="Cost")
-    shared = first.__pydantic_fields_set__
-    snapshot = set(shared)
-    assert second.__pydantic_fields_set__ is shared
-    first.parent_row = 1
-    first.kind = "helper"
-    assert shared == snapshot
-    assert second.__pydantic_fields_set__ is shared
-    assert second.model_fields_set == snapshot
-    assert first.model_fields_set == snapshot | {"parent_row", "kind"}
-    assert second.parent_row is None
-    assert second.kind == "fact"
-    cell = RowCell(col=3, role="value")
-    other = RowCell(col=4, role="value")
-    cell_set = cell.__pydantic_fields_set__
-    cell_snapshot = set(cell_set)
-    copied = cell.model_copy(update={"header": "2024"})
-    cell.header = "2024"
-    assert cell_set == cell_snapshot
-    assert other.__pydantic_fields_set__ is cell_set
-    assert other.header is None
-    assert other.model_fields_set == cell_snapshot
-    assert cell.model_fields_set == cell_snapshot | {"header"}
-    assert copied.model_fields_set == cell.model_fields_set
-    assert copied.__pydantic_fields_set__ is cell.__pydantic_fields_set__
-    assert copied.header == "2024"
-    loaded = LayoutRow.model_validate(first.model_dump())
-    again = LayoutRow.model_validate(first.model_dump())
-    assert loaded.model_fields_set == again.model_fields_set
-    assert loaded.__pydantic_fields_set__ is again.__pydantic_fields_set__
-    assert loaded.parent_row == 1
-    assert loaded.kind == "helper"
 
 
 def test_many_block_rows_keep_one_fields_set() -> None:
