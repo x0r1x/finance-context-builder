@@ -32,6 +32,19 @@ def _record(cell: dict) -> LayoutCell:
     )
 
 
+def test_sheet_is_shared_and_a_plain_address_is_derived() -> None:
+    first = LayoutCell("Model", 2, 1, "A2", cached_value="Line 2")
+    second = LayoutCell("Model", 3, 4, "D3")
+    assert first.sheet is second.sheet
+    assert first.addr is None
+    assert first["addr"] == "A2"
+    assert second["addr"] == "D3"
+    assert "addr" in first
+    odd = LayoutCell("Model", 2, 1, "$A$2")
+    assert odd.addr == "$A$2"
+    assert odd["addr"] == "$A$2"
+
+
 def test_slot_record_is_smaller_than_the_cell_dict() -> None:
     raw = {
         "sheet": "S",
