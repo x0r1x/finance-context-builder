@@ -683,33 +683,82 @@ def _layout_rows(layout: Layout) -> dict[str, set[int]]:
     return {name: rows for name, rows in found.items() if rows}
 
 
-def _layout_value_cells(path: Path, layout: Layout) -> list[dict]:
-    from finance_context.store.fs import read_parquet_dicts
+# Fields the file path reads back. A dict of these is what made build the peak
+# on a wide book; slots match LayoutCell.
+_BUILD_FIELDS = (
+    "sheet",
+    "row",
+    "col",
+    "addr",
+    "formula_raw",
+    "formula_template",
+    "cached_value",
+    "hidden",
+    "number_format",
+    "unparsed",
+)
+_BUILD_FIELD_SET = frozenset(_BUILD_FIELDS)
+
+
+class _BuildCell:
+    """One layout value cell. Dict-style reads, slot storage."""
+
+    __slots__ = _BUILD_FIELDS
+
+    def __init__(
+        self,
+        sheet: object,
+        row: object,
+        col: object,
+        addr: object,
+        formula_raw: object,
+        formula_template: object,
+        cached_value: object,
+        hidden: object,
+        number_format: object,
+        unparsed: object,
+    ) -> None:
+        self.sheet = sheet
+        self.row = row
+        self.col = col
+        self.addr = addr
+        self.formula_raw = formula_raw
+        self.formula_template = formula_template
+        self.cached_value = cached_value
+        self.hidden = hidden
+        self.number_format = number_format
+        self.unparsed = unparsed
+
+    def get(self, key: str, default: object = None) -> object:
+        if key not in _BUILD_FIELD_SET:
+            return default
+        return getattr(self, key)
+
+    def __getitem__(self, key: str) -> object:
+        if key not in _BUILD_FIELD_SET:
+            raise KeyError(key)
+        return getattr(self, key)
+
+
+def _layout_value_cells(path: Path, layout: Layout) -> list[_BuildCell]:
+    from finance_context.store.duckdb_io import _iter_parquet_rows
 
     if not path.is_file():
         return []
-    columns = [
-        "sheet",
-        "row",
-        "col",
-        "addr",
-        "formula_raw",
-        "formula_template",
-        "cached_value",
-        "hidden",
-        "number_format",
-        "unparsed",
-    ]
-    found: list[dict] = []
+    columns = list(_BUILD_FIELDS)
+    found: list[_BuildCell] = []
+    where = "sheet = ? AND row IN (SELECT unnest(?::BIGINT[]))"
     for sheet, rows in _layout_rows(layout).items():
-        found.extend(
-            read_parquet_dicts(
-                path,
-                columns,
-                where="sheet = ? AND row IN (SELECT unnest(?::BIGINT[]))",
-                params=[sheet, [int(row) for row in rows]],
-            )
-        )
+        for names, batch in _iter_parquet_rows(
+            path,
+            columns,
+            where=where,
+            params=[sheet, [int(row) for row in rows]],
+        ):
+            if list(names) != columns:
+                raise ValueError(f"cells.parquet columns {names} != {columns}")
+            for record in batch:
+                found.append(_BuildCell(*record))
     return found
 
 

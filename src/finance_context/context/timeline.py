@@ -23,7 +23,7 @@ _FORMAT_NOISE = re.compile(r"\[[^\]]*\]|\"[^\"]*\"|\\.|[*_]")
 
 def build_axes(
     layout: Layout,
-    cells: list[dict],
+    cells: list,
     *,
     date1904: bool = False,
 ) -> tuple[list[ContextAxis], list[str]]:
@@ -50,7 +50,7 @@ def build_axes(
     return axes, warnings
 
 
-def _unparsed_period_warnings(cells: list[dict], date1904: bool) -> list[str]:
+def _unparsed_period_warnings(cells: list, date1904: bool) -> list[str]:
     out: list[str] = []
     seen: set[tuple[str, str]] = set()
     for cell in cells:
