@@ -105,20 +105,14 @@ def build_context(
         if book_dir is None:
             raise ValueError("build_context needs cells or book_dir")
         cell_path = book_dir / "ir" / "cells.parquet"
-        # Every value cell, as before the per-block read. Streaming drops rows,
-        # not this dict. Warnings still come from the file scan below.
-        loaded = _layout_value_cells(cell_path, layout)
-        memory_by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in loaded}
         hidden_indexes = _occupied_from_file(cell_path)
         switch_rows = _switch_rows(cell_path, defined_names)
         cell_total = _file_rows(cell_path)
     else:
         switch_rows = None
         cell_total = len(cells)
-        loaded = cells
         memory_by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
-    # Lookups filter this dict. The file path still holds every value cell.
-    source = _CellSource(None, memory_by_addr)
+    source = _CellSource(cell_path, memory_by_addr)
     if switch_rows is None:
         by_sheet_row: dict[str, dict[int, list[dict]]] = {}
         assert cells is not None
@@ -133,18 +127,27 @@ def build_context(
     # Selector rows are plain ints. The formula table is not read again.
     by_sheet_row = None
     switch_rows = None
-    # Layout cells on the file path have no addr. The cell scan would warn
-    # with a blank address and is discarded; the file scan is the one kept.
-    assert memory_by_addr is not None
-    header_by_addr = memory_by_addr
-    axes, timeline_warnings = build_axes(
-        layout,
-        loaded,
-        date1904=date1904,
-        by_addr=memory_by_addr,
-        period_warnings=cell_path is None,
-    )
-    if cell_path is not None:
+    # build_axes reads flag rows. _header_unit reads the header label. The
+    # file path loads those rows only; period warnings still scan the file.
+    if cell_path is None:
+        assert cells is not None and memory_by_addr is not None
+        header_by_addr = memory_by_addr
+        axes, timeline_warnings = build_axes(
+            layout,
+            cells,
+            date1904=date1904,
+            by_addr=memory_by_addr,
+            period_warnings=True,
+        )
+    else:
+        header_by_addr = _load_rows(source, _axis_cell_rows(layout))
+        axes, timeline_warnings = build_axes(
+            layout,
+            [],
+            date1904=date1904,
+            by_addr=header_by_addr,
+            period_warnings=False,
+        )
         timeline_warnings.extend(_period_warnings(cell_path, date1904))
     axes_by_id = {axis.id: axis for axis in axes}
     reads = RangeReads()
