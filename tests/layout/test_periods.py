@@ -18,6 +18,43 @@ from finance_context.layout.periods import (
 
 
 @pytest.mark.parametrize(
+    ("text", "period_key"),
+    [
+        ("1900", "1900"),
+        ("2099", "2099"),
+        ("2025.0", "2025"),
+        ("2024.00", "2024"),
+        (" 2025", "2025"),
+        ("2025 ", "2025"),
+        ("1 900", "1900"),
+    ],
+)
+def test_year_forms_around_the_bare_year_window_stay_periods(text: str, period_key: str) -> None:
+    hit = classify_header(text)
+    assert hit is not None
+    assert hit.period_key == period_key
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1899",
+        "2100",
+        "1",
+        "12",
+        "50000",
+        "44743",
+        "02022",
+        "-2024",
+        "+2024",
+        "100000000000000000000",
+    ],
+)
+def test_integers_outside_the_bare_year_window_are_not_headers(text: str) -> None:
+    assert classify_header(text) is None
+
+
+@pytest.mark.parametrize(
     ("text", "period_key", "variant"),
     [
         ("2023", "2023", None),

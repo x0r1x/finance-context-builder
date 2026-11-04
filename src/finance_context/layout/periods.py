@@ -304,9 +304,25 @@ def _prose_blocks_calendar(collapsed: str) -> bool:
     return len(_clean_residual(" ".join(outside))) > 24
 
 
+def _outside_year_integer(text: str) -> bool:
+    """A plain integer that cannot be a bare year.
+
+    ``1 900`` and ``2025.0`` are not plain: both can still be the year 1900
+    or 2025. A digit string longer than fifteen characters stays on the
+    matcher. Unique row numbers never enter the short-header cache.
+    """
+    if len(text) > 15 or not text.isdigit():
+        return False
+    number = int(text)
+    return number < 1900 or number > 2099
+
+
 def classify_header(text: str | None) -> PeriodHit | None:
     # Short headers are the cached path. The prose check is only for a unique
     # label, which is longer than the cache key and would evict those headers.
+    # A run of n, n+1, n+2 is a bare-year candidate only inside 1900–2099.
+    if isinstance(text, str) and _outside_year_integer(text):
+        return None
     long = isinstance(text, str) and len(text) > _CLASSIFY_CACHED_LEN
     if long and _stable_letters(text) and _too_many_outside_words(text):
         return None

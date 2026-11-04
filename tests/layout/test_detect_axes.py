@@ -1189,6 +1189,38 @@ def test_one_caption_year_beside_the_axis_does_not_extend_the_header() -> None:
     assert "Section" in labels or "Forecast 2024" in labels
 
 
+def test_consecutive_bare_years_stay_a_header_and_other_runs_do_not() -> None:
+    """n, n+1, n+2 is a header only inside 1900–2099, label or not."""
+    years = [
+        _c("M", "A1", "Статья " + "x" * 40),
+        _c("M", "B1", "note " + "y" * 40),
+        _c("M", "C1", "2010"),
+        _c("M", "D1", "2011"),
+        _c("M", "E1", "2012"),
+        _c("M", "A2", "Revenue"),
+        _c("M", "C2", "1"),
+        _c("M", "D2", "2"),
+        _c("M", "E2", "3"),
+    ]
+    sheet = detect_layout(years).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == ["2010", "2011", "2012"]
+
+    other = [
+        _c("M", "A1", "Статья " + "x" * 40),
+        _c("M", "B1", "note " + "y" * 40),
+        _c("M", "C1", "50000"),
+        _c("M", "D1", "50001"),
+        _c("M", "E1", "50002"),
+        _c("M", "A2", "Revenue"),
+        _c("M", "C2", "1"),
+        _c("M", "D2", "2"),
+        _c("M", "E2", "3"),
+    ]
+    other_sheet = detect_layout(other).sheets[0]
+    keys = [period.period_key for axis in other_sheet.axes for period in axis.periods]
+    assert keys == []
+
+
 def test_year_like_data_row_is_not_a_header() -> None:
     cells = [
         _c("Inputs", "A1", "Year"),
