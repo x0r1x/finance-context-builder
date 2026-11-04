@@ -304,9 +304,26 @@ def _prose_blocks_calendar(collapsed: str) -> bool:
     return len(_clean_residual(" ".join(outside))) > 24
 
 
+def _ascii_digits_outside_years(text: str) -> bool:
+    """True when ``text`` is an ASCII integer and not a year 1900–2099.
+
+    Those integers are not headers. A row number is unique, so it must not
+    enter the short-header cache or walk the calendar matcher. Fullwidth
+    digits and ``2024.0`` are not this shape and stay on the matcher.
+    """
+    if len(text) == 4:
+        if not text.isascii() or not text.isdigit():
+            return False
+        year = int(text)
+        return year < 1900 or year > 2099
+    return text.isascii() and text.isdigit()
+
+
 def classify_header(text: str | None) -> PeriodHit | None:
     # Short headers are the cached path. The prose check is only for a unique
     # label, which is longer than the cache key and would evict those headers.
+    if isinstance(text, str) and _ascii_digits_outside_years(text):
+        return None
     long = isinstance(text, str) and len(text) > _CLASSIFY_CACHED_LEN
     if long and _stable_letters(text) and _too_many_outside_words(text):
         return None

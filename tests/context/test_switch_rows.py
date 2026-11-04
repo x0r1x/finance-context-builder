@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from finance_context.context.build import _switch_rows
+from finance_context.layout.cells import LayoutCell
 from finance_context.layout.params import selector_rows
 from finance_context.store.fs import write_parquet
 
@@ -108,3 +109,19 @@ def test_switch_rows_match_a_full_formula_scan(tmp_path: Path) -> None:
     # drops the switch.
     only_constant = {3: loaded["PF"].get(3, [])}
     assert selector_rows(only_constant, False, defined_names=names, sheet="PF") == set()
+    records = {
+        row: [
+            LayoutCell(
+                cell["sheet"],
+                cell["row"],
+                cell["col"],
+                cell["addr"],
+                formula_raw=cell["formula_raw"],
+            )
+            for cell in cells
+        ]
+        for row, cells in every.items()
+    }
+    # A derived address is not stored. The switch still resolves to the same rows.
+    assert all(cell.addr is None for cells in records.values() for cell in cells)
+    assert selector_rows(records, False, defined_names=names, sheet="PF") == found

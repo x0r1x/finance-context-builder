@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import sys
 
-from finance_context.excel.a1 import format_addr
+from finance_context.excel.a1 import format_addr, is_derived_addr
 from finance_context.layout.periods import display_cell_text
 
 # Fields detection and the sheet overlays read. A dict of these is ~270 bytes;
@@ -64,9 +64,7 @@ class LayoutCell:
         self.outline_level = outline_level
         self.col_outline_level = col_outline_level
 
-    def _value(self, key: str) -> object:
-        if key != "addr":
-            return getattr(self, key)
+    def _addr(self) -> object:
         stored = self.addr
         if stored is not None:
             return stored
@@ -76,15 +74,25 @@ class LayoutCell:
             return None
         return format_addr(int(col), int(row))
 
+    def _value(self, key: str) -> object:
+        if key == "addr":
+            return self._addr()
+        return getattr(self, key)
+
     def get(self, key: str, default: object = None) -> object:
         if key not in _LAYOUT_FIELD_SET:
             return default
-        return self._value(key)
+        # Column and value reads are the hot path. Address is derived.
+        if key == "addr":
+            return self._addr()
+        return getattr(self, key)
 
     def __getitem__(self, key: str) -> object:
         if key not in _LAYOUT_FIELD_SET:
             raise KeyError(key)
-        return self._value(key)
+        if key == "addr":
+            return self._addr()
+        return getattr(self, key)
 
     def __setitem__(self, key: str, value: object) -> None:
         if key not in _LAYOUT_FIELD_SET:
@@ -101,15 +109,21 @@ class LayoutCell:
         return NotImplemented
 
     def __contains__(self, key: object) -> bool:
-        return key in _LAYOUT_FIELD_SET and self._value(key) is not None
+        if key not in _LAYOUT_FIELD_SET:
+            return False
+        if key == "addr":
+            return self._addr() is not None
+        return getattr(self, key) is not None
 
 
 def _kept_addr(addr: object, row: object, col: object) -> object:
-    """Keep an address only when it is not ``format_addr(col, row)``."""
-    if addr is None or row is None or col is None:
+    """Keep an address only when it is not ``format_addr(col, row)``.
+
+    The compare does not build that string. Construction used to, once per cell.
+    """
+    if not isinstance(addr, str) or row is None or col is None:
         return addr
-    derived = format_addr(int(col), int(row))
-    if addr == derived:
+    if is_derived_addr(addr, int(col), int(row)):
         return None
     return addr
 
