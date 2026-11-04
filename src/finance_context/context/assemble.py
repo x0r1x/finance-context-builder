@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from finance_context.context.measure import Measure, parse_measure
+from finance_context.context.measure import Measure, _combine_measure, _parse_text
 from finance_context.context.series import normalize_series, scale_factor_for, value_status
 from finance_context.layout.models import LayoutRow
 from finance_context.layout.periods import display_cell_text
@@ -42,7 +42,6 @@ def _row_for_layout(
     keep_cols = {header.col for header in value_headers}
     values: list[str | None] = []
     statuses: list[ValueStatus] = []
-    formats: list[str] = []
     for header in headers:
         if header.col not in keep_cols:
             values.append(None)
@@ -51,8 +50,6 @@ def _row_for_layout(
         cell = by_addr.get((sheet_name, row_num, header.col))
         cached = None if cell is None else cell.get("cached_value")
         fmt = None if cell is None else cell.get("number_format")
-        if fmt:
-            formats.append(str(fmt))
         displayed = display_cell_text(
             cached if cached is not None else None,
             fmt,
@@ -64,21 +61,7 @@ def _row_for_layout(
         values.append(text)
         structural = layout_row.kind not in _SERIES_KINDS and text is None
         statuses.append(value_status(text, applicable=not structural))
-    unit_from_cell = next(
-        (item.cached_value for item in role_cells if item.role == "unit"), None
-    )
-    measure = parse_measure(unit_from_cell, layout_row.label, formats)
-    if hints.unit == "rate":
-        measure = Measure(unit="rate")
-    unit = measure.unit or hints.unit or series_unit
-    hints = hints.model_copy(
-        update={
-            "unit": unit,
-            "currency": hints.currency or measure.currency,
-            "scale": hints.scale or measure.scale,
-            "unit_per": hints.unit_per or measure.per,
-        }
-    )
+    unit = hints.unit or series_unit
     factor = scale_factor_for(hints.scale)
     if series:
         series = [
@@ -126,20 +109,46 @@ def _relations_for_block(relations: list[RowRelation], block_id: str) -> list[di
     return out
 
 
+def _resolved_hints(
+    layout_row: LayoutRow,
+    unit_text: str | None = None,
+    *,
+    unit_from_cell: str | None = None,
+    number_formats: list[str] | None = None,
+) -> RowHints:
+    """Currency, scale, and unit for one row. The label is parsed once.
+
+    ``unit_text`` is the block caption or the row's own unit. ``unit_from_cell``
+    is only that row's unit cell. The label can still name the unit when the
+    caption does, and a percent format can replace a money caption.
+    """
+    label_measure = _parse_text(layout_row.label or "")
+    hinted = _combine_measure(unit_text, label_measure, number_formats)
+    if hinted.unit == "money" and _percent_formatted(number_formats or []):
+        hinted = Measure(unit="rate")
+    if hinted.unit == "rate":
+        row_measure = Measure(unit="rate")
+    else:
+        row_measure = _combine_measure(unit_from_cell, label_measure, None)
+    return RowHints(
+        unit=row_measure.unit or hinted.unit,
+        unit_per=hinted.per or row_measure.per,
+        currency=hinted.currency or row_measure.currency,
+        scale=hinted.scale or row_measure.scale,
+    )
+
+
 def _hints_for(
     layout_row: LayoutRow,
     unit_text: str | None = None,
     *,
     number_formats: list[str] | None = None,
 ) -> RowHints:
-    measure = parse_measure(unit_text, layout_row.label, number_formats)
-    if measure.unit == "money" and _percent_formatted(number_formats or []):
-        measure = Measure(unit="rate")
-    return RowHints(
-        unit=measure.unit,
-        unit_per=measure.per,
-        currency=measure.currency,
-        scale=measure.scale,
+    return _resolved_hints(
+        layout_row,
+        unit_text,
+        unit_from_cell=unit_text,
+        number_formats=number_formats,
     )
 
 

@@ -115,9 +115,22 @@ def parse_measure(
     label: str | None = None,
     number_formats: list[str] | None = None,
 ) -> Measure:
+    return _combine_measure(unit_text, _parse_text(label or ""), number_formats)
+
+
+def _combine_measure(
+    unit_text: str | None,
+    label_measure: Measure,
+    number_formats: list[str] | None = None,
+) -> Measure:
+    """Unit text, one already-parsed label, then number formats.
+
+    The label is the expensive unique string. Callers that compose it twice
+    parse it once and pass ``label_measure``.
+    """
     measure = Measure()
     measure = _fill(measure, _parse_text(unit_text or ""))
-    measure = _fill(measure, _parse_text(label or ""))
+    measure = _fill(measure, label_measure)
     # Base units only when the unit cell or label names the currency with no multiplier.
     # A number format names the currency, not the scale of the stored amount.
     currency_in_text = measure.currency is not None
