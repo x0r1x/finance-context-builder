@@ -50,6 +50,7 @@ from finance_context.memory import (
     usage_for_book,
 )
 from finance_context.models.context import (
+    BLOCK_ROW_ADAPTER,
     ArtifactMeta,
     ContextDocument,
     FinancialBlock,
@@ -987,7 +988,9 @@ def _context_json(doc: ContextDocument) -> dict:
 
 def _block_json(block: FinancialBlock) -> dict:
     data = block.model_dump(mode="json", exclude={"rows"})
-    data["rows"] = JsonItems(lambda: (row.model_dump(mode="json") for row in block.rows))
+    data["rows"] = JsonItems(
+        lambda: (BLOCK_ROW_ADAPTER.dump_python(row, mode="json") for row in block.rows)
+    )
     return data
 
 

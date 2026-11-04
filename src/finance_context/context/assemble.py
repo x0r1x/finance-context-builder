@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from finance_context.context.measure import Measure, parse_measure
 from finance_context.context.series import normalize_series, scale_factor_for, value_status
 from finance_context.layout.models import LayoutRow
@@ -71,20 +73,17 @@ def _row_for_layout(
     if hints.unit == "rate":
         measure = Measure(unit="rate")
     unit = measure.unit or hints.unit or series_unit
-    hints = hints.model_copy(
-        update={
-            "unit": unit,
-            "currency": hints.currency or measure.currency,
-            "scale": hints.scale or measure.scale,
-            "unit_per": hints.unit_per or measure.per,
-        }
+    hints = replace(
+        hints,
+        unit=unit,
+        currency=hints.currency or measure.currency,
+        scale=hints.scale or measure.scale,
+        unit_per=hints.unit_per or measure.per,
     )
     factor = scale_factor_for(hints.scale)
     if series:
         series = [
-            item.model_copy(
-                update={"normalized_values": normalize_series(list(item.values), factor)}
-            )
+            replace(item, normalized_values=normalize_series(list(item.values), factor))
             for item in series
         ]
         values = list(series[0].values)
