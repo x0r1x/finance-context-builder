@@ -261,8 +261,15 @@ def _classify(raw: str) -> PeriodHit | None:
     return _one_calendar(raw)
 
 
+# Every pattern reachable from _match_calendar_text requires a digit (a year or a date).
+# test_calendar_match_requires_a_digit
+_HAS_DIGIT = re.compile(r"\d")
+
+
 def _match_calendar_text(raw: str) -> PeriodHit | None:
     """A string that is exactly one calendar date. A suffix letter stays on it."""
+    if _HAS_DIGIT.search(raw) is None:
+        return None
     iso_d = _ISO_YMD.fullmatch(raw)
     if iso_d:
         hit = _ymd_hit(

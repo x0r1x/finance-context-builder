@@ -291,6 +291,25 @@ def test_a_number_glued_to_a_currency_code_is_not_a_thousands_scale() -> None:
     assert (measure.currency, measure.scale) == ("USD", "unit")
 
 
+def test_currency_is_read_once_for_a_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance_context.context.measure as measure
+
+    calls: list[str | None] = []
+    original = measure.currency_code_from_text
+
+    def spy(text: str | None) -> str | None:
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(measure, "currency_code_from_text", spy)
+    plain = parse_measure(label="Maintenance cost line")
+    assert plain.unit is None
+    assert plain.currency is None
+    scaled = parse_measure(label="Total EUR mn")
+    assert (scaled.unit, scaled.currency, scaled.scale) == ("money", "EUR", "m")
+    assert calls == ["Maintenance cost line", "Total EUR mn"]
+
+
 def test_iso_unit_caption_is_unit_text() -> None:
     from finance_context.layout.units import is_unit_text, unit_kind_from_text
 

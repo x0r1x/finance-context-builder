@@ -5,8 +5,8 @@ from pathlib import Path
 
 from finance_context.context.assemble import (
     _SERIES_KINDS,
-    _hints_for,
     _relations_for_block,
+    _resolved_hints,
     _row_for_layout,
 )
 from finance_context.context.series import (
@@ -206,9 +206,18 @@ def build_context(
                     headers=hint_headers,
                     by_addr=by_addr,
                 )
-                hints = _hints_for(
+                unit_from_cell = next(
+                    (
+                        item.cached_value
+                        for item in role_cells
+                        if item.role == "unit"
+                    ),
+                    None,
+                )
+                hints = _resolved_hints(
                     layout_row,
                     unit_text,
+                    unit_from_cell=unit_from_cell,
                     number_formats=formats,
                 )
                 series_unit = hints.unit
