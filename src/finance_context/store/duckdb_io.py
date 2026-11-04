@@ -17,7 +17,7 @@ from typing import Any, Protocol
 import pyarrow as pa
 
 from finance_context.observability import log_event
-from finance_context.settings import Settings
+from finance_context.settings import Settings, _duckdb_size_bytes
 from finance_context.store.paths import shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.store")
@@ -52,6 +52,12 @@ _OBJECT_SIZE_SQL = "SELECT size FROM read_blob(?)"
 _HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
 _S3_LINE = re.compile(r"(?m)^([A-Z][A-Za-z0-9]+): ([^\r\n]{1,160})")
 _publish_held = threading.local()
+# One connection may spill up to 2 GiB. The free-space raise is split across
+# max_concurrent_jobs first, so two builds cannot each take a 4 GiB volume.
+# A configured floor is never lowered. A 16 GiB temp would fill a memory-backed pod.
+_SPILL_CEILING_BYTES = 2 << 30
+# Kept free before the cap is raised, so the output file still has room.
+_SPILL_RESERVE_BYTES = 1 << 30
 
 
 class ObjectStore(Protocol):
@@ -107,7 +113,8 @@ class DuckDBBatch:
         import duckdb
 
         self._con = duckdb.connect(str(self._db))
-        _set_duckdb_limits(self._con, str(self._db) + ".tmp")
+        temp = Path(str(self._db) + ".tmp")
+        _set_duckdb_limits(self._con, str(temp), anchor=temp)
         specs = ", ".join(f"{_quote_ident(name)} {_DUCK_TYPES[dtype]}" for name, dtype in columns)
         self._con.execute(f"CREATE TABLE t ({specs})")
 
@@ -161,6 +168,11 @@ class DuckDBBatch:
         self._partial = partial
         parquet_path.parent.mkdir(parents=True, exist_ok=True)
         try:
+            # The row chunks that filled this table are gone. Return that heap
+            # before DuckDB allocates its own 256MB, or the two stack.
+            from finance_context.memory import trim_process_heap
+
+            trim_process_heap()
             self._con.execute(
                 "COPY (SELECT * FROM t) TO ? ("
                 "FORMAT parquet, COMPRESSION snappy, "
@@ -218,7 +230,7 @@ class DuckDBBatch:
 
 
 def read_parquet_table(path: Path) -> pa.Table:
-    with limited_connection() as con:
+    with limited_connection(path) as con:
         # Relation.to_arrow_table avoids the DB-API copy warning in DuckDB 2.0.
         return con.sql("SELECT * FROM read_parquet(?)", params=[str(path)]).to_arrow_table()
 
@@ -229,7 +241,7 @@ def read_parquet_rows(path: Path) -> list[dict[str, Any]]:
 
 def read_parquet_column_tuples(path: Path, columns: list[str]) -> list[tuple[Any, ...]]:
     selected = ", ".join(_quote_ident(name) for name in columns)
-    with limited_connection() as con:
+    with limited_connection(path) as con:
         rows = con.execute(
             f"SELECT {selected} FROM read_parquet(?)",
             [str(path)],
@@ -261,7 +273,7 @@ def _iter_parquet_rows(
     if where:
         sql = f"{sql} WHERE {where}"
         bind.extend(params or [])
-    with limited_connection() as con:
+    with limited_connection(path) as con:
         cursor = con.execute(sql, bind)
         names = [item[0] for item in cursor.description]
         pos = {name: index for index, name in enumerate(names)}
@@ -765,21 +777,84 @@ def _endpoint(value: str) -> tuple[str, bool]:
     return parts.netloc, parts.scheme == "https"
 
 
+def _spill_job_slots() -> int:
+    """How many builds may spill at once. The setting, not whoever has started."""
+    return max(1, Settings().max_concurrent_jobs)
+
+
+def _spill_limit_bytes(anchor: Path, floor: int, slots: int | None = None) -> int:
+    """How many bytes one connection may spill beside ``anchor``.
+
+    ``floor`` is ``duckdb_max_temp_directory_size``. A large sort hits that cap
+    while the buffer manager is still inside ``duckdb_memory_limit``. When the
+    volume can hold the spill and still keep 1 GiB free, the cap rises, at most
+    to 2 GiB, and that free space is shared across ``slots`` jobs. A configured
+    cap above 2 GiB stays as configured. A tighter volume, a share below the
+    floor, or a volume that cannot be measured, keeps the setting.
+    """
+    ceiling = max(floor, _SPILL_CEILING_BYTES)
+    jobs = _spill_job_slots() if slots is None else max(1, slots)
+    probe = anchor if anchor.is_dir() else anchor.parent
+    if not probe.exists():
+        probe = probe.parent
+    try:
+        free = shutil.disk_usage(probe).free
+    except OSError:
+        return floor
+    if free < floor:
+        return floor
+    roomy = free - _SPILL_RESERVE_BYTES
+    if roomy < floor:
+        return floor
+    share = roomy // jobs
+    if share < floor:
+        return floor
+    return min(ceiling, share)
+
+
+def _spill_limit_setting(
+    anchor: Path, floor_text: str, floor: int, slots: int | None = None
+) -> str:
+    size = _spill_limit_bytes(anchor, floor, slots)
+    if size == floor:
+        return floor_text
+    gibibyte = 1 << 30
+    mebibyte = 1 << 20
+    if size % gibibyte == 0:
+        rounded = size
+        text = f"{size // gibibyte}GiB"
+    else:
+        rounded = (size // mebibyte) * mebibyte
+        text = f"{size // mebibyte}MiB"
+    # ``1GB`` is 1e9 bytes. Rounding the byte cap down to a whole MiB can
+    # land under that floor and fail a sort the setting already allowed.
+    if rounded < floor:
+        return floor_text
+    return text
+
+
 @contextmanager
-def limited_connection() -> Iterator[Any]:
+def limited_connection(anchor: Path | None = None) -> Iterator[Any]:
     """One DuckDB connection with the configured caps and a private temp directory.
 
     ``memory_limit`` is the per-connection buffer-manager ceiling from
-    ``duckdb_memory_limit``. It is not process RSS. The temp directory is removed
-    when the connection closes.
+    ``duckdb_memory_limit``. It is not process RSS. Spill files sit next to
+    ``anchor`` when the scan has a local file, so a memory-backed ``/tmp`` is
+    not the cap. The temp directory is removed when the connection closes.
     """
     import duckdb
 
-    tmp = tempfile.mkdtemp(prefix="duckdb-scan-")
+    if anchor is None:
+        base = Path(tempfile.gettempdir())
+    else:
+        base = Path(anchor)
+        base = base if base.is_dir() else base.parent
+        base.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="duckdb-scan-", dir=base))
     con = None
     try:
         con = duckdb.connect()
-        _set_duckdb_limits(con, tmp)
+        _set_duckdb_limits(con, str(tmp), anchor=anchor)
         yield con
     finally:
         if con is not None:
@@ -787,13 +862,16 @@ def limited_connection() -> Iterator[Any]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _set_duckdb_limits(con: Any, temp_directory: str) -> None:
+def _set_duckdb_limits(con: Any, temp_directory: str, *, anchor: Path | None = None) -> None:
     settings = Settings()
+    temp_cap = settings.duckdb_max_temp_directory_size
+    if anchor is not None:
+        floor = _duckdb_size_bytes(temp_cap)
+        if floor is not None:
+            temp_cap = _spill_limit_setting(anchor, temp_cap, floor)
     con.execute(f"SET memory_limit={_sql_literal(settings.duckdb_memory_limit)}")
     con.execute(f"SET temp_directory={_sql_literal(temp_directory)}")
-    con.execute(
-        f"SET max_temp_directory_size={_sql_literal(settings.duckdb_max_temp_directory_size)}"
-    )
+    con.execute(f"SET max_temp_directory_size={_sql_literal(temp_cap)}")
     con.execute(f"SET threads={_DUCKDB_THREADS}")
 
 

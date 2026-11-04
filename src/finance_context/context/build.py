@@ -17,7 +17,6 @@ from finance_context.context.series import (
 )
 from finance_context.context.timeline import (
     _period_warning_value,
-    _unparsed_period_warning,
     build_axes,
 )
 from finance_context.excel.a1 import format_addr, index_to_col
@@ -31,6 +30,7 @@ from finance_context.layout.periods import (
     display_cell_text,
     is_calendar_hit,
     period_like_header,
+    unparsed_period_shape,
 )
 from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
@@ -783,7 +783,12 @@ def _switch_rows(
             if not _switch_call(text):
                 continue
             sheet = str(sheets[index])
-            names = names_by_sheet.setdefault(sheet, _names_on_sheet(defined_names, sheet))
+            # The index is the same for every formula on a sheet. setdefault would
+            # still build it each time, because the argument is evaluated first.
+            names = names_by_sheet.get(sheet)
+            if names is None:
+                names = _names_on_sheet(defined_names, sheet)
+                names_by_sheet[sheet] = names
             args = _switch_args(text, names)
             if not args:
                 continue
@@ -835,7 +840,7 @@ def _period_warnings(path: Path, date1904: bool) -> list[str]:
             if value is None:
                 continue
             text = _period_warning_value(value, formats[index], date1904)
-            if not _unparsed_period_warning(text):
+            if not text or not unparsed_period_shape(text):
                 continue
             sheet = sheets[index]
             key = (str(sheet), text)

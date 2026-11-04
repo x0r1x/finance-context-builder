@@ -180,6 +180,36 @@ def test_batched_expansion_emits_duplicate_edges() -> None:
     assert seen == [1, 1]
 
 
+def test_cell_index_is_cleared_only_after_edges_are_classified(tmp_path) -> None:
+    from finance_context.formulas.known import KnownNodes
+    from finance_context.formulas.stage import _write_cell_edge_batches
+    from finance_context.store.fs import read_parquet
+
+    known = KnownNodes()
+    known.add("P&L", "A1")
+    known.add("P&L", "B1")
+    pool = {"extra": "extra"}
+    edge = Edge(kind="ref", source="P&L!A1", target="P&L!B1")
+    count = _write_cell_edge_batches(
+        tmp_path,
+        [edge, edge],
+        known,
+        sheets={"P&L"},
+        presence={},
+        usage=None,
+        pool=pool,
+        row_group_rows=10,
+    )
+    assert len(count) == 1
+    assert len(known) == 0
+    assert not known
+    assert pool == {}
+    rows = read_parquet(tmp_path / "ir" / "cell_edges.parquet")
+    assert len(rows) == 1
+    assert rows[0]["dangling"] is False
+    assert rows[0]["status"] is None
+
+
 def test_external_defined_name_is_not_unresolved() -> None:
     from finance_context.formulas.engine import FormulaEngine
     from finance_context.formulas.names import resolve_defined_name_edges

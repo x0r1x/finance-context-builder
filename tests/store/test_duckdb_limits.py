@@ -56,8 +56,17 @@ def _assert_both(tmp_path: Path, memory: str, temp: str) -> None:
         assert _current(con, "threads") == 1
 
 
+def _keep_the_configured_temp_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A roomy disk would raise the cap. These tests check the setting itself."""
+    monkeypatch.setattr(
+        "finance_context.store.duckdb_io.shutil.disk_usage",
+        lambda _path: type("Usage", (), {"free": 1})(),
+    )
+
+
 def test_defaults_reach_both_connections(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
+    _keep_the_configured_temp_cap(monkeypatch)
     monkeypatch.delenv("DUCKDB_MEMORY_LIMIT", raising=False)
     monkeypatch.delenv("DUCKDB_MAX_TEMP_DIRECTORY_SIZE", raising=False)
     settings = Settings()
@@ -96,6 +105,7 @@ def test_env_override_reaches_both_connections(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _keep_the_configured_temp_cap(monkeypatch)
     monkeypatch.setenv("DUCKDB_MEMORY_LIMIT", "512MB")
     monkeypatch.setenv("DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "2GB")
     settings = Settings()

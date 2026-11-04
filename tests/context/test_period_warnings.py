@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from finance_context.context.build import _period_warnings
-from finance_context.context.timeline import _period_warning_text, _unparsed_period_warning
+from finance_context.context.timeline import _period_warning_text, _period_warning_value
 from finance_context.layout.periods import unparsed_period_shape
 from finance_context.store.fs import write_parquet
 
@@ -38,9 +38,9 @@ def test_plain_numbers_match_the_full_shape_check() -> None:
         "",
     ]
     for text in samples:
-        assert _unparsed_period_warning(text) == (
-            bool(text) and unparsed_period_shape(text)
-        ), text
+        shown = _period_warning_value(text, None, False) if text else None
+        reached = bool(shown) and unparsed_period_shape(shown)
+        assert reached == (bool(text) and unparsed_period_shape(text)), text
 
 
 def _fullwidth_digits(text: str) -> str:
@@ -48,7 +48,7 @@ def _fullwidth_digits(text: str) -> str:
 
 
 def test_unicode_digit_headers_match_the_full_shape_check(tmp_path: Path) -> None:
-    """Fullwidth digits fold in ``normalize_header``. The shortcut must not drop them."""
+    """Fullwidth digits fold in ``normalize_header``. The amount gate must not drop them."""
     rows = [
         ("S", "A1", _fullwidth_digits("1.2024"), None),
         ("S", "A2", _fullwidth_digits("13.2025"), None),
@@ -60,7 +60,8 @@ def test_unicode_digit_headers_match_the_full_shape_check(tmp_path: Path) -> Non
         ("S", "A8", "٢٠٢٠٢٠٢٠", None),
     ]
     for _sheet, _addr, text, _fmt in rows:
-        assert _unparsed_period_warning(text) == unparsed_period_shape(text), text
+        shown = _period_warning_value(text, None, False)
+        assert (bool(shown) and unparsed_period_shape(shown)) == unparsed_period_shape(text), text
     path = tmp_path / "cells.parquet"
     write_parquet(path, _COLUMNS, rows, row_group_rows=0)
     assert _period_warnings(path, False) == [

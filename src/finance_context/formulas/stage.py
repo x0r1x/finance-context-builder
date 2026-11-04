@@ -22,7 +22,7 @@ from finance_context.formulas.models import (
     cell_parquet_row,
 )
 from finance_context.formulas.names import resolve_defined_name_edges
-from finance_context.memory import load_presence, usage_from_presence
+from finance_context.memory import load_presence, trim_process_heap, usage_from_presence
 from finance_context.settings import Settings
 from finance_context.store.fs import (
     RowGroupWriter,
@@ -205,7 +205,7 @@ def _compile_cells_streaming(
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
     defined_names = meta.get("defined_names")
     try:
-        with limited_connection() as reader:
+        with limited_connection(raw_path) as reader:
             cursor = reader.execute("SELECT * FROM read_parquet(?)", [str(raw_path)])
             names = [item[0] for item in cursor.description]
             while True:
@@ -237,6 +237,8 @@ def _compile_cells_streaming(
     except Exception:
         batch.abort()
         raise
+    # Cell chunks are on disk. Drop the allocator's spare arenas before edges expand.
+    trim_process_heap()
     return cell_count, edges, known, formula_count, pool
 
 
@@ -668,6 +670,12 @@ def _write_cell_edge_batches(
             consume=sink.consume,
             batch_size=row_group_rows,
         )
+        # Classification is done. finish() writes Parquet through DuckDB, whose
+        # 256MB buffer manager sits on top of whatever Python still holds.
+        known.clear()
+        if pool is not None:
+            pool.clear()
+        trim_process_heap()
         return EdgeCount(sink.finish())
     except Exception:
         sink.abort()

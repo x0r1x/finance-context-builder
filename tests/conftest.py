@@ -3,8 +3,18 @@ from pathlib import Path
 import pytest
 from tests.helpers.policy import isolated_settings as _isolated_settings
 
+from finance_context.observability import flush_logs
 from finance_context.settings import Settings
 from finance_context.settings_env import ENV_SPECS
+
+
+@pytest.hookimpl(wrapper=True, trylast=True)
+def pytest_runtest_call(item: pytest.Item):
+    """Finish queued log lines while this test's stdout capture is still open."""
+    del item
+    result = yield
+    flush_logs()
+    return result
 
 
 @pytest.fixture
