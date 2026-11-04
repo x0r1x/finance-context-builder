@@ -399,6 +399,68 @@ def test_unreadable_horse_lock_on_queue_lost_is_not_dead(
     assert queue.enqueued == 0
 
 
+def test_timeout_failure_relaunches_once_rq_leaves_started(tmp_path: Path) -> None:
+    """A timed-out book is failed in meta while RQ is still started.
+
+    The horse writes TimeoutError before perform_job returns. A re-post in
+    that window must wait out the id and enqueue, not echo the failure.
+    """
+    queue = _Queue("started")
+    reads = 0
+
+    def _leave(_rq_id: str) -> str | None:
+        nonlocal reads
+        reads += 1
+        if reads >= 2:
+            queue.status_value = "finished"
+        return queue.status_value
+
+    queue.status = _leave  # type: ignore[method-assign]
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(ctx, status="failed", stage="failed", error="TimeoutError", generation=1)
+    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    assert body["status"] == "queued"
+    assert body["stage"] == "queued"
+    assert queue.deleted == 1
+    assert queue.enqueued == 1
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
+    assert stored["status"] == "queued"
+    assert stored["generation"] == 2
+    assert "error" not in stored
+
+
+def test_timeout_failure_relaunches_when_the_horse_is_already_gone(tmp_path: Path) -> None:
+    """RQ can stay started after the horse lock is free. That id is not a live run."""
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(ctx, status="failed", stage="failed", error="TimeoutError", generation=1)
+    _horse(dest, _dead_pid())
+    body = _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    assert body["status"] == "queued"
+    assert queue.deleted == 1
+    assert queue.enqueued == 1
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
+    assert stored["generation"] == 2
+
+
+def test_timeout_failure_stays_conflict_while_the_horse_holds_the_lock(tmp_path: Path) -> None:
+    queue = _Queue("started")
+    ctx = _ctx(tmp_path, queue)
+    dest = _meta(ctx, status="failed", stage="failed", error="TimeoutError", generation=1)
+    _horse(dest, _dead_pid())
+    held = _hold(dest / HORSE_LOCK)
+    try:
+        with pytest.raises(ApiError) as caught:
+            _accept_upload(ctx, "model.xlsx", b"PK", _DIGEST, _JOB)
+    finally:
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
+    assert caught.value.http_status == 409
+    assert caught.value.code == "job_still_running"
+    assert queue.deleted == 0
+    assert queue.enqueued == 0
+
+
 def test_missing_horse_record_on_queue_lost_is_not_dead(tmp_path: Path) -> None:
     queue = _Queue("started")
     ctx = _ctx(tmp_path, queue)
