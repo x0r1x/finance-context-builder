@@ -49,7 +49,12 @@ from finance_context.memory import (
     trim_process_heap,
     usage_for_book,
 )
-from finance_context.models.context import ArtifactMeta, ContextDocument, GraphPointer
+from finance_context.models.context import (
+    ArtifactMeta,
+    ContextDocument,
+    FinancialBlock,
+    GraphPointer,
+)
 from finance_context.observability import (
     bind_log_context,
     configure_logging,
@@ -64,7 +69,7 @@ from finance_context.render.markdown import (
 )
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import export_succeeded_book, republish_file
-from finance_context.store.fs import file_lock, read_parquet, update_json
+from finance_context.store.fs import JsonItems, file_lock, read_parquet, update_json
 from finance_context.store.paths import session_job_dir, shared_book_dir
 
 _LOGGER = logging.getLogger("finance_context.pipeline")
@@ -410,7 +415,7 @@ class Pipeline:
             edges = ir_edges = relations = None
             _write_sorted_json(
                 dest_dir / "context" / "context.json",
-                doc.model_dump(mode="json"),
+                _context_json(doc),
                 stream=self.settings.json_stream,
             )
         set_stage("render", status="running")
@@ -969,6 +974,19 @@ def _write_meta(dest_dir: Path, **fields: object) -> None:
         mutate,
         stream=stream if isinstance(stream, bool) else None,
     )
+
+
+def _context_json(doc: ContextDocument) -> dict:
+    """``model_dump`` of the document. Blocks and rows are dumped while it is written."""
+    data = doc.model_dump(mode="json", exclude={"blocks"})
+    data["blocks"] = JsonItems(lambda: (_block_json(block) for block in doc.blocks))
+    return data
+
+
+def _block_json(block: FinancialBlock) -> dict:
+    data = block.model_dump(mode="json", exclude={"rows"})
+    data["rows"] = JsonItems(lambda: (row.model_dump(mode="json") for row in block.rows))
+    return data
 
 
 def _write_sorted_json(path: Path, data: dict, *, stream: bool | None = None) -> None:
