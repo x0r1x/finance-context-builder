@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
+from finance_context.models.shared_fields import SharedFieldsSet
+
 # Params-block column roles and non-period cells. Not a period classification.
 ColumnRole = Literal[
     "stub",
@@ -109,13 +111,13 @@ class TimeAxis(BaseModel):
         return data
 
 
-class RowCell(BaseModel):
+class RowCell(SharedFieldsSet):
     col: int
     role: ColumnRole
     header: str | None = None
 
 
-class LayoutRow(BaseModel):
+class LayoutRow(SharedFieldsSet):
     row: int
     label: str
     parent_row: int | None = None
