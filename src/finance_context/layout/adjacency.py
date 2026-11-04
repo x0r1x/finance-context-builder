@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Collection
 
 from finance_context.excel.a1 import index_to_col, parse_addr
 from finance_context.formulas.csr import (
@@ -96,8 +97,16 @@ def row_adjacency(
     limit: int = 8,
     usage: SheetUsage | None = None,
     ranges: RangeReads | None = None,
+    rows: Collection[tuple[str, int]] | None = None,
 ) -> tuple[dict[tuple[str, int], list[str]], dict[tuple[str, int], list[str]]]:
-    """Row precedents and dependents. With ``ranges``, large ranges go there instead."""
+    """Row precedents and dependents. With ``ranges``, large ranges go there instead.
+
+    ``rows`` is the set of rows whose neighbor lists are read. Other rows are
+    not stored. Range nodes are still recorded for every edge. ``None`` keeps
+    every row.
+    """
+    keep = None if rows is None else rows if isinstance(rows, set) else set(rows)
+    neighbors = keep is None or bool(keep)
     precedents: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
     dependents: dict[tuple[str, int], dict[str, None]] = defaultdict(dict)
     for raw in edges:
@@ -112,16 +121,29 @@ def row_adjacency(
             if node is not None:
                 ranges.add(source, node)
                 continue
+        if not neighbors:
+            continue
+        # A source outside ``rows`` is still walked: it may depend on a row inside.
+        source_kept = keep is None or source in keep
         for target_ref in _targets(edge, usage):
             target = cell_ref_row(target_ref)
             if target is None or source == target:
                 continue
-            src_ref = row_key_ref(*source)
-            tgt_ref = row_key_ref(*target)
-            precedents[source].setdefault(tgt_ref, None)
-            dependents[target].setdefault(src_ref, None)
+            if source_kept:
+                precedents[source].setdefault(row_key_ref(*target), None)
+            if keep is None or target in keep:
+                dependents[target].setdefault(row_key_ref(*source), None)
     cut = limit if limit > 0 else None
-    return (
-        {key: list(values)[:cut] for key, values in precedents.items()},
-        {key: list(values)[:cut] for key, values in dependents.items()},
-    )
+    return _neighbor_lists(precedents, cut), _neighbor_lists(dependents, cut)
+
+
+def _neighbor_lists(
+    found: dict[tuple[str, int], dict[str, None]],
+    cut: int | None,
+) -> dict[tuple[str, int], list[str]]:
+    """One list per row. The dict of dicts is dropped as the lists are built."""
+    out: dict[tuple[str, int], list[str]] = {}
+    while found:
+        key, values = found.popitem()
+        out[key] = list(values)[:cut]
+    return out

@@ -15,7 +15,10 @@ from finance_context.context.series import (
     scale_factor_for,
     value_status,
 )
-from finance_context.context.timeline import _period_warning_text, build_axes
+from finance_context.context.timeline import (
+    _period_warning_value,
+    build_axes,
+)
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.formulas.csr import SheetUsage
 from finance_context.layout.adjacency import RangeReads, row_adjacency
@@ -104,6 +107,9 @@ def build_context(
         name: selector_rows(rows, date1904, defined_names=defined_names, sheet=name)
         for name, rows in by_sheet_row.items()
     }
+    # Selector rows are plain ints. The formula table is not read again.
+    by_sheet_row = None
+    switch_rows = None
     axes, timeline_warnings = build_axes(layout, cells, date1904=date1904)
     if formula_stats is not None and book_dir is not None:
         timeline_warnings = [
@@ -114,7 +120,13 @@ def build_context(
         timeline_warnings.extend(_period_warnings(book_dir / "ir" / "cells.parquet", date1904))
     axes_by_id = {axis.id: axis for axis in axes}
     reads = RangeReads()
-    precedents, dependents = row_adjacency(edges or [], limit=0, usage=usage, ranges=reads)
+    precedents, dependents = row_adjacency(
+        edges or [],
+        limit=0,
+        usage=usage,
+        ranges=reads,
+        rows=_consumed_rows(layout),
+    )
     if hidden_indexes is None:
         hidden_warnings = _hidden_warnings(workbook_meta, cells)
     else:
@@ -644,6 +656,16 @@ class _FormulaStats:
         self.unparsed_addrs: list[str] = []
 
 
+def _consumed_rows(layout: Layout) -> set[tuple[str, int]]:
+    """Layout rows whose formula neighbors are published. Axis headers are not."""
+    found: set[tuple[str, int]] = set()
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            for layout_row in block.rows:
+                found.add((sheet.name, int(layout_row.row)))
+    return found
+
+
 def _layout_rows(layout: Layout) -> dict[str, set[int]]:
     found: dict[str, set[int]] = {}
     for sheet in layout.sheets:
@@ -738,40 +760,51 @@ def _occupied_from_file(path: Path) -> tuple[dict[str, set[int]], dict[str, set[
 def _switch_rows(
     path: Path, defined_names: list | None
 ) -> dict[str, dict[int, list[dict]]]:
-    """Formula rows plus the constant cells those formulas name as switches."""
-    from finance_context.layout.params import _names_on_sheet, _switch_args
+    """INDEX, CHOOSE, and OFFSET formulas, plus the constants they name.
+
+    A SUM or a plain reference cannot select a column. Keeping one dict per
+    formula on the sheet does not change which rows ``selector_rows`` returns,
+    and those other formulas are what made this table large. A formula outside
+    the layout still counts: two of them are enough to mark a constant.
+    """
+    from finance_context.layout.params import _names_on_sheet, _switch_args, _switch_call
     from finance_context.store.fs import read_parquet_dicts
 
-    formulas: list[dict] = []
+    by_sheet: dict[str, dict[int, list[dict]]] = {}
+    wanted: dict[str, set[str]] = {}
+    names_by_sheet: dict[str, dict[str, str]] = {}
     for sheets, rows, cols, addrs, raw in _iter_cell_columns(
         path, ["sheet", "row", "col", "addr", "formula_raw"]
     ):
         for index, formula in enumerate(raw):
             if not formula:
                 continue
-            formulas.append(
+            text = str(formula)
+            if not _switch_call(text):
+                continue
+            sheet = str(sheets[index])
+            # The index is the same for every formula on a sheet. setdefault would
+            # still build it each time, because the argument is evaluated first.
+            names = names_by_sheet.get(sheet)
+            if names is None:
+                names = _names_on_sheet(defined_names, sheet)
+                names_by_sheet[sheet] = names
+            args = _switch_args(text, names)
+            if not args:
+                continue
+            row_n = int(rows[index])
+            by_sheet.setdefault(sheet, {}).setdefault(row_n, []).append(
                 {
                     "sheet": sheets[index],
-                    "row": int(rows[index]),
+                    "row": row_n,
                     "col": int(cols[index]),
                     "addr": addrs[index],
                     "formula_raw": formula,
                 }
             )
-    by_sheet: dict[str, dict[int, list[dict]]] = {}
-    wanted: dict[str, set[str]] = {}
-    names_by_sheet: dict[str, dict[str, str]] = {}
-    for cell in formulas:
-        sheet = str(cell["sheet"])
-        by_sheet.setdefault(sheet, {}).setdefault(cell["row"], []).append(cell)
-        # The index is the same for every formula on a sheet. setdefault would
-        # still build it each time, because the argument is evaluated first.
-        names = names_by_sheet.get(sheet)
-        if names is None:
-            names = _names_on_sheet(defined_names, sheet)
-            names_by_sheet[sheet] = names
-        for addr in _switch_args(str(cell["formula_raw"]), names):
-            wanted.setdefault(sheet, set()).add(addr.upper().replace("$", ""))
+            bucket = wanted.setdefault(sheet, set())
+            for addr in args:
+                bucket.add(addr.upper().replace("$", ""))
     if not path.is_file():
         return by_sheet
     for sheet, addrs in wanted.items():
@@ -797,26 +830,24 @@ def _switch_rows(
 
 
 def _period_warnings(path: Path, date1904: bool) -> list[str]:
+    """Unparsed period headers in file order. One row is four column values, not a dict."""
     out: list[str] = []
     seen: set[tuple[str, str]] = set()
     for sheets, addrs, cached, formats in _iter_cell_columns(
         path, ["sheet", "addr", "cached_value", "number_format"]
     ):
         for index, value in enumerate(cached):
-            cell = {
-                "sheet": sheets[index],
-                "addr": addrs[index],
-                "cached_value": value,
-                "number_format": formats[index],
-            }
-            text = _period_warning_text(cell, date1904)
+            if value is None:
+                continue
+            text = _period_warning_value(value, formats[index], date1904)
             if not text or not unparsed_period_shape(text):
                 continue
-            key = (str(cell["sheet"]), text)
+            sheet = sheets[index]
+            key = (str(sheet), text)
             if key in seen:
                 continue
             seen.add(key)
-            out.append(f"Unparsed period header {cell['sheet']}!{cell['addr']}: «{text}»")
+            out.append(f"Unparsed period header {sheet}!{addrs[index]}: «{text}»")
     return out
 
 

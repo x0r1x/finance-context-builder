@@ -420,6 +420,15 @@ def selector_rows(
     return labeled or candidates
 
 
+def _switch_call(formula: str) -> bool:
+    """True when ``_switch_args`` might name a cell. Other formulas cannot."""
+    return bool(
+        _INDEX_CALL.search(formula)
+        or _CHOOSE_CALL.search(formula)
+        or _OFFSET_CALL.search(formula)
+    )
+
+
 def _switch_args(formula: str, names: dict[str, str]) -> set[str]:
     found: set[str] = set()
     for pattern, skip in ((_INDEX_CALL, 1), (_CHOOSE_CALL, 0), (_OFFSET_CALL, 1)):
