@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic.dataclasses import dataclass
 
 # Params-block column roles and non-period cells. Not a period classification.
 ColumnRole = Literal[
@@ -109,13 +110,15 @@ class TimeAxis(BaseModel):
         return data
 
 
-class RowCell(BaseModel):
+@dataclass(slots=True)
+class RowCell:
     col: int
     role: ColumnRole
     header: str | None = None
 
 
-class LayoutRow(BaseModel):
+@dataclass(slots=True)
+class LayoutRow:
     row: int
     label: str
     parent_row: int | None = None

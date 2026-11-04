@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, Field, TypeAdapter, model_serializer
+from pydantic.dataclasses import dataclass
 
 from finance_context.vocab import ValueStatus
 
@@ -22,7 +23,8 @@ class SourceRef(BaseModel):
         return f"{self.sheet}!{self.addr}"
 
 
-class NumericSummary(BaseModel):
+@dataclass(slots=True)
+class NumericSummary:
     first: str | None = None
     last: str | None = None
     minimum: str | None = None
@@ -31,14 +33,16 @@ class NumericSummary(BaseModel):
     n: int = 0
 
 
-class RowHints(BaseModel):
+@dataclass(slots=True)
+class RowHints:
     unit: str | None = None
     unit_per: str | None = None
     currency: str | None = None
     scale: str | None = None
 
 
-class RoleCell(BaseModel):
+@dataclass(slots=True)
+class RoleCell:
     """A cell left of the ruler. `header` is the caption above it (Start, End, Live Case)."""
 
     addr: str
@@ -56,7 +60,8 @@ class RoleCell(BaseModel):
         return data
 
 
-class RowSeries(BaseModel):
+@dataclass(slots=True)
+class RowSeries:
     """Values of one row on one axis. Aligned to that axis's periods."""
 
     axis_id: str
@@ -68,7 +73,10 @@ class RowSeries(BaseModel):
     normalized_values: list[str | None] = Field(default_factory=list)
 
 
-class BlockRow(BaseModel):
+# `kind` follows defaulted fields, which a dataclass allows only as keyword-only.
+# Field() does not inherit that flag, and the schema then sorts those fields first.
+@dataclass(slots=True, kw_only=True)
+class BlockRow:
     """One layout line. Lives only inside its block."""
 
     row_key: str
@@ -76,26 +84,26 @@ class BlockRow(BaseModel):
     row: int
     label: str
     parent_label: str | None = None
-    label_path: list[str] = Field(default_factory=list)
+    label_path: list[str] = Field(default_factory=list, kw_only=True)
     kind: str
     unit: str | None = None
     formula: str | None = None
-    formula_exceptions: list[str] = Field(default_factory=list)
+    formula_exceptions: list[str] = Field(default_factory=list, kw_only=True)
     indent: int = 0
     hidden: bool = False
     check_row: bool = False
-    neighbors: list[str] = Field(default_factory=list)
+    neighbors: list[str] = Field(default_factory=list, kw_only=True)
     # Large ranges (ids in ContextDocument.ranges) this row's formula reads.
     # Their member rows are not repeated in ``neighbors``.
-    neighbor_ranges: list[str] = Field(default_factory=list)
+    neighbor_ranges: list[str] = Field(default_factory=list, kw_only=True)
     numeric_summary: NumericSummary | None = None
-    hints: RowHints = Field(default_factory=RowHints)
-    cells: list[RoleCell] = Field(default_factory=list)
+    hints: RowHints = Field(default_factory=RowHints, kw_only=True)
+    cells: list[RoleCell] = Field(default_factory=list, kw_only=True)
     scale_factor: int | None = None
-    values: list[str | None] = Field(default_factory=list)
-    value_statuses: list[ValueStatus] = Field(default_factory=list)
-    normalized_values: list[str | None] = Field(default_factory=list)
-    series: list[RowSeries] = Field(default_factory=list)
+    values: list[str | None] = Field(default_factory=list, kw_only=True)
+    value_statuses: list[ValueStatus] = Field(default_factory=list, kw_only=True)
+    normalized_values: list[str | None] = Field(default_factory=list, kw_only=True)
+    series: list[RowSeries] = Field(default_factory=list, kw_only=True)
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
@@ -103,6 +111,10 @@ class BlockRow(BaseModel):
         if not data.get("neighbor_ranges"):
             data.pop("neighbor_ranges", None)
         return data
+
+
+# Slots dataclasses have no model_dump. The context writer uses this one adapter.
+BLOCK_ROW_ADAPTER = TypeAdapter(BlockRow)
 
 
 class ContextRange(BaseModel):
