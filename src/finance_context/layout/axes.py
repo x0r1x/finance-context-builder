@@ -7,7 +7,7 @@ from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import _cell_at, _text, parse_int, parse_number
-from finance_context.layout.markers import apply_axis_markers
+from finance_context.layout.markers import DerivedScan, apply_axis_markers
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
 from finance_context.layout.periods import (
     _HALF_KEY,
@@ -71,10 +71,12 @@ def _axis_candidates(
     formula_cols = _formula_timeline_cols(by_row)
     candidates: list[tuple[list[int], TimeAxis]] = []
     bands = _header_bands(by_row, date1904)
+    # One pass per column set. Every band used to rescan the rows under its header.
+    scan = DerivedScan(by_row, date1904, [max(band_rows) for band_rows in bands])
     for band_rows in bands:
         body_end = _next_band_row(bands, max(band_rows))
         for axis in _axes_from_band(
-            sheet, band_rows, by_row, date1904, known, body_end=body_end
+            sheet, band_rows, by_row, date1904, known, body_end=body_end, scan=scan
         ):
             if _period_count(axis) >= 2:
                 candidates.append((band_rows, axis))
@@ -563,6 +565,8 @@ def _axes_from_band(
     date1904: bool,
     hidden_cols: set[int] | None = None,
     body_end: int | None = None,
+    *,
+    scan: DerivedScan,
 ) -> list[TimeAxis]:
     header_row = max(band_rows)
     cols = sorted(
@@ -672,6 +676,7 @@ def _axes_from_band(
             by_row=by_row,
             date1904=date1904,
             banner_row=min(band_rows) - 1,
+            scan=scan,
         )
         totaled = apply_total_columns(
             marked,

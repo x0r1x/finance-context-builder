@@ -4,7 +4,7 @@ import fcntl
 import json
 import os
 import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -151,17 +151,17 @@ def write_json(
     if stream:
         stream_json(path, data, sort_keys=sort_keys)
         return
-    payload = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=sort_keys) + "\n"
+    payload = "".join(iter_json(data, sort_keys=sort_keys)) + "\n"
     atomic_write_bytes(path, payload.encode("utf-8"))
 
 
 def stream_json(path: Path, data: Any, *, sort_keys: bool = False) -> None:
-    """json.dump writes the document in chunks. No whole-document str or bytes."""
+    """Write the document in chunks. No whole-document str or bytes."""
     path.parent.mkdir(parents=True, exist_ok=True)
     src = temporary_path(path)
     try:
         with src.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=sort_keys)
+            handle.writelines(iter_json(data, sort_keys=sort_keys))
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -170,6 +170,105 @@ def stream_json(path: Path, data: Any, *, sort_keys: bool = False) -> None:
         src.unlink(missing_ok=True)
         raise
     src.unlink(missing_ok=True)
+
+
+class JsonItems:
+    """A JSON array whose items are made one at a time while it is written.
+
+    ``items`` is called once per write. The text matches
+    ``json.dumps(list(items()), ensure_ascii=False, indent=2)`` at that position.
+    """
+
+    def __init__(self, items: Callable[[], Iterable[Any]]) -> None:
+        self.items = items
+
+
+def iter_json(data: Any, *, sort_keys: bool = False) -> Iterator[str]:
+    """``json.dumps(data, ensure_ascii=False, indent=2)`` in chunks.
+
+    A ``JsonItems`` value is the array its factory yields. Callers that stream
+    and callers that buffer both use this, so the bytes cannot drift.
+    """
+    encoder = json.JSONEncoder(ensure_ascii=False, indent=2, sort_keys=sort_keys)
+    return _iter_json(data, 0, encoder, sort_keys)
+
+
+def _iter_json(
+    value: Any, level: int, encoder: json.JSONEncoder, sort_keys: bool
+) -> Iterator[str]:
+    if isinstance(value, JsonItems):
+        yield from _iter_array(value.items(), level, encoder, sort_keys)
+        return
+    if isinstance(value, dict) and _holds_items(value):
+        yield from _iter_object(value, level, encoder, sort_keys)
+        return
+    if isinstance(value, (list, tuple)) and _holds_items(value):
+        yield from _iter_array(value, level, encoder, sort_keys)
+        return
+    pad = "\n" + "  " * level
+    for chunk in encoder.iterencode(value):
+        yield chunk.replace("\n", pad) if level else chunk
+
+
+def _iter_array(
+    items: Iterable[Any], level: int, encoder: json.JSONEncoder, sort_keys: bool
+) -> Iterator[str]:
+    inner = "\n" + "  " * (level + 1)
+    opened = False
+    for item in items:
+        yield ("," if opened else "[") + inner
+        opened = True
+        yield from _iter_json(item, level + 1, encoder, sort_keys)
+    yield ("\n" + "  " * level + "]") if opened else "[]"
+
+
+def _iter_object(
+    value: dict[Any, Any], level: int, encoder: json.JSONEncoder, sort_keys: bool
+) -> Iterator[str]:
+    inner = "\n" + "  " * (level + 1)
+    pairs = sorted(value.items()) if sort_keys else list(value.items())
+    for index, (key, item) in enumerate(pairs):
+        encoded = json.dumps(_json_key(key), ensure_ascii=False)
+        yield ("," if index else "{") + inner + encoded + ": "
+        yield from _iter_json(item, level + 1, encoder, sort_keys)
+    yield "\n" + "  " * level + "}"
+
+
+def _json_key(key: Any) -> str:
+    """The string ``json.dumps`` quotes for this key. Same rules as ``JSONEncoder``."""
+    if isinstance(key, str):
+        return key
+    if isinstance(key, float):
+        return _float_token(key)
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if isinstance(key, int):
+        return int.__repr__(key)
+    raise TypeError(f"keys must be str, int, float, bool or None, not {key.__class__.__name__}")
+
+
+def _float_token(value: float) -> str:
+    if value != value:
+        return "NaN"
+    if value == float("inf"):
+        return "Infinity"
+    if value == float("-inf"):
+        return "-Infinity"
+    return float.__repr__(value)
+
+
+def _holds_items(value: Any) -> bool:
+    if isinstance(value, JsonItems):
+        return True
+    if isinstance(value, dict):
+        return any(_holds_items(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_items(item) for item in value)
+    return False
 
 
 _ARROW_TYPES = {

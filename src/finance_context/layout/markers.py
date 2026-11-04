@@ -53,11 +53,12 @@ def apply_axis_markers(
     by_row: dict[int, list[dict]],
     date1904: bool,
     banner_row: int | None = None,
+    scan: DerivedScan,
 ) -> tuple[list[AxisPeriod], list[str]]:
     """Return periods whose variants are only the markers that earned a suffix."""
     if len(periods) < 2:
         return [_plain(period) for period in periods], []
-    derived = derived_columns(periods, by_row, header_row, date1904)
+    derived = derived_columns(periods, scan, header_row)
     tails = _tails(periods, derived)
     tails = _strip_common(tails)
     banner = _banner_labels(
@@ -84,15 +85,92 @@ def apply_axis_markers(
     return updated, notes
 
 
+class DerivedScan:
+    """Counts behind ``derived_columns``, one bottom-up pass per column set.
+
+    Each band used to walk every row under its header. Bands on one sheet share
+    those rows, so the running totals are snapshotted at each band header and
+    reused. Only the last column set is kept. A pass stops at its top header,
+    so it never reads a row the per-band walk would have skipped.
+    """
+
+    def __init__(
+        self, by_row: dict[int, list[dict]], date1904: bool, header_rows: list[int]
+    ) -> None:
+        self._by_row = by_row
+        self._date1904 = date1904
+        self._header_rows = set(header_rows)
+        self._cols: tuple[int, ...] | None = None
+        self._at: dict[int, dict[int, tuple[int, int, int, int]]] = {}
+
+    def counts(
+        self, cols: list[int], header_row: int
+    ) -> dict[int, tuple[int, int, int, int]]:
+        key = tuple(cols)
+        if key != self._cols or header_row not in self._at:
+            self._scan(cols, header_row)
+        return self._at[header_row]
+
+    def _scan(self, cols: list[int], floor: int) -> None:
+        date1904 = self._date1904
+        running = {col: [0, 0, 0, 0] for col in cols}
+        at: dict[int, dict[int, tuple[int, int, int, int]]] = {}
+        pending = sorted({row for row in self._header_rows if row >= floor} | {floor}, reverse=True)
+        index = 0
+        for row_n in sorted(self._by_row, reverse=True):
+            while index < len(pending) and pending[index] >= row_n:
+                at[pending[index]] = _freeze(running)
+                index += 1
+            if index >= len(pending):
+                break
+            _count_row(running, self._by_row[row_n], cols, row_n, date1904)
+        while index < len(pending):
+            at[pending[index]] = _freeze(running)
+            index += 1
+        self._cols = tuple(cols)
+        self._at = at
+
+
+def _freeze(running: dict[int, list[int]]) -> dict[int, tuple[int, int, int, int]]:
+    return {col: (counts[0], counts[1], counts[2], counts[3]) for col, counts in running.items()}
+
+
+def _count_row(
+    running: dict[int, list[int]],
+    cells: list[dict],
+    cols: list[int],
+    row_n: int,
+    date1904: bool,
+) -> None:
+    numbers = _row_numbers(cells, cols, date1904)
+    valued = [col for col in cols if _has_formula(cells, col) is False and col in numbers]
+    roles = _value_roles(cols, numbers) if numbers else set()
+    for col in cols:
+        if _has_formula(cells, col) is None:
+            continue
+        counter = running[col]
+        if _has_formula(cells, col):
+            counter[0] += 1
+            cell = _cell_at(cells, col)
+            formula = str(cell.get("formula_raw") or "") if cell else ""
+            if formula and _formula_is_derived(formula, col, row_n, cols):
+                counter[1] += 1
+            continue
+        if col not in valued:
+            continue
+        counter[2] += 1
+        if col in roles:
+            counter[3] += 1
+
+
 def derived_index(periods: list[AxisPeriod], derived: set[int]) -> set[int]:
     return {index for index, period in enumerate(periods) if period.col in derived}
 
 
 def derived_columns(
     periods: list[AxisPeriod],
-    by_row: dict[int, list[dict]],
+    scan: DerivedScan,
     header_row: int,
-    date1904: bool,
 ) -> set[int]:
     """Columns whose body is the arithmetic of neighbour columns.
 
@@ -101,39 +179,16 @@ def derived_columns(
     equal that arithmetic within tolerance on enough rows. A sum is the column
     to the right of its inputs, so the inverse (an input equalling the
     difference of the total and another input) is not itself derived. A
-    derived column is never a marker.
+    derived column is never a marker. Rows below ``header_row`` are counted.
     """
     cols = [period.col for period in periods]
-    formula_hits = dict.fromkeys(cols, 0)
-    formula_seen = dict.fromkeys(cols, 0)
-    value_hits = dict.fromkeys(cols, 0)
-    value_seen = dict.fromkeys(cols, 0)
-    for row_n, cells in by_row.items():
-        if row_n <= header_row:
-            continue
-        numbers = _row_numbers(cells, cols, date1904)
-        valued = [col for col in cols if _has_formula(cells, col) is False and col in numbers]
-        roles = _value_roles(cols, numbers) if numbers else set()
-        for col in cols:
-            if _has_formula(cells, col) is None:
-                continue
-            if _has_formula(cells, col):
-                formula_seen[col] += 1
-                cell = _cell_at(cells, col)
-                formula = str(cell.get("formula_raw") or "") if cell else ""
-                if formula and _formula_is_derived(formula, col, row_n, cols):
-                    formula_hits[col] += 1
-                continue
-            if col not in valued:
-                continue
-            value_seen[col] += 1
-            if col in roles:
-                value_hits[col] += 1
+    counts = scan.counts(cols, header_row)
     found: set[int] = set()
     for col in cols:
-        if formula_seen[col] and formula_hits[col] / formula_seen[col] >= _SHARE:
+        formula_seen, formula_hits, value_seen, value_hits = counts[col]
+        if formula_seen and formula_hits / formula_seen >= _SHARE:
             found.add(col)
-        elif value_seen[col] >= 2 and value_hits[col] / value_seen[col] >= _SHARE:
+        elif value_seen >= 2 and value_hits / value_seen >= _SHARE:
             found.add(col)
     return found
 

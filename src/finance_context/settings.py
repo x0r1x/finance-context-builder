@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     job_oom_score_adj: int = DEFAULT_OOM_SCORE_ADJ
     # lxml iterparse into column lists. Raw parquet uses parquet_row_group_rows.
     parse_streaming: bool = True
-    # json.dump instead of json.dumps for context.json and other job JSON.
+    # Chunked JSON write. The buffered path emits the same bytes.
     json_stream: bool = True
     # Raw, IR and graph parquet row-group size. 0 writes one group, matching the
     # single-table bytes. One group of a large book does not fit duckdb_memory_limit.
