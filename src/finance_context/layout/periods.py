@@ -305,12 +305,20 @@ def _prose_blocks_calendar(collapsed: str) -> bool:
 
 
 def classify_header(text: str | None) -> PeriodHit | None:
-    if isinstance(text, str) and _stable_letters(text) and _too_many_outside_words(text):
+    # Short headers are the cached path. The prose check is only for a unique
+    # label, which is longer than the cache key and would evict those headers.
+    long = isinstance(text, str) and len(text) > _CLASSIFY_CACHED_LEN
+    if long and _stable_letters(text) and _too_many_outside_words(text):
         return None
-    collapsed = _collapse_header(text)
-    if not collapsed or _prose_blocks_calendar(collapsed):
-        return None
-    raw = " ".join(_fold_period_token(token) for token in collapsed.split(" "))
+    if long:
+        collapsed = _collapse_header(text)
+        if not collapsed or _prose_blocks_calendar(collapsed):
+            return None
+        raw = " ".join(_fold_period_token(token) for token in collapsed.split(" "))
+    else:
+        raw = normalize_header(text)
+        if raw is None:
+            return None
     if len(raw) > _CLASSIFY_CACHED_LEN:
         return _match_header(raw)
     return _classify(raw)
