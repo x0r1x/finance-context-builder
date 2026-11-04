@@ -7,10 +7,10 @@ import zipfile
 from pathlib import Path
 
 from tests.helpers.parquet import load_cells, load_workbook_json
+from tests.helpers.published import published_context as build_context
 from tests.helpers.xlsx import NS_MAIN, CellSpec, SheetSpec, build_xlsx
 
 from finance_context.app.pipeline import Pipeline
-from finance_context.context.build import build_context
 from finance_context.excel.stage import parse_workbook
 from finance_context.layout.models import Layout
 from finance_context.settings import Settings

@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 
 from tests.helpers.parquet import load_cells, load_workbook_json
+from tests.helpers.published import published_context as build_context
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
-from finance_context.context.build import build_context
 from finance_context.excel import parse_workbook
 from finance_context.formulas import compile_workbook
 from finance_context.layout import layout_workbook

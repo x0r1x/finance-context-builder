@@ -1,4 +1,5 @@
-from finance_context.context.build import build_context
+from tests.helpers.published import published_context as build_context
+
 from finance_context.context.series import normalize_value, value_status
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
 from finance_context.render.markdown import render_markdown

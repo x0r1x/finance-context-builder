@@ -5,6 +5,7 @@ import json
 import logging
 from pathlib import Path
 
+from tests.helpers.published import attach_streamed_rows
 from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 
 import finance_context.app.pipeline as pipeline_mod
@@ -50,7 +51,8 @@ def test_pipeline_writes_json_and_markdown(tmp_path: Path, dest: Path) -> None:
     assert not (dest / "formulas.json").exists()
     assert (dest / "context" / "context.md").is_file()
     assert doc.workbook.cell_count >= 1
-    sheets = {row.sheet for block in doc.blocks for row in block.rows}
+    published = attach_streamed_rows(doc)
+    sheets = {row.sheet for block in published.blocks for row in block.rows}
     assert "P&L" in sheets
     again = pipeline.run(dest, job_id="job-test")
     assert again.meta.job_id == doc.meta.job_id

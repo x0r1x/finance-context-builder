@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import xlsxwriter
+from tests.helpers.published import attach_streamed_rows
 
 from finance_context.app.pipeline import Pipeline
 from finance_context.models.context import ContextDocument
@@ -40,7 +41,7 @@ def _run(tmp_path: Path, header: list[str], *, unit_col: bool = False) -> Contex
     dest.mkdir()
     _book(dest / "source" / "source.xlsx", header, unit_col=unit_col)
     pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
-    return pipeline.run(dest, job_id="job", source_filename="book.xlsx")
+    return attach_streamed_rows(pipeline.run(dest, job_id="job", source_filename="book.xlsx"))
 
 
 def _unknown_columns(doc: ContextDocument) -> dict[str, list[str | None]]:

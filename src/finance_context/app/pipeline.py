@@ -411,16 +411,12 @@ class Pipeline:
                 graph=graph,
                 edges=edges,
                 usage=book_usage(),
+                context_dir=dest_dir / "context",
             )
             build_profile["formulas"] = doc.workbook.formula_count
-            # Render reads the context document. Drop layout before this stage
+            # Rows are already in context.json. Drop layout before this stage
             # trims so those pages are not still resident.
             edges = ir_edges = relations = layout = None
-            _write_sorted_json(
-                dest_dir / "context" / "context.json",
-                _context_json(doc),
-                stream=self.settings.json_stream,
-            )
         set_stage("render", status="running")
         with _stage("render", root=dest_dir, saved=_RENDER_SAVED, settings=self.settings):
             write_context_markdown(dest_dir / "context", doc)
@@ -992,12 +988,6 @@ def _block_json(block: FinancialBlock) -> dict:
         lambda: (BLOCK_ROW_ADAPTER.dump_python(row, mode="json") for row in block.rows)
     )
     return data
-
-
-def _write_sorted_json(path: Path, data: dict, *, stream: bool | None = None) -> None:
-    from finance_context.store.fs import write_json
-
-    write_json(path, data, sort_keys=True, stream=stream)
 
 
 def _load_owner(dest_dir: Path) -> dict:

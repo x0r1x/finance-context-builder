@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from collections import Counter
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from finance_context.context.assemble import (
@@ -36,9 +40,9 @@ from finance_context.layout.relations import RowRelation
 from finance_context.layout.resolve import axes_for
 from finance_context.layout.units import is_block_unit_caption
 from finance_context.models.context import (
+    BLOCK_ROW_ADAPTER,
     SCHEMA_VERSION,
     ArtifactMeta,
-    BlockRow,
     ContextAxis,
     ContextDocument,
     ContextRange,
@@ -49,7 +53,18 @@ from finance_context.models.context import (
     RowSeries,
     WorkbookRaw,
 )
+from finance_context.render.markdown import (
+    AxisRows,
+    MarkdownBody,
+    _block_intro,
+    _markdown_tables,
+    _relations_section,
+)
+from finance_context.store.fs import JsonItems, _iter_json, atomic_replace, temporary_path
 from finance_context.vocab import ValueStatus
+
+# context.json written by build_context. The returned document does not keep rows.
+_CONTEXT_DIRS: dict[int, Path] = {}
 
 
 def _without_name_scope(items: list) -> list:
@@ -78,26 +93,35 @@ def build_context(
     edges: list[dict] | None = None,
     usage: SheetUsage | None = None,
     book_dir: Path | None = None,
+    context_dir: Path | None = None,
 ) -> ContextDocument:
     relations = list(relations or [])
     date1904 = bool(workbook_meta.get("date1904"))
     defined_names = list(workbook_meta.get("defined_names") or [])
     hidden_indexes = None
     cell_path: Path | None = None
+    memory_by_addr: dict | None = None
     if cells is None:
         if book_dir is None:
             raise ValueError("build_context needs cells or book_dir")
         cell_path = book_dir / "ir" / "cells.parquet"
-        cells = _layout_value_cells(cell_path, layout)
+        # Every value cell, as before the per-block read. Streaming drops rows,
+        # not this dict. Warnings still come from the file scan below.
+        loaded = _layout_value_cells(cell_path, layout)
+        memory_by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in loaded}
         hidden_indexes = _occupied_from_file(cell_path)
         switch_rows = _switch_rows(cell_path, defined_names)
         cell_total = _file_rows(cell_path)
     else:
         switch_rows = None
         cell_total = len(cells)
-    by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+        loaded = cells
+        memory_by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+    # Lookups filter this dict. The file path still holds every value cell.
+    source = _CellSource(None, memory_by_addr)
     if switch_rows is None:
         by_sheet_row: dict[str, dict[int, list[dict]]] = {}
+        assert cells is not None
         for cell in cells:
             by_sheet_row.setdefault(cell["sheet"], {}).setdefault(int(cell["row"]), []).append(cell)
     else:
@@ -111,11 +135,13 @@ def build_context(
     switch_rows = None
     # Layout cells on the file path have no addr. The cell scan would warn
     # with a blank address and is discarded; the file scan is the one kept.
+    assert memory_by_addr is not None
+    header_by_addr = memory_by_addr
     axes, timeline_warnings = build_axes(
         layout,
-        cells,
+        loaded,
         date1904=date1904,
-        by_addr=by_addr,
+        by_addr=memory_by_addr,
         period_warnings=cell_path is None,
     )
     if cell_path is not None:
@@ -142,45 +168,244 @@ def build_context(
         else []
     )
     not_applicable: set[str] = set()
-    blocks: list[FinancialBlock] = []
-    for sheet in layout.sheets:
-        for block in sheet.blocks:
-            kind = getattr(block, "kind", "timeline")
-            views = _block_views(sheet, block)
-            hint_headers = [header for _axis_id, headers in views for header in headers]
-            axis_ids = (
-                list(dict.fromkeys(axis_id for axis_id, _headers in views))
-                if kind != "params"
-                else []
-            )
-            periods = _local_periods(views, axes_by_id) if axis_ids else [
-                _period_dict(header)
-                for _axis_id, headers in views
-                for header in headers
-            ]
-            rows: list[BlockRow] = []
-            parent_by_row = {r.row: r.label for r in block.rows}
-            block_unit = _header_unit(
-                sheet,
-                block,
-                by_addr,
-                bool(workbook_meta.get("date1904")),
-            )
-            running_unit = block_unit
-            body_unit = False
-            for layout_row in block.rows:
-                parent = None
-                if layout_row.parent_row:
-                    parent = parent_by_row.get(layout_row.parent_row)
-                neighbors = _formula_neighbors(
-                    sheet.name, layout_row.row, precedents, dependents
+    if context_dir is None:
+        context_dir = Path(tempfile.mkdtemp(prefix="fc-context-"))
+    published: list[FinancialBlock] = []
+    streamed_rows = 0
+    date_flag = bool(workbook_meta.get("date1904"))
+    body = MarkdownBody(context_dir)
+    built: list[ContextDocument] = []
+
+    def _stream_blocks():
+        for sheet in layout.sheets:
+            for block in sheet.blocks:
+                yield from _stream_one_block(
+                    sheet,
+                    block,
+                    axes_by_id=axes_by_id,
+                    header_by_addr=header_by_addr,
+                    source=source,
+                    switches=switches,
+                    precedents=precedents,
+                    dependents=dependents,
+                    reads=reads,
+                    relations=relations,
+                    date1904=date_flag,
+                    not_applicable=not_applicable,
+                    published=published,
+                    body=body,
+                    context_dir=context_dir,
+                    on_rows=lambda count: _add_streamed(count),
                 )
+
+    def _add_streamed(count: int) -> None:
+        nonlocal streamed_rows
+        streamed_rows += count
+
+    def _finish() -> dict:
+        if cell_path is None:
+            assert cells is not None
+            formula_stats = _count_formula_cells(cells, not_applicable)
+        else:
+            formula_stats = _formula_stats(cell_path, not_applicable)
+        # Same place as before the block loop: that loop does not append warnings.
+        if formula_stats.unparsed:
+            sample = ", ".join(formula_stats.unparsed_addrs[:_WARNING_SAMPLE])
+            warnings.append(f"{formula_stats.unparsed} unparsed formula(s) (e.g. {sample})")
+        expected_rows = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
+        if streamed_rows != expected_rows:
+            warnings.append(
+                f"Content completeness {streamed_rows}/{expected_rows} layout rows"
+            )
+        warnings.extend(timeline_warnings)
+        if formula_stats.missing_values:
+            sample = ", ".join(formula_stats.missing_addrs[:_WARNING_SAMPLE])
+            extra = f" (e.g. {sample})" if sample else ""
+            warnings.append(
+                f"{formula_stats.missing_values} formula cell(s) missing cached values{extra}"
+            )
+        if graph is not None and graph.dangling:
+            warnings.append(
+                f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
+            )
+        warnings.extend(hidden_warnings)
+        warnings.extend(_unknown_header_warnings(layout))
+        sheets = [
+            item["name"] if isinstance(item, dict) else getattr(item, "name", str(item))
+            for item in workbook_meta.get("sheets", [])
+        ]
+        workbook = WorkbookRaw(
+            sheets=sheets,
+            sheet_count=len(sheets),
+            cell_count=cell_total,
+            has_vba=bool(workbook_meta.get("has_vba")),
+            has_xlm=bool(workbook_meta.get("has_xlm")),
+            externals=list(workbook_meta.get("externals") or []),
+            locale_hint=workbook_meta.get("locale_hint"),
+            date1904=date_flag,
+            defined_names=_without_name_scope(defined_names),
+            iterate=bool(workbook_meta.get("iterate")),
+            formula_count=formula_stats.formula_count,
+            missing_cached_values=formula_stats.missing_cached,
+            unparsed_formulas=formula_stats.unparsed,
+        )
+        meta = ArtifactMeta(
+            schema_version=SCHEMA_VERSION,
+            job_id=job_id,
+            status=status,  # type: ignore[arg-type]
+            stage=stage,
+            source_filename=source_filename,
+            content_sha256=content_sha256,
+            warnings=warnings[:50],
+            questions=[],
+        )
+        document = ContextDocument(
+            schema_version=SCHEMA_VERSION,
+            meta=meta,
+            workbook=workbook,
+            axes=axes,
+            blocks=published,
+            ranges=[ContextRange.model_validate(item) for item in reads.records(usage)],
+            graph=graph or GraphPointer(),
+            warnings=warnings[:50],
+        )
+        built.append(document)
+        body.close()
+        _CONTEXT_DIRS[id(document)] = context_dir
+        return document.model_dump(mode="json", exclude={"axes", "blocks"})
+
+    axes_payload = [axis.model_dump(mode="json") for axis in axes]
+    try:
+        _write_streamed_context(
+            context_dir / "context.json",
+            axes_payload,
+            _stream_blocks,
+            _finish,
+        )
+    except BaseException:
+        body.abort()
+        raise
+    return built[0]
+
+
+
+
+def read_streamed_context(doc: ContextDocument) -> ContextDocument:
+    """Load context.json for a document this process just built.
+
+    ``build_context`` writes rows into that file and leaves ``blocks[].rows``
+    empty, so a caller that needs the lines reads them back one document at a
+    time instead of keeping them on the model.
+    """
+    directory = _CONTEXT_DIRS[id(doc)]
+    return ContextDocument.model_validate_json(
+        (directory / "context.json").read_text(encoding="utf-8")
+    )
+
+
+def _write_streamed_context(
+    path: Path,
+    axes_payload: list,
+    blocks: Callable[[], Iterator[dict]],
+    finish: Callable[[], dict],
+) -> None:
+    """``context.json`` in sorted-key order. Blocks are written before the tail.
+
+    Warnings, formula totals, and the workbook are known only after the row
+    loop. Those keys sort after ``blocks``, so the tail is dumped then.
+    """
+    encoder = json.JSONEncoder(ensure_ascii=False, indent=2, sort_keys=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    src = temporary_path(path)
+    try:
+        with src.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write('{\n  "axes": ')
+            handle.writelines(_iter_json(axes_payload, 1, encoder, True))
+            handle.write(',\n  "blocks": ')
+            handle.writelines(_iter_json(JsonItems(blocks), 1, encoder, True))
+            tail = finish()
+            for key in sorted(tail):
+                encoded = json.dumps(key, ensure_ascii=False)
+                handle.write(f",\n  {encoded}: ")
+                handle.writelines(_iter_json(tail[key], 1, encoder, True))
+            handle.write("\n}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        atomic_replace(src, path)
+    except BaseException:
+        src.unlink(missing_ok=True)
+        raise
+    src.unlink(missing_ok=True)
+
+
+def _stream_one_block(
+    sheet,
+    block,
+    *,
+    axes_by_id: dict[str, ContextAxis],
+    header_by_addr: dict,
+    source: _CellSource,
+    switches: dict,
+    precedents: dict,
+    dependents: dict,
+    reads: RangeReads,
+    relations: list[RowRelation],
+    date1904: bool,
+    not_applicable: set[str],
+    published: list[FinancialBlock],
+    body: MarkdownBody,
+    context_dir: Path,
+    on_rows: Callable[[int], None],
+) -> Iterator[dict]:
+    """One block: header keys, then each row, then the markdown for that block."""
+    kind = getattr(block, "kind", "timeline")
+    views = _block_views(sheet, block)
+    hint_headers = [header for _axis_id, headers in views for header in headers]
+    axis_ids = (
+        list(dict.fromkeys(axis_id for axis_id, _headers in views)) if kind != "params" else []
+    )
+    periods = (
+        _local_periods(views, axes_by_id)
+        if axis_ids
+        else [_period_dict(header) for _axis_id, headers in views for header in headers]
+    )
+    skeleton = FinancialBlock(
+        block_id=block.block_id,
+        sheet=sheet.name,
+        label_col=block.label_col,
+        grain=None,
+        kind=kind,
+        axis_ids=axis_ids,
+        periods=periods,
+        rows=[],
+        relations=_relations_for_block(relations, block.block_id),
+    )
+    published.append(skeleton)
+    if not block.rows:
+        body.extend(_block_intro(skeleton, axes_by_id, 0))
+        yield skeleton.model_dump(mode="json")
+        return
+    parent_by_row = {row.row: row.label for row in block.rows}
+    block_unit = _header_unit(sheet, block, header_by_addr, date1904)
+    block_cells = source.load(sheet.name, {int(row.row) for row in block.rows})
+    tables = _markdown_tables(skeleton, axes_by_id)
+    writers = [
+        AxisRows(context_dir, heading, headers, axis_id)
+        for heading, headers, axis_id in tables
+    ]
+    state = {"n": 0}
+
+    def _rows() -> Iterator[dict]:
+        running_unit = block_unit
+        body_unit = False
+        try:
+            for layout_row in block.rows:
+                parent = parent_by_row.get(layout_row.parent_row) if layout_row.parent_row else None
+                neighbors = _formula_neighbors(sheet.name, layout_row.row, precedents, dependents)
                 label_path = list(layout_row.section_path)
                 if parent and parent not in label_path:
                     label_path = [*label_path, parent]
-                role_cells = _role_cells(
-                    sheet.name, layout_row, by_addr, bool(workbook_meta.get("date1904"))
-                )
+                role_cells = _role_cells(sheet.name, layout_row, block_cells, date1904)
                 own_unit = next(
                     (
                         item.cached_value
@@ -193,8 +418,8 @@ def build_context(
                     running_unit = layout_row.label.strip()
                     body_unit = True
                 elif body_unit and layout_row.kind == "abstract":
-                    # A caption inside a section (`% p.a.`) stops at the next section.
-                    # The header caption (`RURm` beside the years) stays for the block.
+                    # A caption inside a section stops at the next section.
+                    # The header caption stays for the block.
                     running_unit = block_unit
                     body_unit = False
                 unit_text = own_unit or (
@@ -204,14 +429,9 @@ def build_context(
                     sheet_name=sheet.name,
                     row_num=layout_row.row,
                     headers=hint_headers,
-                    by_addr=by_addr,
+                    by_addr=block_cells,
                 )
-                hints = _hints_for(
-                    layout_row,
-                    unit_text,
-                    number_formats=formats,
-                )
-                series_unit = hints.unit
+                hints = _hints_for(layout_row, unit_text, number_formats=formats)
                 series: list[RowSeries] = []
                 for axis_id, headers in views:
                     row_headers = headers
@@ -221,7 +441,7 @@ def build_context(
                         sheet_name=sheet.name,
                         row_num=layout_row.row,
                         headers=row_headers,
-                        by_addr=by_addr,
+                        by_addr=block_cells,
                     )
                     values, statuses, normalized = _series_numbers(
                         sheet_name=sheet.name,
@@ -229,8 +449,8 @@ def build_context(
                         layout_row=layout_row,
                         headers=headers,
                         value_headers=row_headers,
-                        by_addr=by_addr,
-                        date1904=bool(workbook_meta.get("date1904")),
+                        by_addr=block_cells,
+                        date1904=date1904,
                         factor=scale_factor_for(hints.scale),
                     )
                     series.append(
@@ -252,8 +472,8 @@ def build_context(
                     layout_row_parent=parent,
                     headers=[],
                     value_headers=[],
-                    by_addr=by_addr,
-                    date1904=bool(workbook_meta.get("date1904")),
+                    by_addr=block_cells,
+                    date1904=date1904,
                     label_path=label_path,
                     neighbors=neighbors,
                     neighbor_ranges=reads.for_row(sheet.name, layout_row.row),
@@ -262,103 +482,104 @@ def build_context(
                     numeric_summary=first.numeric_summary if first else None,
                     hints=hints,
                     role_cells=role_cells,
-                    series_unit=series_unit,
+                    series_unit=hints.unit,
                     series=series,
                 )
                 for (_axis_id, headers), item in zip(views, series, strict=False):
-                    for header, state in zip(headers, item.value_statuses, strict=False):
-                        if state == "not_applicable":
+                    for header, item_state in zip(headers, item.value_statuses, strict=False):
+                        if item_state == "not_applicable":
                             not_applicable.add(
                                 f"{sheet.name}!{format_addr(header.col, layout_row.row)}"
                             )
-                rows.append(line)
-            blocks.append(
-                FinancialBlock(
-                    block_id=block.block_id,
-                    sheet=sheet.name,
-                    label_col=block.label_col,
-                    grain=None,
-                    kind=kind,
-                    axis_ids=axis_ids,
-                    periods=periods,
-                    rows=rows,
-                    relations=_relations_for_block(relations, block.block_id),
-                )
-            )
+                for writer in writers:
+                    writer.add(line)
+                state["n"] += 1
+                yield BLOCK_ROW_ADAPTER.dump_python(line, mode="json")
+        finally:
+            block_cells.clear()
 
-    if cell_path is None:
-        formula_stats = _count_formula_cells(cells, not_applicable)
-    else:
-        formula_stats = _formula_stats(cell_path, not_applicable)
-    formula_count = formula_stats.formula_count
-    missing_cached = formula_stats.missing_cached
-    unparsed = formula_stats.unparsed
-    # Same place as before the block loop: that loop does not append warnings.
-    if unparsed:
-        sample = ", ".join(formula_stats.unparsed_addrs[:_WARNING_SAMPLE])
-        warnings.append(f"{unparsed} unparsed formula(s) (e.g. {sample})")
-
-    document_rows = [row for block in blocks for row in block.rows]
-    expected_rows = sum(len(block.rows) for sheet in layout.sheets for block in sheet.blocks)
-    if len(document_rows) != expected_rows:
-        warnings.append(
-            f"Content completeness {len(document_rows)}/{expected_rows} layout rows"
-        )
-    warnings.extend(timeline_warnings)
-    if formula_stats.missing_values:
-        sample = ", ".join(formula_stats.missing_addrs[:_WARNING_SAMPLE])
-        extra = f" (e.g. {sample})" if sample else ""
-        warnings.append(
-            f"{formula_stats.missing_values} formula cell(s) missing cached values{extra}"
-        )
-    if graph is not None and graph.dangling:
-        warnings.append(
-            f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
-        )
-    warnings.extend(hidden_warnings)
-    warnings.extend(_unknown_header_warnings(layout))
-
-    sheets = [
-        s["name"] if isinstance(s, dict) else getattr(s, "name", str(s))
-        for s in workbook_meta.get("sheets", [])
-    ]
-    workbook = WorkbookRaw(
-        sheets=sheets,
-        sheet_count=len(sheets),
-        cell_count=cell_total,
-        has_vba=bool(workbook_meta.get("has_vba")),
-        has_xlm=bool(workbook_meta.get("has_xlm")),
-        externals=list(workbook_meta.get("externals") or []),
-        locale_hint=workbook_meta.get("locale_hint"),
-        date1904=bool(workbook_meta.get("date1904")),
-        defined_names=_without_name_scope(defined_names),
-        iterate=bool(workbook_meta.get("iterate")),
-        formula_count=formula_count,
-        missing_cached_values=missing_cached,
-        unparsed_formulas=unparsed,
-    )
-    meta = ArtifactMeta(
-        schema_version=SCHEMA_VERSION,
-        job_id=job_id,
-        status=status,  # type: ignore[arg-type]
-        stage=stage,
-        source_filename=source_filename,
-        content_sha256=content_sha256,
-        warnings=warnings[:50],
-        questions=[],
-    )
-    return ContextDocument(
-        schema_version=SCHEMA_VERSION,
-        meta=meta,
-        workbook=workbook,
-        axes=axes,
-        blocks=blocks,
-        ranges=[ContextRange.model_validate(item) for item in reads.records(usage)],
-        graph=graph or GraphPointer(),
-        warnings=warnings[:50],
-    )
+    dumped = skeleton.model_dump(mode="json", exclude={"rows"})
+    dumped["rows"] = JsonItems(_rows)
+    try:
+        yield dumped
+        on_rows(state["n"])
+        body.row_count += state["n"]
+        body.extend(_block_intro(skeleton, axes_by_id, state["n"]))
+        for writer in writers:
+            writer.assemble(body)
+        if state["n"] and skeleton.relations:
+            body.extend(_relations_section(skeleton.relations))
+    finally:
+        for writer in writers:
+            writer.discard()
 
 
+class _CellSource:
+    """Cells for one sheet and one set of rows. The file path reads that slice."""
+
+    def __init__(self, path: Path | None, memory: dict | None) -> None:
+        self.path = path
+        self.memory = memory
+
+    def load(self, sheet: str, rows: set[int]) -> dict:
+        if not rows:
+            return {}
+        if self.path is not None:
+            return _load_sheet_rows(self.path, sheet, rows)
+        assert self.memory is not None
+        return {
+            key: cell
+            for key, cell in self.memory.items()
+            if key[0] == sheet and int(key[1]) in rows
+        }
+
+
+def _axis_cell_rows(layout: Layout) -> dict[str, set[int]]:
+    """Header rows and flag rows. ``build_axes`` and ``_header_unit`` read only these."""
+    found: dict[str, set[int]] = {}
+    for sheet in layout.sheets:
+        rows = found.setdefault(sheet.name, set())
+        for axis in sheet.axes:
+            header = getattr(axis, "header_row", None)
+            if header:
+                rows.add(int(header))
+        for block in sheet.blocks:
+            axis = getattr(block, "axis", None)
+            if axis is not None and getattr(axis, "row", None):
+                rows.add(int(axis.row))
+            for row in block.rows:
+                if row.kind == "flag":
+                    rows.add(int(row.row))
+    return {name: rows for name, rows in found.items() if rows}
+
+
+def _load_rows(source: _CellSource, wanted: dict[str, set[int]]) -> dict:
+    found: dict = {}
+    for sheet, rows in wanted.items():
+        found.update(source.load(sheet, rows))
+    return found
+
+
+def _load_sheet_rows(path: Path, sheet: str, rows: set[int]) -> dict:
+    from finance_context.store.duckdb_io import _iter_parquet_rows
+
+    if not path.is_file() or not rows:
+        return {}
+    columns = list(_BUILD_FIELDS)
+    where = "sheet = ? AND row IN (SELECT unnest(?::BIGINT[]))"
+    found: dict = {}
+    for names, batch in _iter_parquet_rows(
+        path,
+        columns,
+        where=where,
+        params=[sheet, [int(row) for row in rows]],
+    ):
+        if list(names) != columns:
+            raise ValueError(f"cells.parquet columns {names} != {columns}")
+        for record in batch:
+            cell = _BuildCell(*record)
+            found[(cell.sheet, int(cell.row), int(cell.col))] = cell
+    return found
 
 
 def _local_periods(

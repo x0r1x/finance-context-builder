@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from tests.helpers.published import published_context as build_context
 from tests.layout.test_detect_axes import _c
 
-from finance_context.context.build import build_context
 from finance_context.context.observations import build_observations
 from finance_context.graph.stage import _period_maps
 from finance_context.layout.detect import detect_layout

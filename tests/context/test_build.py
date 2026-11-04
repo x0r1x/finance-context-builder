@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from finance_context.context.build import build_context
+from pathlib import Path
+
+from tests.helpers.published import published_context as build_context
+
 from finance_context.layout.models import (
     Axis,
     AxisHeader,
@@ -982,3 +985,37 @@ def test_amount_cells_skip_the_period_parser(tmp_path, monkeypatch) -> None:
     assert any("Q5 2025" in warning for warning in warnings)
     assert any("１.２０２４" in warning for warning in warnings)
     assert not any("1.2072" in warning or "1.2" in warning for warning in warnings)
+
+
+def test_streamed_context_matches_the_document_and_markdown(tmp_path: Path) -> None:
+    """Rows are written once. The file matches the document dump; the model keeps none."""
+    import json
+
+    from finance_context.context.build import _CONTEXT_DIRS, read_streamed_context
+    from finance_context.context.build import build_context as build_raw
+    from finance_context.render.markdown import render_markdown, write_context_markdown
+
+    doc = build_raw(
+        job_id="abc",
+        workbook_meta={"sheets": [{"name": "CF"}]},
+        cells=[
+            {"sheet": "CF", "row": 2, "col": 2, "addr": "B2", "cached_value": "1"},
+            {"sheet": "CF", "row": 2, "col": 3, "addr": "C2", "cached_value": "2"},
+        ],
+        layout=_layout(),
+        context_dir=tmp_path,
+    )
+    assert doc.blocks[0].rows == []
+    assert _CONTEXT_DIRS[id(doc)] == tmp_path
+    published = read_streamed_context(doc)
+    assert published.blocks[0].rows[0].label == "Opening cash"
+    original = doc.model_dump(mode="json")
+    loaded = published.model_dump(mode="json")
+    for block, source in zip(original["blocks"], loaded["blocks"], strict=True):
+        block["rows"] = source["rows"]
+    text = (tmp_path / "context.json").read_text(encoding="utf-8")
+    expected = json.dumps(original, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert text == expected
+    write_context_markdown(tmp_path, doc)
+    assert (tmp_path / "context.md").read_text(encoding="utf-8") == render_markdown(published)
+    assert not (tmp_path / ".context.md.body").exists()

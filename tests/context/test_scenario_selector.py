@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from finance_context.context.build import build_context
+from tests.helpers.published import published_context as build_context
+
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
 from finance_context.render.markdown import render_markdown
