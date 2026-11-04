@@ -7,7 +7,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.fixtures.synthetic import dense, hops, hops_tl, outline, rel, series, sumif, text
+from tests.fixtures.synthetic import (
+    block,
+    dense,
+    hops,
+    hops_tl,
+    outline,
+    rel,
+    series,
+    sumif,
+    text,
+)
 
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook
@@ -53,6 +63,7 @@ def test_each_shape_is_byte_stable(tmp_path: Path) -> None:
         ("outline", lambda path: outline(path)),
         ("sumif", lambda path: sumif(path, 6)),
         ("text", lambda path: text(path, 4, strlen=24)),
+        ("block", lambda path: block(path, 4, periods=3)),
     )
     for name, build in builds:
         first = tmp_path / f"{name}-a.xlsx"
@@ -182,6 +193,29 @@ def test_text_shared_strings_are_unique(tmp_path: Path) -> None:
     block = _layout_doc.sheets[0].blocks[0]
     assert block.kind == "timeline"
     assert len(block.rows) == rows
+
+
+def test_block_is_one_timeline_with_a_few_formulas(tmp_path: Path) -> None:
+    rows = 6
+    path = tmp_path / "block.xlsx"
+    block(path, rows, periods=3)
+    layout, compiled, cells = _layout(path, tmp_path)
+    assert len(layout.sheets) == 1
+    assert len(layout.sheets[0].blocks) == 1
+    sheet_block = layout.sheets[0].blocks[0]
+    assert sheet_block.kind == "timeline"
+    assert len(sheet_block.rows) == rows
+    assert len(layout.sheets[0].axes) == 1
+    formulas = [cell for cell in cells if cell["formula_raw"]]
+    assert len(formulas) == 3
+    assert {cell["formula_raw"] for cell in formulas} == {"=1+1"}
+    assert len(compiled.cell_edges) == 0
+    numbers = [
+        cell["cached_value"]
+        for cell in cells
+        if cell["col"] == 3 and not cell["formula_raw"] and cell["row"] > 1
+    ]
+    assert numbers == [str(10_000 + row) for row in range(2, rows + 2)]
 
 
 def test_column_past_the_old_letter_table(tmp_path: Path) -> None:

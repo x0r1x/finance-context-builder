@@ -11,7 +11,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-GENERATOR_REV = 1
+GENERATOR_REV = 2
 
 
 def cached_workbook(directory: Path, name: str, build: Callable[[Path], Path]) -> Path:

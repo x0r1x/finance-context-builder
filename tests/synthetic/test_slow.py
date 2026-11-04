@@ -18,7 +18,9 @@ are the 1536 budget.
 1900–2099 are bare-year headers, and layout scans the sheet once per such
 header. The ceiling is three times that cost. ``dense2m`` layout peaked at
 1050 MiB; 1650 still fails that peak, and its build ceiling is the 1536
-budget.
+budget. ``block500k`` is one 500,000-row block. Its build measured 1030 MiB
+and its render 526, so both ceilings stay at or under the 1536 MiB product
+budget. Layout of that book peaked at 1361 MiB and is not part of the budget.
 
 Measured ``duration_ms`` / ``rss_peak_mb``:
 
@@ -37,6 +39,9 @@ Measured ``duration_ms`` / ``rss_peak_mb``:
 - text200k (507s, ru_maxrss 1103 MiB): parse 16948/371, compile 9198/302,
   layout 313903/866, relations 590/530, graph 2914/527, build 155166/1099,
   render 3650/927. Remeasured after row models became slots dataclasses.
+- block500k (374s, ru_maxrss 1361 MiB): parse 32290/296, compile 15520/251,
+  layout 137755/1361, relations 891/743, graph 6029/642, build 176454/1030,
+  render 127/526. One block, streamed rows, cells read per block.
 """
 
 from __future__ import annotations
@@ -95,6 +100,16 @@ _CEILINGS: dict[str, dict[str, tuple[int, int]]] = {
         "graph": (18_000, 850),
         "build": (466_000, 1536),
         "render": (19_000, 1450),
+    },
+    # Build 1030 and render 526 stay inside the 1536 MiB budget.
+    "block500k": {
+        "parse": (97_000, 500),
+        "compile": (47_000, 450),
+        "layout": (414_000, 2100),
+        "relations": (16_000, 1200),
+        "graph": (19_000, 1050),
+        "build": (530_000, 1536),
+        "render": (16_000, 850),
     },
 }
 

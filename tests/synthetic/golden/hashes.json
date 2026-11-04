@@ -30,6 +30,12 @@
       "context/context.md": "70aaa67dc2a2c9f192813cdfe930cbec8c04e5fc7f6bc0507966bf00e885035c",
       "graph/graph.json": "17f6cadad43835d4ea7aa595abb8fc204bbae16d1b3831594b0f8ea779661161",
       "layout/layout.json": "29244e50f360bcf56886f164d5326fb80d54504269ba8aad4add28ee1896f9b4"
+    },
+    "block8": {
+      "context/context.json": "9d0fbaee508c2fd04a0a54d8d08bf7e4b295a24e4b259e9c9693bd0e61fac524",
+      "context/context.md": "25497ff84c7bff66aa3860fd7c93c35814f9c16c6ece16b02591d9687c0d6e0e",
+      "graph/graph.json": "098c9af7fe840f7213816fa341877592526549cdc08ccab18cb3f5d99e60edfd",
+      "layout/layout.json": "03801e7ac6ec742499cf34cbb7f690d5aa1aabcbca79048b41894edea211b49c"
     }
   }
 }
