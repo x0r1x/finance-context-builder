@@ -91,6 +91,8 @@ def test_line_item_is_not_a_period() -> None:
     assert classify_header("Revenue") is None
     assert classify_header("Выручка") is None
     assert classify_header("GMV") is None
+    assert classify_header("выручка себестоимость прибыль") is None
+    assert classify_header("январь 2025").period_key == "2025-01"  # type: ignore[union-attr]
 
 
 def test_december_maps_to_12() -> None:
