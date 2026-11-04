@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
+from tests.fixtures.synthetic import sumif
 
 from finance_context.app.pipeline import Pipeline
 from finance_context.excel import parse_workbook
@@ -24,21 +24,8 @@ SIZES = (5000, 10000, 20000)
 
 
 def _book(path: Path, rows: int) -> Path:
-    data = [CellSpec(addr="A1", value="key", type="s"), CellSpec(addr="B1", value="2025", type="s")]
-    calc = [CellSpec(addr="A1", value="key", type="s"), CellSpec(addr="B1", value="2025", type="s")]
-    for row in range(2, rows + 2):
-        data.append(CellSpec(addr=f"A{row}", value=str(row % 50)))
-        data.append(CellSpec(addr=f"B{row}", value=str(row)))
-        calc.append(CellSpec(addr=f"A{row}", value=str(row % 50)))
-        calc.append(
-            CellSpec(addr=f"B{row}", value="1", formula=f"SUMIF(Data!$A:$A,$A{row},Data!$B:$B)")
-        )
-        calc.append(CellSpec(addr=f"C{row}", value="1", formula=f"SUM(Data!$B$2:B{row})"))
-    return build_xlsx(
-        path,
-        sheets=[SheetSpec(name="Data", cells=data), SheetSpec(name="Calc", cells=calc)],
-        shared_strings=["key", "2025"],
-    )
+    """The shared SUMIF sheet: ``SUMIF(A:A,…)`` and ``SUM($B$2:B{n})``."""
+    return sumif(path, rows)
 
 
 def _measure(root: Path, rows: int) -> tuple[int, int, int]:

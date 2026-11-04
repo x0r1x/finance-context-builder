@@ -1,0 +1,35 @@
+{
+  "note": "Regenerate with UPDATE_SYNTHETIC_GOLDEN=1 uv run pytest tests/synthetic/test_golden.py and commit this file.",
+  "books": {
+    "rel5k": {
+      "context/context.json": "a65052ee02ced15362f6a8c9ed9e8f6ae4b4df9998a6b50acfcc4531d2f90b6c",
+      "context/context.md": "ba4dbd4ccc3675eefb55761b8bbae01691dcb43fba12ec21b23d514e0971df52",
+      "graph/graph.json": "2a10b3f09659ea86386c30a2acc2d8bf5a2fe59fff7222b02242e36f1f4c3fa0",
+      "layout/layout.json": "9327b44633ea8fc582b77550efb6633f0c2baa634bead95aa6cfc09d5eaf23c1"
+    },
+    "hops10k": {
+      "context/context.json": "d5ad37ab84ab118fb54bc87178bd21e8ab951ea28048f7a79de0624820d204ed",
+      "context/context.md": "9d928c5b208fe7465ac811defe68cc881d3aa23e44a427eead226088be03eafa",
+      "graph/graph.json": "6c999a77a356347c0a8a49182453241c3157cd66a76a4d3a163000f14b886e2d",
+      "layout/layout.json": "782c3bd1137967e1079821a76e8fb92ba77159f1d8f61a6ef78cc269ef4777d1"
+    },
+    "sumif10k": {
+      "context/context.json": "93414cb5ba680b8e72d91cb79dcc711df984276e95a4c271b2c566bdb6cb3dba",
+      "context/context.md": "857702b01a2fe348162f683e140d9f32207a7a2780ac4fe1b52f6779340ee931",
+      "graph/graph.json": "0ca2c1ee824e768190e9bb2bbcaa8de7452768afc7f34e0c0b74d4263f6dff70",
+      "layout/layout.json": "8d2c4bb0863deb01cea2a33e19550c433774a0e2f319fe21d38b27e7ace639e7"
+    },
+    "outline": {
+      "context/context.json": "923d7fbb794341fee572e32f92c31899557c0b82c523438746ef3dc43c564752",
+      "context/context.md": "1121ba85f08d42d49f6cc1acb4024cf4d268c7198fe771df5e4f0d56a65e4845",
+      "graph/graph.json": "4713f254148052e69e390bb5b1b8785f09a58c0c9d39168f1241fe5652a16324",
+      "layout/layout.json": "9b631e2d45ba697c54faf5c5353d4ca8fd0c2158b2df975e1390239b41bd96f0"
+    },
+    "text100": {
+      "context/context.json": "dabe2a9bac0593ba0eff37c3cbe8dcc7e67ea52aef8ee0fe71fd9910e5ca53e4",
+      "context/context.md": "70aaa67dc2a2c9f192813cdfe930cbec8c04e5fc7f6bc0507966bf00e885035c",
+      "graph/graph.json": "17f6cadad43835d4ea7aa595abb8fc204bbae16d1b3831594b0f8ea779661161",
+      "layout/layout.json": "29244e50f360bcf56886f164d5326fb80d54504269ba8aad4add28ee1896f9b4"
+    }
+  }
+}
