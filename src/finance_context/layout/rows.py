@@ -377,6 +377,9 @@ def _data_rows(
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
     out: list[LayoutRow] = []
+    # Non-unit rows, indents strictly increasing. The nearest shallower row is
+    # the top of this stack, so a flat table does not rescan every earlier row.
+    parent_stack: list[LayoutRow] = []
     outlines: list[int] = []
     section_stack: list[LayoutRow] = [seed] if seed is not None else []
     for row_n in band_rows:
@@ -433,13 +436,7 @@ def _data_rows(
             while section_stack and section_stack[-1].indent > indent:
                 section_stack.pop()
         section_path = [item.label for item in section_stack]
-        parent_row = None
-        for prev in reversed(out):
-            if is_unit_text(prev.label):
-                continue
-            if prev.indent < indent:
-                parent_row = prev.row
-                break
+        parent_row = _indent_parent(parent_stack, indent)
         # A fact in the same column as its section header has no shallower indent.
         # section_path already kept that header; parent_row should name it too.
         if parent_row is None and section_stack and kind != "abstract":
@@ -475,11 +472,26 @@ def _data_rows(
         )
         out.append(item)
         outlines.append(outline)
+        if not unit_caption:
+            while parent_stack and parent_stack[-1].indent >= indent:
+                parent_stack.pop()
+            parent_stack.append(item)
         if kind == "abstract" and not is_unit_text(label):
             section_stack.append(item)
     if any(level > 0 for level in outlines):
         _apply_outline_parents(out, outlines, summary_below)
     return out
+
+
+def _indent_parent(stack: list[LayoutRow], indent: int) -> int | None:
+    """Nearest earlier non-unit row whose indent is strictly smaller.
+
+    ``stack`` holds those rows in sheet order and its indents rise.
+    """
+    for prev in reversed(stack):
+        if prev.indent < indent:
+            return prev.row
+    return None
 
 
 def _style_indent(cell: dict) -> int:
@@ -508,13 +520,16 @@ def _apply_outline_parents(
     replaces the indent parent when the summary sits closer.
     ``summaryBelow`` false looks upward; true looks downward.
     """
+    unit = [is_unit_text(row.label) for row in rows]
+    parent_at = _outline_parent_at(levels, unit, summary_below)
     for index, (row, level) in enumerate(zip(rows, levels, strict=True)):
-        if level <= 1 or is_unit_text(row.label):
+        if level <= 1 or unit[index]:
             continue
-        parent = _outline_parent(rows, levels, index, level, summary_below)
-        if parent is None:
+        parent_index = parent_at[index]
+        if parent_index is None:
             continue
-        parent_level = levels[rows.index(parent)]
+        parent = rows[parent_index]
+        parent_level = levels[parent_index]
         if parent_level <= 0:
             continue
         if row.parent_row is None:
@@ -526,20 +541,28 @@ def _apply_outline_parents(
             row.parent_row = parent.row
 
 
-def _outline_parent(
-    rows: list[LayoutRow],
-    levels: list[int],
-    index: int,
-    level: int,
-    summary_below: bool,
-) -> LayoutRow | None:
-    span = range(index + 1, len(rows)) if summary_below else range(index - 1, -1, -1)
-    for other in span:
-        if is_unit_text(rows[other].label):
+def _outline_parent_at(
+    levels: list[int], unit: list[bool], summary_below: bool
+) -> list[int | None]:
+    """Nearest row in the summary direction with a strictly smaller level.
+
+    Unit-text rows are not summaries. One stack pass: each row is pushed and
+    popped at most once. ``summary_below`` walks upward from the bottom.
+    """
+    count = len(levels)
+    found: list[int | None] = [None] * count
+    stack: list[int] = []
+    indexes = range(count - 1, -1, -1) if summary_below else range(count)
+    for index in indexes:
+        if unit[index]:
             continue
-        if levels[other] < level:
-            return rows[other]
-    return None
+        level = levels[index]
+        while stack and levels[stack[-1]] >= level:
+            stack.pop()
+        if stack:
+            found[index] = stack[-1]
+        stack.append(index)
+    return found
 
 
 def _row_all_hidden(
