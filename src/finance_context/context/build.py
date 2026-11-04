@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -93,7 +92,7 @@ def build_context(
     edges: list[dict] | None = None,
     usage: SheetUsage | None = None,
     book_dir: Path | None = None,
-    context_dir: Path | None = None,
+    context_dir: Path,
 ) -> ContextDocument:
     relations = list(relations or [])
     date1904 = bool(workbook_meta.get("date1904"))
@@ -171,8 +170,6 @@ def build_context(
         else []
     )
     not_applicable: set[str] = set()
-    if context_dir is None:
-        context_dir = Path(tempfile.mkdtemp(prefix="fc-context-"))
     published: list[FinancialBlock] = []
     streamed_rows = 0
     date_flag = bool(workbook_meta.get("date1904"))

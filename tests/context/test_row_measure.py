@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from tests.helpers.published import attach_streamed_rows
+from pathlib import Path
+
+from tests.helpers.published import published_context
 
 from finance_context.context import assemble
-from finance_context.context.build import build_context
 from finance_context.context.measure import Measure
 from finance_context.excel.a1 import parse_addr
 from finance_context.layout.detect import detect_layout
@@ -62,14 +63,14 @@ def test_each_row_label_is_parsed_once(monkeypatch) -> None:
         _cell("D7", "0.03", "0.00%"),
     ]
     layout = detect_layout(cells)
-    doc = attach_streamed_rows(
-        build_context(
-            job_id="once",
-            workbook_meta={"sheets": []},
-            cells=cells,
-            layout=layout,
-        )
+    before = set(Path("/tmp").glob("fc-context-*"))
+    doc = published_context(
+        job_id="once",
+        workbook_meta={"sheets": []},
+        cells=cells,
+        layout=layout,
     )
+    assert set(Path("/tmp").glob("fc-context-*")) == before
     rows = [row for block in doc.blocks for row in block.rows]
     assert seen == [row.label for row in rows]
     by_label = {row.label: row for row in rows}
