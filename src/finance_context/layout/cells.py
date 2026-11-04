@@ -64,9 +64,7 @@ class LayoutCell:
         self.outline_level = outline_level
         self.col_outline_level = col_outline_level
 
-    def _value(self, key: str) -> object:
-        if key != "addr":
-            return getattr(self, key)
+    def _addr(self) -> object:
         stored = self.addr
         if stored is not None:
             return stored
@@ -79,12 +77,17 @@ class LayoutCell:
     def get(self, key: str, default: object = None) -> object:
         if key not in _LAYOUT_FIELD_SET:
             return default
-        return self._value(key)
+        # Column and value reads are the hot path. Only an address is derived.
+        if key != "addr":
+            return getattr(self, key)
+        return self._addr()
 
     def __getitem__(self, key: str) -> object:
         if key not in _LAYOUT_FIELD_SET:
             raise KeyError(key)
-        return self._value(key)
+        if key != "addr":
+            return getattr(self, key)
+        return self._addr()
 
     def __setitem__(self, key: str, value: object) -> None:
         if key not in _LAYOUT_FIELD_SET:
@@ -93,15 +96,19 @@ class LayoutCell:
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, LayoutCell):
-            return all(self._value(key) == other._value(key) for key in _LAYOUT_FIELDS)
+            return all(self[key] == other[key] for key in _LAYOUT_FIELDS)
         if isinstance(other, dict):
-            return {key: self._value(key) for key in _LAYOUT_FIELDS} == {
+            return {key: self[key] for key in _LAYOUT_FIELDS} == {
                 key: other.get(key) for key in _LAYOUT_FIELDS
             }
         return NotImplemented
 
     def __contains__(self, key: object) -> bool:
-        return key in _LAYOUT_FIELD_SET and self._value(key) is not None
+        if key not in _LAYOUT_FIELD_SET:
+            return False
+        if key != "addr":
+            return getattr(self, key) is not None
+        return self._addr() is not None
 
 
 def _kept_addr(addr: object, row: object, col: object) -> object:

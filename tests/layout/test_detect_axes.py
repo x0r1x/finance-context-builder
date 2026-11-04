@@ -500,6 +500,27 @@ def test_weekly_dates_keep_distinct_period_keys() -> None:
     assert keys == ["2026-01-11", "2026-01-18", "2026-01-25"]
 
 
+def test_integer_body_keeps_the_year_header_and_adds_no_second_axis() -> None:
+    """Plain integers and grouped numbers are not another header row."""
+    cells = [
+        _c("M", "A1", "Line item"),
+        _c("M", "B1", "2020"),
+        _c("M", "C1", "2021"),
+        _c("M", "D1", "2022"),
+        _c("M", "A2", "Item 2"),
+        _c("M", "B2", "1"),
+        _c("M", "C2", "1"),
+        _c("M", "D2", "1"),
+        _c("M", "A3", "1 000"),
+        _c("M", "B3", "1 000"),
+        _c("M", "C3", "2 000"),
+        _c("M", "D3", "3 000"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.header_row for axis in sheet.axes] == [1]
+    assert [period.period_key for period in sheet.axes[0].periods] == ["2020", "2021", "2022"]
+
+
 def test_model_year_row_forms_relative_axis() -> None:
     cells = [
         _c("CFS", "B2", "Year"),
