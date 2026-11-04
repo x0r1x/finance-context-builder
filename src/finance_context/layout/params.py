@@ -4,7 +4,7 @@ import re
 from collections import Counter, defaultdict
 
 from finance_context.excel.a1 import format_addr, in_grid, index_to_col, parse_addr
-from finance_context.layout.cells import parse_number
+from finance_context.layout.cells import LayoutCell, parse_number
 from finance_context.layout.format_words import header_role_map
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text, period_like_header
@@ -385,20 +385,22 @@ def selector_rows(
     its row.
     """
     names = _names_on_sheet(defined_names, sheet) if sheet else {}
-    by_addr: dict[str, tuple[int, dict]] = {}
-    for row_n, cells in by_row.items():
-        for cell in cells:
-            addr = str(cell.get("addr") or "").replace("$", "").upper()
-            if addr:
-                by_addr[addr] = (row_n, cell)
     referenced: dict[str, set[int]] = defaultdict(set)
     for row_n, cells in by_row.items():
         for cell in cells:
-            formula = str(cell.get("formula_raw") or "")
+            formula = cell.get("formula_raw")
             if not formula:
                 continue
-            for addr in _switch_args(formula, names):
+            text = str(formula)
+            if not _switch_call(text):
+                continue
+            for addr in _switch_args(text, names):
                 referenced[addr].add(row_n)
+    # No switch reads an address. A dense sheet has none, and formatting every
+    # cell here rebuilt the string ``_kept_addr`` had just dropped.
+    if not referenced:
+        return set()
+    by_addr = _selector_addrs(by_row, referenced)
     candidates: set[int] = set()
     for addr, rows in referenced.items():
         found = by_addr.get(addr)
@@ -418,6 +420,45 @@ def selector_rows(
         if is_scenario_selector_label(_left_text(by_row.get(row, []), date1904))
     }
     return labeled or candidates
+
+
+def _selector_addrs(
+    by_row: dict[int, list[dict]],
+    referenced: dict[str, set[int]],
+) -> dict[str, tuple[int, dict]]:
+    """Plain address to the last cell that wears it, for referenced cells only.
+
+    A derived address is ``format_addr(col, row)`` and is not stored. The
+    referenced set already is that form, so the cell is the one at that
+    coordinate. An address that was stored is matched by its text, which is
+    how ``$B$2`` on a different column still resolves.
+    """
+    wanted: dict[tuple[int, int], str] = {}
+    for addr in referenced:
+        col, row = parse_addr(addr)
+        wanted[(row, col)] = addr
+    by_addr: dict[str, tuple[int, dict]] = {}
+    for row_n, cells in by_row.items():
+        for cell in cells:
+            plain = _selector_plain_addr(cell, wanted)
+            if plain:
+                by_addr[plain] = (row_n, cell)
+    return by_addr
+
+
+def _selector_plain_addr(cell: dict, wanted: dict[tuple[int, int], str]) -> str | None:
+    if isinstance(cell, LayoutCell):
+        stored = cell.addr
+        if stored is None:
+            row = cell.row
+            col = cell.col
+            if row is None or col is None:
+                return None
+            return wanted.get((int(row), int(col)))
+        plain = str(stored).replace("$", "").upper()
+        return plain or None
+    plain = str(cell.get("addr") or "").replace("$", "").upper()
+    return plain or None
 
 
 def _switch_call(formula: str) -> bool:

@@ -43,6 +43,15 @@ def test_sheet_is_shared_and_a_plain_address_is_derived() -> None:
     odd = LayoutCell("Model", 2, 1, "$A$2")
     assert odd.addr == "$A$2"
     assert odd["addr"] == "$A$2"
+    wide = LayoutCell("Model", 100, 27, "AA100")
+    assert wide.addr is None
+    assert wide["addr"] == "AA100"
+    # ``A10`` is column A, not a prefix of ``AA``.
+    prefix = LayoutCell("Model", 10, 1, "A10")
+    assert prefix.addr is None
+    assert prefix["addr"] == "A10"
+    misplaced = LayoutCell("Model", 10, 27, "A10")
+    assert misplaced.addr == "A10"
 
 
 def test_slot_record_is_smaller_than_the_cell_dict() -> None:

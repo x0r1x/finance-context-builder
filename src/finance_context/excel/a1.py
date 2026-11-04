@@ -28,13 +28,23 @@ def in_grid(col: int, row: int = 1) -> bool:
     return 1 <= col <= _MAX_COL and 1 <= row <= _MAX_ROW
 
 
+# A sheet repeats a handful of columns on every row. The alphabet walk is not.
+_COL_LETTERS: dict[int, str] = {}
+
+
 def index_to_col(n: int) -> str:
     n = max(n, 1)
+    found = _COL_LETTERS.get(n)
+    if found is not None:
+        return found
     chars: list[str] = []
-    while n:
-        n, rem = divmod(n - 1, 26)
+    value = n
+    while value:
+        value, rem = divmod(value - 1, 26)
         chars.append(chr(65 + rem))
-    return "".join(reversed(chars))
+    found = "".join(reversed(chars))
+    _COL_LETTERS[n] = found
+    return found
 
 
 def parse_addr(addr: str) -> tuple[int, int]:
@@ -46,6 +56,18 @@ def parse_addr(addr: str) -> tuple[int, int]:
 
 def format_addr(col: int, row: int) -> str:
     return f"{index_to_col(col)}{row}"
+
+
+def is_derived_addr(addr: str, col: int, row: int) -> bool:
+    """True when ``addr`` is exactly ``format_addr(col, row)``."""
+    letters = index_to_col(col)
+    width = len(letters)
+    if len(addr) <= width or not addr.startswith(letters):
+        return False
+    tail = addr[width:]
+    if not tail.isdigit() or (len(tail) > 1 and tail[0] == "0"):
+        return False
+    return int(tail) == row
 
 
 def shift_formula(formula: str, from_col: int, from_row: int, to_col: int, to_row: int) -> str:
