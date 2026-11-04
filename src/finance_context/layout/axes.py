@@ -404,6 +404,10 @@ def _relative_run(
     min_len: int,
     hidden_cols: set[int] | None = None,
 ) -> list[tuple[int, int]]:
+    # The run is counted from cells on the row. Fewer cells cannot hold it,
+    # and a year triple must not be classified once per number to learn that.
+    if len(row_cells) < min_len:
+        return []
     # The resolved label is one visible non-number cell. Neither check can
     # succeed when no such cell matches, and finding that out does not parse
     # the label as a header.
