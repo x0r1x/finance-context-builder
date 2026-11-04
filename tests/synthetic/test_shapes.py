@@ -184,6 +184,17 @@ def test_text_shared_strings_are_unique(tmp_path: Path) -> None:
     assert len(block.rows) == rows
 
 
+def test_column_past_the_old_letter_table(tmp_path: Path) -> None:
+    """Column 302 is ``KP``. A 302-entry letter table raised ``IndexError``."""
+    path = tmp_path / "wide.xlsx"
+    rel(path, 1, periods=301)
+    _layout_doc, _compiled, cells = _layout(path, tmp_path)
+    by_addr = {cell["addr"]: cell for cell in cells}
+    assert by_addr["KP1"]["cached_value"] == "FY2300"
+    assert by_addr["KP2"]["formula_raw"] == "=1+1"
+    assert by_addr["KP2"]["cached_value"] == "2"
+
+
 def test_cli_writes_a_workbook(tmp_path: Path) -> None:
     target = tmp_path / "rel.xlsx"
     script = Path(__file__).resolve().parents[2] / "scripts" / "gen_synthetic.py"

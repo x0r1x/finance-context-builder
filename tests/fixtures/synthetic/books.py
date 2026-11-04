@@ -32,7 +32,9 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
-from tests.fixtures.synthetic.ooxml import Book, col_letter
+from tests.fixtures.synthetic.ooxml import Book
+
+from finance_context.excel.a1 import index_to_col
 
 REL_PERIODS = 60
 SERIES_PERIODS = 24
@@ -220,7 +222,7 @@ def _hop_sheet(path: Path, rows: int, *, periods: int) -> None:
                     if excel_row == 2:
                         line.number(col, 1)
                     else:
-                        letter = col_letter(col)
+                        letter = index_to_col(col)
                         line.formula(col, f"={letter}{excel_row - 1}", cached=1)
 
 
@@ -230,7 +232,7 @@ def _series_cell(
     kind: int,
     grid: dict[tuple[int, int], int],
 ) -> tuple[str | None, int]:
-    letter = col_letter(col)
+    letter = index_to_col(col)
     if row < 6:
         return None, 100 + row + col
     if kind == 0:

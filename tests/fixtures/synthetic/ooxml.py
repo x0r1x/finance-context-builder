@@ -25,13 +25,6 @@ _NS_CT = "http://schemas.openxmlformats.org/package/2006/content-types"
 _ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 _COMPRESS_LEVEL = 6
 
-_LETTERS = [index_to_col(col) for col in range(0, 302)]
-
-
-def col_letter(col: int) -> str:
-    """1-based Excel column letter. Column 1 is ``A``."""
-    return _LETTERS[col]
-
 
 class StringTable:
     """Shared strings in first-seen order.
@@ -80,16 +73,16 @@ class Row:
         self._shared(col, index, style=style)
 
     def number(self, col: int, value: int) -> None:
-        self._cells.append(f'<c r="{col_letter(col)}{self.row_number}"><v>{value}</v></c>')
+        self._cells.append(f'<c r="{index_to_col(col)}{self.row_number}"><v>{value}</v></c>')
 
     def formula(self, col: int, formula: str, cached: int | None = None) -> None:
-        ref = f"{col_letter(col)}{self.row_number}"
+        ref = f"{index_to_col(col)}{self.row_number}"
         value = f"<v>{cached}</v>" if cached is not None else ""
         self._cells.append(f'<c r="{ref}"><f>{escape(formula)}</f>{value}</c>')
 
     def _shared(self, col: int, index: int, *, style: int | None) -> None:
         style_attr = f' s="{style}"' if style else ""
-        ref = f"{col_letter(col)}{self.row_number}"
+        ref = f"{index_to_col(col)}{self.row_number}"
         self._cells.append(f'<c r="{ref}" t="s"{style_attr}><v>{index}</v></c>')
 
     def close(self) -> None:
