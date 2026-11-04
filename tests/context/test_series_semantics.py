@@ -1,8 +1,48 @@
 from tests.helpers.published import published_context as build_context
 
-from finance_context.context.series import normalize_value, value_status
+from finance_context.context.assemble import _row_for_layout
+from finance_context.context.series import normalize_series, normalize_value, value_status
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
+from finance_context.models.context import RowHints, RowSeries
 from finance_context.render.markdown import render_markdown
+
+
+def test_row_assembly_uses_the_series_normalization(monkeypatch) -> None:
+    """The series helper already normalized the row. Assembly must not do it again."""
+
+    def fail(values, factor):
+        raise AssertionError((values, factor))
+
+    monkeypatch.setattr("finance_context.context.assemble.normalize_series", fail)
+    series = RowSeries(
+        axis_id="CF!r1",
+        values=["1.9e-11", "60000"],
+        value_statuses=["cached", "cached"],
+        normalized_values=["0", "60000"],
+    )
+    row = _row_for_layout(
+        sheet_name="CF",
+        block_id="CF!r1",
+        layout_row=LayoutRow(row=2, label="Revenue"),
+        layout_row_parent=None,
+        headers=[],
+        value_headers=[],
+        by_addr={},
+        date1904=False,
+        label_path=[],
+        neighbors=[],
+        formula=None,
+        formula_exceptions=[],
+        numeric_summary=None,
+        hints=RowHints(),
+        role_cells=[],
+        series_unit=None,
+        series=[series],
+    )
+    assert row.values == ["1.9e-11", "60000"]
+    assert row.normalized_values == ["0", "60000"]
+    assert row.series[0].normalized_values == ["0", "60000"]
+    assert normalize_series(["1.9e-11", "60000"], None) == ["0", "60000"]
 
 
 def test_status_keeps_explicit_zero_apart_from_empty() -> None:

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 from finance_context.context.measure import Measure, _combine_measure, _parse_text
 from finance_context.context.series import normalize_series, scale_factor_for, value_status
 from finance_context.layout.models import LayoutRow
@@ -66,13 +64,13 @@ def _row_for_layout(
     unit = hints.unit or series_unit
     factor = scale_factor_for(hints.scale)
     if series:
-        series = [
-            replace(item, normalized_values=normalize_series(list(item.values), factor))
-            for item in series
-        ]
-        values = list(series[0].values)
-        statuses = list(series[0].value_statuses)
-    normalized = normalize_series(values, factor)
+        # The series helper already normalized these values with this factor.
+        first = series[0]
+        values = list(first.values)
+        statuses = list(first.value_statuses)
+        normalized = list(first.normalized_values)
+    else:
+        normalized = normalize_series(values, factor)
     return BlockRow(
         row_key=f"{sheet_name}|{row_num}|{block_id}",
         sheet=sheet_name,
