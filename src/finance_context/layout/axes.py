@@ -94,6 +94,10 @@ def _axis_candidates(
             candidates.append(([row_n], axis))
             taken.add(row_n)
             continue
+        # Without a formula timeline the run is discarded. Scanning it still
+        # classifies every body cell.
+        if not formula_cols:
+            continue
         unlabeled = _relative_run(
             by_row[row_n],
             date1904,
@@ -101,7 +105,7 @@ def _axis_candidates(
             min_len=_UNLABELED_RELATIVE_MIN,
             hidden_cols=known,
         )
-        if not unlabeled or not formula_cols:
+        if not unlabeled:
             continue
         run_cols = {col for col, _ in unlabeled}
         if not _same_timeline(run_cols, formula_cols):
@@ -369,6 +373,40 @@ def _cols_connected(left: int, right: int, hidden_cols: set[int]) -> bool:
     return all(col in hidden_cols for col in range(left + 1, right))
 
 
+# ``parse_number`` rejects a non-finite float. Fifteen digits stays finite.
+_SURE_INT_LEN = 15
+
+
+def _sure_integer(text: str) -> bool:
+    """True when ``text`` is an integer ``parse_number`` accepts."""
+    if len(text) > _SURE_INT_LEN:
+        return False
+    if text.startswith("-"):
+        text = text[1:]
+    return bool(text) and text.isdigit()
+
+
+def _non_numeric_text(cell: dict, date1904: bool) -> str | None:
+    """Displayed text of one visible cell that is not a number.
+
+    A plain integer skips display and ``float``. A date format can turn that
+    same integer into a date string, so those cells still go through display.
+    """
+    cached = cell.get("cached_value")
+    if cached is None:
+        return None
+    fmt = cell.get("number_format")
+    if fmt is not None and is_date_format(fmt):
+        shown = _text(cell, date1904)
+        if shown is None or _is_number(shown):
+            return None
+        return shown
+    shown = cached if isinstance(cached, str) else str(cached)
+    if not shown.strip() or _sure_integer(shown) or _is_number(shown):
+        return None
+    return shown
+
+
 def _visible_text_matches(
     row_cells: list[dict],
     date1904: bool,
@@ -384,8 +422,8 @@ def _visible_text_matches(
     for cell in row_cells:
         if cell.get("hidden"):
             continue
-        text = _text(cell, date1904)
-        if not text or _is_number(text):
+        text = _non_numeric_text(cell, date1904)
+        if text is None:
             continue
         if normalized:
             raw = normalize_header(text)
