@@ -130,25 +130,15 @@ def _resolved_hints(
         row_measure = Measure(unit="rate")
     else:
         row_measure = _combine_measure(unit_from_cell, label_measure, None)
+    # row_measure is main's second pass (row unit cell + label) and wins for unit.
+    # hinted is the first pass (block or row caption, label, and number formats)
+    # and wins for unit_per, currency, and scale. This mirrors main's old
+    # `unit = m2.unit or hints.unit` and `hints.x or m2.x` exactly. It must not be normalized.
     return RowHints(
         unit=row_measure.unit or hinted.unit,
         unit_per=hinted.per or row_measure.per,
         currency=hinted.currency or row_measure.currency,
         scale=hinted.scale or row_measure.scale,
-    )
-
-
-def _hints_for(
-    layout_row: LayoutRow,
-    unit_text: str | None = None,
-    *,
-    number_formats: list[str] | None = None,
-) -> RowHints:
-    return _resolved_hints(
-        layout_row,
-        unit_text,
-        unit_from_cell=unit_text,
-        number_formats=number_formats,
     )
 
 
