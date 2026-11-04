@@ -115,6 +115,7 @@ def build_context(
         layout,
         cells,
         date1904=date1904,
+        by_addr=by_addr,
         period_warnings=cell_path is None,
     )
     if cell_path is not None:

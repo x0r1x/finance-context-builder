@@ -15,6 +15,7 @@ from finance_context.context.build import (
     _layout_value_cells,
     build_context,
 )
+from finance_context.context.timeline import build_axes
 from finance_context.layout.models import Axis, AxisHeader, Block, Layout, LayoutRow, SheetLayout
 from finance_context.store.fs import read_parquet_dicts, write_parquet
 
@@ -318,3 +319,28 @@ def test_formula_stats_peak_stays_under_the_address_list(tmp_path: Path) -> None
     finally:
         tracemalloc.stop()
     assert stats_peak < list_peak
+
+
+def test_build_axes_reuses_the_given_address_map() -> None:
+    """A second (sheet, row, col) map was a transient peak inside build_axes."""
+    cells = [
+        {"sheet": "S", "row": row, "col": 1, "addr": f"A{row}", "cached_value": "1"}
+        for row in range(1, 20_001)
+    ]
+    layout = Layout(sheets=[SheetLayout(name="S", blocks=[])])
+    by_addr = {(cell["sheet"], int(cell["row"]), int(cell["col"])): cell for cell in cells}
+    gc.collect()
+    tracemalloc.start()
+    try:
+        build_axes(layout, cells, by_addr=by_addr, period_warnings=False)
+        _current, with_map = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    gc.collect()
+    tracemalloc.start()
+    try:
+        build_axes(layout, cells, period_warnings=False)
+        _current, without = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert with_map * 4 < without

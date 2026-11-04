@@ -26,14 +26,17 @@ def build_axes(
     cells: list,
     *,
     date1904: bool = False,
+    by_addr: dict | None = None,
     period_warnings: bool = True,
 ) -> tuple[list[ContextAxis], list[str]]:
     """Published axes, their notes, and unparsed period headers.
 
-    ``period_warnings`` is false when the caller scans the workbook file
+    ``by_addr`` is the caller's ``(sheet, row, col)`` map when it already has
+    one. ``period_warnings`` is false when the caller scans the workbook file
     itself. Layout cells on that path do not carry ``addr``.
     """
-    by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
+    if by_addr is None:
+        by_addr = {(c["sheet"], int(c["row"]), int(c["col"])): c for c in cells}
     published = _published_axis_ids(layout)
     timeline_of = _timeline_of(layout)
     axes: list[ContextAxis] = []
