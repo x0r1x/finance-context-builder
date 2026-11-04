@@ -11,6 +11,7 @@ from tests.fixtures.synthetic import dense, hops, hops_tl, outline, rel, series,
 
 from finance_context.excel.stage import parse_workbook
 from finance_context.formulas.stage import compile_workbook
+from finance_context.layout.cells import parse_number
 from finance_context.layout.stage import layout_workbook
 from finance_context.settings import Settings
 from finance_context.store.fs import read_parquet_dicts
@@ -105,9 +106,33 @@ def test_series_uses_the_relative_formula_grid(tmp_path: Path) -> None:
     # Excel row 8 is 8 % 4 == 0 and past the value rows, so it sums the four above.
     assert by_addr["B8"]["formula_raw"] == "=SUM(B4:B7)"
     assert by_addr["B2"]["formula_raw"] is None
+    # Row 7 is the fourth formula. It negates the cell three rows up.
+    assert by_addr["B7"]["formula_raw"] == "=-B4"
+    assert parse_number(by_addr["B7"]["cached_value"]) == -106
     block = _layout_doc.sheets[0].blocks[0]
     assert block.kind == "timeline"
     assert len(block.rows) == 8
+
+
+def test_series_caches_stay_inside_the_float_range(tmp_path: Path) -> None:
+    """The old column-B SUM left the float range at row 4076."""
+    path = tmp_path / "series.xlsx"
+    series(path, 4_200, periods=4)
+    dest = tmp_path / "parsed"
+    dest.mkdir()
+    parse_workbook(path, dest, settings=Settings(data_dir=tmp_path / "data", _env_file=None))
+    cells = read_parquet_dicts(
+        dest / "raw" / "cells.parquet",
+        columns=("addr", "row", "col", "cached_value", "formula_raw"),
+    )
+    values = [
+        cell["cached_value"] for cell in cells if cell["col"] > 1 and cell["row"] > 1
+    ]
+    assert values
+    assert all(parse_number(value) is not None for value in values)
+    by_addr = {cell["addr"]: cell for cell in cells}
+    assert by_addr["B4076"]["formula_raw"] == "=SUM(B4072:B4075)"
+    assert parse_number(by_addr["B4076"]["cached_value"]) is not None
 
 
 def test_dense_is_a_value_grid(tmp_path: Path) -> None:

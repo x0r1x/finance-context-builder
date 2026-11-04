@@ -28,9 +28,9 @@ Measured ``duration_ms`` / ``rss_peak_mb``:
 - hops100k (81s, ru_maxrss 2169 MiB): parse 5776/227, compile 7337/276,
   layout 22967/532, relations 2265/518, graph 6308/598, build 33436/1885,
   render 1428/1301.
-- series10k (63s, ru_maxrss 712 MiB): parse 5449/327, compile 13932/398,
-  layout 13514/523, relations 1185/461, graph 10637/544, build 14386/704,
-  render 1213/628.
+- series10k (41s, ru_maxrss 514 MiB): parse 4157/215, compile 12172/338,
+  layout 5966/410, relations 1301/368, graph 9082/440, build 6625/514,
+  render 715/450. Remeasured after every series cache stayed a finite float.
 - dense2m (152s, ru_maxrss 1066 MiB): parse 28252/243, compile 16040/255,
   layout 75415/1066, relations 52/336, graph 4607/370, build 21245/1044,
   render 5066/788.
@@ -70,13 +70,13 @@ _CEILINGS: dict[str, dict[str, tuple[int, int]]] = {
         "render": (17_000, 2050),
     },
     "series10k": {
-        "parse": (21_000, 550),
-        "compile": (42_000, 650),
-        "layout": (41_000, 850),
-        "relations": (17_000, 750),
-        "graph": (32_000, 900),
-        "build": (44_000, 1150),
-        "render": (17_000, 1000),
+        "parse": (20_000, 400),
+        "compile": (37_000, 600),
+        "layout": (21_000, 700),
+        "relations": (17_000, 650),
+        "graph": (28_000, 750),
+        "build": (22_000, 850),
+        "render": (16_000, 750),
     },
     "dense2m": {
         "parse": (85_000, 450),

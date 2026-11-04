@@ -7,7 +7,9 @@ bytes. The shapes:
 - ``rel`` — ``rows`` × 60 periods of ``=1+1`` cached as 2. ``rel20k`` is
   20,000 × 60 = 1,200,000 formulas.
 - ``series`` — relative formulas across 24 periods (the ad-hoc ``gen_rel.py``
-  grid). ``series10k`` is 10,000 × 24.
+  grid). The fourth formula negates the cell three rows up, so each SUM
+  repeats instead of doubling out of the float range. ``series10k`` is
+  10,000 × 24.
 - ``hops`` — one vertical hop chain under a single year. One period is a
   params block, so layout does not walk timeline parents.
 - ``hops_tl`` — the same chain on two year columns. Two periods are a
@@ -76,7 +78,8 @@ def series(path: Path, rows: int, *, periods: int = SERIES_PERIODS) -> Path:
     """Relative formula grid. The first rows are values; later rows copy, subtract, and sum.
 
     Cached values are the formula results, so the book does not take the
-    missing-cache path. The formulas match the ad-hoc generator.
+    missing-cache path. Every cache fits in a finite float: the row after a
+    difference negates the cell three rows up, and the next SUM repeats.
     """
     _require_positive(rows, periods)
     grid: dict[tuple[int, int], int] = {}
@@ -242,12 +245,11 @@ def _series_cell(
             f"={letter}{row - 2}-{letter}{row - 1}",
             grid[(row - 2, col)] - grid[(row - 1, col)],
         )
-    if col == 2:
-        return None, 1
-    return (
-        f"={col_letter(col - 1)}{row}+{letter}{row - 1}",
-        grid[(row, col - 1)] + grid[(row - 1, col)],
-    )
+    # The ad-hoc grid planted a 1 here, then added the left neighbour. Column B
+    # then sums to ``2 * previous + 1`` every four rows, and by row 4076 the
+    # cache is a 309-digit string that ``parse_number`` rejects. Negating the
+    # previous SUM keeps the next one equal to it.
+    return f"=-{letter}{row - 3}", -grid[(row - 3, col)]
 
 
 def _outline_cycle(book: Book, start: int, cycle: int) -> int:
