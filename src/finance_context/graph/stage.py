@@ -68,17 +68,28 @@ class _Periods:
 
 
 class _Formula:
-    """One graph link: the formula text, its layout identity, and its refs."""
+    """One graph link: its layout identity, its refs, and later its formula text.
 
-    __slots__ = ("formula", "row_key", "period_id", "refs")
+    ``formula_cell`` marks a cell that has a formula. The text stays out of this
+    record through the edge walk and the cycle matrix, then ``_attach_formula_text``
+    reads it back for classification and ``graph.json``.
+    """
+
+    __slots__ = ("formula", "row_key", "period_id", "refs", "formula_cell")
 
     def __init__(
-        self, formula: str | None, row_key: str | None, period_id: str | None
+        self,
+        formula: str | None,
+        row_key: str | None,
+        period_id: str | None,
+        *,
+        formula_cell: bool | None = None,
     ) -> None:
         self.formula = formula
         self.row_key = row_key
         self.period_id = period_id
         self.refs: list[str] = []
+        self.formula_cell = bool(formula) if formula_cell is None else formula_cell
 
 
 def _formula_record(sheet, row, col, addr, raw, row_meta, period_by_cell) -> tuple[str, _Formula]:
@@ -89,8 +100,19 @@ def _formula_record(sheet, row, col, addr, raw, row_meta, period_by_cell) -> tup
     )
 
 
+def _formula_identity(sheet, row, col, addr, row_meta, period_by_cell) -> tuple[str, _Formula]:
+    """Same identity as ``_formula_record`` with the formula text left on disk."""
+    return f"{sheet}!{addr}", _Formula(
+        None,
+        row_meta.get((str(sheet), int(row))),
+        period_by_cell.get((str(sheet), int(col))),
+        formula_cell=True,
+    )
+
+
 def _load_formulas(book: Path, row_meta, period_by_cell) -> dict[str, _Formula]:
-    """Formula rows only. Value cells stay in the parquet file."""
+    """Formula rows only. Value cells and formula text stay in the parquet file."""
+    import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
     path = book / "ir" / "cells.parquet"
@@ -99,25 +121,54 @@ def _load_formulas(book: Path, row_meta, period_by_cell) -> dict[str, _Formula]:
     found: dict[str, _Formula] = {}
     columns = ["sheet", "row", "col", "addr", "formula_raw"]
     for batch in pq.ParquetFile(path).iter_batches(columns=columns, batch_size=65536):
-        raw = batch.column(4).to_pylist()
-        sheets = batch.column(0).to_pylist()
-        rows = batch.column(1).to_pylist()
-        cols = batch.column(2).to_pylist()
-        addrs = batch.column(3).to_pylist()
-        for index, formula in enumerate(raw):
-            if not formula:
-                continue
-            node, rec = _formula_record(
-                sheets[index],
+        raw = batch.column(4)
+        mask = pc.and_(pc.invert(pc.is_null(raw)), pc.not_equal(raw, ""))
+        if not pc.any(mask).as_py():
+            continue
+        kept = batch.select(["sheet", "row", "col", "addr"]).filter(mask)
+        sheets = kept.column(0).to_pylist()
+        rows = kept.column(1).to_pylist()
+        cols = kept.column(2).to_pylist()
+        addrs = kept.column(3).to_pylist()
+        for index, sheet in enumerate(sheets):
+            node, rec = _formula_identity(
+                sheet,
                 rows[index],
                 cols[index],
                 addrs[index],
-                formula,
                 row_meta,
                 period_by_cell,
             )
             found[node] = rec
     return found
+
+
+def _attach_formula_text(book: Path, formulas: dict[str, _Formula]) -> None:
+    """Fill formula text after the cycle matrix is gone.
+
+    Records built from an in-memory cell list already hold the text. A record
+    created for an edge source that is not a formula cell stays empty.
+    """
+    if not any(rec.formula_cell and not rec.formula for rec in formulas.values()):
+        return
+    import pyarrow.parquet as pq
+
+    path = book / "ir" / "cells.parquet"
+    if not path.is_file():
+        return
+    columns = ["sheet", "addr", "formula_raw"]
+    for batch in pq.ParquetFile(path).iter_batches(columns=columns, batch_size=65536):
+        raw = batch.column(2).to_pylist()
+        sheets = batch.column(0).to_pylist()
+        addrs = batch.column(1).to_pylist()
+        for index, formula in enumerate(raw):
+            if not formula:
+                continue
+            rec = formulas.get(f"{sheets[index]}!{addrs[index]}")
+            if rec is None or not rec.formula_cell:
+                continue
+            rec.formula = str(formula)
+        del raw
 
 
 def _formulas_from_cells(cells, row_meta, period_by_cell) -> dict[str, _Formula]:
@@ -413,6 +464,7 @@ def build_formula_graph(
         lags = _lags_by_source(enriched)
         _add_range_lags(lags, users, view, period_of)
         _bind_refs(formulas, edges)
+        _attach_formula_text(book, formulas)
         doc.links = _links_from_formulas(formulas, lags)
         if chosen.json_stream:
             _stream_graph_files(dest_dir, doc)
@@ -689,7 +741,7 @@ class _RangeView:
     def hops(self) -> RangeHops:
         if self._hops is None:
             self._hops = RangeHops(
-                node for node, rec in self._formulas.items() if rec.formula
+                node for node, rec in self._formulas.items() if rec.formula_cell
             )
         return self._hops
 
@@ -1203,6 +1255,7 @@ def _graph_from_parquet(
         iterate=iterate,
         circularity_hints=list(hints or []),
     )
+    _attach_formula_text(book, formulas)
     if stream_json:
         _stream_graph_files(dest_dir, doc, formulas, lag_groups)
     else:
