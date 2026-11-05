@@ -13,6 +13,7 @@ from finance_context.formulas.csr import (
     is_range_node,
     parse_range_node,
 )
+from finance_context.formulas.edge_file import iterate_edges
 from finance_context.formulas.models import Edge, as_edge
 from finance_context.formulas.stage import IR_CELL_EDGE_COLUMNS, EdgeCount
 from finance_context.graph.cycles import classify_cycles
@@ -306,10 +307,12 @@ def build_formula_graph(
         and cell_edge_path.is_file()
         and (cell_edges is None or isinstance(cell_edges, EdgeCount))
     )
-    if edges is None:
-        edges_path = book / "ir" / "edges.parquet"
-        edges = read_parquet(edges_path) if edges_path.is_file() else []
-    edges = [as_edge(edge) for edge in edges]
+    # A passed list is the test path. Production leaves edges on disk and
+    # folds them once while the formula links are bound.
+    if edges is None and not stream:
+        edges = list(iterate_edges(book / "ir" / "edges.parquet"))
+    elif edges is not None:
+        edges = [as_edge(edge) for edge in edges]
     if not stream:
         if cell_edges is None or isinstance(cell_edges, EdgeCount):
             cell_edges = read_parquet(cell_edge_path) if cell_edge_path.is_file() else []
@@ -1009,14 +1012,44 @@ def _cycles_packed(
     return cycles
 
 
-def _edge_bucket(formula_edges, pred) -> IdCount:
-    ids: list[str] = []
+def _fold_formula_edges(formulas, formula_edges) -> tuple[IdCount, IdCount, IdCount]:
+    """One pass: unresolved, dynamic and external ids, and formula refs.
+
+    First-seen order matches ``_edge_bucket`` and ``_bind_refs`` walking the
+    same rows separately.
+    """
+    unresolved: list[str] = []
+    dynamic: list[str] = []
+    external: list[str] = []
+    seen_unresolved: set[str] = set()
+    seen_dynamic: set[str] = set()
+    seen_external: set[str] = set()
     for edge in formula_edges:
-        if pred(edge) and edge.source:
-            src = str(edge.source)
-            if src not in ids:
-                ids.append(src)
-    return IdCount(count=len(ids), ids=ids[:ID_CAP])
+        source = str(edge.source or "")
+        if not source:
+            continue
+        if edge.unresolved and edge.kind not in {"dynamic", "external"}:
+            if source not in seen_unresolved:
+                seen_unresolved.add(source)
+                unresolved.append(source)
+        if edge.kind == "dynamic" and source not in seen_dynamic:
+            seen_dynamic.add(source)
+            dynamic.append(source)
+        if edge.kind == "external" and source not in seen_external:
+            seen_external.add(source)
+            external.append(source)
+        rec = formulas.get(source)
+        if rec is None:
+            rec = _Formula(None, None, None)
+            formulas[source] = rec
+        target = edge.target
+        if target and (text := str(target)) not in rec.refs:
+            rec.refs.append(text)
+    return (
+        IdCount(count=len(unresolved), ids=unresolved[:ID_CAP]),
+        IdCount(count=len(dynamic), ids=dynamic[:ID_CAP]),
+        IdCount(count=len(external), ids=external[:ID_CAP]),
+    )
 
 
 def _graph_from_parquet(
@@ -1151,6 +1184,8 @@ def _graph_from_parquet(
     del ids, src_ids, tgt_ids, flags
     hints = circularity_hints(layout, index_rows, cycles, cells_by_row=circular_ids)
     iterate = _workbook_iterate(book)
+    edge_source = edges if edges is not None else book / "ir" / "edges.parquet"
+    unresolved, dynamic, external = _fold_formula_edges(formulas, iterate_edges(edge_source))
     doc = GraphDocument(
         schema_version=GRAPH_SCHEMA_VERSION,
         job_id=job_id,
@@ -1158,11 +1193,9 @@ def _graph_from_parquet(
         edges=n_edges,
         kinds=dict(kinds),
         contract=GraphContract(),
-        unresolved=_edge_bucket(
-            edges, lambda edge: edge.unresolved and edge.kind not in {"dynamic", "external"}
-        ),
-        dynamic=_edge_bucket(edges, lambda edge: edge.kind == "dynamic"),
-        external=_edge_bucket(edges, lambda edge: edge.kind == "external"),
+        unresolved=unresolved,
+        dynamic=dynamic,
+        external=external,
         truncated=IdCount(count=len(truncated_ids), ids=truncated_ids[:ID_CAP]),
         dangling=IdCount(count=len(dangling_ids), ids=dangling_ids[:ID_CAP]),
         dangling_classes=dict(classes),
@@ -1170,7 +1203,6 @@ def _graph_from_parquet(
         iterate=iterate,
         circularity_hints=list(hints or []),
     )
-    _bind_refs(formulas, edges)
     if stream_json:
         _stream_graph_files(dest_dir, doc, formulas, lag_groups)
     else:

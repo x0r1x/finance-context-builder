@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from pathlib import Path
 
 from finance_context.formulas.models import as_edge
 from finance_context.layout.axes import _axis_candidates, _table_groups
@@ -31,7 +32,7 @@ def detect_layout(
     cells: list[dict],
     *,
     date1904: bool = False,
-    edges: list[dict] | None = None,
+    edges: list | Path | None = None,
     hidden_sheets: set[str] | None = None,
     hidden_columns: dict[str, set[int]] | None = None,
     hidden_rows: dict[str, set[int]] | None = None,
@@ -41,7 +42,8 @@ def detect_layout(
     hidden = hidden_sheets or set()
     columns = hidden_columns or {}
     below = summary_below or {}
-    edges = None if edges is None else [as_edge(edge) for edge in edges]
+    if not isinstance(edges, Path):
+        edges = None if edges is None else [as_edge(edge) for edge in edges]
     by_sheet: dict[str, list[dict]] = {}
     order: list[str] = []
     for cell in cells:
@@ -76,7 +78,7 @@ def _sheet_layout(
     sheet_cells: list[dict],
     *,
     date1904: bool,
-    edges: list[dict] | None,
+    edges: list | Path | None,
     hidden_sheets: set[str],
     hidden_columns: dict[str, set[int]],
     hidden_rows: dict[str, set[int]] | None,
@@ -102,7 +104,7 @@ def _blocks_for_sheet(
     sheet: str,
     cells: list[dict],
     date1904: bool,
-    edges: list[dict] | None = None,
+    edges: list | Path | None = None,
     hidden_cols: set[int] | None = None,
     hidden_row_ids: set[int] | None = None,
     summary_below: bool = True,

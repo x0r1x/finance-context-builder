@@ -9,7 +9,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from finance_context.excel.a1 import parse_addr
-from finance_context.formulas.models import as_edge
 from finance_context.layout.cells import LayoutCell
 from finance_context.layout.detect import _sheet_layout, detect_layout
 from finance_context.layout.models import Layout, SheetLayout
@@ -69,12 +68,14 @@ def layout_workbook(
     dest_dir: Path,
     *,
     cells: list[dict] | None = None,
-    edges: list[dict] | None = None,
+    edges: list | Path | None = None,
     settings: Settings | None = None,
 ) -> Layout:
     chosen = settings if isinstance(settings, Settings) else Settings()
+    # None means the parquet file. A list is still accepted for tests. The file
+    # is opened only for a sheet that has no timeline, and only one batch at a time.
     if edges is None:
-        edges = _read_edges(dest_dir)
+        edges = dest_dir / "ir" / "edges.parquet"
     date1904 = False
     hidden_sheets: set[str] = set()
     hidden_columns: dict[str, set[int]] = {}
@@ -191,7 +192,7 @@ def _detect_from_groups(
     facts: dict[str, dict[tuple[int, int], dict[str, int]]],
     *,
     date1904: bool,
-    edges: list[dict] | None,
+    edges: list | Path | None,
     hidden_sheets: set[str],
     hidden_columns: dict[str, set[int]],
     hidden_rows: dict[str, set[int]] | None,
@@ -200,7 +201,7 @@ def _detect_from_groups(
     meta: dict | None,
 ) -> Layout:
     """Lay out one sheet, then drop its cells. Shared timelines read flag rows only."""
-    prepared = None if edges is None else [as_edge(edge) for edge in edges]
+    prepared = edges
     sheets = []
     try:
         for name in names:
@@ -743,8 +744,3 @@ def _overlay_facts_columnar(dest_dir: Path, cells: list[dict]) -> list:
     return merged
 
 
-def _read_edges(dest_dir: Path) -> list[dict]:
-    path = dest_dir / "ir" / "edges.parquet"
-    if not path.is_file():
-        return []
-    return read_parquet(path)

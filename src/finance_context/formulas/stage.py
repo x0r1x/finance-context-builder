@@ -151,11 +151,17 @@ def compile_workbook(
         {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
         stream=chosen.json_stream,
     )
+    # The rows are in ir/edges.parquet. Later stages read that file. Holding
+    # the list here is what kept the process near the job budget through layout.
+    edge_count = len(edges)
+    edges.clear()
+    trim_process_heap()
     return CompileResult(
         cells=[],
-        edges=edges,
+        edges=[],
         cell_edges=cell_edges,
         cell_count=cell_count,
+        edge_count=edge_count,
         usage=usage,
     )
 
