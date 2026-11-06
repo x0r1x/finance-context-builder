@@ -5,7 +5,7 @@ from pathlib import Path
 
 from finance_context.formulas.models import as_edge
 from finance_context.layout.axes import _axis_candidates, _table_groups
-from finance_context.layout.cells import _is_number, _text
+from finance_context.layout.cells import _is_number, _text, bind_row_index, clear_row_index
 from finance_context.layout.models import (
     Block,
     Layout,
@@ -113,6 +113,32 @@ def _blocks_for_sheet(
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
         by_row[int(cell["row"])].append(cell)
+    bind_row_index(by_row)
+    try:
+        return _blocks_indexed(
+            sheet,
+            by_row,
+            date1904,
+            edges,
+            hidden_cols,
+            hidden_row_ids,
+            summary_below,
+            defined_names,
+        )
+    finally:
+        clear_row_index()
+
+
+def _blocks_indexed(
+    sheet: str,
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    edges: list | Path | None,
+    hidden_cols: set[int] | None,
+    hidden_row_ids: set[int] | None,
+    summary_below: bool,
+    defined_names: list | None,
+) -> tuple[list[Block], list[TimeAxis]]:
     row_ids = sorted(by_row)
     candidates = _axis_candidates(sheet, by_row, date1904, hidden_cols)
     groups = _table_groups(candidates)

@@ -658,14 +658,15 @@ def _axes_from_band(
         }
     )
     prefer_end = _band_prefers_end(band_rows, by_row, date1904)
-    allow_q = any(
-        is_quarter_label(_row_label(by_row[row_n], date1904)) for row_n in band_rows
-    )
-    allow_m = any(
-        is_month_label(_row_label(by_row[row_n], date1904)) for row_n in band_rows
-    )
+    # One label per header row. `_column_atoms` used to rescan the row on every
+    # column, so a wide ruler was classified width times.
     labels = {row_n: _row_label(by_row[row_n], date1904) for row_n in band_rows}
-    start_rows = [row_n for row_n in band_rows if is_start_period_label(labels[row_n])]
+    quarter_row = {row_n: is_quarter_label(labels[row_n]) for row_n in band_rows}
+    month_row = {row_n: is_month_label(labels[row_n]) for row_n in band_rows}
+    start_row = {row_n: is_start_period_label(labels[row_n]) for row_n in band_rows}
+    allow_q = any(quarter_row.values())
+    allow_m = any(month_row.values())
+    start_rows = [row_n for row_n in band_rows if start_row[row_n]]
     end_rows = [row_n for row_n in band_rows if is_end_period_label(labels[row_n])]
     bounds: dict[int, tuple[str | None, str | None]] = {}
     composed: list[AxisHeader] = []
@@ -695,13 +696,23 @@ def _axes_from_band(
             allow_q=allow_q,
             allow_m=allow_m,
             prefer_end=prefer_end,
+            start_row=start_row,
+            quarter_row=quarter_row,
+            month_row=month_row,
         )
         hit = compose_period(atoms, year_hint=year_hint)
         if hit is None:
             continue
         if hit.period_key[:4].isdigit():
             year_hint = hit.period_key[:4]
-        text = _column_text(col, band_rows, by_row, date1904, prefer_end=prefer_end)
+        text = _column_text(
+            col,
+            band_rows,
+            by_row,
+            date1904,
+            prefer_end=prefer_end,
+            start_row=start_row,
+        )
         kind, variant, explicit_role = _column_mark(atoms, hit)
         composed.append(
             AxisHeader(
@@ -893,20 +904,21 @@ def _column_atoms(
     allow_q: bool,
     allow_m: bool,
     prefer_end: bool,
+    start_row: dict[int, bool],
+    quarter_row: dict[int, bool],
+    month_row: dict[int, bool],
 ) -> list[HeaderAtom]:
     atoms: list[HeaderAtom] = []
     for row_n in band_rows:
-        if prefer_end and is_start_period_label(_row_label(by_row[row_n], date1904)):
+        if prefer_end and start_row[row_n]:
             continue
         cell = _cell_at(by_row[row_n], col)
         if cell is None:
             continue
-        row_allow_q = allow_q or is_quarter_label(_row_label(by_row[row_n], date1904))
-        row_allow_m = allow_m or is_month_label(_row_label(by_row[row_n], date1904))
         atom = classify_atom(
             _text(cell, date1904),
-            allow_quarter_num=row_allow_q,
-            allow_month_num=row_allow_m,
+            allow_quarter_num=allow_q or quarter_row[row_n],
+            allow_month_num=allow_m or month_row[row_n],
         )
         if atom is not None:
             atoms.append(atom)
@@ -920,10 +932,11 @@ def _column_text(
     date1904: bool,
     *,
     prefer_end: bool,
+    start_row: dict[int, bool],
 ) -> str:
     parts: list[str] = []
     for row_n in band_rows:
-        if prefer_end and is_start_period_label(_row_label(by_row[row_n], date1904)):
+        if prefer_end and start_row[row_n]:
             continue
         cell = _cell_at(by_row[row_n], col)
         if cell is None:

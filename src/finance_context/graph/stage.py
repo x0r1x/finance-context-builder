@@ -1072,6 +1072,18 @@ class _NodeIds:
         return slot
 
 
+def _numpy_ids(values):
+    """Copy packed edge ids into an array the cycle matrix can keep alone.
+
+    ``array.array`` and the NumPy copy used to live together through
+    ``connected_components``. Dropping the first copy is what keeps that crest
+    under the job RSS cap.
+    """
+    import numpy as np
+
+    return np.array(values, dtype=np.int32, copy=True)
+
+
 def _cycles_packed(
     id_of: dict[str, int],
     src_ids,
@@ -1467,6 +1479,8 @@ def _graph_from_parquet(
 
         for node in unique.values():
             hops.wire(node, ids.nid, add_hop, segments)
+        # The default args are the only other owners of the packed id arrays.
+        del add_hop
 
         def extra(label_of, _hops=hops, _users=range_users, _period=period_of):
             return hop_flags(
@@ -1479,18 +1493,23 @@ def _graph_from_parquet(
         n_nodes = segments.n_nodes if segments.span else len(ids.map)
         order_names = segments.offer
         _rss_mark("after_hops", nodes=len(ids.map), packed=len(src_ids))
-    _rss_mark("before_cycles", nodes=len(ids.map), packed=len(src_ids))
+    row_ids = _numpy_ids(src_ids)
+    col_ids = _numpy_ids(tgt_ids)
+    del src_ids, tgt_ids
+    gc.collect()
+    trim_process_heap()
+    _rss_mark("before_cycles", nodes=len(ids.map), packed=int(row_ids.size))
     cycles = _cycles_packed(
         ids.map,
-        src_ids,
-        tgt_ids,
+        row_ids,
+        col_ids,
         flags,
         extra,
         n_nodes=n_nodes,
         order_names=order_names,
     )
     del extra
-    del ids, src_ids, tgt_ids, flags, hops, segments
+    del ids, row_ids, col_ids, flags, hops, segments
     gc.collect()
     trim_process_heap()
     _rss_mark("after_cycles", cycles=len(cycles))
