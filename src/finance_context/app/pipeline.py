@@ -347,6 +347,9 @@ class Pipeline:
                 "cell_edges": len(ir_cell_edges),
             }
             graph_edges = None if isinstance(ir_cell_edges, EdgeCount) else ir_cell_edges
+            # The layout model is on disk. Graph keeps only the row maps it copies.
+            layout_holder: list[Layout] = [layout]
+            layout = None
             with _stage(
                 "graph",
                 root=dest_dir,
@@ -357,11 +360,14 @@ class Pipeline:
                 graph = build_formula_graph(
                     dest_dir,
                     job_id=job_id,
-                    layout=layout,
+                    layout=layout_holder,
                     cell_edges=graph_edges,
                     book_dir=book,
                     settings=self.settings,
                 )
+            layout = Layout.model_validate_json(
+                (book / "layout" / "layout.json").read_text(encoding="utf-8")
+            )
         else:
             _stage_reused("graph", root=dest_dir, saved=_GRAPH_SAVED)
             payload = json.loads((dest_dir / "graph" / "graph.json").read_text(encoding="utf-8"))

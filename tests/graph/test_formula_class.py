@@ -1,4 +1,4 @@
-from finance_context.graph.formula_class import classify_formula
+from finance_context.graph.formula_class import classify_formula, classify_formula_bits, note_lag
 
 
 def test_formula_class_prefers_one_financial_shape() -> None:
@@ -20,3 +20,36 @@ def test_formula_class_prefers_one_financial_shape() -> None:
     assert classify_formula("=0.05") == "hardcoded"
     assert classify_formula(None) is None
     assert classify_formula("  ") is None
+
+
+def test_lag_bits_classify_like_the_lag_list() -> None:
+    samples = [
+        None,
+        [],
+        ["same"],
+        ["unaligned"],
+        ["0"],
+        ["-1"],
+        ["-1", "-1"],
+        ["-2"],
+        ["-1", "-2"],
+        ["1"],
+        ["1", "5"],
+        ["-1", "1"],
+        ["-1", "-5", "1"],
+        ["same", "-1"],
+        ["12"],
+        ["-12"],
+        ["nope"],
+        ["", "same", "-1"],
+    ]
+    formulas = ["=B10", "=B10*(1+C5)", "=SUM(A1)", "=IF(A1,B1,0)", "=0.05", None]
+    for lags in samples:
+        bits = 0
+        for lag in lags or []:
+            bits = note_lag(bits, lag)
+        for formula in formulas:
+            refs = ["S!B10"]
+            assert classify_formula_bits(formula, refs, bits) == classify_formula(
+                formula, refs, lags
+            )

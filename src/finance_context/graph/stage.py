@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import json
+import logging
 import os
 from collections import Counter
 from pathlib import Path
@@ -17,7 +19,7 @@ from finance_context.formulas.edge_file import iterate_edges
 from finance_context.formulas.models import Edge, as_edge
 from finance_context.formulas.stage import IR_CELL_EDGE_COLUMNS, EdgeCount
 from finance_context.graph.cycles import classify_cycles
-from finance_context.graph.formula_class import classify_formula
+from finance_context.graph.formula_class import classify_formula, classify_formula_bits, note_lag
 from finance_context.graph.models import (
     GRAPH_SCHEMA_VERSION,
     ID_CAP,
@@ -28,12 +30,14 @@ from finance_context.graph.models import (
     GraphDocument,
     IdCount,
 )
-from finance_context.graph.ranges import CellGrid, RangeHops, hop_flags, is_cell_id
+from finance_context.graph.ranges import CellGrid, RangeHops, SegmentIds, hop_flags, is_cell_id
 from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import Layout
 from finance_context.layout.periods import period_position
 from finance_context.layout.resolve import period_headers
+from finance_context.memory import trim_process_heap
 from finance_context.models.context import GraphPointer
+from finance_context.observability import log_event
 from finance_context.settings import Settings
 from finance_context.store.fs import (
     atomic_replace,
@@ -52,6 +56,61 @@ INDEX_COLUMNS = (
     ("period_id", "VARCHAR"),
     ("node_type", "VARCHAR"),
 )
+
+# GRAPH_RSS_LOG=1 emits graph_rss lines on the worker log. Anything else, including
+# a filesystem path, stays off so the log never receives a path or a formula.
+_LOGGER = logging.getLogger(__name__)
+_rss_enabled: bool | None = None
+_RSS_MARKS = frozenset(
+    {
+        "formulas_loaded",
+        "edges_begin",
+        "row_group_begin",
+        "row_group_pylist",
+        "row_group_done",
+        "edges_scanned",
+        "before_hops",
+        "after_hops",
+        "before_cycles",
+        "after_cycles",
+        "after_release",
+        "after_refs",
+        "before_formula_text",
+        "after_formula_text",
+        "graph_written",
+    }
+)
+
+
+def _reset_rss_mark() -> None:
+    global _rss_enabled
+    _rss_enabled = None
+
+
+def _rss_on() -> bool:
+    global _rss_enabled
+    if _rss_enabled is None:
+        raw = os.environ.get("GRAPH_RSS_LOG", "").strip().lower()
+        _rss_enabled = raw in {"1", "true", "yes", "on"}
+    return _rss_enabled
+
+
+def _rss_mark(mark: str, **fields: object) -> None:
+    """One RSS sample on the worker log. Counts only, and only when enabled."""
+    if mark not in _RSS_MARKS or not _rss_on():
+        return
+    from finance_context.memory import rss_bytes
+
+    counts = {key: value for key, value in fields.items() if type(value) is int}
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "graph_rss",
+        mark,
+        mark=mark,
+        rss_mb=rss_bytes() // (1024 * 1024),
+        **counts,
+    )
 
 
 class _Periods:
@@ -75,7 +134,7 @@ class _Formula:
     reads it back for classification and ``graph.json``.
     """
 
-    __slots__ = ("formula", "row_key", "period_id", "refs", "formula_cell")
+    __slots__ = ("formula", "row_key", "period_id", "refs", "formula_cell", "lag_bits")
 
     def __init__(
         self,
@@ -90,6 +149,7 @@ class _Formula:
         self.period_id = period_id
         self.refs: list[str] = []
         self.formula_cell = bool(formula) if formula_cell is None else formula_cell
+        self.lag_bits = 0
 
 
 def _formula_record(sheet, row, col, addr, raw, row_meta, period_by_cell) -> tuple[str, _Formula]:
@@ -205,16 +265,22 @@ def _bind_refs(formulas: dict[str, _Formula], formula_edges) -> None:
             rec.refs.append(text)
 
 
-def _links_from_formulas(formulas: dict[str, _Formula], lags: dict | None) -> list[FormulaLink]:
+def _links_from_formulas(
+    formulas: dict[str, _Formula], lags: dict | None = None, *, bits: bool = False
+) -> list[FormulaLink]:
     lags = lags or {}
     links: list[FormulaLink] = []
     for cell in sorted(formulas):
         rec = formulas[cell]
+        if bits:
+            formula_class = classify_formula_bits(rec.formula, rec.refs, rec.lag_bits)
+        else:
+            formula_class = classify_formula(rec.formula, rec.refs, lags.get(cell))
         links.append(
             FormulaLink(
                 cell=cell,
                 formula=rec.formula,
-                formula_class=classify_formula(rec.formula, rec.refs, lags.get(cell)),
+                formula_class=formula_class,
                 refs=rec.refs,
                 row_key=rec.row_key,
                 period_id=rec.period_id,
@@ -229,7 +295,7 @@ def _circular_rows(layout: Layout) -> dict[tuple[str, int], str]:
         for block in sheet.blocks:
             for row in block.rows:
                 if "circular" in (row.label or "").casefold():
-                    found[(sheet.name, int(row.row))] = row.label
+                    found.setdefault((sheet.name, int(row.row)), row.label)
     return found
 
 
@@ -238,7 +304,7 @@ def _stream_index(
     path: Path,
     row_meta: dict[tuple[str, int], str],
     period_by_cell: dict[tuple[str, int], str],
-    layout: Layout,
+    circular: dict[tuple[str, int], str],
     cell_edge_path: Path | None,
     cell_edges: list | None,
     row_group_rows: int,
@@ -247,8 +313,6 @@ def _stream_index(
     import pyarrow.parquet as pq
 
     from finance_context.store.fs import RowGroupWriter
-
-    circular = _circular_rows(layout)
     circular_ids: dict[tuple[str, int], list[str]] = {}
     count = 0
     names = [name for name, _dtype in INDEX_COLUMNS]
@@ -339,11 +403,20 @@ def _empty_target_ids(cell_edge_path: Path | None, cell_edges: list | None) -> l
     return [str(row[0]) for row in rows]
 
 
+def _accept_layout(layout: Layout | list[Layout]) -> Layout:
+    """Take a layout, emptying a one-slot list so the caller can drop it."""
+    if isinstance(layout, list):
+        if len(layout) != 1:
+            raise RuntimeError("layout release slot is empty")
+        return layout.pop()
+    return layout
+
+
 def build_formula_graph(
     dest_dir: Path,
     *,
     job_id: str,
-    layout: Layout,
+    layout: Layout | list[Layout],
     cells: list[dict] | None = None,
     edges: list | None = None,
     cell_edges: list | None = None,
@@ -352,6 +425,7 @@ def build_formula_graph(
 ) -> GraphPointer:
     chosen = settings if isinstance(settings, Settings) else Settings()
     book = book_dir or dest_dir
+    layout = _accept_layout(layout)
     cell_edge_path = book / "ir" / "cell_edges.parquet"
     stream = (
         chosen.graph_stream
@@ -371,18 +445,26 @@ def build_formula_graph(
 
     row_meta = _row_meta(layout)
     period_by_cell, _period_index = _period_maps(layout)
+    circular = _circular_rows(layout)
+    if stream:
+        # Row maps are copied. The caller's list slot is already empty.
+        del layout
+        gc.collect()
+        trim_process_heap()
     if cells is None:
         node_count, circular_ids = _stream_index(
             book,
             dest_dir / "graph" / "index.parquet",
             row_meta,
             period_by_cell,
-            layout,
+            circular,
             cell_edge_path if stream else None,
             cell_edges if not stream else None,
             chosen.parquet_row_group_rows,
         )
         formulas = _load_formulas(book, row_meta, period_by_cell)
+        del row_meta
+        _rss_mark("formulas_loaded", nodes=node_count, formulas=len(formulas))
         index_rows: list[tuple[object, ...]] = []
     else:
         index_rows = _index_rows(cells, row_meta, period_by_cell)
@@ -408,7 +490,7 @@ def build_formula_graph(
             dest_dir,
             book,
             job_id,
-            layout,
+            circular,
             formulas,
             edges,
             index_rows,
@@ -522,10 +604,11 @@ def _cells_by_row(index_rows: list[tuple[object, ...]]) -> dict[tuple[str, int],
 
 
 def circularity_hints(
-    layout: Layout,
+    layout: Layout | None,
     index_rows: list[tuple[object, ...]],
     cycles: list[CycleRecord],
     cells_by_row: dict[tuple[str, int], list[str]] | None = None,
+    circular: dict[tuple[str, int], str] | None = None,
 ) -> list[CircularityHint]:
     if cycles:
         return []
@@ -547,11 +630,10 @@ def circularity_hints(
             )
         )
 
-    for sheet in layout.sheets:
-        for block in sheet.blocks:
-            for row in block.rows:
-                if "circular" in (row.label or "").casefold():
-                    add(sheet.name, row.row, row.label)
+    if circular is None:
+        circular = {} if layout is None else _circular_rows(layout)
+    for (sheet, row), label in circular.items():
+        add(sheet, row, label)
     return hints
 
 
@@ -800,6 +882,35 @@ def _add_range_lags(
                 bucket.append(lag)
 
 
+def _note_range_lags(formulas, users, view: _RangeView, period_of, stray: dict[str, int]) -> None:
+    """Same member lags as ``_add_range_lags``, folded into class bits."""
+    for source, node in users:
+        member_periods = view.member_periods(node)
+        if not member_periods:
+            continue
+        rec = formulas.get(source)
+        bits = stray.get(source, 0) if rec is None else rec.lag_bits
+        src_period = period_of.get(source)
+        for member_period in member_periods:
+            if not src_period or not member_period:
+                lag = "unaligned"
+            else:
+                lag = calendar_lag(str(src_period), str(member_period))
+            bits = note_lag(bits, lag)
+        if rec is None:
+            stray[source] = bits
+        else:
+            rec.lag_bits = bits
+
+
+def _release_range_view(view: _RangeView) -> None:
+    """Drop the presence index and hop rows once lags no longer need them."""
+    view._grid = None
+    view._hops = None
+    view._nodes.clear()
+    view._periods.clear()
+
+
 def _member_chain(source: str, member: str, period_of: dict) -> bool:
     offset, lag = _offset_and_lag(source, member, period_of)
     return _period_chain(source, member, lag, offset)
@@ -962,7 +1073,14 @@ class _NodeIds:
 
 
 def _cycles_packed(
-    id_of: dict[str, int], src_ids, tgt_ids, flags, extra=None
+    id_of: dict[str, int],
+    src_ids,
+    tgt_ids,
+    flags,
+    extra=None,
+    *,
+    n_nodes: int | None = None,
+    order_names=None,
 ) -> list[CycleRecord]:
     """Same records as classify_cycles, from integer endpoints and a period-chain bit.
 
@@ -970,6 +1088,10 @@ def _cycles_packed(
     components but is not a formula edge, so it does not vote on the class.
     ``extra(label_of)`` yields (component, bit, self loop) for the formula ->
     member edges a per-formula expansion would have had inside a component.
+
+    ``n_nodes`` counts anonymous segment ids that are not in ``id_of``.
+    ``order_names(accept)`` reports those ids and their ``#seg|...`` names so
+    cycle ids stay in the order of a sorted walk over every node name.
     """
     import numpy as np
     from scipy import sparse
@@ -977,20 +1099,33 @@ def _cycles_packed(
 
     if not id_of:
         return []
-    nodes = sorted(id_of)
-    n = len(nodes)
-    # slot -> index in `nodes`. An array, not a dict of every node.
-    rank = np.empty(n, dtype=np.int32)
-    rank[np.fromiter((id_of[name] for name in nodes), dtype=np.int32, count=n)] = np.arange(
-        n, dtype=np.int32
-    )
-    n_edges = len(src_ids)
-    if n_edges:
-        rows = rank[np.asarray(src_ids, dtype=np.int32)]
-        cols = rank[np.asarray(tgt_ids, dtype=np.int32)]
+    anonymous = n_nodes is not None
+    if anonymous:
+        nodes = None
+        n = n_nodes
+        n_edges = len(src_ids)
+        if n_edges:
+            rows = np.asarray(src_ids, dtype=np.int32)
+            cols = np.asarray(tgt_ids, dtype=np.int32)
+        else:
+            rows = np.empty(0, dtype=np.int32)
+            cols = np.empty(0, dtype=np.int32)
+        rank = None
     else:
-        rows = np.empty(0, dtype=np.int32)
-        cols = np.empty(0, dtype=np.int32)
+        nodes = sorted(id_of)
+        n = len(nodes)
+        # slot -> index in `nodes`. An array, not a dict of every node.
+        rank = np.empty(n, dtype=np.int32)
+        rank[np.fromiter((id_of[name] for name in nodes), dtype=np.int32, count=n)] = np.arange(
+            n, dtype=np.int32
+        )
+        n_edges = len(src_ids)
+        if n_edges:
+            rows = rank[np.asarray(src_ids, dtype=np.int32)]
+            cols = rank[np.asarray(tgt_ids, dtype=np.int32)]
+        else:
+            rows = np.empty(0, dtype=np.int32)
+            cols = np.empty(0, dtype=np.int32)
     data = np.ones(n_edges, dtype=np.uint8)
     matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.uint8)
     _n_comp, labels = connected_components(matrix, directed=True, connection="strong")
@@ -1017,10 +1152,17 @@ def _cycles_packed(
         del same
     del rows, cols
     if extra is not None:
+        if anonymous:
 
-        def label_of(name: str, _labels=labels, _rank=rank) -> int | None:
-            slot = id_of.get(name)
-            return None if slot is None else int(_labels[int(_rank[slot])])
+            def label_of(name: str, _labels=labels) -> int | None:
+                slot = id_of.get(name)
+                return None if slot is None else int(_labels[int(slot)])
+
+        else:
+
+            def label_of(name: str, _labels=labels, _rank=rank) -> int | None:
+                slot = id_of.get(name)
+                return None if slot is None else int(_labels[int(_rank[slot])])
 
         for label, bit, is_self in extra(label_of):
             saw.add(label)
@@ -1029,6 +1171,10 @@ def _cycles_packed(
             previous = all_period.get(label)
             all_period[label] = bit if previous is None else previous and bit
     del rank
+    if anonymous:
+        return _cycles_named(
+            id_of, labels, sizes, self_loop, saw, all_period, order_names
+        )
     # Member lists only for components that can be cycles. Singletons stay in `labels`.
     order: list[int] = []
     members: dict[int, list[str]] = {}
@@ -1043,6 +1189,43 @@ def _cycles_packed(
         else:
             bucket.append(name)
     del nodes, labels, sizes
+    return _emit_cycles(order, members, self_loop, saw, all_period)
+
+
+def _cycles_named(
+    id_of, labels, sizes, self_loop, saw, all_period, order_names
+) -> list[CycleRecord]:
+    """Cycle ids in min-name order, segments included, without storing their strings."""
+    mins: dict[int, str] = {}
+    cells: dict[int, list[str]] = {}
+
+    def offer(slot: int, name: str) -> None:
+        label = int(labels[slot])
+        if sizes[label] < 2 and label not in self_loop:
+            return
+        current = mins.get(label)
+        if current is None or name < current:
+            mins[label] = name
+
+    for name, slot in id_of.items():
+        offer(int(slot), name)
+        if is_cell_id(name):
+            label = int(labels[int(slot)])
+            if sizes[label] < 2 and label not in self_loop:
+                continue
+            bucket = cells.get(label)
+            if bucket is None:
+                cells[label] = [name]
+            else:
+                bucket.append(name)
+    if order_names is not None:
+        order_names(offer)
+    order = sorted(mins, key=lambda label: mins[label])
+    members = {label: cells.get(label, []) for label in order}
+    return _emit_cycles(order, members, self_loop, saw, all_period)
+
+
+def _emit_cycles(order, members, self_loop, saw, all_period) -> list[CycleRecord]:
     cycles: list[CycleRecord] = []
     seq = 1
     for label in order:
@@ -1064,11 +1247,13 @@ def _cycles_packed(
     return cycles
 
 
-def _fold_formula_edges(formulas, formula_edges) -> tuple[IdCount, IdCount, IdCount]:
+def _fold_formula_edges(
+    formulas, formula_edges, stray: dict[str, int] | None = None
+) -> tuple[IdCount, IdCount, IdCount]:
     """One pass: unresolved, dynamic and external ids, and formula refs.
 
     First-seen order matches ``_edge_bucket`` and ``_bind_refs`` walking the
-    same rows separately.
+    same rows separately. Repeated targets share one string.
     """
     unresolved: list[str] = []
     dynamic: list[str] = []
@@ -1076,6 +1261,7 @@ def _fold_formula_edges(formulas, formula_edges) -> tuple[IdCount, IdCount, IdCo
     seen_unresolved: set[str] = set()
     seen_dynamic: set[str] = set()
     seen_external: set[str] = set()
+    shared: dict[str, str] = {}
     for edge in formula_edges:
         source = str(edge.source or "")
         if not source:
@@ -1093,9 +1279,20 @@ def _fold_formula_edges(formulas, formula_edges) -> tuple[IdCount, IdCount, IdCo
         rec = formulas.get(source)
         if rec is None:
             rec = _Formula(None, None, None)
+            if stray is not None:
+                rec.lag_bits = stray.pop(source, 0)
             formulas[source] = rec
+        elif stray is not None and source in stray:
+            rec.lag_bits |= stray.pop(source)
         target = edge.target
-        if target and (text := str(target)) not in rec.refs:
+        if not target:
+            continue
+        raw = str(target)
+        text = shared.get(raw)
+        if text is None:
+            shared[raw] = raw
+            text = raw
+        if text not in rec.refs:
             rec.refs.append(text)
     return (
         IdCount(count=len(unresolved), ids=unresolved[:ID_CAP]),
@@ -1108,7 +1305,7 @@ def _graph_from_parquet(
     dest_dir,
     book,
     job_id,
-    layout,
+    circular,
     formulas,
     edges,
     index_rows,
@@ -1134,7 +1331,8 @@ def _graph_from_parquet(
     dangling_seen: set[str] = set()
     truncated_ids: list[str] = []
     truncated_seen: set[str] = set()
-    lag_groups: dict[str, list[str]] = {}
+    # Sources that are not formula cells. Formula records keep their own bits.
+    stray_lags: dict[str, int] = {}
     lag_pool: dict[str, str] = {}
     view = _RangeView(book, formulas, period_by_cell)
     range_users: list[tuple[str, RangeNode]] = []
@@ -1150,11 +1348,16 @@ def _graph_from_parquet(
         multi = parquet.num_row_groups > 1
         if multi:
             writer.begin_row_groups()
-        for group in range(parquet.num_row_groups):
+        group_count = parquet.num_row_groups
+        _rss_mark("edges_begin", groups=group_count, rows=parquet.metadata.num_rows)
+        for group in range(group_count):
+            group_rows = parquet.metadata.row_group(group).num_rows
+            _rss_mark("row_group_begin", group=group, rows=group_rows)
             table = parquet.read_row_group(group, columns=names)
             data = {name: table.column(name).to_pylist() for name in names}
             del table
             width = len(data["source"])
+            _rss_mark("row_group_pylist", group=group, rows=width)
             offsets: list[int | None] = [None] * width
             lag_col: list[str] = [""] * width
             for index in range(width):
@@ -1184,9 +1387,11 @@ def _graph_from_parquet(
                 if source:
                     if node is not None:
                         range_users.append((source, node))
-                    bucket = lag_groups.setdefault(source, [])
-                    if lag not in bucket:
-                        bucket.append(lag)
+                    rec = formulas.get(source)
+                    if rec is None:
+                        stray_lags[source] = note_lag(stray_lags.get(source, 0), lag)
+                    else:
+                        rec.lag_bits = note_lag(rec.lag_bits, lag)
                 if (
                     source
                     and target
@@ -1214,30 +1419,98 @@ def _graph_from_parquet(
                     out_cols.append(data[name])
             writer.write_lists(out_cols)
             del data, offsets, lag_col, out_cols
-    _add_range_lags(lag_groups, range_users, view, period_of)
+            _rss_mark(
+                "row_group_done",
+                group=group,
+                nodes=len(ids.map),
+                packed=len(src_ids),
+            )
+    _rss_mark(
+        "edges_scanned",
+        edges=n_edges,
+        nodes=len(ids.map),
+        packed=len(src_ids),
+        range_users=len(range_users),
+        formulas=len(formulas),
+    )
+    dangling_count = len(dangling_ids)
+    dangling_ids = dangling_ids[:ID_CAP]
+    truncated_count = len(truncated_ids)
+    truncated_ids = truncated_ids[:ID_CAP]
+    del dangling_seen, truncated_seen, seen_class, lag_pool
+    # The row-group lists are gone. Return their arenas before the hop matrix.
+    gc.collect()
+    trim_process_heap()
     extra = None
+    hops = None
+    segments = None
+    n_nodes = None
+    order_names = None
     if range_users:
+        _rss_mark("before_hops", range_users=len(range_users))
         hops = view.hops()
-        for node in {node.node_id: node for _source, node in range_users}.values():
-            for parent, child in hops.edges(node):
-                src_ids.append(ids.nid(parent))
-                tgt_ids.append(ids.nid(child))
-                flags.append(_STRUCTURAL)
+        unique = {node.node_id: node for _source, node in range_users}
+        # New leaf and range ids are assigned during wire. The gap keeps them
+        # below the anonymous segment ids.
+        segments = SegmentIds(len(ids.map) + len(formulas) + len(unique) + 1)
 
-        def extra(label_of):
+        def add_hop(
+            parent: int,
+            child: int,
+            _src=src_ids,
+            _tgt=tgt_ids,
+            _flags=flags,
+        ) -> None:
+            _src.append(parent)
+            _tgt.append(child)
+            _flags.append(_STRUCTURAL)
+
+        for node in unique.values():
+            hops.wire(node, ids.nid, add_hop, segments)
+
+        def extra(label_of, _hops=hops, _users=range_users, _period=period_of):
             return hop_flags(
                 label_of,
-                range_users,
-                hops,
-                lambda source, member: _member_chain(source, member, period_of),
+                _users,
+                _hops,
+                lambda source, member: _member_chain(source, member, _period),
             )
 
-    cycles = _cycles_packed(ids.map, src_ids, tgt_ids, flags, extra)
-    del ids, src_ids, tgt_ids, flags
-    hints = circularity_hints(layout, index_rows, cycles, cells_by_row=circular_ids)
+        n_nodes = segments.n_nodes if segments.span else len(ids.map)
+        order_names = segments.offer
+        _rss_mark("after_hops", nodes=len(ids.map), packed=len(src_ids))
+    _rss_mark("before_cycles", nodes=len(ids.map), packed=len(src_ids))
+    cycles = _cycles_packed(
+        ids.map,
+        src_ids,
+        tgt_ids,
+        flags,
+        extra,
+        n_nodes=n_nodes,
+        order_names=order_names,
+    )
+    del extra
+    del ids, src_ids, tgt_ids, flags, hops, segments
+    gc.collect()
+    trim_process_heap()
+    _rss_mark("after_cycles", cycles=len(cycles))
+    # Same lags _add_range_lags would append, stored as class bits on the formula.
+    _note_range_lags(formulas, range_users, view, period_of, stray_lags)
+    _release_range_view(view)
+    del range_users, view
+    gc.collect()
+    trim_process_heap()
+    _rss_mark("after_release", formulas=len(formulas))
+    hints = circularity_hints(
+        None, index_rows, cycles, cells_by_row=circular_ids, circular=circular
+    )
     iterate = _workbook_iterate(book)
     edge_source = edges if edges is not None else book / "ir" / "edges.parquet"
-    unresolved, dynamic, external = _fold_formula_edges(formulas, iterate_edges(edge_source))
+    unresolved, dynamic, external = _fold_formula_edges(
+        formulas, iterate_edges(edge_source), stray_lags
+    )
+    del stray_lags
+    _rss_mark("after_refs", formulas=len(formulas))
     doc = GraphDocument(
         schema_version=GRAPH_SCHEMA_VERSION,
         job_id=job_id,
@@ -1248,18 +1521,20 @@ def _graph_from_parquet(
         unresolved=unresolved,
         dynamic=dynamic,
         external=external,
-        truncated=IdCount(count=len(truncated_ids), ids=truncated_ids[:ID_CAP]),
-        dangling=IdCount(count=len(dangling_ids), ids=dangling_ids[:ID_CAP]),
+        truncated=IdCount(count=truncated_count, ids=truncated_ids),
+        dangling=IdCount(count=dangling_count, ids=dangling_ids),
         dangling_classes=dict(classes),
         cycles=cycles,
         iterate=iterate,
         circularity_hints=list(hints or []),
     )
+    _rss_mark("before_formula_text", formulas=len(formulas))
     _attach_formula_text(book, formulas)
+    _rss_mark("after_formula_text", formulas=len(formulas))
     if stream_json:
-        _stream_graph_files(dest_dir, doc, formulas, lag_groups)
+        _stream_graph_files(dest_dir, doc, formulas)
     else:
-        doc.links = _links_from_formulas(formulas, lag_groups)
+        doc.links = _links_from_formulas(formulas, bits=True)
         write_json(
             dest_dir / "graph" / "graph.json",
             doc.model_dump(mode="json", by_alias=True),
@@ -1269,6 +1544,7 @@ def _graph_from_parquet(
 
         markdown = render_graph_markdown(doc)
         atomic_write_bytes(dest_dir / "graph" / "graph.md", markdown.encode("utf-8"))
+    _rss_mark("graph_written", formulas=len(formulas), cycles=len(cycles))
     return cycles, doc, iterate
 
 
@@ -1276,7 +1552,6 @@ def _stream_graph_files(
     dest_dir,
     doc: GraphDocument,
     formulas: dict[str, _Formula] | None = None,
-    lags: dict | None = None,
 ) -> None:
     """Write graph.json with json.dump. Links are streamed when the caller kept them columnar."""
     from finance_context.render.graph import _cell, render_graph_markdown
@@ -1287,7 +1562,6 @@ def _stream_graph_files(
         markdown = render_graph_markdown(doc)
         atomic_write_bytes(dest_dir / "graph" / "graph.md", markdown.encode("utf-8"))
         return
-    lags = lags or {}
     n_links = len(formulas)
     head = doc.model_dump(mode="json", by_alias=True)
     head["links"] = _LINKS_SLOT
@@ -1312,7 +1586,7 @@ def _stream_graph_files(
                 first = True
                 for cell in sorted(formulas):
                     rec = formulas.pop(cell)
-                    formula_class = classify_formula(rec.formula, rec.refs, lags.get(cell))
+                    formula_class = classify_formula_bits(rec.formula, rec.refs, rec.lag_bits)
                     item = {
                         "cell": cell,
                         "formula": rec.formula,

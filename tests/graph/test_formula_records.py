@@ -77,6 +77,6 @@ def test_load_formulas_skips_values(tmp_path: Path) -> None:
     assert found["S!A1"].row_key == "S|1|b"
     assert found["S!A1"].period_id == "2024"
     view = _RangeView(book, found, {("S", 1): "2024"})
-    assert view.hops().rows[("S", 1)] == [1]
+    assert list(view.hops().rows[("S", 1)]) == [1]
     _attach_formula_text(book, found)
     assert found["S!A1"].formula == "=B1"
