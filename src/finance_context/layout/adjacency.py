@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 
 from finance_context.excel.a1 import index_to_col, parse_addr
 from finance_context.formulas.csr import (
@@ -92,7 +92,7 @@ class RangeReads:
 
 
 def row_adjacency(
-    edges: list,
+    edges: Iterable,
     *,
     limit: int = 8,
     usage: SheetUsage | None = None,

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from finance_context.formulas.models import Edge
 from finance_context.graph.stage import (
+    _attach_formula_text,
     _bind_refs,
     _formulas_from_cells,
     _links_from_formulas,
@@ -71,6 +72,11 @@ def test_load_formulas_skips_values(tmp_path: Path) -> None:
     )
     found = _load_formulas(book, {("S", 1): "S|1|b"}, {("S", 1): "2024"})
     assert list(found) == ["S!A1"]
-    assert found["S!A1"].formula == "=B1"
+    assert found["S!A1"].formula is None
+    assert found["S!A1"].formula_cell is True
     assert found["S!A1"].row_key == "S|1|b"
     assert found["S!A1"].period_id == "2024"
+    view = _RangeView(book, found, {("S", 1): "2024"})
+    assert list(view.hops().rows[("S", 1)]) == [1]
+    _attach_formula_text(book, found)
+    assert found["S!A1"].formula == "=B1"

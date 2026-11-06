@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import date, timedelta
+from functools import lru_cache
 
 _ESCAPED = re.compile(r'\\.')
 _BRACKET = re.compile(r"\[[^\]]*\]")
@@ -14,6 +15,7 @@ _EXCEL_MIN = 1
 _EXCEL_MAX = 2958465  # 9999-12-31 in the 1900 system
 
 
+@lru_cache(maxsize=256)
 def is_date_format(fmt: str | None) -> bool:
     if fmt is None:
         return False

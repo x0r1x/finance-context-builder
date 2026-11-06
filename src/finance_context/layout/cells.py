@@ -132,7 +132,33 @@ def _kept_addr(addr: object, row: object, col: object) -> object:
 _IGNORED_SPACE = str.maketrans("", "", " \xa0\u202f")
 
 
+# First cell in list order for each column. Valid only while those lists live.
+_ROW_INDEX: dict[int, dict[int, dict]] = {}
+
+
+def bind_row_index(by_row: dict[int, list]) -> None:
+    """O(1) column lookup for the row lists of one sheet.
+
+    ``_cell_at`` otherwise walks the row. On a wide header that walk ran once
+    per column.
+    """
+    _ROW_INDEX.clear()
+    for cells in by_row.values():
+        found: dict[int, dict] = {}
+        for cell in cells:
+            found.setdefault(int(cell["col"]), cell)
+        _ROW_INDEX[id(cells)] = found
+
+
+def clear_row_index() -> None:
+    """Drop the index before the row lists are freed, so a reused id cannot hit it."""
+    _ROW_INDEX.clear()
+
+
 def _cell_at(row_cells: list[dict], col: int) -> dict | None:
+    found = _ROW_INDEX.get(id(row_cells))
+    if found is not None:
+        return found.get(col)
     for cell in row_cells:
         if int(cell["col"]) == col:
             return cell

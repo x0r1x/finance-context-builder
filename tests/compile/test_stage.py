@@ -12,6 +12,13 @@ from finance_context.formulas.models import IrCell, release_cell_asts
 from finance_context.formulas.stage import compile_schema_id
 
 
+def test_edge_file_columns_match_compile() -> None:
+    from finance_context.formulas.edge_file import _EDGE_COLUMNS
+    from finance_context.formulas.stage import IR_EDGE_COLUMNS
+
+    assert _EDGE_COLUMNS == tuple(name for name, _dtype in IR_EDGE_COLUMNS)
+
+
 def test_compile_reads_presence_once(tmp_path: Path, dest: Path, monkeypatch) -> None:
     source = tmp_path / "once.xlsx"
     build_xlsx(
@@ -72,7 +79,9 @@ def test_compile_writes_ir_artifacts_and_templates(tmp_path: Path, dest: Path) -
     assert any(e["kind"] == "cross_sheet" and e["target"] == "Inputs!D5" for e in edges)
     assert result.cell_count == 3
     assert not result.cells
-    assert result.edges and result.cell_edges
+    assert not result.edges
+    assert result.edge_count == len(edges)
+    assert result.cell_edges
     assert (dest / "ir" / "cells.parquet").is_file()
     assert (dest / "ir" / "edges.parquet").is_file()
     assert (dest / "ir" / "cell_edges.parquet").is_file()

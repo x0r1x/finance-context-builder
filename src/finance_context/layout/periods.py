@@ -319,10 +319,55 @@ def _ascii_digits_outside_years(text: str) -> bool:
     return text.isascii() and text.isdigit()
 
 
+_AMOUNT_SPACE = str.maketrans("", "", " \xa0\u202f")
+
+
+def _decimal_amount(text: str) -> bool:
+    """One decimal magnitude, such as ``1234567.89`` or ``-12,5``.
+
+    A year ``2024.0`` and a month-year ``01.2024`` stay on the calendar matcher.
+    A fraction below 1 (``0.25``) is a time-factor atom, not a skipped amount.
+    A trailing separator (``2024.``) and a second separator (``01.02.2024``) stay too.
+    """
+    if len(text) > 40:
+        return False
+    sep = 0
+    before = 0
+    after = 0
+    nonzero_before = False
+    for index, char in enumerate(text):
+        if char.isdigit():
+            if sep:
+                after += 1
+            else:
+                before += 1
+                if char != "0":
+                    nonzero_before = True
+            continue
+        if char in " \xa0\u202f":
+            continue
+        if char in ".,":
+            if sep:
+                return False
+            sep += 1
+            continue
+        if char == "-" and index == 0:
+            continue
+        return False
+    if sep != 1 or before == 0 or after == 0 or not nonzero_before:
+        return False
+    compact = text.translate(_AMOUNT_SPACE)
+    if compact.startswith("-"):
+        compact = compact[1:]
+    if _YEAR_FLOAT.fullmatch(compact) or _MONTH_YEAR.fullmatch(compact):
+        return False
+    return True
+
+
 def classify_header(text: str | None) -> PeriodHit | None:
     # Short headers are the cached path. The prose check is only for a unique
     # label, which is longer than the cache key and would evict those headers.
-    if isinstance(text, str) and _ascii_digits_outside_years(text):
+    if isinstance(text, str) and (_ascii_digits_outside_years(text) or _decimal_amount(text)):
         return None
     long = isinstance(text, str) and len(text) > _CLASSIFY_CACHED_LEN
     if long and _stable_letters(text) and _too_many_outside_words(text):
@@ -666,6 +711,8 @@ def classify_atom(
     allow_quarter_num: bool = False,
     allow_month_num: bool = False,
 ) -> HeaderAtom | None:
+    if isinstance(text, str) and _decimal_amount(text):
+        return None
     raw = normalize_header(text)
     if not raw:
         return None

@@ -8,6 +8,7 @@ without listing its cells per node, so memory stays linear in formulas plus cell
 
 from __future__ import annotations
 
+import array
 import bisect
 from collections.abc import Callable, Iterable, Iterator
 
@@ -165,14 +166,23 @@ class RangeHops:
     """
 
     def __init__(self, formula_cells: Iterable[str]) -> None:
-        rows: dict[tuple[str, int], list[int]] = {}
+        buckets: dict[tuple[str, int], array.array] = {}
         for cell in formula_cells:
             parsed = parse_node_id(cell)
             if parsed is None or ":" in cell:
                 continue
             sheet, col, row = parsed
-            rows.setdefault((sheet, col), []).append(row)
-        self.rows = {key: sorted(set(values)) for key, values in rows.items()}
+            key = (sheet, col)
+            bucket = buckets.get(key)
+            if bucket is None:
+                bucket = array.array("i")
+                buckets[key] = bucket
+            bucket.append(row)
+        # One column at a time: the packed ints stay, the Python ints do not.
+        self.rows: dict[tuple[str, int], array.array] = {}
+        for key, bucket in buckets.items():
+            self.rows[key] = array.array("i", sorted(set(bucket)))
+        buckets.clear()
         self.columns: dict[str, list[int]] = {}
         for sheet, col in self.rows:
             self.columns.setdefault(sheet, []).append(col)
@@ -213,10 +223,30 @@ class RangeHops:
                 yield node.node_id, self._name(node.sheet, col, lo, hi)
                 yield from self._tree(node.sheet, col, lo, hi)
 
+    def _leaf(self, sheet: str, col: int, index: int) -> str:
+        return f"{sheet}!{index_to_col(col)}{self.rows[(sheet, col)][index]}"
+
     def _name(self, sheet: str, col: int, lo: int, hi: int) -> str:
         if lo == hi:
-            return f"{sheet}!{index_to_col(col)}{self.rows[(sheet, col)][lo]}"
+            return self._leaf(sheet, col, lo)
         return f"{SEGMENT_PREFIX}{sheet}|{col}|{lo}|{hi}"
+
+    def wire(self, node: RangeNode, nid, add, segments: SegmentIds) -> None:
+        """Same links as ``edges``, with integer endpoints.
+
+        A leaf cell and the range node go through ``nid``. An internal segment
+        takes an anonymous id from ``segments`` and is not stored as a string.
+        """
+        range_id = nid(node.node_id)
+        sheet = node.sheet
+        for col in self._cols(node):
+            span = self._span(node, col)
+            if span is None:
+                continue
+            size = len(self.rows[(sheet, col)])
+            for lo, hi in _cover(0, size - 1, span[0], span[1]):
+                add(range_id, segments.endpoint(self, sheet, col, lo, hi, size, nid))
+                segments.expand(self, sheet, col, lo, hi, size, nid, add)
 
     def _tree(self, sheet: str, col: int, lo: int, hi: int) -> Iterator[tuple[str, str]]:
         stack = [(lo, hi)]
@@ -231,6 +261,125 @@ class RangeHops:
             yield parent, self._name(sheet, col, mid + 1, b)
             stack.append((a, mid))
             stack.append((mid + 1, b))
+
+
+class SegmentIds:
+    """Anonymous ids for internal hop segments.
+
+    The strong-component pass only needs an integer per segment. The ``#seg|``
+    text is rebuilt afterwards, one name at a time, and only to keep cycle ids
+    in the same order as a sorted walk over every node name.
+    """
+
+    def __init__(self, base: int) -> None:
+        self.base = base
+        self._span = 0
+        self._origin: dict[tuple[str, int], tuple[int, bytearray]] = {}
+        self._sheet_of: dict[str, int] = {}
+        self._sheet_names: list[str] = []
+        self._slot: array.array = array.array("I")
+        self._sheet_i: array.array = array.array("I")
+        self._col: array.array = array.array("I")
+        self._lo: array.array = array.array("I")
+        self._hi: array.array = array.array("I")
+
+    @property
+    def span(self) -> int:
+        return self._span
+
+    @property
+    def n_nodes(self) -> int:
+        return self.base + self._span
+
+    def endpoint(
+        self, hops: RangeHops, sheet: str, col: int, lo: int, hi: int, size: int, nid
+    ) -> int:
+        if lo == hi:
+            return nid(hops._leaf(sheet, col, lo))
+        return self._id(sheet, col, lo, hi, size)
+
+    def expand(
+        self, hops: RangeHops, sheet: str, col: int, lo: int, hi: int, size: int, nid, add
+    ) -> None:
+        stack = [(lo, hi)]
+        while stack:
+            a, b = stack.pop()
+            if a == b:
+                continue
+            parent = self._claim(sheet, col, a, b, size)
+            if parent is None:
+                continue
+            mid = (a + b) // 2
+            add(parent, self.endpoint(hops, sheet, col, a, mid, size, nid))
+            add(parent, self.endpoint(hops, sheet, col, mid + 1, b, size, nid))
+            stack.append((a, mid))
+            stack.append((mid + 1, b))
+
+    def offer(self, accept) -> None:
+        """Report each stored segment id and the name ``edges`` would have used."""
+        names = self._sheet_names
+        prefix = SEGMENT_PREFIX
+        for index, slot in enumerate(self._slot):
+            sheet = names[self._sheet_i[index]]
+            col = self._col[index]
+            lo = self._lo[index]
+            hi = self._hi[index]
+            name = f"{prefix}{sheet}|{col}|{lo}|{hi}"
+            accept(int(slot), name)
+
+    def _id(self, sheet: str, col: int, lo: int, hi: int, size: int) -> int:
+        offset, _bits = self._ensure(sheet, col, size)
+        return self.base + offset + _internal_index(lo, hi, size)
+
+    def _claim(self, sheet: str, col: int, lo: int, hi: int, size: int) -> int | None:
+        index = _internal_index(lo, hi, size)
+        offset, bits = self._ensure(sheet, col, size)
+        byte, bit = divmod(index, 8)
+        mask = 1 << bit
+        if bits[byte] & mask:
+            return None
+        bits[byte] |= mask
+        slot = self.base + offset + index
+        self._slot.append(slot)
+        self._sheet_i.append(self._sheet_index(sheet))
+        self._col.append(col)
+        self._lo.append(lo)
+        self._hi.append(hi)
+        return slot
+
+    def _ensure(self, sheet: str, col: int, size: int) -> tuple[int, bytearray]:
+        key = (sheet, col)
+        found = self._origin.get(key)
+        if found is None:
+            offset = self._span
+            internals = max(size - 1, 0)
+            self._span += internals
+            found = (offset, bytearray((internals + 7) // 8))
+            self._origin[key] = found
+        return found
+
+    def _sheet_index(self, sheet: str) -> int:
+        found = self._sheet_of.get(sheet)
+        if found is None:
+            found = len(self._sheet_names)
+            self._sheet_of[sheet] = found
+            self._sheet_names.append(sheet)
+        return found
+
+
+def _internal_index(lo: int, hi: int, size: int) -> int:
+    """Index in ``0 .. size-2`` of the split-tree node covering ``[lo, hi]``."""
+    a, b = 0, size - 1
+    index = 0
+    while (a, b) != (lo, hi):
+        mid = (a + b) // 2
+        if hi <= mid:
+            index += 1
+            b = mid
+        else:
+            index += mid - a + 1
+            a = mid + 1
+    return index
 
 
 def _cover(lo: int, hi: int, want_lo: int, want_hi: int) -> Iterator[tuple[int, int]]:

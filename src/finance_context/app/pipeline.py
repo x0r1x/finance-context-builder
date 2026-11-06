@@ -29,7 +29,7 @@ from finance_context.formulas.csr import (
     reset_range_expand_cap,
     reset_range_node_min_cells,
 )
-from finance_context.formulas.models import as_edge, release_cell_asts
+from finance_context.formulas.models import release_cell_asts
 from finance_context.formulas.stage import EdgeCount, compile_workbook, ir_is_current
 from finance_context.graph.stage import build_formula_graph
 from finance_context.jobqueue.progress import (
@@ -289,21 +289,21 @@ class Pipeline:
             ):
                 compiled_book = compile_workbook(book, settings=self.settings)
                 profile["cells"] = compiled_book.cell_count
-                profile["edges"] = len(compiled_book.edges)
+                profile["edges"] = compiled_book.edge_count
                 profile["cell_edges"] = len(compiled_book.cell_edges)
                 usage_box[0] = compiled_book.usage
                 cell_count = compiled_book.cell_count
-                ir_edges = compiled_book.edges
+                edge_count = compiled_book.edge_count
                 ir_cell_edges = compiled_book.cell_edges
+                del compiled_book
         else:
             _stage_reused("compile", root=book, saved=_COMPILE_SAVED)
-            ir_edges, ir_cell_edges = _read_ir(
-                book, count_cell_edges=self.settings.graph_stream
-            )
+            ir_cell_edges = _read_ir(book, count_cell_edges=self.settings.graph_stream)
             cell_count = _parquet_rows(book / "ir" / "cells.parquet")
+            edge_count = _parquet_rows(book / "ir" / "edges.parquet")
         set_stage("layout")
         if not (book / "layout" / "layout.json").is_file():
-            layout_profile = {"cells": cell_count, "edges": len(ir_edges)}
+            layout_profile = {"cells": cell_count, "edges": edge_count}
             with _stage(
                 "layout",
                 root=book,
@@ -311,7 +311,7 @@ class Pipeline:
                 counts=layout_profile,
                 settings=self.settings,
             ):
-                layout = layout_workbook(book, edges=ir_edges, settings=self.settings)
+                layout = layout_workbook(book, settings=self.settings)
         else:
             _stage_reused("layout", root=book, saved=_LAYOUT_SAVED)
             _pause_layout_reuse()
@@ -332,7 +332,6 @@ class Pipeline:
             relation_profile["cells"] = relation_cells.count
             release_cell_asts(relation_cells)
         relation_cells = None
-        edges = ir_edges
         workbook_meta = json.loads((book / "raw" / "workbook.json").read_text(encoding="utf-8"))
         status = _final_status()
         set_stage("graph", status="running")
@@ -344,10 +343,13 @@ class Pipeline:
         ):
             graph_profile = {
                 "cells": cell_count,
-                "edges": len(ir_edges),
+                "edges": edge_count,
                 "cell_edges": len(ir_cell_edges),
             }
             graph_edges = None if isinstance(ir_cell_edges, EdgeCount) else ir_cell_edges
+            # The layout model is on disk. Graph keeps only the row maps it copies.
+            layout_holder: list[Layout] = [layout]
+            layout = None
             with _stage(
                 "graph",
                 root=dest_dir,
@@ -358,12 +360,14 @@ class Pipeline:
                 graph = build_formula_graph(
                     dest_dir,
                     job_id=job_id,
-                    layout=layout,
-                    edges=ir_edges,
+                    layout=layout_holder,
                     cell_edges=graph_edges,
                     book_dir=book,
                     settings=self.settings,
                 )
+            layout = Layout.model_validate_json(
+                (book / "layout" / "layout.json").read_text(encoding="utf-8")
+            )
         else:
             _stage_reused("graph", root=dest_dir, saved=_GRAPH_SAVED)
             payload = json.loads((dest_dir / "graph" / "graph.json").read_text(encoding="utf-8"))
@@ -390,7 +394,7 @@ class Pipeline:
             )
         ir_cell_edges = None
         set_stage("build", status="running")
-        build_profile = {"cells": cell_count, "edges": len(edges)}
+        build_profile = {"cells": cell_count, "edges": edge_count}
         with _stage(
             "build",
             root=dest_dir,
@@ -409,14 +413,13 @@ class Pipeline:
                 status=status,
                 stage="done",
                 graph=graph,
-                edges=edges,
                 usage=book_usage(),
                 context_dir=dest_dir / "context",
             )
             build_profile["formulas"] = doc.workbook.formula_count
             # Rows are already in context.json. Drop layout before this stage
             # trims so those pages are not still resident.
-            edges = ir_edges = relations = layout = None
+            relations = layout = None
         set_stage("render", status="running")
         with _stage("render", root=dest_dir, saved=_RENDER_SAVED, settings=self.settings):
             write_context_markdown(dest_dir / "context", doc)
@@ -811,18 +814,13 @@ def _wait_for_pause_release() -> None:
         time.sleep(0.05)
 
 
-def _read_ir(
-    dest_dir: Path, *, count_cell_edges: bool = False
-) -> tuple[list, list | EdgeCount]:
-    edges_path = dest_dir / "ir" / "edges.parquet"
-    edges = read_parquet(edges_path) if edges_path.is_file() else []
+def _read_ir(dest_dir: Path, *, count_cell_edges: bool = False) -> list | EdgeCount:
+    """Cell edges for a reused compile. Formula edges stay in ``ir/edges.parquet``."""
     cell_edges_path = dest_dir / "ir" / "cell_edges.parquet"
     if count_cell_edges and cell_edges_path.is_file():
-        cell_edges: list | EdgeCount = EdgeCount(_parquet_rows(cell_edges_path))
-    else:
-        loaded = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
-        cell_edges = [as_cell_edge(edge) for edge in loaded]
-    return [as_edge(edge) for edge in edges], cell_edges
+        return EdgeCount(_parquet_rows(cell_edges_path))
+    loaded = read_parquet(cell_edges_path) if cell_edges_path.is_file() else []
+    return [as_cell_edge(edge) for edge in loaded]
 
 
 def _parquet_rows(path: Path) -> int:
