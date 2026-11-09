@@ -35,7 +35,7 @@ def test_narrow_list_without_an_axis_is_key_value() -> None:
     assert [row.label for row in block.rows] == ["Rent", "Tax"]
     assert [header.period_key for header in block.axis.headers] == ["c2"]
     assert block.axis.headers[0].text == "Amount"
-    assert any("key_value" in note for note in sheet.notes)
+    assert sheet.notes == []
 
 
 def test_one_labelled_number_is_not_a_table() -> None:
@@ -73,7 +73,7 @@ def test_wide_grid_without_an_axis_is_a_matrix() -> None:
         "Three",
         "Four",
     ]
-    assert any("matrix" in note for note in sheet.notes)
+    assert sheet.notes == []
 
 
 def test_rows_above_a_timeline_keep_their_own_block() -> None:
@@ -139,6 +139,143 @@ def test_chart_sheet_is_marked_and_still_read() -> None:
     sheet = detect_layout(cells).sheets[0]
     assert sheet.blocks[0].kind == "key_value"
     assert any(note == "Sheet Charts is a chart copy, not a calculation" for note in sheet.notes)
+
+
+def test_a_single_year_header_is_not_a_value_row() -> None:
+    cells = [
+        _c("P&L", "A1", "Item"),
+        _c("P&L", "B1", "2024"),
+        _c("P&L", "A2", "Revenue"),
+        _c("P&L", "B2", "10"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert sheet.blocks == []
+    assert sheet.notes == []
+
+
+def test_two_captioned_columns_stay_a_list() -> None:
+    cells = [
+        _c("List", "A1", "Name"),
+        _c("List", "B1", "Amount"),
+        _c("List", "C1", "Share"),
+        _c("List", "A2", "Rent"),
+        _c("List", "B2", "10"),
+        _c("List", "C2", "0.2"),
+        _c("List", "A3", "Tax"),
+        _c("List", "B3", "2"),
+        _c("List", "C3", "0.1"),
+    ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "key_value"
+    assert [row.label for row in block.rows] == ["Rent", "Tax"]
+    assert [header.text for header in block.axis.headers] == ["Amount", "Share"]
+
+
+def test_a_numeric_key_column_is_not_a_table() -> None:
+    cells = [
+        _c("Data", "A1", "key"),
+        _c("Data", "B1", "val"),
+        _c("Data", "A2", "1"),
+        _c("Data", "B2", "10"),
+        _c("Data", "A3", "2"),
+        _c("Data", "B3", "20"),
+    ]
+    assert detect_layout(cells).sheets[0].blocks == []
+
+
+def test_numeric_id_column_is_not_the_label() -> None:
+    cells = [
+        _c("List", "A1", "ID"),
+        _c("List", "B1", "Name"),
+        _c("List", "C1", "Amount"),
+        _c("List", "A2", "1"),
+        _c("List", "B2", "Rent"),
+        _c("List", "C2", "10"),
+        _c("List", "A3", "2"),
+        _c("List", "B3", "Tax"),
+        _c("List", "C3", "2"),
+    ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.label_col == 2
+    assert [row.label for row in block.rows] == ["Rent", "Tax"]
+
+
+def test_one_blank_row_splits_two_lists() -> None:
+    cells = [
+        _c("Model", "A1", "Name"),
+        _c("Model", "B1", "Amount"),
+        _c("Model", "A2", "Rent"),
+        _c("Model", "B2", "10"),
+        _c("Model", "A3", "Tax"),
+        _c("Model", "B3", "2"),
+        _c("Model", "A5", "Name"),
+        _c("Model", "B5", "Amount"),
+        _c("Model", "A6", "Fee"),
+        _c("Model", "B6", "3"),
+        _c("Model", "A7", "Cost"),
+        _c("Model", "B7", "4"),
+        _c("Model", "A9", "Item"),
+        _c("Model", "B9", "2020"),
+        _c("Model", "C9", "2021"),
+        _c("Model", "D9", "2022"),
+        _c("Model", "A10", "Revenue"),
+        _c("Model", "B10", "1"),
+        _c("Model", "C10", "2"),
+        _c("Model", "D10", "3"),
+    ]
+    blocks = [block for block in detect_layout(cells).sheets[0].blocks if block.kind == "key_value"]
+    assert [row.label for block in blocks for row in block.rows] == ["Rent", "Tax", "Fee", "Cost"]
+    assert len(blocks) == 2
+
+
+def test_a_far_number_is_not_a_column_of_the_list() -> None:
+    cells = [
+        _c("List", "A1", "Name"),
+        _c("List", "B1", "Amount"),
+        _c("List", "A2", "Rent"),
+        _c("List", "B2", "10"),
+        _c("List", "Z2", "999"),
+        _c("List", "A3", "Tax"),
+        _c("List", "B3", "2"),
+        _c("List", "Z3", "888"),
+    ]
+    headers = detect_layout(cells).sheets[0].blocks[0].axis.headers
+    assert [header.col for header in headers] == [2]
+
+
+def test_a_hidden_column_is_not_a_coverage_value() -> None:
+    cells = [
+        _c("List", "A1", "Name"),
+        _c("List", "B1", "Amount"),
+        _c("List", "C1", "Secret", hidden=True),
+        _c("List", "A2", "Rent"),
+        _c("List", "B2", "10"),
+        _c("List", "C2", "99", hidden=True),
+        _c("List", "A3", "Tax"),
+        _c("List", "B3", "2"),
+        _c("List", "C3", "88", hidden=True),
+    ]
+    layout = detect_layout(cells, hidden_columns={"List": {3}})
+    headers = layout.sheets[0].blocks[0].axis.headers
+    assert [header.col for header in headers] == [2]
+
+
+def test_years_that_are_not_an_axis_stay_column_captions() -> None:
+    cells = [
+        _c("Model", "A1", "Item"),
+        _c("Model", "B1", "2020"),
+        _c("Model", "C1", "2022"),
+        _c("Model", "D1", "2025"),
+        _c("Model", "A2", "Revenue"),
+        _c("Model", "B2", "1"),
+        _c("Model", "C2", "2"),
+        _c("Model", "D2", "3"),
+    ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.kind == "matrix"
+    assert [row.label for row in block.rows] == ["Revenue"]
+    assert [header.text for header in block.axis.headers] == ["2020", "2022", "2025"]
+    assert [header.role for header in block.axis.headers] == ["unknown", "unknown", "unknown"]
 
 
 def test_payment_schedule_is_not_a_chart_sheet() -> None:

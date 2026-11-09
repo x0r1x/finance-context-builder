@@ -737,10 +737,7 @@ def test_pipeline_records_the_warning_and_does_not_export_a_reuse(
     pipeline.run(dest, job_id="job-test", source_filename="model.xlsx")
     meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "succeeded"
-    assert meta["warnings"] == [
-        "Sheet P&L: 2 rows included without a period axis (key_value)",
-        "minio export failed",
-    ]
+    assert meta["warnings"] == ["minio export failed"]
     assert (dest / "context" / "context.json").is_file()
     pipeline.run(dest, job_id="job-test")
     assert calls == ["job-test"]

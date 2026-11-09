@@ -857,7 +857,7 @@ def _unknown_header_warnings(layout: Layout) -> list[str]:
     warnings: list[str] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            if block.kind != "params" or block.axis is None:
+            if block.kind not in {"params", "key_value", "matrix"} or block.axis is None:
                 continue
             unknown = [
                 header

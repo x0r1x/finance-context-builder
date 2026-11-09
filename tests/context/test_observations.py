@@ -285,3 +285,36 @@ def test_second_axis_without_a_series_is_not_filled_from_row_values() -> None:
     block.axis_ids = ["Operation!r8", "Operation!r99"]
     payload = _dump(context, row_keys=[REVENUE])
     assert [item["timeline"]["axis_id"] for item in payload["observations"]] == ["Operation!r8"]
+
+
+def test_a_later_filled_column_keeps_its_own_value() -> None:
+    from finance_context.context.observations import _params_row
+    from finance_context.models.context import BlockRow, RoleCell, RowSeries
+
+    block = FinancialBlock(
+        block_id="L!c2",
+        sheet="L",
+        label_col=1,
+        kind="key_value",
+        periods=[
+            {"col": 2, "text": "Low", "period_key": "c2", "role": "value"},
+            {"col": 3, "text": "High", "period_key": "c3", "role": "value"},
+        ],
+    )
+    row = BlockRow(
+        row_key="L|2|L!c2",
+        sheet="L",
+        row=2,
+        label="Rent",
+        kind="fact",
+        cells=[RoleCell(addr="C2", col=3, role="value", cached_value="1", header="High")],
+        series=[
+            RowSeries(
+                axis_id="L!c2",
+                values=[None, "9"],
+                value_statuses=["empty", "cached"],
+            )
+        ],
+    )
+    found = _params_row(block, row, {}, periods=set())
+    assert [(item.period_id, item.value) for item in found] == [("c3", "9")]

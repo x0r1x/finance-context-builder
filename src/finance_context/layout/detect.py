@@ -226,7 +226,9 @@ def _blocks_indexed(
         axis = block.axis
         if axis is not None and axis.row:
             header_rows.add(int(axis.row))
-    covered, notes = coverage_blocks(sheet, by_row, date1904, blocks, header_rows)
+    covered, notes = coverage_blocks(
+        sheet, by_row, date1904, blocks, header_rows, hidden_cols
+    )
     if covered:
         blocks = sorted(
             [*blocks, *covered],

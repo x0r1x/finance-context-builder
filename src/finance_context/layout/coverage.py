@@ -20,10 +20,12 @@ _PARAMETER_VALUES = 2
 _KEY_VALUE_COLUMNS = 2
 # Values further right than this are a cover-page control, not this row's list.
 _LABEL_GAP = 3
-# Markdown and context stay aligned, so a very wide grid is excerpted.
+# Markdown and context stay aligned. Extra columns past this stay out;
+# the kept columns are the ones next to the label, not the far tail.
 _COLUMN_CAP = 32
-_COLUMN_HEAD = 24
-_COLUMN_TAIL = 8
+# A sheet of calculation keys is not a report table. Stop before it is copied
+# into layout, context, and the graph.
+_ROW_CAP = 2000
 # Names of chart and dashboard sheets. A payment schedule is not one of these.
 _CHART_SHEET = re.compile(
     r"^(?:charts?|графики|диаграммы?|dashboards?|дашборды?)(?:\s*\d*)$",
@@ -44,13 +46,16 @@ def coverage_blocks(
     date1904: bool,
     blocks: list[Block],
     header_rows: set[int],
+    hidden_cols: set[int] | None = None,
 ) -> tuple[list[Block], list[str]]:
     """Blocks and notes for rows outside every existing block span."""
-    owned = _owned_rows(blocks, header_rows)
+    hidden = hidden_cols or set()
+    spans = _owned_spans(blocks)
     free = [
         row
         for row in sorted(by_row)
-        if row not in owned and _row_has_value(by_row[row], date1904)
+        if not _is_owned(row, header_rows, spans)
+        and _row_has_value(by_row[row], date1904, hidden)
     ]
     # A caption row has no numbers, so it is not free. Keep the row directly
     # above a free row when it only holds column titles.
@@ -58,14 +63,14 @@ def coverage_blocks(
         row - 1
         for row in free
         if (row - 1) in by_row
-        and (row - 1) not in owned
-        and not _row_has_value(by_row[row - 1], date1904)
+        and not _is_owned(row - 1, header_rows, spans)
+        and not _row_has_value(by_row[row - 1], date1904, hidden)
     ]
     free = sorted(set(free) | set(captions))
     found: list[Block] = []
     notes: list[str] = []
     for band in _bands(free):
-        block, note = _band_block(sheet, band, by_row, date1904)
+        block, note = _band_block(sheet, band, by_row, date1904, hidden)
         if block is None:
             continue
         found.append(block)
@@ -74,42 +79,53 @@ def coverage_blocks(
     return found, notes
 
 
-def _owned_rows(blocks: list[Block], header_rows: set[int]) -> set[int]:
-    """Header rows and every row inside an existing block's vertical span.
-
-    A row between the first and last row of a timeline stays with that
-    timeline. Coverage only sees rows above, below, or on a sheet with no block.
-    """
-    owned = set(header_rows)
+def _owned_spans(blocks: list[Block]) -> list[tuple[int, int]]:
+    """Vertical spans of blocks that already exist. Not a filled set of every row."""
+    spans: list[tuple[int, int]] = []
     for block in blocks:
         rows = [row.row for row in block.rows]
-        if not rows:
-            continue
-        owned.update(range(min(rows), max(rows) + 1))
-    return owned
+        if rows:
+            spans.append((min(rows), max(rows)))
+    return spans
+
+
+def _is_owned(row: int, header_rows: set[int], spans: list[tuple[int, int]]) -> bool:
+    if row in header_rows:
+        return True
+    return any(start <= row <= end for start, end in spans)
 
 
 def _bands(rows: list[int]) -> list[list[int]]:
-    """Split on two or more missing rows. One empty row stays inside a list."""
+    """One missing row splits two lists. They are not one table."""
     if not rows:
         return []
     bands = [[rows[0]]]
     for prev, nxt in zip(rows, rows[1:], strict=False):
-        if nxt - prev >= 3:
+        if nxt - prev >= 2:
             bands.append([nxt])
         else:
             bands[-1].append(nxt)
     return bands
 
 
-def _row_has_value(cells: list[dict], date1904: bool) -> bool:
-    return any(_is_value(cell, date1904) for cell in cells)
+def _row_has_value(cells: list[dict], date1904: bool, hidden_cols: set[int]) -> bool:
+    return any(
+        int(cell["col"]) not in hidden_cols and _is_value(cell, date1904) for cell in cells
+    )
+
+
+def _is_year_text(text: str | None) -> bool:
+    """A bare year is a period token, not a list value and not a row label."""
+    if not text or len(text) != 4 or not text.isascii() or not text.isdigit():
+        return False
+    year = int(text)
+    return 1900 <= year <= 2100
 
 
 def _is_value(cell: dict, date1904: bool) -> bool:
-    if cell.get("formula_raw"):
-        return True
     text = _text(cell, date1904)
+    if _is_year_text(text):
+        return False
     return bool(text and _is_number(text))
 
 
@@ -118,12 +134,15 @@ def _band_block(
     band: list[int],
     by_row: dict[int, list[dict]],
     date1904: bool,
+    hidden_cols: set[int],
 ) -> tuple[Block | None, str | None]:
-    label_col = _label_column(band, by_row, date1904)
+    value_cols = _value_columns(band, by_row, date1904, hidden_cols)
+    label_col = _label_column(band, by_row, date1904, value_cols)
     if label_col is None:
         return None, None
-    value_cols = _value_columns(band, by_row, date1904, label_col)
-    if not value_cols or min(value_cols) - label_col > _LABEL_GAP:
+    value_cols = [col for col in value_cols if col > label_col]
+    value_cols = _contiguous(value_cols)
+    if not value_cols or value_cols[0] - label_col > _LABEL_GAP:
         return None, None
     titles = _column_titles(band, by_row, date1904, value_cols)
     shown, omitted = _cap_columns(value_cols)
@@ -132,7 +151,7 @@ def _band_block(
         if row_n in titles:
             continue
         label = _label_text(by_row[row_n], label_col, date1904)
-        if not label:
+        if not label or _is_number(label):
             continue
         count = _value_count(by_row[row_n], date1904, shown)
         if count == 0:
@@ -152,19 +171,26 @@ def _band_block(
         )
     if not rows:
         return None, None
+    truncated = len(rows) > _ROW_CAP
+    if truncated:
+        rows = rows[:_ROW_CAP]
     richest = max(len(row.cells) for row in rows)
-    if len(rows) == 1 and richest <= _PARAMETER_VALUES and len(value_cols) <= _PARAMETER_VALUES:
+    if len(rows) == 1 and richest <= _PARAMETER_VALUES and len(shown) <= _PARAMETER_VALUES:
         return None, None
-    # Two bare numbers beside a label are a rejected date header, not a list.
-    # A list has one value on each row, or a caption row above several columns.
-    if len(value_cols) <= _KEY_VALUE_COLUMNS and any(len(row.cells) > 1 for row in rows):
+    # Bare numbers in one or two columns, with no caption row, are a rejected
+    # date header. Amount | Share under a caption row is a list.
+    if (
+        len(shown) <= _KEY_VALUE_COLUMNS
+        and not titles
+        and any(len(row.cells) > 1 for row in rows)
+    ):
         return None, None
-    kind = "key_value" if len(value_cols) <= _KEY_VALUE_COLUMNS else "matrix"
+    kind = "key_value" if len(shown) <= _KEY_VALUE_COLUMNS else "matrix"
     headers = [
         AxisHeader(
             col=col,
             text=_caption(by_row, titles, col, date1904) or index_to_col(col),
-            role="value",
+            role="unknown" if _period_caption(by_row, titles, col, date1904) else "value",
             period_key=f"c{col}",
         )
         for col in shown
@@ -174,44 +200,93 @@ def _band_block(
     block = Block(
         block_id=block_id,
         label_col=label_col,
-        axis=Axis(id=block_id, row=first, headers=headers),
+        axis=Axis(id=block_id, row=titles and min(titles) or first, headers=headers),
         rows=rows,
         kind=kind,
     )
-    note = f"Sheet {sheet}: {len(rows)} rows included without a period axis ({kind}"
+    note = None
     if omitted:
-        note += f", {len(shown)} of {len(value_cols)} value columns"
-    note += ")"
+        note = (
+            f"Sheet {sheet}: coverage kept {len(shown)} of {len(value_cols)} value columns"
+        )
+    if truncated:
+        extra = f"Sheet {sheet}: coverage kept {_ROW_CAP} rows"
+        note = f"{note}; {extra}" if note else extra
     return block, note
 
 
 def _label_column(
-    band: list[int], by_row: dict[int, list[dict]], date1904: bool
+    band: list[int],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    value_cols: list[int],
 ) -> int | None:
-    """Leftmost column that carries a non-numeric caption on any band row."""
-    found: list[int] = []
-    for row_n in band:
-        for cell in by_row[row_n]:
-            text = _text(cell, date1904)
-            if text and not _is_number(text):
-                found.append(int(cell["col"]))
-    return min(found) if found else None
+    """Rightmost text column that sits just left of a value.
+
+    A header word above a numeric body (``key``, ``ID``) is not a label.
+    The names beside the numbers are.
+    """
+    best: int | None = None
+    values = set(value_cols)
+    columns = {
+        int(cell["col"])
+        for row_n in band
+        for cell in by_row[row_n]
+    }
+    for col in sorted(columns):
+        texts = numbers = 0
+        for row_n in band:
+            text = _text(_cell(by_row[row_n], col) or {}, date1904)
+            if not text or _is_year_text(text):
+                continue
+            if _is_number(text):
+                numbers += 1
+            else:
+                texts += 1
+        if texts == 0 or texts <= numbers:
+            continue
+        if any(col < value <= col + _LABEL_GAP for value in values):
+            best = col
+    return best
+
+
+def _contiguous(cols: list[int]) -> list[int]:
+    if not cols:
+        return []
+    run = [cols[0]]
+    for col in cols[1:]:
+        if col - run[-1] > _LABEL_GAP:
+            break
+        run.append(col)
+    return run
 
 
 def _value_columns(
     band: list[int],
     by_row: dict[int, list[dict]],
     date1904: bool,
-    label_col: int,
+    hidden_cols: set[int],
 ) -> list[int]:
+    """The run of value columns that starts at the first one.
+
+    A page number many columns to the right is not part of the list.
+    """
     cols: set[int] = set()
     for row_n in band:
         for cell in by_row[row_n]:
             col = int(cell["col"])
-            if col == label_col or not _is_value(cell, date1904):
+            if col in hidden_cols or not _is_value(cell, date1904):
                 continue
             cols.add(col)
-    return sorted(cols)
+    ordered = sorted(cols)
+    if not ordered:
+        return []
+    run = [ordered[0]]
+    for col in ordered[1:]:
+        if col - run[-1] > _LABEL_GAP:
+            break
+        run.append(col)
+    return run
 
 
 def _column_titles(
@@ -239,16 +314,27 @@ def _caption(
 ) -> str | None:
     for row_n in sorted(titles):
         text = _text(_cell(by_row[row_n], col) or {}, date1904)
-        if text and not _is_number(text):
-            return text.strip()
+        if not text:
+            continue
+        if _is_number(text) and not _is_year_text(text):
+            continue
+        return text.strip()
     return None
+
+
+def _period_caption(
+    by_row: dict[int, list[dict]],
+    titles: set[int],
+    col: int,
+    date1904: bool,
+) -> bool:
+    return _is_year_text(_caption(by_row, titles, col, date1904))
 
 
 def _cap_columns(cols: list[int]) -> tuple[list[int], int]:
     if len(cols) <= _COLUMN_CAP:
         return cols, 0
-    shown = cols[:_COLUMN_HEAD] + cols[-_COLUMN_TAIL:]
-    return shown, len(cols) - len(shown)
+    return cols[:_COLUMN_CAP], len(cols) - _COLUMN_CAP
 
 
 def _label_text(cells: list[dict], label_col: int, date1904: bool) -> str | None:
