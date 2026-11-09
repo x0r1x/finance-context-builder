@@ -603,6 +603,7 @@ def expand_cell_edges_column_batches(
     usage: SheetUsage | None = None,
     pool: dict[str, str] | None = None,
     batch_size: int = 65536,
+    after_edge: Any = None,
 ) -> int:
     """Same rows as expand_cell_edges, flushed as column lists. No CellEdge objects.
 
@@ -650,6 +651,10 @@ def expand_cell_edges_column_batches(
             columns["named"].append(row.named)
             if limit and len(columns["source"]) >= limit:
                 flush()
+        # ``truncated`` is set while the edge's rows are walked. The caller can
+        # store the edge after that, still one edge at a time.
+        if after_edge is not None:
+            after_edge(edge)
     flush()
     return count
 

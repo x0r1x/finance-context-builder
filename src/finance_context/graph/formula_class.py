@@ -17,6 +17,46 @@ _A1_REF = re.compile(
 )
 
 
+# Bits that classify the same way as a lag list. ``classify_formula`` only cares
+# whether a prior exists, whether every prior is -1, and whether a forward exists.
+_LAG_NEG1 = 1
+_LAG_OTHER = 2
+_LAG_POS = 4
+
+
+def note_lag(bits: int, lag: str) -> int:
+    """Fold one lag into the bits ``classify_formula_bits`` understands."""
+    if lag in {"", "same", "unaligned"}:
+        return bits
+    try:
+        number = int(lag)
+    except (TypeError, ValueError):
+        return bits
+    if number == -1:
+        return bits | _LAG_NEG1
+    if number < 0:
+        return bits | _LAG_OTHER
+    if number > 0:
+        return bits | _LAG_POS
+    return bits
+
+
+def classify_formula_bits(
+    formula: str | None,
+    refs: list[str] | None,
+    bits: int,
+) -> FormulaClass | None:
+    """Same class as ``classify_formula`` for the lags those bits summarize."""
+    lags: list[str] = []
+    if bits & _LAG_NEG1:
+        lags.append("-1")
+    if bits & _LAG_OTHER:
+        lags.append("-2")
+    if bits & _LAG_POS:
+        lags.append("1")
+    return classify_formula(formula, refs, lags)
+
+
 def classify_formula(
     formula: str | None,
     refs: list[str] | None = None,

@@ -547,6 +547,45 @@ def test_graph_selects_active_value_column() -> None:
     assert headers[4] == ("value", "Values")
 
 
+def test_graph_selects_active_value_column_from_parquet(tmp_path) -> None:
+    """The same column, read from ir/edges.parquet instead of a resident list."""
+    from finance_context.formulas.stage import IR_EDGE_COLUMNS
+    from finance_context.store.fs import write_parquet
+
+    cells = [
+        _c("Input Assumptions", "B5", "Parameter"),
+        _c("Input Assumptions", "C5", "Base"),
+        _c("Input Assumptions", "D5", "Values"),
+        _c("Input Assumptions", "B8", "Gearing"),
+        _c("Input Assumptions", "C8", "0.7"),
+        _c("Input Assumptions", "D8", "0.65"),
+        _c("Input Assumptions", "B9", "Tax Rate"),
+        _c("Input Assumptions", "C9", "0.3"),
+        _c("Input Assumptions", "D9", "0.3"),
+        _c("Input Assumptions", "B10", "Duration"),
+        _c("Input Assumptions", "C10", "30"),
+        _c("Input Assumptions", "D10", "40"),
+        _c("Input Assumptions", "B11", "Toll"),
+        _c("Input Assumptions", "C11", "3"),
+        _c("Input Assumptions", "D11", "3.56"),
+    ]
+    path = tmp_path / "edges.parquet"
+    write_parquet(
+        path,
+        IR_EDGE_COLUMNS,
+        [
+            ("Construction!E21", "ref", "Input Assumptions!D8", False, False, False),
+            ("P&L!C9", "ref", "Input Assumptions!D9", False, False, False),
+            ("CFS!C10", "ref", "Input Assumptions!D10", False, False, False),
+        ],
+    )
+    layout = detect_layout(cells, edges=path)
+    block = layout.sheets[0].blocks[0]
+    headers = {header.col: (header.role, header.text) for header in block.axis.headers}
+    assert headers[3] == ("value", "Base")
+    assert headers[4] == ("value", "Values")
+
+
 def test_unit_caption_does_not_replace_the_debt_section() -> None:
     cells = [
         _c("PF", "L1", "2024"),

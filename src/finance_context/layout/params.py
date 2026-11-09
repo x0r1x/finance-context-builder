@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, in_grid, index_to_col, parse_addr
 from finance_context.layout.cells import LayoutCell, parse_number
@@ -31,7 +32,7 @@ def detect_params_block(
     sheet: str,
     by_row: dict[int, list[dict]],
     date1904: bool,
-    edges: list[dict] | None = None,
+    edges: list | Path | None = None,
     defined_names: list | None = None,
 ) -> Block | None:
     if _looks_like_grid(by_row, date1904):
@@ -747,7 +748,7 @@ def _column_roles(
     by_row: dict[int, list[dict]],
     date1904: bool,
     sheet: str,
-    edges: list[dict],
+    edges: list | Path | None,
 ) -> dict[int, str]:
     header_votes: dict[int, Counter[str]] = defaultdict(Counter)
     numeric_counts: Counter[int] = Counter()
@@ -1178,10 +1179,12 @@ def _is_same_row_total(formula: str, template: str, row: int) -> bool:
     return False
 
 
-def _active_value_col(edges: list[dict], sheet: str) -> int | None:
+def _active_value_col(edges: list | Path | None, sheet: str) -> int | None:
+    from finance_context.formulas.edge_file import iterate_edges
+
     counts: Counter[int] = Counter()
     prefix = sheet.casefold()
-    for edge in edges:
+    for edge in iterate_edges(edges):
         target = str(edge.target or "")
         source = str(edge.source or "")
         parsed_t = _parse_sheet_addr(target)

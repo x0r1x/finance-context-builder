@@ -24,6 +24,7 @@ from finance_context.context.timeline import (
 )
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.formulas.csr import SheetUsage
+from finance_context.formulas.edge_file import iterate_edges
 from finance_context.layout.adjacency import RangeReads, row_adjacency
 from finance_context.layout.cells import parse_number
 from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
@@ -150,8 +151,14 @@ def build_context(
         timeline_warnings.extend(_period_warnings(cell_path, date1904))
     axes_by_id = {axis.id: axis for axis in axes}
     reads = RangeReads()
+    # An explicit list wins. The pipeline passes none and the rows are read
+    # from ir/edges.parquet in file order, one batch at a time.
+    if edges is None and book_dir is not None:
+        edge_source = book_dir / "ir" / "edges.parquet"
+    else:
+        edge_source = edges
     precedents, dependents = row_adjacency(
-        edges or [],
+        iterate_edges(edge_source),
         limit=0,
         usage=usage,
         ranges=reads,

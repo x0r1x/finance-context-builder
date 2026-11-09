@@ -149,6 +149,7 @@ def test_row_group_of_one_keeps_values(tmp_path: Path) -> None:
     for name in ("raw/cells.parquet", "raw/cell_presence.parquet"):
         assert (wide / name).read_bytes() == (split / name).read_bytes(), name
     assert _same_table(wide / "ir" / "cells.parquet", split / "ir" / "cells.parquet")
+    assert _same_table(wide / "ir" / "edges.parquet", split / "ir" / "edges.parquet")
     edges = split / "ir" / "cell_edges.parquet"
     assert pq.ParquetFile(edges).num_row_groups > 1
     assert _same_table(wide / "ir" / "cell_edges.parquet", edges)

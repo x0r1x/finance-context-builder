@@ -97,8 +97,9 @@ def compile_workbook(
     meta = json.loads((dest_dir / "raw" / "workbook.json").read_text(encoding="utf-8"))
     engine = FormulaEngine(locale_hint=meta.get("locale_hint"))
     raw_path = dest_dir / "raw" / "cells.parquet"
+    spill: Path | None = None
     if chosen.parse_streaming:
-        cell_count, edges, known, formula_count, pool = _compile_cells_streaming(
+        cell_count, spill, edge_count, known, _formula_count, pool = _compile_cells_streaming(
             dest_dir, raw_path, engine, meta, chosen
         )
     else:
@@ -106,6 +107,7 @@ def compile_workbook(
             raw_path, engine, meta, chosen
         )
         cell_count = len(cells)
+        edge_count = len(edges)
     sheets = {
         str(item["name"] if isinstance(item, dict) else item.name)
         for item in (meta.get("sheets") or [])
@@ -113,49 +115,76 @@ def compile_workbook(
     presence = load_presence(dest_dir / "raw" / "cell_presence.parquet", pool=pool)
     if usage is None:
         usage = usage_from_presence(presence)
-    if chosen.graph_stream:
-        cell_edges: list | EdgeCount = _write_cell_edge_batches(
-            dest_dir,
-            edges,
-            known,
-            sheets=sheets,
-            presence=presence,
-            usage=usage,
-            pool=pool,
-            row_group_rows=chosen.parquet_row_group_rows,
-        )
-    else:
-        cell_edges = expand_cell_edges(
-            edges,
-            known,
-            known_sheets=sheets,
-            presence=presence,
-            usage=usage,
-            pool=pool,
-        )
-    if pool is not None:
-        pool.clear()
-    if chosen.parse_streaming:
-        _write_edges(dest_dir, edges, settings=chosen)
-    else:
-        _write_cells_and_edges(dest_dir, cells, edges, settings=chosen)
-        del cells
-    if not chosen.graph_stream:
-        _write_cell_edge_rows(
-            dest_dir,
-            cell_edges,
-            row_group_rows=chosen.parquet_row_group_rows,
-        )
+    try:
+        if spill is not None and chosen.graph_stream:
+            # The spill is the edge list. Expand from it, then publish edges.
+            cell_edges = _expand_spilled_edges(
+                dest_dir,
+                spill,
+                edge_count,
+                known,
+                sheets=sheets,
+                presence=presence,
+                usage=usage,
+                settings=chosen,
+            )
+            edges = []
+        elif chosen.graph_stream:
+            cell_edges = _write_cell_edge_batches(
+                dest_dir,
+                edges,
+                known,
+                sheets=sheets,
+                presence=presence,
+                usage=usage,
+                pool=pool,
+                row_group_rows=chosen.parquet_row_group_rows,
+            )
+        else:
+            if spill is not None:
+                edges = list(_iter_spilled_edges(spill))
+                edge_count = len(edges)
+            cell_edges = expand_cell_edges(
+                edges,
+                known,
+                known_sheets=sheets,
+                presence=presence,
+                usage=usage,
+                pool=pool,
+            )
+            if spill is not None:
+                _write_edges(dest_dir, edges, settings=chosen)
+        if pool is not None:
+            pool.clear()
+        if spill is None and not chosen.parse_streaming:
+            _write_cells_and_edges(dest_dir, cells, edges, settings=chosen)
+            del cells
+        elif spill is None:
+            _write_edges(dest_dir, edges, settings=chosen)
+        if not chosen.graph_stream:
+            _write_cell_edge_rows(
+                dest_dir,
+                cell_edges,
+                row_group_rows=chosen.parquet_row_group_rows,
+            )
+    finally:
+        if spill is not None:
+            spill.unlink(missing_ok=True)
     write_json(
         dest_dir / "ir" / "compile.json",
         {"schema_id": compile_schema_id(), "files": list(COMPILE_FILES)},
         stream=chosen.json_stream,
     )
+    if spill is None:
+        edge_count = len(edges)
+        edges.clear()
+    trim_process_heap()
     return CompileResult(
         cells=[],
-        edges=edges,
+        edges=[],
         cell_edges=cell_edges,
         cell_count=cell_count,
+        edge_count=edge_count,
         usage=usage,
     )
 
@@ -183,63 +212,93 @@ def _compile_cells_loaded(
     return cells, edges, known, formula_count, pool
 
 
+# Published edges plus the absolute-reference bits expand needs and parquet does not keep.
+_SPILL_COLUMNS = (
+    *IR_EDGE_COLUMNS,
+    ("abs_col", "BOOLEAN"),
+    ("abs_row", "BOOLEAN"),
+    ("abs_col_end", "BOOLEAN"),
+    ("abs_row_end", "BOOLEAN"),
+)
+
+
 def _compile_cells_streaming(
     dest_dir: Path,
     raw_path: Path,
     engine: FormulaEngine,
     meta: dict,
     chosen: Settings,
-) -> tuple[int, list[Edge], KnownNodes, int, dict[str, str] | None]:
-    """Read raw cells in chunks and publish ``ir/cells.parquet`` from the batch.
+) -> tuple[int, Path, int, KnownNodes, int, dict[str, str] | None]:
+    """Read raw cells in chunks. Cells and formula edges both leave memory with the chunk.
 
-    Each cell is written and dropped. Callers read the columns they need.
+    Edges go to a spill file, not ``ir/edges.parquet``: expansion still has to
+    set ``truncated``, and that flag is written with the published file.
     """
     from finance_context.store.duckdb_io import DuckDBBatch, limited_connection
 
     cells_path = dest_dir / "ir" / "cells.parquet"
+    spill_path = dest_dir / "ir" / ".edges-spill.parquet"
     batch = DuckDBBatch(Path(str(cells_path) + ".build.duckdb"), IR_CELL_COLUMNS)
-    edges: list[Edge] = []
+    spill = RowGroupWriter(spill_path, _SPILL_COLUMNS, chosen.parquet_row_group_rows)
     known = KnownNodes()
     formula_count = 0
     cell_count = 0
+    edge_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
     defined_names = meta.get("defined_names")
+    published = False
     try:
-        with limited_connection(raw_path) as reader:
-            cursor = reader.execute("SELECT * FROM read_parquet(?)", [str(raw_path)])
-            names = [item[0] for item in cursor.description]
-            while True:
-                fetched = cursor.fetchmany(2048)
-                if not fetched:
-                    break
-                raw_rows = [dict(zip(names, record, strict=True)) for record in fetched]
-                edge_at = len(edges)
-                chunk: list[tuple[object, ...]] = []
-                for row, (parsed, release) in zip(
-                    raw_rows, _iter_parsed(engine, raw_rows), strict=True
-                ):
-                    cell, added = _take_cell(
-                        row,
-                        parsed,
-                        release,
-                        pool=pool,
-                        edges=edges,
-                        known=known,
-                        chosen=chosen,
-                    )
-                    if added:
-                        formula_count += 1
-                    cell_count += 1
-                    chunk.append(cell_parquet_row(cell))
-                _intern_resolved_edges(edges[edge_at:], defined_names, pool)
-                batch.add_rows(chunk)
-            batch.finish(cells_path, chosen.parquet_row_group_rows)
+        try:
+            with limited_connection(raw_path) as reader:
+                cursor = reader.execute("SELECT * FROM read_parquet(?)", [str(raw_path)])
+                names = [item[0] for item in cursor.description]
+                while True:
+                    fetched = cursor.fetchmany(2048)
+                    if not fetched:
+                        break
+                    raw_rows = [dict(zip(names, record, strict=True)) for record in fetched]
+                    chunk_edges: list[Edge] = []
+                    chunk: list[tuple[object, ...]] = []
+                    for row, (parsed, release) in zip(
+                        raw_rows, _iter_parsed(engine, raw_rows), strict=True
+                    ):
+                        cell, added = _take_cell(
+                            row,
+                            parsed,
+                            release,
+                            pool=pool,
+                            edges=chunk_edges,
+                            known=known,
+                            chosen=chosen,
+                        )
+                        if added:
+                            formula_count += 1
+                        cell_count += 1
+                        chunk.append(cell_parquet_row(cell))
+                    _intern_resolved_edges(chunk_edges, defined_names, pool)
+                    if chunk_edges:
+                        spill.write_lists(
+                            _columns_from_rows([_spill_row(edge) for edge in chunk_edges])
+                        )
+                        edge_count += len(chunk_edges)
+                        chunk_edges.clear()
+                    if pool is not None:
+                        pool.clear()
+                    batch.add_rows(chunk)
+                batch.finish(cells_path, chosen.parquet_row_group_rows)
+        except Exception:
+            batch.abort()
+            raise
+        spill.close()
+        published = True
     except Exception:
-        batch.abort()
+        if not published:
+            spill._abort_tmp()
+        spill_path.unlink(missing_ok=True)
         raise
-    # Cell chunks are on disk. Drop the allocator's spare arenas before edges expand.
+    # Cell chunks and the edge spill are on disk. Drop spare arenas before expand.
     trim_process_heap()
-    return cell_count, edges, known, formula_count, pool
+    return cell_count, spill_path, edge_count, known, formula_count, pool
 
 
 def _take_cell(
@@ -734,6 +793,136 @@ def _write_cells_and_edges(
             row_group_rows=0,
         )
     _write_edges(dest_dir, edges, settings=settings)
+
+
+def _spill_row(edge: Edge) -> tuple[object, ...]:
+    return (
+        edge.source,
+        edge.kind,
+        edge.target,
+        edge.unresolved,
+        edge.truncated,
+        edge.named,
+        edge.abs_col,
+        edge.abs_row,
+        edge.abs_col_end,
+        edge.abs_row_end,
+    )
+
+
+def _published_edge_row(edge: Edge) -> tuple[object, ...]:
+    return (edge.source, edge.kind, edge.target, edge.unresolved, edge.truncated, edge.named)
+
+
+def _columns_from_rows(rows: list[tuple[object, ...]]) -> list[list[object]]:
+    width = len(rows[0])
+    columns: list[list[object]] = [[] for _ in range(width)]
+    for row in rows:
+        for index, value in enumerate(row):
+            columns[index].append(value)
+    return columns
+
+
+def _opt_spill_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _iter_spilled_edges(path: Path):
+    """One spilled edge at a time, in write order."""
+    import pyarrow.parquet as pq
+
+    names = [name for name, _dtype in _SPILL_COLUMNS]
+    for batch in pq.ParquetFile(path).iter_batches(columns=names, batch_size=65536):
+        columns = [batch.column(index).to_pylist() for index in range(len(names))]
+        width = batch.num_rows
+        del batch
+        for index in range(width):
+            target = columns[2][index]
+            kind = columns[1][index] or "ref"
+            yield Edge(
+                kind=kind,  # type: ignore[arg-type]
+                source="" if columns[0][index] is None else str(columns[0][index]),
+                target=None if target is None else str(target),
+                unresolved=bool(columns[3][index]),
+                truncated=bool(columns[4][index]),
+                named=bool(columns[5][index]),
+                abs_col=_opt_spill_bool(columns[6][index]),
+                abs_row=_opt_spill_bool(columns[7][index]),
+                abs_col_end=_opt_spill_bool(columns[8][index]),
+                abs_row_end=_opt_spill_bool(columns[9][index]),
+            )
+        del columns
+
+
+def _expand_spilled_edges(
+    dest_dir: Path,
+    spill: Path,
+    edge_count: int,
+    known: KnownNodes,
+    *,
+    sheets: set[str],
+    presence: object,
+    usage: object,
+    settings: Settings,
+) -> EdgeCount:
+    """Expand formula edges from the spill. A book that fits in one row group is written
+    by the same function as a resident list, so its parquet bytes stay the same.
+    """
+    row_group_rows = settings.parquet_row_group_rows
+    fits = row_group_rows <= 0 or edge_count <= row_group_rows
+    if fits:
+        edges = list(_iter_spilled_edges(spill))
+        count = _write_cell_edge_batches(
+            dest_dir,
+            edges,
+            known,
+            sheets=sheets,
+            presence=presence,  # type: ignore[arg-type]
+            usage=usage,
+            pool=None,
+            row_group_rows=row_group_rows,
+        )
+        _write_edges(dest_dir, edges, settings=settings)
+        edges.clear()
+        return count
+    path = dest_dir / "ir" / "cell_edges.parquet"
+    sink = _KeptEdgeWriter(path, row_group_rows)
+    published: list[tuple[object, ...]] = []
+    try:
+        edges_path = dest_dir / "ir" / "edges.parquet"
+        with RowGroupWriter(edges_path, IR_EDGE_COLUMNS, row_group_rows) as writer:
+
+            def flush_published() -> None:
+                if not published:
+                    return
+                writer.write_lists(_columns_from_rows(published))
+                published.clear()
+
+            def after_edge(edge: Edge) -> None:
+                published.append(_published_edge_row(edge))
+                if row_group_rows > 0 and len(published) >= row_group_rows:
+                    flush_published()
+
+            expand_cell_edges_column_batches(
+                _iter_spilled_edges(spill),
+                known,
+                consume=sink.consume,
+                known_sheets=sheets,
+                presence=presence,  # type: ignore[arg-type]
+                usage=usage,  # type: ignore[arg-type]
+                pool=None,
+                batch_size=row_group_rows,
+                after_edge=after_edge,
+            )
+            flush_published()
+        known.clear()
+        trim_process_heap()
+        return EdgeCount(sink.finish())
+    except Exception:
+        sink.abort()
+        raise
 
 
 def _write_edges(dest_dir: Path, edges: list[Edge], *, settings: Settings) -> None:
