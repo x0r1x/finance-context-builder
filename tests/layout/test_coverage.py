@@ -200,32 +200,90 @@ def test_numeric_id_column_is_not_the_label() -> None:
     assert [row.label for row in block.rows] == ["Rent", "Tax"]
 
 
-def test_one_blank_row_splits_two_lists() -> None:
-    cells = [
-        _c("Model", "A1", "Name"),
-        _c("Model", "B1", "Amount"),
-        _c("Model", "A2", "Rent"),
-        _c("Model", "B2", "10"),
-        _c("Model", "A3", "Tax"),
-        _c("Model", "B3", "2"),
-        _c("Model", "A5", "Name"),
-        _c("Model", "B5", "Amount"),
-        _c("Model", "A6", "Fee"),
-        _c("Model", "B6", "3"),
-        _c("Model", "A7", "Cost"),
-        _c("Model", "B7", "4"),
-        _c("Model", "A9", "Item"),
-        _c("Model", "B9", "2020"),
-        _c("Model", "C9", "2021"),
-        _c("Model", "D9", "2022"),
-        _c("Model", "A10", "Revenue"),
-        _c("Model", "B10", "1"),
-        _c("Model", "C10", "2"),
-        _c("Model", "D10", "3"),
+def _timeline(sheet: str, row: int) -> list[dict]:
+    return [
+        _c(sheet, f"A{row}", "Item"),
+        _c(sheet, f"B{row}", "2020"),
+        _c(sheet, f"C{row}", "2021"),
+        _c(sheet, f"D{row}", "2022"),
+        _c(sheet, f"A{row + 1}", "Revenue"),
+        _c(sheet, f"B{row + 1}", "1"),
+        _c(sheet, f"C{row + 1}", "2"),
+        _c(sheet, f"D{row + 1}", "3"),
     ]
-    blocks = [block for block in detect_layout(cells).sheets[0].blocks if block.kind == "key_value"]
-    assert [row.label for block in blocks for row in block.rows] == ["Rent", "Tax", "Fee", "Cost"]
-    assert len(blocks) == 2
+
+
+def test_one_blank_row_stays_inside_one_list() -> None:
+    cells = [
+        _c("List", "A1", "Name"),
+        _c("List", "B1", "Amount"),
+        _c("List", "A2", "Revenue"),
+        _c("List", "B2", "100"),
+        _c("List", "A4", "COGS"),
+        _c("List", "B4", "40"),
+        _c("List", "A6", "Gross"),
+        _c("List", "B6", "60"),
+        *_timeline("List", 10),
+    ]
+    lists = [block for block in detect_layout(cells).sheets[0].blocks if block.kind == "key_value"]
+    assert len(lists) == 1
+    assert [row.label for row in lists[0].rows] == ["Revenue", "COGS", "Gross"]
+
+
+def test_two_blank_rows_split_lists() -> None:
+    cells = [
+        _c("List", "A1", "Name"),
+        _c("List", "B1", "Amount"),
+        _c("List", "A2", "Rent"),
+        _c("List", "B2", "10"),
+        _c("List", "A3", "Tax"),
+        _c("List", "B3", "2"),
+        _c("List", "A6", "Name"),
+        _c("List", "B6", "Amount"),
+        _c("List", "A7", "Fee"),
+        _c("List", "B7", "3"),
+        _c("List", "A8", "Cost"),
+        _c("List", "B8", "4"),
+        *_timeline("List", 12),
+    ]
+    lists = [block for block in detect_layout(cells).sheets[0].blocks if block.kind == "key_value"]
+    assert [row.label for block in lists for row in block.rows] == ["Rent", "Tax", "Fee", "Cost"]
+    assert len(lists) == 2
+
+
+def test_a_header_only_unit_column_does_not_replace_the_name() -> None:
+    cells = [
+        _c("List", "A1", "Name"),
+        _c("List", "B1", "Unit"),
+        _c("List", "C1", "Amount"),
+        _c("List", "A2", "Rent"),
+        _c("List", "C2", "10"),
+        _c("List", "A3", "Tax"),
+        _c("List", "C3", "2"),
+    ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert block.label_col == 1
+    assert [row.label for row in block.rows] == ["Rent", "Tax"]
+
+
+def test_a_left_index_does_not_hide_the_table() -> None:
+    cells = [
+        _c("List", "A2", "7"),
+        _c("List", "D1", "Name"),
+        _c("List", "E1", "Amount"),
+        _c("List", "F1", "Share"),
+        _c("List", "D2", "Rent"),
+        _c("List", "E2", "10"),
+        _c("List", "F2", "0.2"),
+        _c("List", "A3", "8"),
+        _c("List", "D3", "Tax"),
+        _c("List", "E3", "2"),
+        _c("List", "F3", "0.1"),
+    ]
+    blocks = detect_layout(cells).sheets[0].blocks
+    assert len(blocks) == 1
+    assert blocks[0].label_col == 4
+    assert [header.col for header in blocks[0].axis.headers] == [5, 6]
 
 
 def test_a_far_number_is_not_a_column_of_the_list() -> None:

@@ -70,12 +70,9 @@ def coverage_blocks(
     found: list[Block] = []
     notes: list[str] = []
     for band in _bands(free):
-        block, note = _band_block(sheet, band, by_row, date1904, hidden)
-        if block is None:
-            continue
-        found.append(block)
-        if note:
-            notes.append(note)
+        blocks, band_notes = _band_blocks(sheet, band, by_row, date1904, hidden)
+        found.extend(blocks)
+        notes.extend(band_notes)
     return found, notes
 
 
@@ -96,12 +93,12 @@ def _is_owned(row: int, header_rows: set[int], spans: list[tuple[int, int]]) -> 
 
 
 def _bands(rows: list[int]) -> list[list[int]]:
-    """One missing row splits two lists. They are not one table."""
+    """Two missing rows split lists. One blank line stays inside a statement."""
     if not rows:
         return []
     bands = [[rows[0]]]
     for prev, nxt in zip(rows, rows[1:], strict=False):
-        if nxt - prev >= 2:
+        if nxt - prev >= 3:
             bands.append([nxt])
         else:
             bands[-1].append(nxt)
@@ -129,25 +126,45 @@ def _is_value(cell: dict, date1904: bool) -> bool:
     return bool(text and _is_number(text))
 
 
-def _band_block(
+def _band_blocks(
     sheet: str,
     band: list[int],
     by_row: dict[int, list[dict]],
     date1904: bool,
     hidden_cols: set[int],
+) -> tuple[list[Block], list[str]]:
+    """One block per contiguous value run that has a name column beside it."""
+    found: list[Block] = []
+    notes: list[str] = []
+    for cluster in _clusters(
+        _value_columns(band, by_row, date1904, hidden_cols), band, by_row, date1904
+    ):
+        block, note = _cluster_block(sheet, band, by_row, date1904, cluster)
+        if block is not None:
+            found.append(block)
+        if note:
+            notes.append(note)
+    return found, notes
+
+
+def _cluster_block(
+    sheet: str,
+    band: list[int],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    value_cols: list[int],
 ) -> tuple[Block | None, str | None]:
-    value_cols = _value_columns(band, by_row, date1904, hidden_cols)
     label_col = _label_column(band, by_row, date1904, value_cols)
-    if label_col is None:
-        return None, None
-    value_cols = [col for col in value_cols if col > label_col]
-    value_cols = _contiguous(value_cols)
-    if not value_cols or value_cols[0] - label_col > _LABEL_GAP:
+    if label_col is None or value_cols[0] - label_col > _LABEL_GAP:
         return None, None
     titles = _column_titles(band, by_row, date1904, value_cols)
     shown, omitted = _cap_columns(value_cols)
     rows: list[LayoutRow] = []
+    truncated = False
     for row_n in band:
+        if len(rows) == _ROW_CAP:
+            truncated = True
+            break
         if row_n in titles:
             continue
         label = _label_text(by_row[row_n], label_col, date1904)
@@ -171,9 +188,6 @@ def _band_block(
         )
     if not rows:
         return None, None
-    truncated = len(rows) > _ROW_CAP
-    if truncated:
-        rows = rows[:_ROW_CAP]
     richest = max(len(row.cells) for row in rows)
     if len(rows) == 1 and richest <= _PARAMETER_VALUES and len(shown) <= _PARAMETER_VALUES:
         return None, None
@@ -221,21 +235,19 @@ def _label_column(
     date1904: bool,
     value_cols: list[int],
 ) -> int | None:
-    """Rightmost text column that sits just left of a value.
+    """Name column just left of this value run.
 
-    A header word above a numeric body (``key``, ``ID``) is not a label.
-    The names beside the numbers are.
+    Count text on rows that actually have a number. A header word ``Unit``
+    with an empty body does not beat ``Name``. When two columns are equally
+    full, the left one is the name.
     """
+    data_rows = [row_n for row_n in band if _value_count(by_row[row_n], date1904, value_cols)]
+    first = value_cols[0]
     best: int | None = None
-    values = set(value_cols)
-    columns = {
-        int(cell["col"])
-        for row_n in band
-        for cell in by_row[row_n]
-    }
-    for col in sorted(columns):
+    best_texts = 0
+    for col in range(max(1, first - _LABEL_GAP), first):
         texts = numbers = 0
-        for row_n in band:
+        for row_n in data_rows:
             text = _text(_cell(by_row[row_n], col) or {}, date1904)
             if not text or _is_year_text(text):
                 continue
@@ -243,22 +255,54 @@ def _label_column(
                 numbers += 1
             else:
                 texts += 1
-        if texts == 0 or texts <= numbers:
+        if texts == 0 or texts <= numbers or texts < best_texts:
             continue
-        if any(col < value <= col + _LABEL_GAP for value in values):
-            best = col
+        if texts == best_texts:
+            continue
+        best = col
+        best_texts = texts
     return best
 
 
-def _contiguous(cols: list[int]) -> list[int]:
+def _clusters(
+    cols: list[int],
+    band: list[int],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> list[list[int]]:
+    """Separate value runs.
+
+    A wide gap splits them, and so does a name column sitting between two
+    numbers. ``ID | Name | Amount`` does not become one run that starts at ID.
+    """
     if not cols:
         return []
-    run = [cols[0]]
+    groups = [[cols[0]]]
     for col in cols[1:]:
-        if col - run[-1] > _LABEL_GAP:
-            break
-        run.append(col)
-    return run
+        prev = groups[-1][-1]
+        if col - prev > _LABEL_GAP or _name_between(prev, col, band, by_row, date1904):
+            groups.append([col])
+        else:
+            groups[-1].append(col)
+    return groups
+
+
+def _name_between(
+    left: int,
+    right: int,
+    band: list[int],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> bool:
+    for col in range(left + 1, right):
+        texts = 0
+        for row_n in band:
+            text = _text(_cell(by_row[row_n], col) or {}, date1904)
+            if text and not _is_number(text) and not _is_year_text(text):
+                texts += 1
+        if texts >= 2:
+            return True
+    return False
 
 
 def _value_columns(
@@ -267,10 +311,7 @@ def _value_columns(
     date1904: bool,
     hidden_cols: set[int],
 ) -> list[int]:
-    """The run of value columns that starts at the first one.
-
-    A page number many columns to the right is not part of the list.
-    """
+    """Every value column. Runs are split later, so a left index stays separate."""
     cols: set[int] = set()
     for row_n in band:
         for cell in by_row[row_n]:
@@ -278,15 +319,7 @@ def _value_columns(
             if col in hidden_cols or not _is_value(cell, date1904):
                 continue
             cols.add(col)
-    ordered = sorted(cols)
-    if not ordered:
-        return []
-    run = [ordered[0]]
-    for col in ordered[1:]:
-        if col - run[-1] > _LABEL_GAP:
-            break
-        run.append(col)
-    return run
+    return sorted(cols)
 
 
 def _column_titles(
