@@ -7,7 +7,7 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from finance_context.layout.formulas_shape import RowPattern, _pattern_for_row
-from finance_context.layout.models import Block, Layout, LayoutRow, SheetLayout
+from finance_context.layout.models import Block, Layout, LayoutRow, SheetLayout, is_value_block
 from finance_context.layout.resolve import period_headers
 
 
@@ -56,7 +56,7 @@ class _RowCells:
 def relation_period_cols(sheet: SheetLayout, block: Block) -> list[int]:
     """Columns ``formula_relations`` reads on this block."""
     headers = period_headers(sheet, block)
-    if getattr(block, "kind", "timeline") == "params":
+    if is_value_block(getattr(block, "kind", "timeline")):
         return [header.col for header in headers if header.role in {"value", "unknown"}]
     return [header.col for header in headers]
 

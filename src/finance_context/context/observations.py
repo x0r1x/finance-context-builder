@@ -47,7 +47,7 @@ def build_observations(
         for row in block.rows:
             if not _selected(row, keys, needle):
                 continue
-            if block.kind == "params":
+            if block.kind in {"params", "key_value", "matrix"}:
                 found.extend(
                     _params_row(
                         block,

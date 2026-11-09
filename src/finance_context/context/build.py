@@ -27,7 +27,13 @@ from finance_context.formulas.csr import SheetUsage
 from finance_context.formulas.edge_file import iterate_edges
 from finance_context.layout.adjacency import RangeReads, row_adjacency
 from finance_context.layout.cells import parse_number
-from finance_context.layout.models import AxisHeader, Layout, LayoutRow, is_series_column
+from finance_context.layout.models import (
+    AxisHeader,
+    Layout,
+    LayoutRow,
+    is_series_column,
+    is_value_block,
+)
 from finance_context.layout.params import selector_rows
 from finance_context.layout.periods import (
     classify_header,
@@ -237,6 +243,8 @@ def build_context(
             )
         warnings.extend(hidden_warnings)
         warnings.extend(_unknown_header_warnings(layout))
+        for item in layout.sheets:
+            warnings.extend(item.notes)
         sheets = [
             item["name"] if isinstance(item, dict) else getattr(item, "name", str(item))
             for item in workbook_meta.get("sheets", [])
@@ -369,7 +377,9 @@ def _stream_one_block(
     views = _block_views(sheet, block)
     hint_headers = [header for _axis_id, headers in views for header in headers]
     axis_ids = (
-        list(dict.fromkeys(axis_id for axis_id, _headers in views)) if kind != "params" else []
+        []
+        if is_value_block(kind)
+        else list(dict.fromkeys(axis_id for axis_id, _headers in views))
     )
     periods = (
         _local_periods(views, axes_by_id)
@@ -626,7 +636,7 @@ def _block_views(
     block,
 ) -> list[tuple[str, list[AxisHeader]]]:
     kind = getattr(block, "kind", "timeline")
-    if kind == "params":
+    if is_value_block(kind):
         headers = [
             header
             for header in (block.axis.headers if block.axis is not None else [])
