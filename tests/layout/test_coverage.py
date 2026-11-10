@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from finance_context.excel.a1 import parse_addr
+from finance_context.excel.a1 import index_to_col, parse_addr
 from finance_context.layout.detect import detect_layout
 
 
@@ -345,3 +345,16 @@ def test_payment_schedule_is_not_a_chart_sheet() -> None:
     ]
     notes = detect_layout(cells).sheets[0].notes
     assert not any("chart copy" in note for note in notes)
+
+
+def test_a_wide_grid_keeps_every_value_column() -> None:
+    cells = [_c("Grid", "A1", "Item"), _c("Grid", "A2", "Revenue"), _c("Grid", "A3", "Cost")]
+    for col in range(2, 42):
+        letter = index_to_col(col)
+        cells.append(_c("Grid", f"{letter}1", letter))
+        cells.append(_c("Grid", f"{letter}2", "1"))
+        cells.append(_c("Grid", f"{letter}3", "2"))
+    sheet = detect_layout(cells).sheets[0]
+    assert [block.kind for block in sheet.blocks] == ["matrix"]
+    assert [header.col for header in sheet.blocks[0].axis.headers] == list(range(2, 42))
+    assert sheet.notes == []

@@ -20,12 +20,6 @@ _PARAMETER_VALUES = 2
 _KEY_VALUE_COLUMNS = 2
 # Values further right than this are a cover-page control, not this row's list.
 _LABEL_GAP = 3
-# Markdown and context stay aligned. Extra columns past this stay out;
-# the kept columns are the ones next to the label, not the far tail.
-_COLUMN_CAP = 32
-# A sheet of calculation keys is not a report table. Stop before it is copied
-# into layout, context, and the graph.
-_ROW_CAP = 2000
 # Names of chart and dashboard sheets. A payment schedule is not one of these.
 _CHART_SHEET = re.compile(
     r"^(?:charts?|графики|диаграммы?|dashboards?|дашборды?)(?:\s*\d*)$",
@@ -135,16 +129,13 @@ def _band_blocks(
 ) -> tuple[list[Block], list[str]]:
     """One block per contiguous value run that has a name column beside it."""
     found: list[Block] = []
-    notes: list[str] = []
     for cluster in _clusters(
         _value_columns(band, by_row, date1904, hidden_cols), band, by_row, date1904
     ):
-        block, note = _cluster_block(sheet, band, by_row, date1904, cluster)
+        block = _cluster_block(sheet, band, by_row, date1904, cluster)
         if block is not None:
             found.append(block)
-        if note:
-            notes.append(note)
-    return found, notes
+    return found, []
 
 
 def _cluster_block(
@@ -153,24 +144,19 @@ def _cluster_block(
     by_row: dict[int, list[dict]],
     date1904: bool,
     value_cols: list[int],
-) -> tuple[Block | None, str | None]:
+) -> Block | None:
     label_col = _label_column(band, by_row, date1904, value_cols)
     if label_col is None or value_cols[0] - label_col > _LABEL_GAP:
-        return None, None
+        return None
     titles = _column_titles(band, by_row, date1904, value_cols)
-    shown, omitted = _cap_columns(value_cols)
     rows: list[LayoutRow] = []
-    truncated = False
     for row_n in band:
-        if len(rows) == _ROW_CAP:
-            truncated = True
-            break
         if row_n in titles:
             continue
         label = _label_text(by_row[row_n], label_col, date1904)
         if not label or _is_number(label):
             continue
-        count = _value_count(by_row[row_n], date1904, shown)
+        count = _value_count(by_row[row_n], date1904, value_cols)
         if count == 0:
             continue
         rows.append(
@@ -181,25 +167,25 @@ def _cluster_block(
                 kind="fact",
                 cells=[
                     RowCell(col=col, role="value", header=_caption(by_row, titles, col, date1904))
-                    for col in shown
+                    for col in value_cols
                     if _is_value(_cell(by_row[row_n], col) or {}, date1904)
                 ],
             )
         )
     if not rows:
-        return None, None
+        return None
     richest = max(len(row.cells) for row in rows)
-    if len(rows) == 1 and richest <= _PARAMETER_VALUES and len(shown) <= _PARAMETER_VALUES:
-        return None, None
+    if len(rows) == 1 and richest <= _PARAMETER_VALUES and len(value_cols) <= _PARAMETER_VALUES:
+        return None
     # Bare numbers in one or two columns, with no caption row, are a rejected
     # date header. Amount | Share under a caption row is a list.
     if (
-        len(shown) <= _KEY_VALUE_COLUMNS
+        len(value_cols) <= _KEY_VALUE_COLUMNS
         and not titles
         and any(len(row.cells) > 1 for row in rows)
     ):
-        return None, None
-    kind = "key_value" if len(shown) <= _KEY_VALUE_COLUMNS else "matrix"
+        return None
+    kind = "key_value" if len(value_cols) <= _KEY_VALUE_COLUMNS else "matrix"
     headers = [
         AxisHeader(
             col=col,
@@ -207,26 +193,17 @@ def _cluster_block(
             role="unknown" if _period_caption(by_row, titles, col, date1904) else "value",
             period_key=f"c{col}",
         )
-        for col in shown
+        for col in value_cols
     ]
     first = rows[0].row
     block_id = f"{sheet}!c{first}"
-    block = Block(
+    return Block(
         block_id=block_id,
         label_col=label_col,
         axis=Axis(id=block_id, row=titles and min(titles) or first, headers=headers),
         rows=rows,
         kind=kind,
     )
-    note = None
-    if omitted:
-        note = (
-            f"Sheet {sheet}: coverage kept {len(shown)} of {len(value_cols)} value columns"
-        )
-    if truncated:
-        extra = f"Sheet {sheet}: coverage kept {_ROW_CAP} rows"
-        note = f"{note}; {extra}" if note else extra
-    return block, note
 
 
 def _label_column(
@@ -362,12 +339,6 @@ def _period_caption(
     date1904: bool,
 ) -> bool:
     return _is_year_text(_caption(by_row, titles, col, date1904))
-
-
-def _cap_columns(cols: list[int]) -> tuple[list[int], int]:
-    if len(cols) <= _COLUMN_CAP:
-        return cols, 0
-    return cols[:_COLUMN_CAP], len(cols) - _COLUMN_CAP
 
 
 def _label_text(cells: list[dict], label_col: int, date1904: bool) -> str | None:
