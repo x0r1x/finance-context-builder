@@ -176,7 +176,23 @@ def _distinct_year_ruler(row_cells: list[dict], date1904: bool) -> bool:
     if not _year_run_is_header(values) or len(set(values)) < 2:
         return False
     steps = [right - left for left, right in zip(values, values[1:], strict=False)]
-    return all(step == 1 for step in steps)
+    # A banner repeats a year, so it has a zero step. A ruler steps every column.
+    return bool(steps) and all(step > 0 for step in steps) and len(set(steps)) == 1
+
+
+def _row_can_supply_year(row_cells: list[dict], date1904: bool) -> bool:
+    """A year banner may hold labels. Another number makes it a data row."""
+    saw = False
+    for cell in row_cells:
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        if _is_bare_year_text(text):
+            saw = True
+            continue
+        if _is_number(text):
+            return False
+    return saw
 
 
 def _year_label_section(
@@ -184,45 +200,46 @@ def _year_label_section(
     header_row: int,
     period_cols: set[int],
     date1904: bool,
+    years: set[str],
 ) -> LayoutRow | None:
-    """``Выручка`` left of a single year above quarter tokens.
+    """The word left of the year that actually filled these quarters.
 
-    The year feeds the quarters. The word is the section, not a fact row.
+    A note between that word and the quarter row is not the section. A year
+    above an ordinary ``2020–2023`` ruler is not one either: ``years`` is the
+    set that went into the quarter keys.
     """
-    if not period_cols:
+    if not period_cols or not years:
         return None
     left = min(period_cols)
     for dist in range(1, 4):
-        row_n = header_row - dist
-        cells = by_row.get(row_n)
-        if not cells or _is_empty_row(cells, date1904):
-            continue
-        label: str | None = None
-        label_col: int | None = None
-        saw_year = False
-        foreign = False
-        for cell in cells:
-            text = _text(cell, date1904)
-            if not text:
+        for delta in (-dist, dist):
+            row_n = header_row + delta
+            cells = by_row.get(row_n)
+            if not cells or not _row_can_supply_year(cells, date1904):
                 continue
-            col = int(cell["col"])
-            if col < left and not _is_number(text):
-                if label_col is None or col > label_col:
+            found = {
+                str(parse_int(text))
+                for cell in cells
+                if (text := _text(cell, date1904))
+                and int(cell["col"]) in period_cols
+                and _is_bare_year_text(text)
+                and parse_int(text) is not None
+            }
+            if not found & years:
+                continue
+            label: str | None = None
+            label_col: int | None = None
+            for cell in cells:
+                text = _text(cell, date1904)
+                if not text or _is_number(text):
+                    continue
+                col = int(cell["col"])
+                if col < left and (label_col is None or col > label_col):
                     label = text.strip()
                     label_col = col
-                continue
-            if col in period_cols and _is_bare_year_text(text):
-                saw_year = True
-                continue
-            foreign = True
-        if label and saw_year and not foreign and label_col is not None:
-            return LayoutRow(
-                row=row_n,
-                label=label,
-                kind="abstract",
-                label_col=label_col,
-            )
-        return None
+            if label is None or label_col is None:
+                return None
+            return LayoutRow(row=row_n, label=label, kind="abstract", label_col=label_col)
     return None
 
 

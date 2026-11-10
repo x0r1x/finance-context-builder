@@ -187,12 +187,7 @@ def _blocks_indexed(
             span,
             date1904,
             period_cols,
-            seed=(
-                _band_title(by_row, group_axes[0].header_row, span, period_cols, date1904)
-                or _year_label_section(
-                    by_row, group_axes[0].header_row, period_cols, date1904
-                )
-            ),
+            seed=_section_seed(by_row, group_axes[0], span, period_cols, date1904),
             reveal_rows=reveal_rows,
             summary_below=summary_below,
             hidden_row_ids=hidden_row_ids,
@@ -406,10 +401,15 @@ def _transposed_items(
             if cell.get("formula_raw") or (shown and _is_number(shown)):
                 value_cols.add(col)
     items: list[LayoutRow] = []
+    prev: int | None = None
     anchor = label_row if label_row is not None and label_row >= 1 else min(period_rows)
     for col in sorted(set(labels) | value_cols):
+        # Two empty columns end the ruler. One empty column does not.
+        if prev is not None and col - prev >= 3:
+            break
         label = labels.get(col)
         if not label:
+            prev = col
             continue
         items.append(
             LayoutRow(
@@ -420,7 +420,22 @@ def _transposed_items(
                 value_col=col,
             )
         )
+        prev = col
     return items
+
+
+def _section_seed(by_row, axis, span, period_cols, date1904):
+    """Band title, or the word beside the year that filled a quarter ruler."""
+    header = axis.header_row
+    seed = _band_title(by_row, header, span, period_cols, date1904)
+    if seed is not None or axis.grain != "quarter":
+        return seed
+    years = {
+        period.period_key[:4]
+        for period in axis.periods
+        if period.period_key[:4].isdigit()
+    }
+    return _year_label_section(by_row, header, period_cols, date1904, years)
 
 
 def _section_title_owners(
@@ -435,8 +450,22 @@ def _section_title_owners(
         start = starts[index]
         earlier = [other for other in starts if other < start]
         floor = max(earlier) if earlier else 0
-        period_cols = {period.col for _band, axis in group for period in axis.periods}
+        axis = group[0][1]
+        period_cols = {period.col for _band, item in group for period in item.periods}
+        years = {
+            period.period_key[:4]
+            for period in axis.periods
+            if period.period_key[:4].isdigit()
+        }
+        section = (
+            _year_label_section(by_row, axis.header_row, period_cols, date1904, years)
+            if axis.grain == "quarter"
+            else None
+        )
         for row_n in _label_rows_above(by_row, start, period_cols, date1904, floor):
+            # A note between the named year and the quarters is not the section.
+            if section is not None and section.row < row_n < start:
+                continue
             owners[row_n] = index
     return owners
 

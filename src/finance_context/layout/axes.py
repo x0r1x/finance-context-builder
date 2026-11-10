@@ -45,6 +45,7 @@ from finance_context.layout.rows import (
     _is_quarter_token_row,
     _is_starter_row,
     _is_year_banner_row,
+    _row_can_supply_year,
     _row_label,
     _row_layers,
     _year_banner_by_column,
@@ -577,11 +578,13 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
                 continue
             if _is_data_row(cells, date1904):
                 break
-            # 2020, 2021, 2022 under a quarter-token note is its own year axis.
-            # A repeated year (2024, 2024, 2024, 2024) stays in the quarter band.
-            if _is_quarter_token_row(by_row[row_n], date1904) and _distinct_year_ruler(
-                cells, date1904
-            ):
+            # A year ruler and a row of bare quarters are two axes, whichever
+            # comes first. A repeated year stays in the quarter band.
+            quarter_tokens = _is_quarter_token_row(cells, date1904)
+            year_ruler = _distinct_year_ruler(cells, date1904)
+            band_quarters = _is_quarter_token_row(by_row[row_n], date1904)
+            band_years = _distinct_year_ruler(by_row[row_n], date1904)
+            if (band_quarters and year_ruler) or (band_years and quarter_tokens):
                 break
             if _is_flag_bits_row(cells, _band_calendar_cols(band, by_row, date1904), date1904):
                 break
@@ -678,6 +681,7 @@ def _axes_from_band(
         }
     )
     prefer_end = _band_prefers_end(band_rows, by_row, date1904)
+    borrowed_cols: set[int] = set()
     # One label per header row. `_column_atoms` used to rescan the row on every
     # column, so a wide ruler was classified width times.
     labels = {row_n: _row_label(by_row[row_n], date1904) for row_n in band_rows}
@@ -720,12 +724,17 @@ def _axes_from_band(
             quarter_row=quarter_row,
             month_row=month_row,
         )
-        # A year in this column within three rows above fills the quarter.
-        # Later columns keep that year through year_hint.
-        if not any(atom.year for atom in atoms):
-            carried = _year_above(by_row, header_row, col, date1904)
+        # A bare quarter, half, or month borrows a year from the same column,
+        # up to three rows up or down. A later column keeps that year until
+        # its own column has one. The run is kept only when the step is steady.
+        borrowed = False
+        if _bare_part(atoms) and not any(atom.year for atom in atoms):
+            carried = _year_near(by_row, header_row, col, date1904)
             if carried:
                 atoms = [*atoms, HeaderAtom(kind="year", year=carried)]
+                borrowed = True
+            elif year_hint:
+                borrowed = True
         hit = compose_period(atoms, year_hint=year_hint)
         if hit is None:
             continue
@@ -750,6 +759,8 @@ def _axes_from_band(
                 explicit_role=explicit_role,
             )
         )
+        if borrowed:
+            borrowed_cols.add(col)
     known_hidden = hidden_cols or set()
     banner_years: dict[int, str] = {}
     for row_n in band_rows:
@@ -810,6 +821,10 @@ def _axes_from_band(
             body_end=body_end,
         )
         periods = disambiguate_period_keys(totaled)
+        if any(header.col in borrowed_cols for header in headers) and not _steady_month_step(
+            [period.period_key for period in periods]
+        ):
+            continue
         axes.append(
             TimeAxis(
                 id=axis_id,
@@ -1090,30 +1105,61 @@ def _cell_covering(row_cells: list[dict], col: int) -> dict | None:
     return cover
 
 
-# Rows above a quarter header that can still supply its year. CFS uses three.
+# Rows around a bare quarter that can still supply its year. CFS uses three.
 _YEAR_NEAR = 3
-
-# A word in the period column of a vertical ruler. "Date" and "Founded" are
-# field names of a list, not this caption.
-_AXIS_CAPTION = re.compile(r"^(?:год|года|year|период|period|fy)$", re.IGNORECASE)
+_MONTH_STEPS = {1, 3, 6, 12}
+_BARE_PARTS = {"quarter_token", "half_token", "month_num"}
 
 
-def _year_above(
+def _bare_part(atoms: list[HeaderAtom]) -> bool:
+    """Quarter, half, or month tokens with no finished period in the cell."""
+    return any(atom.kind in _BARE_PARTS for atom in atoms)
+
+
+def _year_near(
     by_row: dict[int, list[dict]], row_n: int, col: int, date1904: bool
 ) -> str | None:
-    """Bare year in this column, up to three rows above the header."""
+    """Bare year in this column. Each distance looks up, then down."""
     for dist in range(1, _YEAR_NEAR + 1):
-        cells = by_row.get(row_n - dist)
-        if not cells:
-            continue
-        cell = _cell_covering(cells, col)
-        text = _text(cell, date1904) if cell is not None else None
-        if not text or not _is_bare_year_text(text):
-            continue
-        year = parse_int(text)
-        if year is not None:
-            return str(year)
+        for delta in (-dist, dist):
+            cells = by_row.get(row_n + delta)
+            if not cells or not _row_can_supply_year(cells, date1904):
+                continue
+            cell = _cell_covering(cells, col)
+            text = _text(cell, date1904) if cell is not None else None
+            if not text or not _is_bare_year_text(text):
+                continue
+            year = parse_int(text)
+            if year is not None:
+                return str(year)
     return None
+
+
+def _month_index(key: str) -> int | None:
+    """Month slot of a calendar key. Dates use the month, not the day number."""
+    year, quarter, month, day = parse_period_key(key)
+    if year is None:
+        return None
+    slot = int(year) * 12
+    half = _HALF_KEY.fullmatch(key)
+    if half:
+        return slot + (int(half.group(2)) - 1) * 6
+    if day and month:
+        return slot + month - 1
+    if quarter:
+        return slot + (quarter - 1) * 3
+    if month:
+        return slot + month - 1
+    return slot
+
+
+def _steady_month_step(keys: list[str]) -> bool:
+    """True when every step is the same 1, 3, 6, or 12 months."""
+    indexes = [_month_index(key) for key in keys]
+    if any(index is None for index in indexes):
+        return False
+    steps = [right - left for left, right in zip(indexes, indexes[1:], strict=False)]
+    return bool(steps) and len(set(steps)) == 1 and steps[0] in _MONTH_STEPS
 
 
 def _vertical_axes(
@@ -1180,13 +1226,20 @@ def _vertical_run_ok(
     keys = [key for _row, key, _text in run]
     if not _regular_period_run(keys):
         return False
-    if _labels_left_of(by_row, col, run, date1904) >= 2:
+    if _entity_list(by_row, col, run, date1904):
         return False
     return _series_row_above(by_row, col, run[0][0], date1904) is not None
 
 
 def _regular_period_run(keys: list[str]) -> bool:
-    """CFS length: three positions of one grain, four for a day grain."""
+    """Three periods of one grain. Dates use the month step, not the day number.
+
+    Month-ends step one month. Year-ends step twelve, including a leap day.
+    Four adjacent days are a journal: the month step is zero, so they are not
+    an axis.
+    """
+    if keys and all(parse_period_key(key)[3] for key in keys):
+        return _steady_month_step(keys) and len(keys) >= 3
     positions = []
     for key in keys:
         found = period_position(key)
@@ -1195,25 +1248,26 @@ def _regular_period_run(keys: list[str]) -> bool:
         positions.append(found)
     if len({grain for grain, _index in positions}) != 1:
         return False
-    grain = positions[0][0]
     steps = [right - left for (_g, left), (_h, right) in zip(positions, positions[1:], strict=False)]
-    if not steps or any(step <= 0 for step in steps):
+    if not steps or any(step <= 0 for step in steps) or len(set(steps)) != 1:
         return False
-    if len(set(steps)) != 1:
+    if positions[0][0] == "day":
         return False
-    if grain == "day":
-        return len(keys) >= 4
     return len(keys) >= 3
 
 
-def _labels_left_of(
+def _entity_list(
     by_row: dict[int, list[dict]],
     col: int,
     run: list[tuple[int, str, str]],
     date1904: bool,
-) -> int:
-    """Period rows that name an entity to the left of the ruler."""
-    found = 0
+) -> bool:
+    """Different names on the left and a field header, not a repeated scenario.
+
+    ``База`` down a column beside ``Год`` stays a ruler. ``A`` / ``B`` / ``C``
+    beside ``Founded`` is a list.
+    """
+    names: list[str] = []
     for row_n, _key, _shown in run:
         for cell in by_row.get(row_n, []):
             if int(cell["col"]) >= col:
@@ -1221,9 +1275,18 @@ def _labels_left_of(
             text = _text(cell, date1904)
             if not text or _is_number(text) or is_calendar_hit(classify_header(text)):
                 continue
-            found += 1
+            names.append(text.strip())
             break
-    return found
+    if len(names) < 2 or len(set(names)) < 2:
+        return False
+    header = _series_row_above(by_row, col, run[0][0], date1904)
+    if header is None:
+        return False
+    caption_cell = _cell_at(by_row.get(header, []), col)
+    caption = _text(caption_cell, date1904) if caption_cell is not None else None
+    if not caption or is_calendar_hit(classify_header(caption)):
+        return False
+    return True
 
 
 def _series_row_above(
@@ -1238,10 +1301,7 @@ def _series_row_above(
         cells = by_row.get(row_n, [])
         if not cells or _is_empty_row(cells, date1904):
             continue
-        anchor = _cell_at(cells, col)
-        if _names_right(cells, col, date1904) and _period_caption_ok(
-            _text(anchor, date1904) if anchor is not None else None
-        ):
+        if _names_right(cells, col, date1904):
             return row_n
         return None
     return None
@@ -1256,13 +1316,6 @@ def _names_right(cells: list[dict], col: int, date1904: bool) -> list[str]:
         if text and classify_header(text) is None and not _is_number(text):
             names.append(text.strip())
     return names
-
-
-def _period_caption_ok(text: str | None) -> bool:
-    if not text:
-        return True
-    folded = text.casefold().replace("ё", "е").strip().strip(".")
-    return _AXIS_CAPTION.fullmatch(folded) is not None
 
 
 def _values_beside(
