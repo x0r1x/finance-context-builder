@@ -20,10 +20,18 @@ ColumnRole = Literal[
 # Internal period-column classification. Not written to context.json.
 ColumnKind = Literal["period", "total", "stub", "relative"]
 RowKind = Literal["fact", "abstract", "index", "helper", "flag"]
-BlockKind = Literal["timeline", "params"]
+BlockKind = Literal["timeline", "params", "key_value", "matrix"]
+# Blocks whose columns are values, not a period axis. Timeline code must not
+# read them as years.
+VALUE_BLOCK_KINDS = frozenset({"params", "key_value", "matrix"})
 
 SERIES_KINDS = frozenset({"period", "stub", "relative"})
 STRUCTURAL_PERIOD_KEYS = frozenset({"total", "stub"})
+
+
+def is_value_block(kind: str | None) -> bool:
+    """True for a block that publishes value columns instead of a period axis."""
+    return kind in VALUE_BLOCK_KINDS
 
 
 def is_series_column(kind: str | None, period_key: str) -> bool:
@@ -147,6 +155,15 @@ class SheetLayout(BaseModel):
     hidden: bool = False
     axes: list[TimeAxis] = Field(default_factory=list)
     blocks: list[Block]
+    # Coverage remarks. Empty on a sheet whose blocks are unchanged.
+    notes: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("notes"):
+            data.pop("notes", None)
+        return data
 
 
 class Layout(BaseModel):

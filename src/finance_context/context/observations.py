@@ -47,7 +47,7 @@ def build_observations(
         for row in block.rows:
             if not _selected(row, keys, needle):
                 continue
-            if block.kind == "params":
+            if block.kind in {"params", "key_value", "matrix"}:
                 found.extend(
                     _params_row(
                         block,
@@ -266,17 +266,22 @@ def _params_row(
         None,
     )
     out: list[Observation] = []
-    for index, cell in enumerate(cells):
+    for cell in cells:
         period_id = _params_period_id(block, cell)
         if periods and period_id not in periods:
             continue
-        text = _at(series.values, index) if series is not None else cell.cached_value
-        status = _at(series.value_statuses, index) if series is not None else None
-        normalized = (
-            _at(series.normalized_values, index)
-            if series is not None
-            else _at(row.normalized_values, index)
-        )
+        # series.values lines up with block.periods. A row that fills only
+        # the later column still stores that column's value there, not at
+        # the index of the filled cell.
+        index = _period_index(block, cell.col)
+        if series is not None and index is not None:
+            text = _at(series.values, index)
+            status = _at(series.value_statuses, index)
+            normalized = _at(series.normalized_values, index)
+        else:
+            text = cell.cached_value
+            status = None
+            normalized = _at(row.normalized_values, index) if index is not None else None
         value, value_status = _cache(
             None if text is None else str(text),
             None if status is None else str(status),
@@ -298,6 +303,13 @@ def _params_row(
             )
         )
     return out
+
+
+def _period_index(block: FinancialBlock, col: int) -> int | None:
+    for index, period in enumerate(block.periods):
+        if isinstance(period, dict) and period.get("col") == col:
+            return index
+    return None
 
 
 def _params_period_id(block: FinancialBlock, cell) -> str:

@@ -6,6 +6,7 @@ from pathlib import Path
 from finance_context.formulas.models import as_edge
 from finance_context.layout.axes import _axis_candidates, _table_groups
 from finance_context.layout.cells import _is_number, _text, bind_row_index, clear_row_index
+from finance_context.layout.coverage import chart_note, coverage_blocks
 from finance_context.layout.models import (
     Block,
     Layout,
@@ -87,7 +88,7 @@ def _sheet_layout(
 ) -> SheetLayout:
     """Blocks for one sheet. The caller drops ``sheet_cells`` before the next sheet."""
     row_ids = None if hidden_rows is None else set(hidden_rows.get(name, ()))
-    blocks, axes = _blocks_for_sheet(
+    blocks, axes, notes = _blocks_for_sheet(
         name,
         sheet_cells,
         date1904,
@@ -97,7 +98,12 @@ def _sheet_layout(
         summary_below=summary_below.get(name, True),
         defined_names=defined_names,
     )
-    return SheetLayout(name=name, blocks=blocks, axes=axes, hidden=name in hidden_sheets)
+    chart = chart_note(name)
+    if chart:
+        notes.append(chart)
+    return SheetLayout(
+        name=name, blocks=blocks, axes=axes, hidden=name in hidden_sheets, notes=notes
+    )
 
 
 def _blocks_for_sheet(
@@ -109,7 +115,7 @@ def _blocks_for_sheet(
     hidden_row_ids: set[int] | None = None,
     summary_below: bool = True,
     defined_names: list | None = None,
-) -> tuple[list[Block], list[TimeAxis]]:
+) -> tuple[list[Block], list[TimeAxis], list[str]]:
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
         by_row[int(cell["row"])].append(cell)
@@ -138,16 +144,18 @@ def _blocks_indexed(
     hidden_row_ids: set[int] | None,
     summary_below: bool,
     defined_names: list | None,
-) -> tuple[list[Block], list[TimeAxis]]:
+) -> tuple[list[Block], list[TimeAxis], list[str]]:
     row_ids = sorted(by_row)
     candidates = _axis_candidates(sheet, by_row, date1904, hidden_cols)
     groups = _table_groups(candidates)
     blocks: list[Block] = []
     params_blocks: list[Block] = []
     axes: list[TimeAxis] = []
+    header_rows: set[int] = set()
     title_owner = _section_title_owners(groups, by_row, date1904)
     for index, group in enumerate(groups):
         band_rows = group[0][0]
+        header_rows.update(band_rows)
         group_axes = [axis for _, axis in group]
         axes.extend(group_axes)
         start = min(band_rows)
@@ -214,7 +222,19 @@ def _blocks_indexed(
         if extra is not None:
             blocks.append(extra)
     attach_orphan_switches(sheet, blocks, by_row, date1904, defined_names)
-    return blocks, axes
+    for block in blocks:
+        axis = block.axis
+        if axis is not None and axis.row:
+            header_rows.add(int(axis.row))
+    covered, notes = coverage_blocks(
+        sheet, by_row, date1904, blocks, header_rows, hidden_cols
+    )
+    if covered:
+        blocks = sorted(
+            [*blocks, *covered],
+            key=lambda block: min((row.row for row in block.rows), default=0),
+        )
+    return blocks, axes, notes
 
 
 def _section_title_owners(

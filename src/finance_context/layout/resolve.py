@@ -7,6 +7,7 @@ from finance_context.layout.models import (
     Block,
     SheetLayout,
     TimeAxis,
+    is_value_block,
 )
 
 
@@ -50,7 +51,7 @@ def project_axis(axis: TimeAxis) -> Axis:
 
 
 def axes_for(sheet: SheetLayout, block: Block) -> list[TimeAxis]:
-    if getattr(block, "kind", "timeline") == "params":
+    if is_value_block(getattr(block, "kind", "timeline")):
         return []
     by_id = {axis.id: axis for axis in sheet.axes}
     picked = [by_id[axis_id] for axis_id in block.axis_ids if axis_id in by_id]
@@ -62,7 +63,7 @@ def axes_for(sheet: SheetLayout, block: Block) -> list[TimeAxis]:
 
 
 def period_headers(sheet: SheetLayout, block: Block) -> list[AxisHeader]:
-    if getattr(block, "kind", "timeline") == "params" and block.axis is not None:
+    if is_value_block(getattr(block, "kind", "timeline")) and block.axis is not None:
         return list(block.axis.headers)
     headers: list[AxisHeader] = []
     for axis in axes_for(sheet, block):
