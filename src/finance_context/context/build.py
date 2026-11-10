@@ -404,7 +404,12 @@ def _stream_one_block(
         return
     parent_by_row = {row.row: row.label for row in block.rows}
     block_unit = _header_unit(sheet, block, header_by_addr, date1904)
-    block_cells = source.load(sheet.name, {int(row.row) for row in block.rows})
+    block_rows = {int(row.row) for row in block.rows}
+    for axis in axes_for(sheet, block):
+        for period in axis.periods:
+            if period.row:
+                block_rows.add(int(period.row))
+    block_cells = source.load(sheet.name, block_rows)
     tables = _markdown_tables(skeleton, axes_by_id)
     writers = [
         AxisRows(context_dir, heading, headers, axis_id)
@@ -418,7 +423,15 @@ def _stream_one_block(
         try:
             for layout_row in block.rows:
                 parent = parent_by_row.get(layout_row.parent_row) if layout_row.parent_row else None
-                neighbors = _formula_neighbors(sheet.name, layout_row.row, precedents, dependents)
+                # Neighbors are stored per sheet row. A transposed line shares
+                # the label row, so those edges are not this series.
+                neighbors = (
+                    []
+                    if layout_row.value_col
+                    else _formula_neighbors(
+                        sheet.name, layout_row.row, precedents, dependents
+                    )
+                )
                 label_path = list(layout_row.section_path)
                 if parent and parent not in label_path:
                     label_path = [*label_path, parent]
@@ -445,6 +458,7 @@ def _stream_one_block(
                 formats = _row_number_formats(
                     sheet_name=sheet.name,
                     row_num=layout_row.row,
+                    layout_row=layout_row,
                     headers=hint_headers,
                     by_addr=block_cells,
                 )
@@ -471,6 +485,7 @@ def _stream_one_block(
                     fingerprint, exceptions, summary = _row_formula_and_numbers(
                         sheet_name=sheet.name,
                         row_num=layout_row.row,
+                        layout_row=layout_row,
                         headers=row_headers,
                         by_addr=block_cells,
                     )
@@ -520,7 +535,7 @@ def _stream_one_block(
                     for header, item_state in zip(headers, item.value_statuses, strict=False):
                         if item_state == "not_applicable":
                             not_applicable.add(
-                                f"{sheet.name}!{format_addr(header.col, layout_row.row)}"
+                                f"{sheet.name}!{_value_addr(layout_row, header)}"
                             )
                 for writer in writers:
                     writer.add(line)
@@ -652,6 +667,7 @@ def _block_views(
             headers.append(
                 AxisHeader(
                     col=period.col,
+                    row=period.row,
                     text=period.text,
                     kind=period.kind,
                     variant=period.variant,
@@ -679,11 +695,11 @@ def _series_numbers(
     values: list[str | None] = []
     statuses: list[ValueStatus] = []
     for header in headers:
-        if header.col not in keep_cols:
+        if header.col not in keep_cols and not _transposed_value(layout_row, header):
             values.append(None)
             statuses.append("not_applicable")
             continue
-        cell = by_addr.get((sheet_name, row_num, header.col))
+        cell = _value_cell(sheet_name, layout_row, header, by_addr, row_num)
         cached = None if cell is None else cell.get("cached_value")
         fmt = None if cell is None else cell.get("number_format")
         displayed = display_cell_text(
@@ -704,16 +720,40 @@ def _series_numbers(
 
 
 
+def _transposed_value(layout_row: LayoutRow, header) -> bool:
+    return bool(getattr(header, "row", None) and layout_row.value_col)
+
+
+def _value_cell(
+    sheet_name: str,
+    layout_row: LayoutRow,
+    header,
+    by_addr: dict[tuple[str, int, int], dict],
+    row_num: int,
+) -> dict | None:
+    """The cached cell for one period of one line."""
+    if _transposed_value(layout_row, header):
+        return by_addr.get((sheet_name, int(header.row), int(layout_row.value_col)))
+    return by_addr.get((sheet_name, row_num, int(header.col)))
+
+
+def _value_addr(layout_row: LayoutRow, header) -> str:
+    if _transposed_value(layout_row, header):
+        return format_addr(int(layout_row.value_col), int(header.row))
+    return format_addr(int(header.col), int(layout_row.row))
+
+
 def _row_number_formats(
     *,
     sheet_name: str,
     row_num: int,
+    layout_row: LayoutRow,
     headers: list,
     by_addr: dict[tuple[str, int, int], dict],
 ) -> list[str]:
     out: list[str] = []
     for header in headers:
-        cell = by_addr.get((sheet_name, row_num, header.col))
+        cell = _value_cell(sheet_name, layout_row, header, by_addr, row_num)
         fmt = None if cell is None else cell.get("number_format")
         if fmt:
             out.append(str(fmt))
@@ -744,6 +784,7 @@ def _row_formula_and_numbers(
     *,
     sheet_name: str,
     row_num: int,
+    layout_row: LayoutRow,
     headers: list,
     by_addr: dict[tuple[str, int, int], dict],
 ) -> tuple[str | None, list[str], NumericSummary | None]:
@@ -753,7 +794,7 @@ def _row_formula_and_numbers(
     raw_first: str | None = None
     raw_last: str | None = None
     for header in headers:
-        cell = by_addr.get((sheet_name, row_num, header.col))
+        cell = _value_cell(sheet_name, layout_row, header, by_addr, row_num)
         if cell is None:
             continue
         template = cell.get("formula_template")
@@ -778,7 +819,7 @@ def _row_formula_and_numbers(
                 continue
             template = cell.get("formula_template")
             if template and str(template) != fingerprint:
-                exceptions.append(f"{sheet_name}!{format_addr(header.col, row_num)}")
+                exceptions.append(f"{sheet_name}!{_value_addr(layout_row, header)}")
     summary = None
     if raw_first is not None or numbers:
         summary = NumericSummary(

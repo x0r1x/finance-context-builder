@@ -316,6 +316,7 @@ def _annotate_axis(
                 end_date=getattr(header, "end_date", None),
                 flags=flag_map,
                 hidden=bool(getattr(header, "hidden", False)),
+                row=header.row,
             )
         )
     live = {name for period in periods for name, on in period.flags.items() if on}
@@ -326,6 +327,7 @@ def _annotate_axis(
         sheet=sheet_name,
         grain=grain,
         header_row=axis.header_row,
+        transposed=bool(axis.transposed),
         periods=periods,
     )
 

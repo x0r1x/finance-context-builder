@@ -39,6 +39,9 @@ def _row_for_layout(
     series: list[RowSeries] | None = None,
 ) -> BlockRow:
     row_num = layout_row.row
+    row_key = f"{sheet_name}|{row_num}|{block_id}"
+    if layout_row.value_col:
+        row_key = f"{sheet_name}|{row_num}|c{layout_row.value_col}|{block_id}"
     keep_cols = {header.col for header in value_headers}
     values: list[str | None] = []
     statuses: list[ValueStatus] = []
@@ -47,7 +50,10 @@ def _row_for_layout(
             values.append(None)
             statuses.append("not_applicable")
             continue
-        cell = by_addr.get((sheet_name, row_num, header.col))
+        if getattr(header, "row", None) and layout_row.value_col:
+            cell = by_addr.get((sheet_name, int(header.row), int(layout_row.value_col)))
+        else:
+            cell = by_addr.get((sheet_name, row_num, header.col))
         cached = None if cell is None else cell.get("cached_value")
         fmt = None if cell is None else cell.get("number_format")
         displayed = display_cell_text(
@@ -71,9 +77,10 @@ def _row_for_layout(
     else:
         normalized = normalize_series(values, factor)
     return BlockRow(
-        row_key=f"{sheet_name}|{row_num}|{block_id}",
+        row_key=row_key,
         sheet=sheet_name,
         row=row_num,
+        value_col=layout_row.value_col,
         label=layout_row.label,
         parent_label=layout_row_parent,
         unit=unit,

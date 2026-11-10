@@ -104,12 +104,16 @@ class BlockRow:
     value_statuses: list[ValueStatus] = Field(default_factory=list, kw_only=True)
     normalized_values: list[str | None] = Field(default_factory=list, kw_only=True)
     series: list[RowSeries] = Field(default_factory=list, kw_only=True)
+    # Column of a transposed line item. Horizontal rows omit it.
+    value_col: int | None = None
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
         if not data.get("neighbor_ranges"):
             data.pop("neighbor_ranges", None)
+        if data.get("value_col") is None:
+            data.pop("value_col", None)
         return data
 
 
@@ -144,6 +148,8 @@ class ModelPeriod(BaseModel):
 
 class ContextPeriod(BaseModel):
     col: int
+    # Sheet row of a transposed period. Horizontal periods omit it.
+    row: int | None = None
     text: str = ""
     period_key: str
     group_key: str | None = None
@@ -162,6 +168,8 @@ class ContextPeriod(BaseModel):
                 data.pop(key, None)
         if not data.get("hidden"):
             data.pop("hidden", None)
+        if data.get("row") is None:
+            data.pop("row", None)
         if not data.get("flags"):
             data.pop("flags", None)
         if data.get("group_key") is None:
@@ -178,9 +186,18 @@ class ContextAxis(BaseModel):
     sheet: str
     grain: str | None = None
     header_row: int
+    # Periods run down a column. Horizontal axes omit the flag.
+    transposed: bool = False
     # Shared key sequence. Equals ``id`` when this axis is not grouped.
     timeline_id: str | None = None
     periods: list[ContextPeriod] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if not data.get("transposed"):
+            data.pop("transposed", None)
+        return data
 
 
 class WorkbookTimeline(BaseModel):

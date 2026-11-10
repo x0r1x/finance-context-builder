@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from datetime import date
 
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import _cell_at, _is_number, _text, parse_int, parse_number
+from finance_context.layout.format_words import is_total_word
 from finance_context.layout.markers import DerivedScan, apply_axis_markers
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
 from finance_context.layout.periods import (
@@ -23,6 +25,7 @@ from finance_context.layout.periods import (
     classify_header,
     compose_period,
     infer_grain,
+    is_calendar_hit,
     is_end_period_label,
     is_month_label,
     is_quarter_label,
@@ -36,7 +39,9 @@ from finance_context.layout.rows import (
     _is_counter_row,
     _is_data_row,
     _is_empty_row,
+    _is_quarter_token_row,
     _is_starter_row,
+    _is_year_banner_row,
     _row_label,
     _row_layers,
     _year_banner_by_column,
@@ -117,7 +122,8 @@ def _axis_candidates(
         )
         candidates.append(([row_n], axis))
         taken.add(row_n)
-    return _keep_dominant(_fold_year_banners(candidates))
+    horizontal = _keep_dominant(_fold_year_banners(candidates))
+    return [*horizontal, *_vertical_axes(sheet, by_row, date1904, horizontal)]
 
 
 def _period_count(axis: TimeAxis) -> int:
@@ -554,6 +560,11 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
             continue
         layers = _row_layers(by_row[row_n], date1904)
         band = [row_n]
+        if i > 0 and _is_quarter_token_row(by_row[row_n], date1904):
+            prev = rows[i - 1]
+            if 0 < row_n - prev <= 2 and _is_year_banner_row(by_row[prev], date1904):
+                band = [prev, row_n]
+                layers |= _row_layers(by_row[prev], date1904)
         j = i + 1
         while j < len(rows):
             nxt = rows[j]
@@ -729,7 +740,13 @@ def _axes_from_band(
     for row_n in band_rows:
         for col, year in _year_banner_by_column(by_row[row_n], date1904).items():
             banner_years.setdefault(col, year)
-    runs = _split_header_runs(composed, known_hidden)
+    runs = _split_header_runs(
+        composed,
+        known_hidden,
+        by_row=by_row,
+        band_rows=band_rows,
+        date1904=date1904,
+    )
     axes: list[TimeAxis] = []
     multi = len(runs) > 1
     for run in runs:
@@ -788,6 +805,10 @@ def _axes_from_band(
             )
         )
     return axes
+
+
+# Columns between two pieces of one ruler: a year total, or a total and a blank.
+_JOIN_GAP = 2
 
 
 _RELATIVE_STEP = re.compile(r"^([YQMP])(\d+)$")
@@ -860,7 +881,12 @@ def _header_key_class(key: str) -> str:
 
 
 def _split_header_runs(
-    headers: list[AxisHeader], hidden_cols: set[int] | None = None
+    headers: list[AxisHeader],
+    hidden_cols: set[int] | None = None,
+    *,
+    by_row: dict[int, list[dict]] | None = None,
+    band_rows: list[int] | None = None,
+    date1904: bool = False,
 ) -> list[list[AxisHeader]]:
     if not headers:
         return []
@@ -880,7 +906,16 @@ def _split_header_runs(
         continues = _period_continues(prev.period_key, item.period_key) and (
             not hidden_only or _run_continues(runs[-1])
         )
-        gap = physical_gap and (not bridged or (hidden_only and not continues))
+        between = item.col - prev.col - 1
+        # «Итого» between quarter groups is not a new axis. An empty column
+        # still splits the run.
+        join_gap = (
+            0 < between <= _JOIN_GAP
+            and _period_continues(prev.period_key, item.period_key)
+            and (len(runs[-1]) == 1 or _run_continues(runs[-1]))
+            and _gap_is_total(prev.col, item.col, by_row, band_rows, date1904)
+        )
+        gap = physical_gap and not join_gap and (not bridged or (hidden_only and not continues))
         left_cls = _header_key_class(prev.period_key)
         right_cls = _header_key_class(item.period_key)
         grain_break = (
@@ -893,6 +928,31 @@ def _split_header_runs(
         else:
             runs[-1].append(item)
     return [run for run in runs if len(run) >= 2]
+
+
+def _gap_is_total(
+    left: int,
+    right: int,
+    by_row: dict[int, list[dict]] | None,
+    band_rows: list[int] | None,
+    date1904: bool,
+) -> bool:
+    """True when every occupied cell between two headers is a total word."""
+    if not by_row or not band_rows:
+        return False
+    saw = False
+    for col in range(left + 1, right):
+        for row_n in band_rows:
+            cell = _cell_at(by_row.get(row_n, []), col)
+            if cell is None:
+                continue
+            text = _text(cell, date1904)
+            if not text:
+                continue
+            if not is_total_word(text):
+                return False
+            saw = True
+    return saw
 
 
 def _column_atoms(
@@ -912,7 +972,7 @@ def _column_atoms(
     for row_n in band_rows:
         if prefer_end and start_row[row_n]:
             continue
-        cell = _cell_at(by_row[row_n], col)
+        cell = _cell_covering(by_row[row_n], col)
         if cell is None:
             continue
         atom = classify_atom(
@@ -938,7 +998,7 @@ def _column_text(
     for row_n in band_rows:
         if prefer_end and start_row[row_n]:
             continue
-        cell = _cell_at(by_row[row_n], col)
+        cell = _cell_covering(by_row[row_n], col)
         if cell is None:
             continue
         text = _text(cell, date1904)
@@ -993,3 +1053,108 @@ def _band_prefers_end(
     return any(is_start_period_label(label) for label in labels) and any(
         is_end_period_label(label) for label in labels
     )
+
+
+def _cell_covering(row_cells: list[dict], col: int) -> dict | None:
+    """The cell at ``col``, or the merge anchor whose span covers it."""
+    found = _cell_at(row_cells, col)
+    if found is not None:
+        return found
+    cover: dict | None = None
+    for cell in row_cells:
+        end = cell.get("merge_end_col")
+        if end is None:
+            continue
+        try:
+            end_col = int(end)
+        except (TypeError, ValueError):
+            continue
+        origin = int(cell["col"])
+        if origin < col <= end_col and (cover is None or origin > int(cover["col"])):
+            cover = cell
+    return cover
+
+
+def _vertical_axes(
+    sheet: str,
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    horizontal: list[tuple[list[int], TimeAxis]],
+) -> list[tuple[list[int], TimeAxis]]:
+    """Period runs down a column. A horizontal ruler on those rows wins."""
+    taken_cols = {period.col for _, axis in horizontal for period in axis.periods}
+    taken_rows = {row_n for band, _axis in horizontal for row_n in band}
+    by_col: dict[int, list[tuple[int, dict]]] = defaultdict(list)
+    for row_n, cells in by_row.items():
+        if row_n in taken_rows:
+            continue
+        for cell in cells:
+            col = int(cell["col"])
+            if col in taken_cols:
+                continue
+            by_col[col].append((row_n, cell))
+    found: list[tuple[list[int], TimeAxis]] = []
+    for col, items in sorted(by_col.items()):
+        items.sort(key=lambda item: item[0])
+        for run in _vertical_runs(items, date1904):
+            if len(run) < 2 or not _values_beside(by_row, col, run, date1904):
+                continue
+            found.append(_vertical_axis(sheet, col, run))
+    return found
+
+
+def _vertical_runs(
+    items: list[tuple[int, dict]], date1904: bool
+) -> list[list[tuple[int, str, str]]]:
+    runs: list[list[tuple[int, str, str]]] = []
+    run: list[tuple[int, str, str]] = []
+    for row_n, cell in items:
+        text = _text(cell, date1904)
+        hit = classify_header(text)
+        key = hit.period_key if hit is not None and is_calendar_hit(hit) else None
+        if key is None or (run and row_n != run[-1][0] + 1):
+            if run:
+                runs.append(run)
+                run = []
+            if key is None:
+                continue
+        run.append((row_n, key, text or key))
+    if run:
+        runs.append(run)
+    return runs
+
+
+def _values_beside(
+    by_row: dict[int, list[dict]],
+    col: int,
+    run: list[tuple[int, str, str]],
+    date1904: bool,
+) -> bool:
+    for row_n, _key, _shown in run:
+        for cell in by_row.get(row_n, []):
+            if int(cell["col"]) <= col:
+                continue
+            if cell.get("formula_raw"):
+                return True
+            shown = _text(cell, date1904)
+            if shown and _is_number(shown):
+                return True
+    return False
+
+
+def _vertical_axis(
+    sheet: str, col: int, run: list[tuple[int, str, str]]
+) -> tuple[list[int], TimeAxis]:
+    keys = [key for _row, key, _text in run]
+    periods = [
+        AxisPeriod(col=col, row=row_n, text=text, kind="period", period_key=key)
+        for row_n, key, text in run
+    ]
+    axis = TimeAxis(
+        id=f"{sheet}!c{col}r{run[0][0]}",
+        grain=infer_grain(keys),
+        header_row=run[0][0],
+        periods=periods,
+        transposed=True,
+    )
+    return [row_n for row_n, _key, _text in run], axis

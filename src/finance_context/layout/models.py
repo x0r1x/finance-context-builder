@@ -52,6 +52,8 @@ class PeriodHit(BaseModel):
 
 class AxisHeader(BaseModel):
     col: int
+    # Sheet row of a transposed period. Horizontal headers leave this empty.
+    row: int | None = None
     text: str
     # Params columns only (value/unit/note/...). Period columns leave this empty.
     role: str | None = None
@@ -70,6 +72,8 @@ class AxisHeader(BaseModel):
             data.pop("role", None)
         if data.get("kind") is None:
             data.pop("kind", None)
+        if data.get("row") is None:
+            data.pop("row", None)
         return data
 
 
@@ -81,6 +85,8 @@ class Axis(BaseModel):
 
 class AxisPeriod(BaseModel):
     col: int
+    # Sheet row when the period runs down a column. Horizontal periods omit it.
+    row: int | None = None
     text: str
     kind: ColumnKind = "period"
     variant: str | None = Field(default=None, exclude=True)
@@ -96,6 +102,8 @@ class AxisPeriod(BaseModel):
         data = handler(self)
         if not data.get("hidden"):
             data.pop("hidden", None)
+        if data.get("row") is None:
+            data.pop("row", None)
         return data
 
 
@@ -105,6 +113,8 @@ class TimeAxis(BaseModel):
     id: str
     grain: str | None = None
     header_row: int
+    # Periods run down a column and line items run across.
+    transposed: bool = False
     periods: list[AxisPeriod]
     # Ambiguous-marker warnings. Not a context-schema field. Empty notes are
     # omitted; a reused layout.json still carries a note that was raised.
@@ -115,6 +125,8 @@ class TimeAxis(BaseModel):
         data = handler(self)
         if not data.get("notes"):
             data.pop("notes", None)
+        if not data.get("transposed"):
+            data.pop("transposed", None)
         return data
 
 
@@ -136,7 +148,16 @@ class LayoutRow:
     kind: RowKind = "fact"
     section_path: list[str] = Field(default_factory=list)
     label_col: int | None = None
+    # Column of a transposed line item. Horizontal rows leave this empty.
+    value_col: int | None = None
     cells: list[RowCell] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _slim(self, handler):
+        data = handler(self)
+        if data.get("value_col") is None:
+            data.pop("value_col", None)
+        return data
 
 
 class Block(BaseModel):

@@ -224,7 +224,10 @@ def _timeline_observation(
     normalized: str | None,
 ) -> Observation:
     value, value_status = _cache(text, status)
-    cell = format_addr(period.col, row.row)
+    if period.row and row.value_col:
+        cell = format_addr(int(row.value_col), int(period.row))
+    else:
+        cell = format_addr(period.col, row.row)
     return Observation(
         row_key=row.row_key,
         label=row.label,
