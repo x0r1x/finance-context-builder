@@ -33,12 +33,15 @@ from finance_context.layout.periods import (
     marker_token,
     normalize_header,
     parse_period_key,
+    period_position,
 )
 from finance_context.layout.rows import (
     _RELATIVE_LABEL,
     _is_counter_row,
     _is_data_row,
     _is_empty_row,
+    _distinct_year_ruler,
+    _is_bare_year_text,
     _is_quarter_token_row,
     _is_starter_row,
     _is_year_banner_row,
@@ -574,6 +577,12 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
                 continue
             if _is_data_row(cells, date1904):
                 break
+            # 2020, 2021, 2022 under a quarter-token note is its own year axis.
+            # A repeated year (2024, 2024, 2024, 2024) stays in the quarter band.
+            if _is_quarter_token_row(by_row[row_n], date1904) and _distinct_year_ruler(
+                cells, date1904
+            ):
+                break
             if _is_flag_bits_row(cells, _band_calendar_cols(band, by_row, date1904), date1904):
                 break
             new_layers = _row_layers(cells, date1904)
@@ -711,6 +720,12 @@ def _axes_from_band(
             quarter_row=quarter_row,
             month_row=month_row,
         )
+        # A year in this column within three rows above fills the quarter.
+        # Later columns keep that year through year_hint.
+        if not any(atom.year for atom in atoms):
+            carried = _year_above(by_row, header_row, col, date1904)
+            if carried:
+                atoms = [*atoms, HeaderAtom(kind="year", year=carried)]
         hit = compose_period(atoms, year_hint=year_hint)
         if hit is None:
             continue
@@ -1075,6 +1090,32 @@ def _cell_covering(row_cells: list[dict], col: int) -> dict | None:
     return cover
 
 
+# Rows above a quarter header that can still supply its year. CFS uses three.
+_YEAR_NEAR = 3
+
+# A word in the period column of a vertical ruler. "Date" and "Founded" are
+# field names of a list, not this caption.
+_AXIS_CAPTION = re.compile(r"^(?:год|года|year|период|period|fy)$", re.IGNORECASE)
+
+
+def _year_above(
+    by_row: dict[int, list[dict]], row_n: int, col: int, date1904: bool
+) -> str | None:
+    """Bare year in this column, up to three rows above the header."""
+    for dist in range(1, _YEAR_NEAR + 1):
+        cells = by_row.get(row_n - dist)
+        if not cells:
+            continue
+        cell = _cell_covering(cells, col)
+        text = _text(cell, date1904) if cell is not None else None
+        if not text or not _is_bare_year_text(text):
+            continue
+        year = parse_int(text)
+        if year is not None:
+            return str(year)
+    return None
+
+
 def _vertical_axes(
     sheet: str,
     by_row: dict[int, list[dict]],
@@ -1097,7 +1138,9 @@ def _vertical_axes(
     for col, items in sorted(by_col.items()):
         items.sort(key=lambda item: item[0])
         for run in _vertical_runs(items, date1904):
-            if len(run) < 2 or not _values_beside(by_row, col, run, date1904):
+            if not _vertical_run_ok(by_row, col, run, date1904):
+                continue
+            if not _values_beside(by_row, col, run, date1904):
                 continue
             found.append(_vertical_axis(sheet, col, run))
     return found
@@ -1122,6 +1165,104 @@ def _vertical_runs(
     if run:
         runs.append(run)
     return runs
+
+
+def _vertical_run_ok(
+    by_row: dict[int, list[dict]],
+    col: int,
+    run: list[tuple[int, str, str]],
+    date1904: bool,
+) -> bool:
+    """A vertical ruler is a regular period step with series names above it.
+
+    Three founded years, or a date journal beside one amount, stay a list.
+    """
+    keys = [key for _row, key, _text in run]
+    if not _regular_period_run(keys):
+        return False
+    if _labels_left_of(by_row, col, run, date1904) >= 2:
+        return False
+    return _series_row_above(by_row, col, run[0][0], date1904) is not None
+
+
+def _regular_period_run(keys: list[str]) -> bool:
+    """CFS length: three positions of one grain, four for a day grain."""
+    positions = []
+    for key in keys:
+        found = period_position(key)
+        if found is None:
+            return False
+        positions.append(found)
+    if len({grain for grain, _index in positions}) != 1:
+        return False
+    grain = positions[0][0]
+    steps = [right - left for (_g, left), (_h, right) in zip(positions, positions[1:], strict=False)]
+    if not steps or any(step <= 0 for step in steps):
+        return False
+    if len(set(steps)) != 1:
+        return False
+    if grain == "day":
+        return len(keys) >= 4
+    return len(keys) >= 3
+
+
+def _labels_left_of(
+    by_row: dict[int, list[dict]],
+    col: int,
+    run: list[tuple[int, str, str]],
+    date1904: bool,
+) -> int:
+    """Period rows that name an entity to the left of the ruler."""
+    found = 0
+    for row_n, _key, _shown in run:
+        for cell in by_row.get(row_n, []):
+            if int(cell["col"]) >= col:
+                continue
+            text = _text(cell, date1904)
+            if not text or _is_number(text) or is_calendar_hit(classify_header(text)):
+                continue
+            found += 1
+            break
+    return found
+
+
+def _series_row_above(
+    by_row: dict[int, list[dict]], col: int, first: int, date1904: bool
+) -> int | None:
+    """Nearest row above the first period that names series to its right.
+
+    Empty rows are skipped, so one blank between the names and the years
+    still belongs to the ruler.
+    """
+    for row_n in range(first - 1, max(0, first - 6), -1):
+        cells = by_row.get(row_n, [])
+        if not cells or _is_empty_row(cells, date1904):
+            continue
+        anchor = _cell_at(cells, col)
+        if _names_right(cells, col, date1904) and _period_caption_ok(
+            _text(anchor, date1904) if anchor is not None else None
+        ):
+            return row_n
+        return None
+    return None
+
+
+def _names_right(cells: list[dict], col: int, date1904: bool) -> list[str]:
+    names: list[str] = []
+    for cell in cells:
+        if int(cell["col"]) <= col:
+            continue
+        text = _text(cell, date1904)
+        if text and classify_header(text) is None and not _is_number(text):
+            names.append(text.strip())
+    return names
+
+
+def _period_caption_ok(text: str | None) -> bool:
+    if not text:
+        return True
+    folded = text.casefold().replace("ё", "е").strip().strip(".")
+    return _AXIS_CAPTION.fullmatch(folded) is not None
 
 
 def _values_beside(

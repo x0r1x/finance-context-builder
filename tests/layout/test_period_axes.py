@@ -194,6 +194,229 @@ def test_periods_down_a_column_are_transposed() -> None:
     ).sheets[0].axes[0].model_dump(mode="json")
 
 
+def test_two_quarter_tokens_do_not_eat_the_year_ruler() -> None:
+    cells = [
+        _c("N", "A1", "см."),
+        _c("N", "B1", "1 кв."),
+        _c("N", "C1", "2 кв."),
+        _c("N", "D1", "комментарий"),
+        _c("N", "A4", "Выручка"),
+    ]
+    for col, year in zip("BCDE", ["2020", "2021", "2022", "2023"], strict=True):
+        cells.append(_c("N", f"{col}3", year))
+        cells.append(_c("N", f"{col}4", "10"))
+    sheet = detect_layout(cells).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2020",
+        "2021",
+        "2022",
+        "2023",
+    ]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Выручка"]
+
+
+def test_a_year_per_column_under_quarter_tokens_stays_a_year_axis() -> None:
+    cells = [_c("N", "A4", "Выручка")]
+    for col, quarter in zip("BCDE", ["1 кв.", "2 кв.", "3 кв.", "4 кв."], strict=True):
+        cells.append(_c("N", f"{col}1", quarter))
+    for col, year in zip("BCDE", ["2020", "2021", "2022", "2023"], strict=True):
+        cells.append(_c("N", f"{col}2", year))
+        cells.append(_c("N", f"{col}4", "10"))
+    sheet = detect_layout(cells).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2020",
+        "2021",
+        "2022",
+        "2023",
+    ]
+
+
+def test_repeated_year_under_quarter_tokens_fills_the_quarters() -> None:
+    cells = [_c("Q", "A3", "Выручка")]
+    for col in "BCDE":
+        cells.append(_c("Q", f"{col}1", "1 кв." if col == "B" else {"C": "2 кв.", "D": "3 кв.", "E": "4 кв."}[col]))
+        cells.append(_c("Q", f"{col}2", "2024"))
+        cells.append(_c("Q", f"{col}3", "10"))
+    sheet = detect_layout(cells).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024Q1",
+        "2024Q2",
+        "2024Q3",
+        "2024Q4",
+    ]
+
+
+def test_line_name_beside_one_year_is_the_section() -> None:
+    cells = [
+        _c("P", "A1", "Выручка"),
+        _c("P", "B1", "2024"),
+        _c("P", "A3", "Себестоимость"),
+    ]
+    for col, quarter, value in zip(
+        "BCDE", ["1 кв.", "2 кв.", "3 кв.", "4 кв."], ["1", "2", "3", "4"], strict=True
+    ):
+        cells.append(_c("P", f"{col}2", quarter))
+        cells.append(_c("P", f"{col}3", value))
+    sheet = detect_layout(cells).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024Q1",
+        "2024Q2",
+        "2024Q3",
+        "2024Q4",
+    ]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Себестоимость"]
+    assert sheet.blocks[0].rows[0].section_path == ["Выручка"]
+
+
+def test_founded_years_stay_a_list() -> None:
+    cells = [
+        _c("C", "A1", "Company"),
+        _c("C", "B1", "Founded"),
+        _c("C", "C1", "Revenue"),
+        _c("C", "A2", "A"),
+        _c("C", "B2", "2010"),
+        _c("C", "C2", "100"),
+        _c("C", "A3", "B"),
+        _c("C", "B3", "2011"),
+        _c("C", "C3", "200"),
+        _c("C", "A4", "C"),
+        _c("C", "B4", "2012"),
+        _c("C", "C4", "300"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis for axis in sheet.axes if axis.transposed] == []
+    timeline = [block for block in sheet.blocks if block.kind == "timeline"]
+    assert timeline == []
+
+
+def test_a_date_journal_is_not_a_timeline() -> None:
+    cells = [_c("L", "A1", "Date"), _c("L", "B1", "Amount")]
+    for row, day, amount in (
+        (2, "15.01.2024", "10"),
+        (3, "16.01.2024", "11"),
+        (4, "17.01.2024", "12"),
+        (5, "18.01.2024", "13"),
+    ):
+        cells.append(_c("L", f"A{row}", day))
+        cells.append(_c("L", f"B{row}", amount))
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis for axis in sheet.axes if axis.transposed] == []
+
+
+def test_two_dates_do_not_start_a_vertical_axis() -> None:
+    cells = [
+        _c("L", "B1", "Сумма"),
+        _c("L", "A2", "15.01.2024"),
+        _c("L", "B2", "10"),
+        _c("L", "A3", "16.01.2024"),
+        _c("L", "B3", "11"),
+    ]
+    sheet = detect_layout(cells).sheets[0]
+    assert sheet.axes == []
+
+
+def test_year_caption_above_a_vertical_ruler_is_kept() -> None:
+    cells = [
+        _c("D", "A1", "Год"),
+        _c("D", "B1", "Выручка"),
+        _c("D", "C1", "EBITDA"),
+    ]
+    for row, year, revenue, ebitda in (
+        (2, "2020", "10", "20"),
+        (3, "2021", "11", "21"),
+        (4, "2022", "12", "22"),
+    ):
+        cells.append(_c("D", f"A{row}", year))
+        cells.append(_c("D", f"B{row}", revenue))
+        cells.append(_c("D", f"C{row}", ebitda))
+    sheet = detect_layout(cells).sheets[0]
+    axis = sheet.axes[0]
+    assert axis.transposed is True
+    assert [period.period_key for period in axis.periods] == ["2020", "2021", "2022"]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "EBITDA"]
+
+
+def test_blank_row_between_names_and_vertical_years() -> None:
+    cells = [_c("D", "B1", "Выручка"), _c("D", "C1", "EBITDA")]
+    for row, year, revenue, ebitda in (
+        (3, "2020", "10", "20"),
+        (4, "2021", "11", "21"),
+        (5, "2022", "12", "22"),
+    ):
+        cells.append(_c("D", f"A{row}", year))
+        cells.append(_c("D", f"B{row}", revenue))
+        cells.append(_c("D", f"C{row}", ebitda))
+    sheet = detect_layout(cells).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == ["2020", "2021", "2022"]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "EBITDA"]
+
+
+def test_a_gap_keeps_the_series_on_the_same_year_axis() -> None:
+    cells = [
+        _c("D", "B1", "Выручка"),
+        _c("D", "C1", "EBITDA"),
+        _c("D", "F1", "Долг"),
+    ]
+    for row, year in ((2, "2020"), (3, "2021"), (4, "2022")):
+        cells.append(_c("D", f"A{row}", year))
+        cells.append(_c("D", f"B{row}", "1"))
+        cells.append(_c("D", f"C{row}", "2"))
+        cells.append(_c("D", f"F{row}", "3"))
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == ["2020", "2021", "2022"]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "EBITDA", "Долг"]
+
+
+def test_side_by_side_rows_stay_with_the_columns_they_fill() -> None:
+    cells = [
+        _c("S", "A2", "Left"),
+        _c("S", "A6", "Shared"),
+        _c("S", "A7", "OnlyLeft"),
+        _c("S", "A8", "OnlyRight"),
+    ]
+    for col, year in zip("BCDE", ["2020", "2021", "2022", "2023"], strict=True):
+        cells.append(_c("S", f"{col}1", year))
+        cells.append(_c("S", f"{col}2", "1"))
+        cells.append(_c("S", f"{col}6", "9"))
+        cells.append(_c("S", f"{col}7", "4"))
+    cells.append(_c("S", "G4", "Right"))
+    for col, year in zip("HIJ", ["2021", "2022", "2023"], strict=True):
+        cells.append(_c("S", f"{col}3", year))
+        cells.append(_c("S", f"{col}4", "5"))
+        cells.append(_c("S", f"{col}6", "7"))
+        cells.append(_c("S", f"{col}8", "6"))
+    sheet = detect_layout(cells).sheets[0]
+    by_axis = {block.axis_ids[0]: [row.label for row in block.rows] for block in sheet.blocks}
+    wide = next(axis.id for axis in sheet.axes if len(axis.periods) == 4)
+    narrow = next(axis.id for axis in sheet.axes if len(axis.periods) == 3)
+    assert "OnlyLeft" in by_axis[wide]
+    assert "OnlyLeft" not in by_axis[narrow]
+    assert "OnlyRight" in by_axis[narrow]
+    assert "OnlyRight" not in by_axis[wide]
+    assert "Shared" in by_axis[wide]
+    assert "Shared" not in by_axis[narrow]
+
+
+def test_months_down_a_column_are_one_series() -> None:
+    cells = [_c("M", "B1", "Выручка")]
+    for row, month, value in (
+        (2, "янв 2024", "1"),
+        (3, "фев 2024", "2"),
+        (4, "мар 2024", "3"),
+    ):
+        cells.append(_c("M", f"A{row}", month))
+        cells.append(_c("M", f"B{row}", value))
+    sheet = detect_layout(cells).sheets[0]
+    assert sheet.axes[0].transposed is True
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024-01",
+        "2024-02",
+        "2024-03",
+    ]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Выручка"]
+
+
 def test_transposed_lines_do_not_take_the_label_row() -> None:
     cells = [
         _c("Debt", "B1", "Выручка"),
@@ -204,6 +427,9 @@ def test_transposed_lines_do_not_take_the_label_row() -> None:
         _c("Debt", "A3", "2021"),
         _c("Debt", "B3", "11"),
         _c("Debt", "C3", "21"),
+        _c("Debt", "A4", "2022"),
+        _c("Debt", "B4", "12"),
+        _c("Debt", "C4", "22"),
     ]
     layout = detect_layout(cells)
     sheet = layout.sheets[0]

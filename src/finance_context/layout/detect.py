@@ -4,7 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from finance_context.formulas.models import as_edge
-from finance_context.layout.axes import _axis_candidates, _table_groups
+from finance_context.layout.axes import _axis_candidates, _series_row_above, _table_groups
 from finance_context.layout.cells import _is_number, _text, bind_row_index, clear_row_index
 from finance_context.layout.coverage import chart_note, coverage_blocks
 from finance_context.layout.models import (
@@ -27,6 +27,7 @@ from finance_context.layout.rows import (
     _is_banner_gap,
     _is_empty_row,
     _label_span,
+    _year_label_section,
 )
 from finance_context.layout.timelines import _share_repeated_axes, link_workbook_timelines
 
@@ -186,7 +187,12 @@ def _blocks_indexed(
             span,
             date1904,
             period_cols,
-            seed=_band_title(by_row, group_axes[0].header_row, span, period_cols, date1904),
+            seed=(
+                _band_title(by_row, group_axes[0].header_row, span, period_cols, date1904)
+                or _year_label_section(
+                    by_row, group_axes[0].header_row, period_cols, date1904
+                )
+            ),
             reveal_rows=reveal_rows,
             summary_below=summary_below,
             hidden_row_ids=hidden_row_ids,
@@ -380,9 +386,9 @@ def _transposed_items(
     """One line item per labelled column to the right of a vertical ruler."""
     if not period_rows:
         return []
-    label_row = min(period_rows) - 1
+    label_row = _series_row_above(by_row, period_col, min(period_rows), date1904)
     labels: dict[int, str] = {}
-    if label_row in by_row:
+    if label_row is not None and label_row in by_row:
         for cell in by_row[label_row]:
             col = int(cell["col"])
             if col <= period_col:
@@ -400,14 +406,10 @@ def _transposed_items(
             if cell.get("formula_raw") or (shown and _is_number(shown)):
                 value_cols.add(col)
     items: list[LayoutRow] = []
-    prev: int | None = None
-    anchor = label_row if label_row >= 1 else min(period_rows)
+    anchor = label_row if label_row is not None and label_row >= 1 else min(period_rows)
     for col in sorted(set(labels) | value_cols):
-        if prev is not None and col - prev >= 3:
-            break
         label = labels.get(col)
         if not label:
-            prev = col
             continue
         items.append(
             LayoutRow(
@@ -418,7 +420,6 @@ def _transposed_items(
                 value_col=col,
             )
         )
-        prev = col
     return items
 
 
