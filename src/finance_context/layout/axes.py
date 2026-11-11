@@ -45,6 +45,7 @@ from finance_context.layout.rows import (
     _is_quarter_token_row,
     _is_starter_row,
     _is_year_banner_row,
+    _repeated_year_line,
     _row_can_supply_year,
     _row_label,
     _row_layers,
@@ -562,6 +563,15 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
         if not _is_starter_row(by_row[row_n], date1904):
             i += 1
             continue
+        # ``Год ввода | 2024…`` under a ruler is a value row. The same years
+        # with no line name are still a header.
+        if (
+            bands
+            and _repeated_year_line(by_row[row_n], date1904)
+            and _band_covers_years(bands[-1], by_row, row_n, date1904)
+        ):
+            i += 1
+            continue
         layers = _row_layers(by_row[row_n], date1904)
         band = [row_n]
         if i > 0 and _is_quarter_token_row(by_row[row_n], date1904):
@@ -604,6 +614,23 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
         bands.append(band)
         i = j if j > i else i + 1
     return bands
+
+
+def _band_covers_years(
+    band: list[int],
+    by_row: dict[int, list[dict]],
+    row_n: int,
+    date1904: bool,
+) -> bool:
+    years = {
+        int(cell["col"])
+        for cell in by_row[row_n]
+        if _is_bare_year_text(_text(cell, date1904))
+    }
+    if not years:
+        return False
+    covered = {int(cell["col"]) for row in band for cell in by_row.get(row, [])}
+    return bool(years & covered)
 
 
 def _is_flag_bits_row(

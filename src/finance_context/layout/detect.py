@@ -180,6 +180,12 @@ def _blocks_indexed(
             date1904,
         )
         reveal_rows = {row_n for row_n, owner in title_owner.items() if owner == index}
+        axis = group_axes[0]
+        # Only the row whose year filled these quarter keys. Another 2024
+        # below that banner is a value.
+        section = _quarter_year_row(by_row, axis, period_cols, date1904)
+        if section is not None:
+            body_rows = [row_n for row_n in body_rows if row_n != section.row]
         data_rows = _data_rows(
             by_row,
             body_rows,
@@ -187,7 +193,7 @@ def _blocks_indexed(
             span,
             date1904,
             period_cols,
-            seed=_section_seed(by_row, group_axes[0], span, period_cols, date1904),
+            seed=_section_seed(by_row, axis, span, period_cols, date1904),
             reveal_rows=reveal_rows,
             summary_below=summary_below,
             hidden_row_ids=hidden_row_ids,
@@ -440,6 +446,18 @@ def _transposed_items(
         )
         prev = col
     return items
+
+
+def _quarter_year_row(by_row, axis, period_cols, date1904):
+    """The labelled year that was borrowed into this quarter ruler."""
+    if axis.grain != "quarter":
+        return None
+    years = {
+        period.period_key[:4]
+        for period in axis.periods
+        if period.period_key[:4].isdigit()
+    }
+    return _year_label_section(by_row, axis.header_row, period_cols, date1904, years)
 
 
 def _section_seed(by_row, axis, span, period_cols, date1904):

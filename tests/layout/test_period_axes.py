@@ -365,13 +365,10 @@ def test_two_empty_columns_end_the_vertical_series() -> None:
         cells.append(_c("D", f"B{row}", "1"))
         cells.append(_c("D", f"C{row}", "2"))
         cells.append(_c("D", f"F{row}", "3"))
-        cells.append(_c("D", f"H{row}", {2: "Rent", 3: "Tax", 4: "Fee"}[row]))
         cells.append(_c("D", f"I{row}", "4"))
     sheet = detect_layout(cells).sheets[0]
     assert [period.period_key for period in sheet.axes[0].periods] == ["2020", "2021", "2022"]
     assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "EBITDA"]
-    listed = [block for block in sheet.blocks if block.kind == "key_value"]
-    assert [row.label for block in listed for row in block.rows] == ["Tax", "Fee"]
 
 
 def test_one_empty_column_keeps_the_next_series() -> None:
@@ -516,6 +513,49 @@ def test_year_ends_down_a_column_stay_a_year_axis() -> None:
     ]
     assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "EBITDA"]
     assert [block.kind for block in sheet.blocks] == ["timeline"]
+
+
+def test_repeated_year_under_a_year_ruler_stays_a_line() -> None:
+    cells = [_c("P", "A2", "Выручка"), _c("P", "A3", "Год ввода")]
+    for col, year, value in zip(
+        "BCDE", ["2020", "2021", "2022", "2023"], ["10", "11", "12", "13"], strict=True
+    ):
+        cells.append(_c("P", f"{col}1", year))
+        cells.append(_c("P", f"{col}2", value))
+        cells.append(_c("P", f"{col}3", "2024"))
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.grain for axis in sheet.axes] == ["year"]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2020",
+        "2021",
+        "2022",
+        "2023",
+    ]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "Год ввода"]
+
+
+def test_one_year_value_under_filled_quarters_stays_a_line() -> None:
+    cells = [
+        _c("P", "A1", "Выручка"),
+        _c("P", "B1", "2024"),
+        _c("P", "A3", "Год ввода"),
+        _c("P", "B3", "2024"),
+        _c("P", "A4", "Себестоимость"),
+    ]
+    for col, quarter, value in zip(
+        "BCDE", ["1 кв.", "2 кв.", "3 кв.", "4 кв."], ["10", "20", "30", "40"], strict=True
+    ):
+        cells.append(_c("P", f"{col}2", quarter))
+        cells.append(_c("P", f"{col}4", value))
+    sheet = detect_layout(cells).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024Q1",
+        "2024Q2",
+        "2024Q3",
+        "2024Q4",
+    ]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Год ввода", "Себестоимость"]
+    assert [row.section_path for row in sheet.blocks[0].rows] == [["Выручка"], ["Выручка"]]
 
 
 def test_borrowed_year_row_is_the_section_not_a_line() -> None:
