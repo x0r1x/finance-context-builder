@@ -195,6 +195,28 @@ def _row_can_supply_year(row_cells: list[dict], date1904: bool) -> bool:
     return saw
 
 
+def _borrowed_year_row(
+    row_cells: list[dict], period_cols: set[int], date1904: bool
+) -> bool:
+    """Label beside one repeated year. That year fills the quarters; it is not a line.
+
+    Different years in the period columns are values and stay in the block.
+    """
+    if not period_cols or not _row_can_supply_year(row_cells, date1904):
+        return False
+    years: set[str] = set()
+    for cell in row_cells:
+        if int(cell["col"]) not in period_cols:
+            continue
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        if not _is_bare_year_text(text):
+            return False
+        years.add(text.strip())
+    return len(years) == 1
+
+
 def _year_label_section(
     by_row: dict[int, list[dict]],
     header_row: int,
@@ -522,6 +544,10 @@ def _data_rows(
         if _is_empty_row(by_row[row_n], date1904):
             continue
         if _is_counter_row(by_row[row_n], date1904):
+            continue
+        # ``Выручка | 2024`` under bare quarters supplies the year. The line
+        # with the numbers is the next row, and this one stays a section.
+        if _borrowed_year_row(by_row[row_n], period_cols, date1904):
             continue
         reveal = row_n in revealed or _row_all_hidden(
             row_n, by_row[row_n], hidden_row_ids

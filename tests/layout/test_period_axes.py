@@ -233,8 +233,9 @@ def test_a_year_per_column_under_quarter_tokens_stays_a_year_axis() -> None:
 
 def test_repeated_year_under_quarter_tokens_fills_the_quarters() -> None:
     cells = [_c("Q", "A3", "Выручка")]
+    quarters = {"B": "1 кв.", "C": "2 кв.", "D": "3 кв.", "E": "4 кв."}
     for col in "BCDE":
-        cells.append(_c("Q", f"{col}1", "1 кв." if col == "B" else {"C": "2 кв.", "D": "3 кв.", "E": "4 кв."}[col]))
+        cells.append(_c("Q", f"{col}1", quarters[col]))
         cells.append(_c("Q", f"{col}2", "2024"))
         cells.append(_c("Q", f"{col}3", "10"))
     sheet = detect_layout(cells).sheets[0]
@@ -364,10 +365,13 @@ def test_two_empty_columns_end_the_vertical_series() -> None:
         cells.append(_c("D", f"B{row}", "1"))
         cells.append(_c("D", f"C{row}", "2"))
         cells.append(_c("D", f"F{row}", "3"))
+        cells.append(_c("D", f"H{row}", {2: "Rent", 3: "Tax", 4: "Fee"}[row]))
         cells.append(_c("D", f"I{row}", "4"))
     sheet = detect_layout(cells).sheets[0]
     assert [period.period_key for period in sheet.axes[0].periods] == ["2020", "2021", "2022"]
     assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "EBITDA"]
+    listed = [block for block in sheet.blocks if block.kind == "key_value"]
+    assert [row.label for block in listed for row in block.rows] == ["Tax", "Fee"]
 
 
 def test_one_empty_column_keeps_the_next_series() -> None:
@@ -486,7 +490,13 @@ def test_month_ends_down_a_column_stay_a_month_axis() -> None:
     sheet = detect_layout(cells).sheets[0]
     assert sheet.axes[0].transposed is True
     assert sheet.axes[0].grain == "month"
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024-01",
+        "2024-02",
+        "2024-03",
+    ]
     assert [row.label for row in sheet.blocks[0].rows] == ["Выручка"]
+    assert [block.kind for block in sheet.blocks] == ["timeline"]
 
 
 def test_year_ends_down_a_column_stay_a_year_axis() -> None:
@@ -498,7 +508,36 @@ def test_year_ends_down_a_column_stay_a_year_axis() -> None:
     sheet = detect_layout(cells).sheets[0]
     assert sheet.axes[0].transposed is True
     assert sheet.axes[0].grain == "year"
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2021",
+        "2022",
+        "2023",
+        "2024",
+    ]
     assert [row.label for row in sheet.blocks[0].rows] == ["Выручка", "EBITDA"]
+    assert [block.kind for block in sheet.blocks] == ["timeline"]
+
+
+def test_borrowed_year_row_is_the_section_not_a_line() -> None:
+    cells = [
+        _c("P", "A2", "Выручка"),
+        _c("P", "B2", "2024", merge_end_col=5),
+        _c("P", "A3", "Себестоимость"),
+    ]
+    for col, quarter, value in zip(
+        "BCDE", ["1 кв.", "2 кв.", "3 кв.", "4 кв."], ["10", "20", "30", "40"], strict=True
+    ):
+        cells.append(_c("P", f"{col}1", quarter))
+        cells.append(_c("P", f"{col}3", value))
+    sheet = detect_layout(cells).sheets[0]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024Q1",
+        "2024Q2",
+        "2024Q3",
+        "2024Q4",
+    ]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Себестоимость"]
+    assert sheet.blocks[0].rows[0].section_path == ["Выручка"]
 
 
 def test_vertical_captions_are_not_a_closed_list() -> None:

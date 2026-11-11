@@ -37,11 +37,11 @@ from finance_context.layout.periods import (
 )
 from finance_context.layout.rows import (
     _RELATIVE_LABEL,
+    _distinct_year_ruler,
+    _is_bare_year_text,
     _is_counter_row,
     _is_data_row,
     _is_empty_row,
-    _distinct_year_ruler,
-    _is_bare_year_text,
     _is_quarter_token_row,
     _is_starter_row,
     _is_year_banner_row,
@@ -1248,7 +1248,10 @@ def _regular_period_run(keys: list[str]) -> bool:
         positions.append(found)
     if len({grain for grain, _index in positions}) != 1:
         return False
-    steps = [right - left for (_g, left), (_h, right) in zip(positions, positions[1:], strict=False)]
+    steps = [
+        right - left
+        for (_g, left), (_h, right) in zip(positions, positions[1:], strict=False)
+    ]
     if not steps or any(step <= 0 for step in steps) or len(set(steps)) != 1:
         return False
     if positions[0][0] == "day":
@@ -1339,14 +1342,18 @@ def _values_beside(
 def _vertical_axis(
     sheet: str, col: int, run: list[tuple[int, str, str]]
 ) -> tuple[list[int], TimeAxis]:
-    keys = [key for _row, key, _text in run]
+    raw = [key for _row, key, _text in run]
+    grain = infer_grain(raw)
+    # Month-ends and year-ends keep the day on the cell. The published key is
+    # the period: ``2024-01-31`` is ``2024-01``, ``2021-12-31`` is ``2021``.
+    keys = [apply_grain(key, grain) for key in raw]
     periods = [
         AxisPeriod(col=col, row=row_n, text=text, kind="period", period_key=key)
-        for row_n, key, text in run
+        for (row_n, _raw, text), key in zip(run, keys, strict=True)
     ]
     axis = TimeAxis(
         id=f"{sheet}!c{col}r{run[0][0]}",
-        grain=infer_grain(keys),
+        grain=grain,
         header_row=run[0][0],
         periods=periods,
         transposed=True,

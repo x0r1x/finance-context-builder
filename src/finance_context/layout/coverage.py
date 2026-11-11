@@ -41,9 +41,15 @@ def coverage_blocks(
     blocks: list[Block],
     header_rows: set[int],
     hidden_cols: set[int] | None = None,
+    taken: set[tuple[int, int]] | None = None,
 ) -> tuple[list[Block], list[str]]:
-    """Blocks and notes for rows outside every existing block span."""
+    """Blocks and notes for rows outside every existing block span.
+
+    ``taken`` is the period column of a vertical ruler. That cell is not a list
+    label. The other columns of the same row stay free.
+    """
     hidden = hidden_cols or set()
+    by_row = _without_taken(by_row, taken or set())
     spans = _owned_spans(blocks)
     free = [
         row
@@ -68,6 +74,21 @@ def coverage_blocks(
         found.extend(blocks)
         notes.extend(band_notes)
     return found, notes
+
+
+def _without_taken(
+    by_row: dict[int, list[dict]], taken: set[tuple[int, int]]
+) -> dict[int, list[dict]]:
+    if not taken:
+        return by_row
+    return {
+        row_n: [
+            cell
+            for cell in cells
+            if (row_n, int(cell["col"])) not in taken
+        ]
+        for row_n, cells in by_row.items()
+    }
 
 
 def _owned_spans(blocks: list[Block]) -> list[tuple[int, int]]:

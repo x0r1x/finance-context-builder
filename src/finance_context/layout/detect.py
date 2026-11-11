@@ -229,7 +229,13 @@ def _blocks_indexed(
         if axis is not None and axis.row:
             header_rows.add(int(axis.row))
     covered, notes = coverage_blocks(
-        sheet, by_row, date1904, blocks, header_rows, hidden_cols
+        sheet,
+        by_row,
+        date1904,
+        blocks,
+        header_rows,
+        hidden_cols,
+        taken=_vertical_period_cells(axes),
     )
     if covered:
         blocks = sorted(
@@ -237,6 +243,18 @@ def _blocks_indexed(
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
     return blocks, axes, notes
+
+
+def _vertical_period_cells(axes: list[TimeAxis]) -> set[tuple[int, int]]:
+    """Cells of a vertical ruler. The rest of those rows can still be a list."""
+    taken: set[tuple[int, int]] = set()
+    for axis in axes:
+        if not axis.transposed:
+            continue
+        for period in axis.periods:
+            if period.row:
+                taken.add((int(period.row), int(period.col)))
+    return taken
 
 
 def _group_body(
