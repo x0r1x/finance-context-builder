@@ -402,8 +402,12 @@ def _ensure_published_book(settings: Settings, local: Path, job_id: str, relativ
             return
         try:
             republish_file(settings, local, job_id, relative)
-        except Exception:
-            _LOGGER.warning("minio export failed for %s", relative)
+        except Exception as exc:
+            detail = _export_error_detail(exc)
+            if detail is None:
+                _LOGGER.warning("minio export failed for %s", relative)
+            else:
+                _LOGGER.warning("minio export failed for %s: %s", relative, detail)
 
 
 def _session_dest(local: Path, relative: str) -> Path | None:
@@ -549,18 +553,35 @@ def _export_body(
     )
     started = time.monotonic()
     warning: str | None = None
+    failing: str | None = "_complete.json"
     try:
         _put_marker(target, settings.minio_bucket, marker_key, [])
         for local, relative in pairs:
+            failing = relative
             if not local.is_file():
                 raise FileNotFoundError(relative)
             key = object_key(settings.minio_prefix, job_id, relative)
             _put_and_check(target, local, object_url(settings.minio_bucket, key))
             uploaded.append(key)
+            failing = None
+        failing = "_complete.json"
         _put_marker(target, settings.minio_bucket, marker_key, uploaded)
+        failing = None
     except Exception as exc:
         status, detail = _s3_failure(exc)
-        _log_export_failure("minio export failed for job %s", job_id, detail=detail)
+        local_bytes = 0
+        if failing is not None:
+            local_bytes = next(
+                (path.stat().st_size for path, name in pairs if name == failing and path.is_file()),
+                0,
+            )
+        _log_export_failure(
+            "minio export failed for job %s at %s (%s bytes)",
+            job_id,
+            failing or "-",
+            local_bytes,
+            detail=detail or _export_error_detail(exc),
+        )
         # A 403 will not clear the marker either. Skip the second PUT.
         if status != 403:
             try:
@@ -670,6 +691,15 @@ def _s3_failure(exc: BaseException) -> tuple[int | None, str | None]:
             continue
         return status, f"HTTP {status} {code}: {message.strip()}"
     return status, f"HTTP {status}"
+
+
+def _export_error_detail(exc: BaseException) -> str | None:
+    """First line of a memory error. Other text can carry a credential essay."""
+    if isinstance(exc, MemoryError) or type(exc).__name__ == "OutOfMemoryException":
+        lines = str(exc).strip().splitlines()
+        head = lines[0][:300] if lines else ""
+        return f"{type(exc).__name__}: {head}"
+    return None
 
 
 def _log_export_failure(template: str, *args: object, detail: str | None) -> None:

@@ -258,6 +258,37 @@ def test_copy_failure_keeps_the_local_files_and_hides_the_secret(
     assert json.loads(mismatch.objects[prefix + "_complete.json"])["keys"] == []
 
 
+class _OutOfMemory(Exception):
+    pass
+
+
+_OutOfMemory.__name__ = "OutOfMemoryException"
+
+
+def test_memory_failure_logs_the_object_path_and_size(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    context = dest / "context" / "context.json"
+
+    class _Store(_MemoryStore):
+        def put(self, local: Path, url: str) -> None:
+            if url.endswith("context/context.json"):
+                raise _OutOfMemory("Out of Memory Error: failed to allocate data of size 1.0 GiB")
+            super().put(local, url)
+
+    caplog.set_level(logging.WARNING, logger="finance_context.store")
+    assert (
+        export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=_Store())
+        == "minio export failed"
+    )
+    assert f"at context/context.json ({context.stat().st_size} bytes)" in caplog.text
+    assert "OutOfMemoryException: Out of Memory Error:" in caplog.text
+    assert _SECRET not in caplog.text
+
+
 _DENIED = (
     "HTTP Error: HTTP PUT error uploading to 's3://bucket/books/job/_complete.json' "
     "(HTTP 403 Forbidden)\n\n"
