@@ -16,15 +16,19 @@ from finance_context.app.pipeline import Pipeline, _append_export_warning
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import (
     _IMAGE_HTTPFS,
+    _UPLOAD_CHUNK_BYTES,
     DuckDBBatch,
     DuckDBObjectStore,
+    PublishedFile,
     _configure_s3,
+    _s3_filesystem,
     _sql_literal,
     export_succeeded_book,
     object_key,
     read_blob_bytes,
     read_published_file,
     republish_file,
+    stream_local_file,
 )
 from finance_context.store.fs import RowGroupWriter, read_parquet, write_json, write_parquet
 
@@ -75,6 +79,37 @@ class _MemoryStore:
         if self.mismatch:
             return 0
         return len(self.objects[url])
+
+
+class _MemoryHandle:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+        self._offset = 0
+
+    def read(self, size: int) -> bytes:
+        chunk = self._payload[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+    def close(self) -> None:
+        return None
+
+
+def _body(published: PublishedFile) -> bytes:
+    data = b"".join(published)
+    assert published.content_length == len(data)
+    return data
+
+
+def _serve_memory(monkeypatch: pytest.MonkeyPatch, store: _MemoryStore) -> None:
+    """Bucket reads in these tests stay on the memory store, not a live endpoint."""
+
+    def open_object(settings: Settings, url: str) -> PublishedFile:
+        del settings
+        payload = store.objects[url]
+        return PublishedFile(len(payload), _MemoryHandle(payload))
+
+    monkeypatch.setattr("finance_context.store.duckdb_io._open_published_object", open_object)
 
 
 def _minio(**overrides: object) -> Settings:
@@ -391,7 +426,7 @@ def test_published_read_falls_back_to_data_dir(
 
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
     body = read_published_file(_minio(), local, _JOB, "context/context.json")
-    assert body == b'{"ok": true}\n'
+    assert _body(body) == b'{"ok": true}\n'
 
 
 def test_failed_recopy_hides_the_bucket_until_the_marker_is_rewritten(
@@ -417,7 +452,8 @@ def test_failed_recopy_hides_the_bucket_until_the_marker_is_rewritten(
         return Path(uri).read_bytes()
 
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
-    assert read_published_file(settings, local, _JOB, "context/context.json") == published
+    _serve_memory(monkeypatch, store)
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == published
 
     store.fail_on = "context/context.json"
     assert (
@@ -425,11 +461,15 @@ def test_failed_recopy_hides_the_bucket_until_the_marker_is_rewritten(
         == "minio export failed"
     )
     assert json.loads(store.objects[prefix + "_complete.json"])["keys"] == []
-    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        local.read_bytes()
+    )
     cells = book / "raw" / "cells.parquet"
     cells.write_bytes(b"local-only-cells\n")
     assert store.objects[prefix + "raw/cells.parquet"] != b"local-only-cells\n"
-    assert read_published_file(settings, cells, _JOB, "raw/cells.parquet") == b"local-only-cells\n"
+    assert _body(read_published_file(settings, cells, _JOB, "raw/cells.parquet")) == (
+        b"local-only-cells\n"
+    )
 
 
 def test_failed_republish_drops_the_key_so_the_next_read_is_local(
@@ -463,7 +503,7 @@ def test_failed_republish_drops_the_key_so_the_next_read_is_local(
     marker = json.loads(store.objects[marker_url])
     assert markdown_key not in marker["keys"]
     assert other_key in marker["keys"]
-    assert read_published_file(settings, local, _JOB, "context/context.md") == b"new-md\n"
+    assert _body(read_published_file(settings, local, _JOB, "context/context.md")) == b"new-md\n"
 
 
 def test_marker_clear_is_written_again_when_the_opening_put_does_not_commit(
@@ -502,7 +542,7 @@ def test_marker_clear_is_written_again_when_the_opening_put_does_not_commit(
         "minio export failed"
     )
     assert json.loads(store.objects[prefix + "_complete.json"])["keys"] == []
-    assert read_published_file(settings, local, _JOB, "context/context.json") == b'{"v":2}\n'
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == b'{"v":2}\n'
     meta = dest / "meta" / "meta.json"
     meta.parent.mkdir(parents=True, exist_ok=True)
     meta.write_text('{"warnings": ["minio export failed"]}\n', encoding="utf-8")
@@ -510,7 +550,7 @@ def test_marker_clear_is_written_again_when_the_opening_put_does_not_commit(
         json.dumps({"keys": [object_key("team/a", _JOB, "context/context.json")]}, indent=2) + "\n"
     ).encode()
     store.objects[prefix + "context/context.json"] = b'{"v":1}\n'
-    assert read_published_file(settings, local, _JOB, "context/context.json") == b'{"v":2}\n'
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == b'{"v":2}\n'
 
 
 def _memory_read(store: _MemoryStore):
@@ -553,7 +593,10 @@ def test_http_404_is_a_missing_marker_and_a_connection_error_is_not(
         return Path(uri).read_bytes()
 
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", unread)
-    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    _serve_memory(monkeypatch, store)
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        local.read_bytes()
+    )
     assert store.order == []
 
     def missing(uri: str, settings: Settings | None = None) -> bytes:
@@ -565,7 +608,9 @@ def test_http_404_is_a_missing_marker_and_a_connection_error_is_not(
         return Path(uri).read_bytes()
 
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", missing)
-    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        local.read_bytes()
+    )
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
     marker = json.loads(store.objects[prefix + "_complete.json"])
     assert object_key("team/a", _JOB, "context/context.json") in marker["keys"]
@@ -589,20 +634,27 @@ def test_missing_marker_is_filled_from_the_local_book(
         lambda _settings: store,
     )
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
     local = dest / "context" / "context.json"
-    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        local.read_bytes()
+    )
     assert store.order == []
 
     (dest / "meta" / "meta.json").write_text(
         json.dumps({"status": "succeeded", "warnings": []}),
         encoding="utf-8",
     )
-    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        local.read_bytes()
+    )
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
     marker = json.loads(store.objects[prefix + "_complete.json"])
     assert object_key("team/a", _JOB, "context/context.json") in marker["keys"]
     copied = len(store.order)
-    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        local.read_bytes()
+    )
     assert len(store.order) == copied
     stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert stored["warnings"] == []
@@ -630,8 +682,11 @@ def test_one_missing_key_is_republished_without_clearing_the_marker(
         lambda _settings: store,
     )
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
     local = dest / "context" / "context.json"
-    assert read_published_file(settings, local, _JOB, "context/context.json") == local.read_bytes()
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        local.read_bytes()
+    )
     marker = json.loads(store.objects[prefix + "_complete.json"])
     assert other in marker["keys"]
     assert object_key("team/a", _JOB, "context/context.json") in marker["keys"]
@@ -691,7 +746,7 @@ def test_truncated_republish_is_not_served(
     with pytest.raises(OSError, match="size mismatch"):
         republish_file(settings, local, _JOB, "context/context.md", store=store)
     assert markdown_key not in json.loads(store.objects[marker_url])["keys"]
-    assert read_published_file(settings, local, _JOB, "context/context.md") == b"new-md\n"
+    assert _body(read_published_file(settings, local, _JOB, "context/context.md")) == b"new-md\n"
 
 
 def test_requested_row_groups_are_separate_files_stitched_by_pyarrow(tmp_path: Path) -> None:
@@ -861,51 +916,354 @@ def test_compose_documents_minio_without_starting_it_in_production() -> None:
     assert dockerfile.index("USER app") < dockerfile.index("INSTALL httpfs")
 
 
-def test_blob_size_query_projects_size_only(tmp_path: Path) -> None:
-    path = tmp_path / "blob.bin"
-    path.write_bytes(b"abc")
+def test_put_copies_in_chunks_and_size_does_not_read_the_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import duckdb
+    from pyarrow.fs import FileType
 
-    from finance_context.store.duckdb_io import _OBJECT_SIZE_SQL
+    payload = b"a" * (_UPLOAD_CHUNK_BYTES + 3)
+    local = tmp_path / "context.json"
+    local.write_bytes(payload)
+    written: list[bytes] = []
+    built: list[object] = []
 
-    con = duckdb.connect()
-    try:
-        row = con.execute(f"EXPLAIN {_OBJECT_SIZE_SQL}", [str(path)]).fetchone()
-        text = "\n".join(str(cell) for cell in row)
-        assert "Projections: size" in text
-        assert "content" not in text
-        assert con.execute(_OBJECT_SIZE_SQL, [str(path)]).fetchone() == (3,)
-    finally:
-        con.close()
+    class _Dest:
+        def write(self, data: bytes) -> None:
+            written.append(bytes(data))
 
+        def close(self) -> None:
+            return None
 
-def test_object_size_rejects_a_null_length(monkeypatch: pytest.MonkeyPatch) -> None:
-    from contextlib import contextmanager
+        def __enter__(self) -> _Dest:
+            return self
 
-    from finance_context.store.duckdb_io import _OBJECT_SIZE_SQL
+        def __exit__(self, *_args: object) -> None:
+            self.close()
 
-    captured: list[str] = []
+    class _Info:
+        type = FileType.File
+        size = len(payload)
 
-    class _Cursor:
-        def fetchone(self) -> tuple[None]:
-            return (None,)
+    class _Missing:
+        type = FileType.NotFound
+        size = None
 
-    class _Con:
-        def execute(self, sql: str, params: object = None) -> _Cursor:
-            del params
-            captured.append(sql)
-            return _Cursor()
+    class _ChunkFS:
+        def __init__(self) -> None:
+            self.paths: list[str] = []
 
-    @contextmanager
-    def _conn():
-        yield _Con()
+        def open_output_stream(self, path: str) -> _Dest:
+            self.paths.append(path)
+            return _Dest()
 
-    monkeypatch.setattr("finance_context.store.duckdb_io.limited_connection", _conn)
-    monkeypatch.setattr("finance_context.store.duckdb_io._configure_s3", lambda con, settings: None)
+        def get_file_info(self, path: str) -> _Info | _Missing:
+            self.paths.append("size:" + path)
+            if path.endswith("/missing"):
+                return _Missing()
+            return _Info()
+
+        def open_input_stream(self, path: str) -> None:
+            raise AssertionError(path)
+
+    def factory(settings: Settings) -> _ChunkFS:
+        del settings
+        filesystem = _ChunkFS()
+        built.append(filesystem)
+        return filesystem
+
+    def connect(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("duckdb.connect")
+
+    monkeypatch.setattr(duckdb, "connect", connect)
+    monkeypatch.setattr("finance_context.store.duckdb_io._s3_filesystem", factory)
     store = DuckDBObjectStore(_minio())
+    url = "s3://finance-context/team/a/books/job/context/context.json"
+    other = "s3://finance-context/team/a/books/job/context/context.md"
+    store.put(local, url)
+    store.put(local, other)
+    assert store.size(url) == len(payload)
+    assert len(built) == 1
+    assert built[0].paths == [
+        "finance-context/team/a/books/job/context/context.json",
+        "finance-context/team/a/books/job/context/context.md",
+        "size:finance-context/team/a/books/job/context/context.json",
+    ]
+    assert written == [
+        payload[:_UPLOAD_CHUNK_BYTES],
+        payload[_UPLOAD_CHUNK_BYTES:],
+        payload[:_UPLOAD_CHUNK_BYTES],
+        payload[_UPLOAD_CHUNK_BYTES:],
+    ]
     with pytest.raises(OSError, match="missing object"):
-        store.size("s3://finance-context/books/job/raw/cells.parquet")
-    assert captured == [_OBJECT_SIZE_SQL]
+        store.size(url + "/missing")
+
+
+def test_s3_filesystem_uses_path_style(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FS:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("pyarrow.fs.S3FileSystem", _FS)
+    _s3_filesystem(
+        _minio(minio_region="eu-central-1", minio_endpoint="https://s3.internal:9000/")
+    )
+    assert captured["endpoint_override"] == "s3.internal:9000"
+    assert captured["scheme"] == "https"
+    assert captured["region"] == "eu-central-1"
+    assert captured["access_key"] == "minioadmin"
+    assert captured["secret_key"] == _SECRET
+    assert captured["force_virtual_addressing"] is False
+    assert captured["background_writes"] is False
+    http = {}
+
+    class _HTTP:
+        def __init__(self, **kwargs: object) -> None:
+            http.update(kwargs)
+
+    monkeypatch.setattr("pyarrow.fs.S3FileSystem", _HTTP)
+    _s3_filesystem(_minio())
+    assert http["endpoint_override"] == "minio:9000"
+    assert http["scheme"] == "http"
+    assert http["force_virtual_addressing"] is False
+
+
+def test_published_read_streams_the_bucket_in_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import duckdb
+    from pyarrow.fs import FileType
+
+    local = tmp_path / "context" / "context.json"
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"local-not-served")
+    payload = b"b" * (_UPLOAD_CHUNK_BYTES + 5)
+    marker = (
+        json.dumps({"keys": [object_key("team/a", _JOB, "context/context.json")]}) + "\n"
+    ).encode()
+
+    def fake_read(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.endswith("/_complete.json"):
+            return marker
+        raise AssertionError(uri)
+
+    class _In:
+        def __init__(self) -> None:
+            self._offset = 0
+
+        def read(self, size: int) -> bytes:
+            chunk = payload[self._offset : self._offset + size]
+            self._offset += len(chunk)
+            return chunk
+
+        def close(self) -> None:
+            return None
+
+    class _Info:
+        type = FileType.File
+        size = len(payload)
+
+    class _FS:
+        def get_file_info(self, path: str) -> _Info:
+            del path
+            return _Info()
+
+        def open_input_stream(self, path: str) -> _In:
+            del path
+            return _In()
+
+    def connect(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("duckdb.connect")
+
+    monkeypatch.setattr(duckdb, "connect", connect)
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    monkeypatch.setattr("finance_context.store.duckdb_io._s3_filesystem", lambda settings: _FS())
+    body = read_published_file(_minio(), local, _JOB, "context/context.json")
+    assert body.content_length == len(payload)
+    assert list(body) == [payload[:_UPLOAD_CHUNK_BYTES], payload[_UPLOAD_CHUNK_BYTES:]]
+
+
+def test_bucket_read_logs_a_memory_error_and_hides_the_essay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    local = tmp_path / "context" / "context.json"
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"local-bytes")
+    marker = (
+        json.dumps({"keys": [object_key("team/a", _JOB, "context/context.json")]}) + "\n"
+    ).encode()
+
+    def fake_read(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.endswith("/_complete.json"):
+            return marker
+        return Path(uri).read_bytes()
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+
+    def out_of_memory(settings: Settings, url: str) -> PublishedFile:
+        del settings, url
+        raise _OutOfMemory("Out of Memory Error: failed to allocate data of size 1.0 GiB")
+
+    monkeypatch.setattr("finance_context.store.duckdb_io._open_published_object", out_of_memory)
+    caplog.set_level(logging.WARNING, logger="finance_context.store")
+    assert _body(read_published_file(_minio(), local, _JOB, "context/context.json")) == (
+        b"local-bytes"
+    )
+    assert "minio read failed for context/context.json: OutOfMemoryException:" in caplog.text
+
+    def denied(settings: Settings, url: str) -> PublishedFile:
+        del settings, url
+        raise RuntimeError(_DENIED + _SECRET)
+
+    monkeypatch.setattr("finance_context.store.duckdb_io._open_published_object", denied)
+    caplog.clear()
+    assert _body(read_published_file(_minio(), local, _JOB, "context/context.json")) == (
+        b"local-bytes"
+    )
+    assert "HTTP 403 AccessDenied: Access Denied." in caplog.text
+    assert "Authentication Failure" not in caplog.text
+    assert _SECRET not in caplog.text
+
+
+def _error_server(status: int, code: str, message: str) -> tuple[object, dict[str, int]]:
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    payload = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Error><Code>{code}</Code><Message>{message}</Message></Error>"
+    ).encode()
+    counts = {"PUT": 0, "POST": 0, "GET": 0, "HEAD": 0, "DELETE": 0}
+
+    class _Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def _reply(self) -> None:
+            counts[self.command] = counts.get(self.command, 0) + 1
+            self._drain()
+            length = 0 if self.command == "HEAD" else len(payload)
+            self.send_response(status)
+            self.send_header("Content-Type", "application/xml")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(payload)
+
+        def _drain(self) -> None:
+            encoding = self.headers.get("Transfer-Encoding", "")
+            if "chunked" in encoding.lower():
+                while True:
+                    line = self.rfile.readline()
+                    size = int(line.split(b";", 1)[0] or b"0", 16)
+                    if size == 0:
+                        while True:
+                            trailer = self.rfile.readline()
+                            if trailer in {b"\r\n", b"\n", b""}:
+                                break
+                        break
+                    self.rfile.read(size)
+                    self.rfile.read(2)
+                return
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length:
+                self.rfile.read(length)
+
+        def handle_expect_100(self) -> bool:
+            self.send_response_only(100)
+            self.end_headers()
+            return True
+
+        do_PUT = do_GET = do_POST = do_HEAD = do_DELETE = _reply
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            del fmt, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, counts
+
+
+def test_pyarrow_access_denied_skips_the_second_marker_put(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    server, counts = _error_server(403, "AccessDenied", "Access Denied.")
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    raw: list[BaseException] = []
+    try:
+        port = server.server_address[1]
+        settings = _minio(minio_endpoint=f"http://127.0.0.1:{port}")
+        store = DuckDBObjectStore(settings)
+        original = store.put
+
+        def put(local: Path, url: str) -> None:
+            try:
+                original(local, url)
+            except Exception as exc:
+                raw.append(exc)
+                raise
+
+        store.put = put  # type: ignore[method-assign]
+        caplog.set_level(logging.WARNING, logger="finance_context.store")
+        assert (
+            export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
+            == "minio export failed"
+        )
+    finally:
+        server.shutdown()
+    assert raw, counts
+    assert "HTTP 403 AccessDenied: Access Denied." in caplog.text, str(raw[0])
+    assert "Authentication Failure" not in caplog.text
+    assert _SECRET not in caplog.text
+    assert "minio export failed for _complete.json" not in caplog.text
+    # AccessDenied is not retried. One CreateMultipartUpload, and no marker clear.
+    assert counts["PUT"] + counts["POST"] == 1, (counts, str(raw[0]))
+
+
+def test_pyarrow_http_500_clears_the_marker_without_the_essay(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    server, counts = _error_server(500, "SlowDown", "Please reduce your request rate.")
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    raw: list[BaseException] = []
+    try:
+        port = server.server_address[1]
+        settings = _minio(minio_endpoint=f"http://127.0.0.1:{port}")
+        store = DuckDBObjectStore(settings)
+        original = store.put
+
+        def put(local: Path, url: str) -> None:
+            try:
+                original(local, url)
+            except Exception as exc:
+                raw.append(exc)
+                raise
+
+        store.put = put  # type: ignore[method-assign]
+        caplog.set_level(logging.WARNING, logger="finance_context.store")
+        assert (
+            export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
+            == "minio export failed"
+        )
+    finally:
+        server.shutdown()
+    assert raw, counts
+    # PyArrow reports SLOW_DOWN with no HTTP status. SlowDown is 503, and it is
+    # not a 403, so the marker clear still runs.
+    assert "HTTP 503 SlowDown: Please reduce your request rate." in caplog.text, str(raw[0])
+    assert "minio export failed for _complete.json" in caplog.text
+    assert "Authentication Failure" not in caplog.text
+    assert _SECRET not in caplog.text
+    assert counts["POST"] > 1, (counts, str(raw[0]))
 
 
 def test_export_logs_its_own_duration(
@@ -947,3 +1305,33 @@ def test_export_logs_its_own_duration(
         is None
     )
     assert [getattr(record, "event", None) for record in caplog.records] == []
+
+
+def test_document_response_streams_with_content_length(tmp_path: Path) -> None:
+    import anyio
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from finance_context.api.routes.documents import _document_response
+
+    payload = b"z" * (_UPLOAD_CHUNK_BYTES + 9)
+    path = tmp_path / "context.json"
+    path.write_bytes(payload)
+
+    class _Ctx:
+        thread_limiter: object
+
+    app = FastAPI()
+
+    @app.get("/context.json")
+    async def get_context() -> object:
+        ctx = _Ctx()
+        ctx.thread_limiter = anyio.to_thread.current_default_thread_limiter()
+        return _document_response(ctx, stream_local_file(path), "application/json")
+
+    with TestClient(app) as client:
+        response = client.get("/context.json")
+    assert response.status_code == 200
+    assert response.headers["content-length"] == str(len(payload))
+    assert response.content == payload
+    assert response.headers["content-type"].startswith("application/json")
