@@ -15,6 +15,8 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from finance_context.app.pipeline import Pipeline, _append_export_warning
 from finance_context.settings import Settings
 from finance_context.store.duckdb_io import (
+    _EXPORT_ATTEMPTS,
+    _EXPORT_RETRY_PAUSE_SEC,
     _IMAGE_HTTPFS,
     _UPLOAD_CHUNK_BYTES,
     DuckDBBatch,
@@ -75,10 +77,19 @@ class _MemoryStore:
         self.objects[url] = local.read_bytes()
         self.order.append(url)
 
+    def get(self, url: str) -> bytes:
+        try:
+            return self.objects[url]
+        except KeyError:
+            raise FileNotFoundError(url) from None
+
     def size(self, url: str) -> int:
         if self.mismatch:
             return 0
-        return len(self.objects[url])
+        try:
+            return len(self.objects[url])
+        except KeyError:
+            raise FileNotFoundError(url) from None
 
 
 class _MemoryHandle:
@@ -176,8 +187,7 @@ def test_export_lists_every_book_key_and_writes_the_marker_last(tmp_path: Path) 
     )
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
     expected = [prefix + name for name in (*_SHARED, *_SESSION)]
-    assert store.order[0] == prefix + "_complete.json"
-    assert store.order[1:-1] == expected
+    assert store.order[:-1] == expected
     assert store.order[-1] == prefix + "_complete.json"
     for name in _LOCAL_ONLY:
         assert all(name not in url for url in store.order)
@@ -280,7 +290,7 @@ def test_copy_failure_keeps_the_local_files_and_hides_the_secret(
     assert warning == "minio export failed"
     assert _SECRET not in warning
     assert _SECRET not in caplog.text
-    assert store.attempts == 2
+    assert store.attempts == 1
     assert store.order == []
     assert (dest / "meta" / "meta.json").is_file()
     mismatch = _MemoryStore(mismatch=True)
@@ -289,8 +299,8 @@ def test_copy_failure_keeps_the_local_files_and_hides_the_secret(
         == "minio export failed"
     )
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    assert mismatch.order == [prefix + "_complete.json", prefix + "_complete.json"]
-    assert json.loads(mismatch.objects[prefix + "_complete.json"])["keys"] == []
+    assert mismatch.order == [prefix + "source/source.xlsx"]
+    assert prefix + "_complete.json" not in mismatch.objects
 
 
 class _OutOfMemory(Exception):
@@ -360,21 +370,88 @@ _SLOW = (
 )
 
 
-def test_http_500_retries_the_marker_and_logs_the_s3_code(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_http_500_retries_the_upload_and_logs_the_s3_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     book = tmp_path / "book"
     dest = tmp_path / "dest"
     _fill(book, dest)
     store = _MemoryStore(fail=RuntimeError(_SLOW))
+    pauses: list[float] = []
+    monkeypatch.setattr(
+        "finance_context.store.duckdb_io.time.sleep",
+        lambda seconds: pauses.append(seconds),
+    )
     caplog.set_level(logging.WARNING, logger="finance_context.store")
     assert (
         export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store)
         == "minio export failed"
     )
-    assert store.attempts == 2
+    assert store.attempts == _EXPORT_ATTEMPTS
+    assert pauses == [_EXPORT_RETRY_PAUSE_SEC] * (_EXPORT_ATTEMPTS - 1)
     assert "HTTP 500 SlowDown: Please reduce your request rate." in caplog.text
     assert "Authentication Failure" not in caplog.text
+
+
+def test_second_export_skips_a_key_whose_size_matches(tmp_path: Path) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    settings = _minio()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    copied = list(store.order)
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    assert store.order == copied
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    local = dest / "context" / "context.json"
+    local.write_bytes(b'{"v":2}\n')
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    # The key was already listed, so a same-size check does not rewrite the marker.
+    assert store.order[len(copied) :] == [prefix + "context/context.json"]
+    marker = json.loads(store.objects[prefix + "_complete.json"])
+    assert object_key("team/a", _JOB, "context/context.json") in marker["keys"]
+    assert len(marker["keys"]) == len(_SHARED) + len(_SESSION)
+
+
+def test_missing_local_file_does_not_drop_the_other_keys(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    settings = _minio()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    missing = dest / "context" / "context.json"
+    missing.unlink()
+    caplog.set_level(logging.WARNING, logger="finance_context.store")
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    assert "minio export skipped missing context/context.json" in caplog.text
+    keys = json.loads(store.objects[f"s3://finance-context/team/a/books/{_JOB}/_complete.json"])[
+        "keys"
+    ]
+    assert object_key("team/a", _JOB, "context/context.json") in keys
+    assert object_key("team/a", _JOB, "raw/cells.parquet") in keys
+    assert len(keys) == len(_SHARED) + len(_SESSION)
+
+
+def test_http_404_is_not_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore(fail=RuntimeError("HTTP Error: missing object (HTTP 404 Not Found)"))
+    pauses: list[float] = []
+    monkeypatch.setattr(
+        "finance_context.store.duckdb_io.time.sleep",
+        lambda seconds: pauses.append(seconds),
+    )
+    assert (
+        export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store)
+        == "minio export failed"
+    )
+    assert store.attempts == 1
+    assert pauses == []
 
 
 def test_local_read_blob_does_not_open_duckdb(
@@ -460,7 +537,9 @@ def test_failed_recopy_hides_the_bucket_until_the_marker_is_rewritten(
         export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
         == "minio export failed"
     )
-    assert json.loads(store.objects[prefix + "_complete.json"])["keys"] == []
+    keys = json.loads(store.objects[prefix + "_complete.json"])["keys"]
+    assert object_key("team/a", _JOB, "context/context.json") not in keys
+    assert object_key("team/a", _JOB, "raw/cells.parquet") in keys
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
         local.read_bytes()
     )
@@ -468,7 +547,7 @@ def test_failed_recopy_hides_the_bucket_until_the_marker_is_rewritten(
     cells.write_bytes(b"local-only-cells\n")
     assert store.objects[prefix + "raw/cells.parquet"] != b"local-only-cells\n"
     assert _body(read_published_file(settings, cells, _JOB, "raw/cells.parquet")) == (
-        b"local-only-cells\n"
+        store.objects[prefix + "raw/cells.parquet"]
     )
 
 
@@ -506,7 +585,7 @@ def test_failed_republish_drops_the_key_so_the_next_read_is_local(
     assert _body(read_published_file(settings, local, _JOB, "context/context.md")) == b"new-md\n"
 
 
-def test_marker_clear_is_written_again_when_the_opening_put_does_not_commit(
+def test_failed_marker_write_keeps_the_listed_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     book = tmp_path / "book"
@@ -516,6 +595,11 @@ def test_marker_clear_is_written_again_when_the_opening_put_does_not_commit(
     store = _MemoryStore()
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    marker_url = prefix + "_complete.json"
+    dropped = object_key("team/a", _JOB, "graph/graph.md")
+    listed = json.loads(store.objects[marker_url])
+    listed["keys"] = [key for key in listed["keys"] if key != dropped]
+    store.objects[marker_url] = (json.dumps(listed, indent=2) + "\n").encode()
     local = dest / "context" / "context.json"
     local.write_bytes(b'{"v":2}\n')
     skipped = {"done": False}
@@ -538,10 +622,14 @@ def test_marker_clear_is_written_again_when_the_opening_put_does_not_commit(
         return Path(uri).read_bytes()
 
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    _serve_memory(monkeypatch, store)
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) == (
         "minio export failed"
     )
-    assert json.loads(store.objects[prefix + "_complete.json"])["keys"] == []
+    kept = json.loads(store.objects[marker_url])["keys"]
+    assert dropped not in kept
+    assert object_key("team/a", _JOB, "raw/cells.parquet") in kept
+    assert len(kept) == len(_SHARED) + len(_SESSION) - 1
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == b'{"v":2}\n'
     meta = dest / "meta" / "meta.json"
     meta.parent.mkdir(parents=True, exist_ok=True)
@@ -1190,8 +1278,9 @@ def _error_server(status: int, code: str, message: str) -> tuple[object, dict[st
 
 
 def test_pyarrow_access_denied_skips_the_second_marker_put(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    monkeypatch.setattr("finance_context.store.duckdb_io.time.sleep", lambda _seconds: None)
     server, counts = _error_server(403, "AccessDenied", "Access Denied.")
     book = tmp_path / "book"
     dest = tmp_path / "dest"
@@ -1218,18 +1307,20 @@ def test_pyarrow_access_denied_skips_the_second_marker_put(
         )
     finally:
         server.shutdown()
-    assert raw, counts
-    assert "HTTP 403 AccessDenied: Access Denied." in caplog.text, str(raw[0])
+    detail = str(raw[0]) if raw else caplog.text
+    # The marker read is a HEAD, so the XML message is not in the error.
+    assert "HTTP 403 AccessDenied: No response body." in caplog.text, detail
     assert "Authentication Failure" not in caplog.text
     assert _SECRET not in caplog.text
     assert "minio export failed for _complete.json" not in caplog.text
-    # AccessDenied is not retried. One CreateMultipartUpload, and no marker clear.
-    assert counts["PUT"] + counts["POST"] == 1, (counts, str(raw[0]))
+    # AccessDenied is not retried, and a 403 does not write the marker again.
+    assert sum(counts.values()) == 1, (counts, detail)
 
 
-def test_pyarrow_http_500_clears_the_marker_without_the_essay(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_pyarrow_http_500_retries_without_the_essay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    monkeypatch.setattr("finance_context.store.duckdb_io.time.sleep", lambda _seconds: None)
     server, counts = _error_server(500, "SlowDown", "Please reduce your request rate.")
     book = tmp_path / "book"
     dest = tmp_path / "dest"
@@ -1256,14 +1347,13 @@ def test_pyarrow_http_500_clears_the_marker_without_the_essay(
         )
     finally:
         server.shutdown()
-    assert raw, counts
-    # PyArrow reports SLOW_DOWN with no HTTP status. SlowDown is 503, and it is
-    # not a 403, so the marker clear still runs.
-    assert "HTTP 503 SlowDown: Please reduce your request rate." in caplog.text, str(raw[0])
-    assert "minio export failed for _complete.json" in caplog.text
+    detail = str(raw[0]) if raw else caplog.text
+    # HeadObject has no XML body, so the status is logged without the SlowDown name.
+    assert "HTTP 500: No response body." in caplog.text, detail
     assert "Authentication Failure" not in caplog.text
     assert _SECRET not in caplog.text
-    assert counts["POST"] > 1, (counts, str(raw[0]))
+    assert counts["HEAD"] >= _EXPORT_ATTEMPTS, (counts, detail)
+    assert counts["PUT"] + counts["POST"] == 0, (counts, detail)
 
 
 def test_export_logs_its_own_duration(

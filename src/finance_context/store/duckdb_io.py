@@ -61,6 +61,10 @@ _AWS_DURING = re.compile(
     r"AWS Error ([A-Z][A-Z0-9_]*) during \S+ operation: ([^\r\n]{1,160})"
 )
 _AWS_BRACKET = re.compile(r"AWS Error \[code (\d+)\]: ([^\r\n]{1,160})")
+# HeadObject has no XML body, so PyArrow reports the status and not the S3 code.
+_AWS_HTTP_STATUS = re.compile(
+    r"\(HTTP status (\d{3})\) during \S+ operation: ([^\r\n]{1,160})"
+)
 _AWS_RESPONSE_CODE = re.compile(r"HTTP response code: (\d{3})")
 _AWS_NAME_STATUS = {
     "ACCESS_DENIED": 403,
@@ -95,8 +99,21 @@ _SPILL_CEILING_BYTES = 2 << 30
 _SPILL_RESERVE_BYTES = 1 << 30
 
 
+# First try plus three repeats. A SlowDown or a dropped connection gets a pause.
+# 403 and 404 are not repeated: another attempt would get the same answer.
+_EXPORT_ATTEMPTS = 4
+_EXPORT_RETRY_PAUSE_SEC = 1.0
+_NETWORK_ERROR = re.compile(
+    r"NETWORK_CONNECTION|REQUEST_TIMEOUT|Could not connect|Connection refused|"
+    r"timed out|Timeout|Temporary failure|Name or service not known",
+    re.IGNORECASE,
+)
+
+
 class ObjectStore(Protocol):
     def put(self, local: Path, url: str) -> None: ...
+
+    def get(self, url: str) -> bytes: ...
 
     def size(self, url: str) -> int: ...
 
@@ -611,11 +628,10 @@ def export_succeeded_book(
 ) -> str | None:
     """Copy a finished book into the bucket. ``None`` means nothing to report.
 
-    Empty MinIO settings return immediately. The copy clears the completion
-    marker before it replaces objects, then writes the marker again only after
-    every key. A failed copy tries to leave the marker empty. If that write
-    also fails, the previous marker stays. The returned warning keeps reads
-    on the local files.
+    Empty MinIO settings return immediately. A key whose bucket object is
+    already the same size is left in place. A failed copy drops that key and
+    leaves the others. A missing local file is skipped. The returned warning
+    keeps reads on the local files.
     """
     if not settings.minio_configured():
         return None
@@ -635,7 +651,7 @@ def _export_body(
     pairs = [(book / name, name) for name in _SHARED]
     pairs.extend((dest / name, name) for name in _SESSION)
     marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
-    uploaded: list[str] = []
+    confirmed: list[str] = []
     log_event(
         _LOGGER,
         logging.INFO,
@@ -646,23 +662,38 @@ def _export_body(
     started = time.monotonic()
     warning: str | None = None
     failing: str | None = "_complete.json"
+    existed = False
+    listed: list[str] = []
     try:
-        _put_marker(target, settings.minio_bucket, marker_key, [])
+        existed, listed = _read_marker_keys(target, settings, job_id)
         for local, relative in pairs:
             failing = relative
-            if not local.is_file():
-                raise FileNotFoundError(relative)
             key = object_key(settings.minio_prefix, job_id, relative)
-            _put_and_check(target, local, object_url(settings.minio_bucket, key))
-            uploaded.append(key)
+            if not local.is_file():
+                _LOGGER.warning("minio export skipped missing %s", relative)
+                continue
+            url = object_url(settings.minio_bucket, key)
+            if _remote_size_matches(target, local, url):
+                confirmed.append(key)
+                continue
+
+            def upload(local: Path = local, url: str = url) -> None:
+                _put_and_check(target, local, url)
+
+            _call_with_retry(upload)
+            confirmed.append(key)
             failing = None
         failing = "_complete.json"
-        _put_marker(target, settings.minio_bucket, marker_key, uploaded)
+        final = _keys_to_publish(pairs, confirmed, listed, settings, job_id)
+        if not existed or final != listed:
+            _call_with_retry(
+                lambda: _put_marker(target, settings.minio_bucket, marker_key, final)
+            )
         failing = None
     except Exception as exc:
         status, detail = _s3_failure(exc)
         local_bytes = 0
-        if failing is not None:
+        if failing is not None and failing != "_complete.json":
             local_bytes = next(
                 (path.stat().st_size for path, name in pairs if name == failing and path.is_file()),
                 0,
@@ -674,14 +705,23 @@ def _export_body(
             local_bytes,
             detail=detail or _export_error_detail(exc),
         )
-        # A 403 will not clear the marker either. Skip the second PUT.
-        if status != 403:
+        # 403 and 404 will not update the marker either. Any other failure
+        # drops only the key that did not land, and leaves the rest listed.
+        if status not in {403, 404} and failing not in {None, "_complete.json"}:
+            failed_key = object_key(settings.minio_prefix, job_id, failing)
             try:
-                _put_marker(target, settings.minio_bucket, marker_key, [])
-            except Exception as clear_exc:
+                _drop_failed_key(
+                    target,
+                    settings,
+                    marker_key,
+                    listed,
+                    failed_key,
+                    existed=existed,
+                )
+            except Exception as drop_exc:
                 _log_export_failure(
                     "minio export failed for _complete.json",
-                    detail=_s3_failure(clear_exc)[1],
+                    detail=_s3_failure(drop_exc)[1] or _export_error_detail(drop_exc),
                 )
         warning = _EXPORT_WARNING
     log_event(
@@ -690,10 +730,133 @@ def _export_body(
         "export_done",
         "minio export done",
         duration_ms=int((time.monotonic() - started) * 1000),
-        objects=len(uploaded),
+        objects=len(confirmed),
         ok=warning is None,
     )
     return warning
+
+
+def _export_retryable(exc: BaseException) -> bool:
+    """Network, HTTP 5xx, and SlowDown. A 403 or 404 does not change on retry."""
+    if isinstance(exc, (MemoryError, FileNotFoundError, ValueError)):
+        return False
+    if type(exc).__name__ == "OutOfMemoryException":
+        return False
+    text = str(exc)
+    if "size mismatch" in text:
+        return False
+    status, detail = _s3_failure(exc)
+    if status in {403, 404}:
+        return False
+    if (detail and "SlowDown" in detail) or "SlowDown" in text or "SLOW_DOWN" in text:
+        return True
+    if status is not None and status >= 500:
+        return True
+    if status is not None:
+        return False
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    if type(exc).__name__ in {"IOException", "ArrowIOError"}:
+        return True
+    return _NETWORK_ERROR.search(text) is not None
+
+
+def _call_with_retry(action: Any) -> Any:
+    attempt = 1
+    while True:
+        try:
+            return action()
+        except Exception as exc:
+            if attempt >= _EXPORT_ATTEMPTS or not _export_retryable(exc):
+                raise
+            time.sleep(_EXPORT_RETRY_PAUSE_SEC)
+            attempt += 1
+
+
+def _is_missing_object(exc: BaseException) -> bool:
+    if isinstance(exc, FileNotFoundError):
+        return True
+    status, _detail = _s3_failure(exc)
+    if status == 404:
+        return True
+    text = str(exc)
+    return "NoSuchKey" in text or "HTTP 404" in text
+
+
+def _read_marker_keys(
+    store: ObjectStore, settings: Settings, job_id: str
+) -> tuple[bool, list[str]]:
+    """``False`` means the marker object is absent. The key order is kept."""
+    url = object_url(
+        settings.minio_bucket,
+        object_key(settings.minio_prefix, job_id, "_complete.json"),
+    )
+
+    def read() -> list[str]:
+        parsed = json.loads(store.get(url))
+        keys = parsed.get("keys") if isinstance(parsed, dict) else None
+        if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+            raise ValueError("marker")
+        return list(keys)
+
+    try:
+        return True, _call_with_retry(read)
+    except Exception as exc:
+        if _is_missing_object(exc):
+            return False, []
+        raise
+
+
+def _remote_size_matches(store: ObjectStore, local: Path, url: str) -> bool:
+    def probe() -> int:
+        return store.size(url)
+
+    try:
+        remote = _call_with_retry(probe)
+    except Exception as exc:
+        if _is_missing_object(exc):
+            return False
+        raise
+    return remote == local.stat().st_size
+
+
+def _keys_to_publish(
+    pairs: list[tuple[Path, str]],
+    confirmed: list[str],
+    listed: list[str],
+    settings: Settings,
+    job_id: str,
+) -> list[str]:
+    """Confirmed keys, plus a listed key whose local file is gone."""
+    confirmed_set = set(confirmed)
+    listed_set = set(listed)
+    final: list[str] = []
+    for local, relative in pairs:
+        key = object_key(settings.minio_prefix, job_id, relative)
+        if key in confirmed_set or (key in listed_set and not local.is_file()):
+            final.append(key)
+    return final
+
+
+def _drop_failed_key(
+    store: ObjectStore,
+    settings: Settings,
+    marker_key: str,
+    listed: list[str],
+    failed_key: str,
+    *,
+    existed: bool,
+) -> None:
+    if failed_key not in listed:
+        return
+    updated = [key for key in listed if key != failed_key]
+    if not existed and not updated:
+        return
+
+    def write() -> None:
+        _put_marker(store, settings.minio_bucket, marker_key, updated)
+
+    _call_with_retry(write)
 
 
 def _export_warning_recorded(local: Path, relative: str) -> bool:
@@ -725,10 +888,25 @@ class DuckDBObjectStore:
                     break
                 dest.write(chunk)
 
+    def get(self, url: str) -> bytes:
+        filesystem = self._filesystem()
+        path = _s3_object_path(url)
+        info = filesystem.get_file_info(path)
+        if info.type != pafs.FileType.File or info.size is None:
+            raise FileNotFoundError(f"missing object {url}")
+        handle = filesystem.open_input_stream(path)
+        try:
+            payload = handle.read()
+        finally:
+            handle.close()
+        if not payload:
+            return b""
+        return payload if isinstance(payload, bytes) else bytes(payload)
+
     def size(self, url: str) -> int:
         info = self._filesystem().get_file_info(_s3_object_path(url))
         if info.type != pafs.FileType.File or info.size is None:
-            raise OSError(f"missing object {url}")
+            raise FileNotFoundError(f"missing object {url}")
         return int(info.size)
 
     def _filesystem(self) -> Any:
@@ -806,6 +984,10 @@ def _pyarrow_s3_failure(text: str) -> tuple[int | None, str | None]:
             return None, None
         message = during.group(2).strip()
         return status, f"HTTP {status} {_AWS_PUBLIC_NAME.get(token, token)}: {message}"
+    http_status = _AWS_HTTP_STATUS.search(text)
+    if http_status:
+        status = int(http_status.group(1))
+        return status, f"HTTP {status}: {http_status.group(2).strip()}"
     response = _AWS_RESPONSE_CODE.search(text)
     if response is None:
         return None, None
