@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from finance_context.excel.a1 import format_addr
+from finance_context.excel.a1 import format_addr, value_coord
 from finance_context.graph.models import FormulaLink
 from finance_context.labels import own_label_contains
 from finance_context.models.context import BlockRow, ContextDocument, ContextPeriod, FinancialBlock
@@ -224,7 +224,8 @@ def _timeline_observation(
     normalized: str | None,
 ) -> Observation:
     value, value_status = _cache(text, status)
-    cell = format_addr(period.col, row.row)
+    col, line = value_coord(row.value_col, period.row, period.col, row.row)
+    cell = format_addr(col, line)
     return Observation(
         row_key=row.row_key,
         label=row.label,

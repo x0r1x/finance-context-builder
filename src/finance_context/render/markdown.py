@@ -7,7 +7,7 @@ from pathlib import Path
 
 from finance_context.context.measure import Measure
 from finance_context.context.series import format_number
-from finance_context.excel.a1 import index_to_col
+from finance_context.excel.a1 import index_to_col, value_coord
 from finance_context.layout.cells import parse_number
 from finance_context.models.context import (
     BlockRow,
@@ -20,7 +20,7 @@ from finance_context.store.fs import atomic_replace, atomic_write_bytes, tempora
 
 _MD_ESCAPE = str.maketrans({"|": "\\|", "\n": " "})
 # Bump when period-cell text changes, so a finished job rewrites context.md.
-MARKDOWN_RENDERER = "structure-columns"
+MARKDOWN_RENDERER = "transposed-cells"
 _RENDERER_STAMP = "context.md.renderer"
 # Per-job sidecars written while rows are streamed. Render prepends the header.
 MARKDOWN_BODY = ".context.md.body"
@@ -352,7 +352,12 @@ def _markdown_tables(
             headers = list(block.periods)
         else:
             headers = [
-                {"text": period.text, "period_key": period.period_key, "col": period.col}
+                {
+                    "text": period.text,
+                    "period_key": period.period_key,
+                    "col": period.col,
+                    **({"row": period.row} if period.row else {}),
+                }
                 for period in axis.periods
             ]
         heading = f"### `{axis.id}`" if multi else None
@@ -601,10 +606,16 @@ def _series_cell(
 
 def _cell_addr(row: BlockRow, period: dict) -> str:
     """Graph and trace key for this period cell. The axis table is not a cell."""
-    letter = _column_letter(period.get("col"))
-    if not letter or not row.sheet or not row.row:
+    col, line = value_coord(
+        row.value_col,
+        period.get("row"),
+        int(period.get("col") or 0),
+        row.row,
+    )
+    letter = _column_letter(col)
+    if not letter or not row.sheet or not line:
         return ""
-    return f"{row.sheet}!{letter}{row.row}"
+    return f"{row.sheet}!{letter}{line}"
 
 
 def _percent_amount(text: str) -> str | None:
@@ -661,10 +672,13 @@ def _period_label(header: dict) -> str:
     text = str(header.get("text") or "").strip()
     key = str(header.get("period_key") or "").strip()
     name = key if _prefers_period_key(text, key) else (text or key)
-    letter = _column_letter(header.get("col"))
-    if name and letter and name != letter:
-        return f"{name} ({letter})"
-    return name or letter
+    if header.get("row"):
+        mark = str(int(header["row"]))
+    else:
+        mark = _column_letter(header.get("col"))
+    if name and mark and name != mark:
+        return f"{name} ({mark})"
+    return name or mark
 
 
 def _prefers_period_key(text: str, key: str) -> bool:

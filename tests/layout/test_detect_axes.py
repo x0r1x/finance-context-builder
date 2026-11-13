@@ -419,7 +419,11 @@ def test_fact_marker_overrides_forecast_banner() -> None:
     assert [(row.label, row.kind) for row in rows] == [("Прогноз", "abstract"), ("Revenue", "fact")]
 
 
-def test_year_forward_fill_under_forecast_banner() -> None:
+def test_uneven_borrowed_years_are_not_a_quarter_axis() -> None:
+    """2026 on Q1 and 2027 on Q3 fill 2026Q2 then 2027Q3. That jump is not a ruler.
+
+    A year written on each quarter of an even run still becomes an axis.
+    """
     cells = [
         _c("P&L", "A1", "Прогноз"),
         _c("P&L", "B2", "2026"),
@@ -434,10 +438,12 @@ def test_year_forward_fill_under_forecast_banner() -> None:
         _c("P&L", "D4", "3"),
         _c("P&L", "E4", "4"),
     ]
-    layout = detect_layout(cells)
-    headers = layout.sheets[0].blocks[0].axis.headers
-    assert [h.period_key for h in headers] == ["2026Q1", "2026Q2", "2027Q3", "2027Q4"]
-    assert [marker_token(h.variant) for h in headers] == ["", "", "", ""]
+    sheet = detect_layout(cells).sheets[0]
+    assert sheet.axes == []
+    block = sheet.blocks[0]
+    assert block.kind == "matrix"
+    assert [header.period_key for header in block.axis.headers] == ["c2", "c3", "c4", "c5"]
+    assert [row.label for row in block.rows] == ["Revenue"]
 
 
 def test_start_end_period_pair_prefers_end() -> None:

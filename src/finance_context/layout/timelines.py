@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from finance_context.excel.a1 import value_coord
 from finance_context.layout.axes import _derived_axis
 from finance_context.layout.cells import _cell_at, _text
 from finance_context.layout.models import (
@@ -103,7 +104,7 @@ def _timeline_flags(
     items: list[tuple[str, tuple[bool, ...]]] = []
     for row in rows:
         bits = tuple(
-            _flag_bit(by_addr.get((sheet.name, row.row, period.col)), date1904)
+            _flag_bit(_flag_addr(sheet.name, row, period, by_addr), date1904)
             for period in periods
         )
         items.append((row.label, bits))
@@ -206,6 +207,21 @@ def _has_explicit_marker(axis: TimeAxis) -> bool:
     return any(period.explicit_role or period.variant for period in axis.periods)
 
 
+def _flag_addr(sheet: str, row, period, by_addr: dict) -> dict | None:
+    """Flag bit of one period. A transposed line reads down its own column."""
+    col, line = value_coord(
+        row.value_col, getattr(period, "row", None), period.col, row.row
+    )
+    return by_addr.get((sheet, line, col))
+
+
+def _flag_on_row(row, period, by_row: dict[int, list[dict]]) -> dict | None:
+    col, line = value_coord(
+        row.value_col, getattr(period, "row", None), period.col, row.row
+    )
+    return _cell_at(by_row.get(line, []), col)
+
+
 def _flag_bit(cell: dict | None, date1904: bool) -> bool:
     if cell is None:
         return False
@@ -233,7 +249,7 @@ def _flag_fingerprint(
     items: list[tuple[str, tuple[bool, ...]]] = []
     for row in rows:
         bits = tuple(
-            _flag_bit(_cell_at(by_row.get(row.row, []), period.col), date1904)
+            _flag_bit(_flag_on_row(row, period, by_row), date1904)
             for period in axis.periods
         )
         items.append((row.label, bits))

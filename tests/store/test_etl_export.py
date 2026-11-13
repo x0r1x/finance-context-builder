@@ -102,7 +102,7 @@ def _fill(book: Path, dest: Path) -> None:
     (book / ".lock").write_text("lock", encoding="utf-8")
     (book / "stages.json").write_text("{}\n", encoding="utf-8")
     (dest / "context" / "context.md.renderer").parent.mkdir(parents=True, exist_ok=True)
-    (dest / "context" / "context.md.renderer").write_text("structure-columns\n", encoding="utf-8")
+    (dest / "context" / "context.md.renderer").write_text("transposed-cells\n", encoding="utf-8")
 
 
 def test_empty_minio_settings_do_not_touch_the_store(tmp_path: Path) -> None:
@@ -747,7 +747,7 @@ def test_pipeline_records_the_warning_and_does_not_export_a_reuse(
     assert calls == ["job-test"]
     assert published == ["context/context.md"]
     assert (dest / "context" / "context.md.renderer").read_text(encoding="utf-8") == (
-        "structure-columns\n"
+        "transposed-cells\n"
     )
 
     def fail_republish(

@@ -32,6 +32,10 @@ class _CellIndex:
         for sheet in layout.sheets:
             for block in sheet.blocks:
                 for row in block.rows:
+                    # A transposed line shares the label row with its siblings.
+                    # Indexing it here would hide them, and a horizontal row.
+                    if row.value_col:
+                        continue
                     self.row_index[(sheet.name, row.row)] = (block, row)
         buckets: dict[str, list[tuple[int, str]]] = {}
         for (name, row_n), (block, _layout_row) in self.row_index.items():
@@ -67,6 +71,9 @@ def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation
     Cells of one sheet row are contiguous, which is how ``ir/cells.parquet`` is
     stored and how ``load_relation_cells`` yields them. The row is reduced to a
     pattern and its AST strings are dropped before the next row.
+
+    A transposed line is a column, so it gets none of these relations. The graph
+    still links each of its formula cells once ``row_key`` and ``period_id`` are set.
     """
     book = _CellIndex(layout)
     periods: dict[tuple[str, int], list[list[int]]] = {}
@@ -74,6 +81,10 @@ def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation
         for block in sheet.blocks:
             cols = relation_period_cols(sheet, block)
             for layout_row in block.rows:
+                # The scanner reads one sheet row across period columns. A
+                # transposed line is a column, so that read would be the label.
+                if layout_row.value_col:
+                    continue
                 periods.setdefault((sheet.name, layout_row.row), []).append(cols)
     patterns: dict[tuple[str, int, tuple[int, ...]], RowPattern] = {}
     current: tuple[str, int] | None = None
@@ -105,6 +116,8 @@ def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation
         for block in sheet.blocks:
             keyed = tuple(relation_period_cols(sheet, block))
             for layout_row in block.rows:
+                if layout_row.value_col:
+                    continue
                 pattern = patterns.get((sheet.name, layout_row.row, keyed))
                 if pattern is None:
                     continue

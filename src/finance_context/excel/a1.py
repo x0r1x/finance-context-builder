@@ -58,6 +58,22 @@ def format_addr(col: int, row: int) -> str:
     return f"{index_to_col(col)}{row}"
 
 
+def value_coord(
+    value_col: int | None,
+    period_row: int | None,
+    period_col: int,
+    line_row: int,
+) -> tuple[int, int]:
+    """Column and row of one period's value.
+
+    A transposed line reads ``(value_col, period_row)``. A horizontal line
+    reads ``(period_col, line_row)``.
+    """
+    if value_col and period_row:
+        return int(value_col), int(period_row)
+    return int(period_col), int(line_row)
+
+
 def is_derived_addr(addr: str, col: int, row: int) -> bool:
     """True when ``addr`` is exactly ``format_addr(col, row)``."""
     letters = index_to_col(col)

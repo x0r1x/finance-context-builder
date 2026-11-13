@@ -109,20 +109,162 @@ def _row_layers(row_cells: list[dict], date1904: bool) -> set[str]:
 def _is_starter_row(row_cells: list[dict], date1904: bool) -> bool:
     calendar = 0
     bare_only = True
+    texts: list[str] = []
     for cell in row_cells:
         text = _text(cell, date1904)
+        if not text:
+            continue
+        # A number is never a quarter token. Years still count as calendar hits.
+        if _is_number(text):
+            if is_calendar_hit(classify_header(text)):
+                calendar += 1
+                if not _is_bare_year_text(text):
+                    bare_only = False
+            continue
+        texts.append(text)
         if not is_calendar_hit(classify_header(text)):
             continue
         calendar += 1
         if not _is_bare_year_text(text):
             bare_only = False
+    # A row of "4Q" / "1 кв." is a header even when no year sits in the same cells.
+    # Two tokens are a note. CFS keeps a run only from three periods.
     if calendar < 2:
-        return False
+        quarters = 0
+        for text in texts:
+            atom = classify_atom(text)
+            if atom is not None and atom.kind == "quarter_token":
+                quarters += 1
+        return quarters >= 3
     # Dates, quarters and "2025E" are headers. Bare years are a header only when
     # the visible run is non-decreasing, with one positive step if it advances.
     if not bare_only:
         return True
     return _bare_years_are_header(row_cells, date1904)
+
+
+def _is_quarter_token_row(row_cells: list[dict], date1904: bool) -> bool:
+    """True when the row is quarter tokens such as ``4Q`` or ``1 кв.``."""
+    quarters = 0
+    for cell in row_cells:
+        text = _text(cell, date1904)
+        if not text or _is_number(text):
+            if text and is_calendar_hit(classify_header(text)):
+                return False
+            continue
+        if is_calendar_hit(classify_header(text)):
+            return False
+        atom = classify_atom(text)
+        if atom is not None and atom.kind == "quarter_token":
+            quarters += 1
+    return quarters >= 3
+
+
+def _is_year_banner_row(row_cells: list[dict], date1904: bool) -> bool:
+    """Years above a quarter row. A line name left of the first year is not one."""
+    years = 0
+    first_year: int | None = None
+    left_label = False
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        col = int(cell["col"])
+        if _is_bare_year_text(text):
+            years += 1
+            if first_year is None or col < first_year:
+                first_year = col
+            continue
+        if _is_number(text):
+            return False
+        if first_year is None or col < first_year:
+            left_label = True
+    return years >= 1 and not left_label
+
+
+def _distinct_year_ruler(row_cells: list[dict], date1904: bool) -> bool:
+    """``2020, 2021, 2022, 2023``: each column is the next year.
+
+    A banner repeats one year across the quarters under it, so a zero step
+    stays out of this check.
+    """
+    values = _bare_year_values(row_cells, date1904)
+    if not _year_run_is_header(values) or len(set(values)) < 2:
+        return False
+    steps = [right - left for left, right in zip(values, values[1:], strict=False)]
+    # A banner repeats a year, so it has a zero step. A ruler steps every column.
+    return bool(steps) and all(step > 0 for step in steps) and len(set(steps)) == 1
+
+
+def _row_can_supply_year(row_cells: list[dict], date1904: bool) -> bool:
+    """A year banner may hold labels. Another number makes it a data row."""
+    saw = False
+    for cell in row_cells:
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        if _is_bare_year_text(text):
+            saw = True
+            continue
+        if _is_number(text):
+            return False
+    return saw
+
+
+def _repeated_year_line(row_cells: list[dict], date1904: bool) -> bool:
+    """The same year beside a line name. A banner with no name there is a header."""
+    if _is_year_banner_row(row_cells, date1904):
+        return False
+    values = _bare_year_values(row_cells, date1904)
+    return len(values) >= 2 and len(set(values)) == 1
+
+
+def _year_label_section(
+    by_row: dict[int, list[dict]],
+    header_row: int,
+    period_cols: set[int],
+    date1904: bool,
+    years: set[str],
+) -> LayoutRow | None:
+    """The word left of the year that actually filled these quarters.
+
+    A note between that word and the quarter row is not the section. A year
+    above an ordinary ``2020–2023`` ruler is not one either: ``years`` is the
+    set that went into the quarter keys.
+    """
+    if not period_cols or not years:
+        return None
+    left = min(period_cols)
+    for dist in range(1, 4):
+        for delta in (-dist, dist):
+            row_n = header_row + delta
+            cells = by_row.get(row_n)
+            if not cells or not _row_can_supply_year(cells, date1904):
+                continue
+            found = {
+                str(parse_int(text))
+                for cell in cells
+                if (text := _text(cell, date1904))
+                and int(cell["col"]) in period_cols
+                and _is_bare_year_text(text)
+                and parse_int(text) is not None
+            }
+            if not found & years:
+                continue
+            label: str | None = None
+            label_col: int | None = None
+            for cell in cells:
+                text = _text(cell, date1904)
+                if not text or _is_number(text):
+                    continue
+                col = int(cell["col"])
+                if col < left and (label_col is None or col > label_col):
+                    label = text.strip()
+                    label_col = col
+            if label is None or label_col is None:
+                return None
+            return LayoutRow(row=row_n, label=label, kind="abstract", label_col=label_col)
+    return None
 
 
 def _is_banner_gap(row_cells: list[dict], period_cols: set[int], date1904: bool) -> bool:
@@ -253,7 +395,7 @@ def _year_banner_by_column(row_cells: list[dict], date1904: bool) -> dict[int, s
     if not _bare_years_are_header(row_cells, date1904):
         return {}
     row_hidden = bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
-    found: dict[int, str] = {}
+    own: list[tuple[int, str, int | None]] = []
     for cell in row_cells:
         if cell.get("hidden") and not row_hidden:
             continue
@@ -261,8 +403,24 @@ def _year_banner_by_column(row_cells: list[dict], date1904: bool) -> dict[int, s
         if not text or not _is_bare_year_text(text):
             continue
         year = parse_int(text)
-        if year is not None:
-            found[int(cell["col"])] = str(year)
+        if year is None:
+            continue
+        end = cell.get("merge_end_col")
+        try:
+            end_col = int(end) if end is not None else None
+        except (TypeError, ValueError):
+            end_col = None
+        own.append((int(cell["col"]), str(year), end_col))
+    own.sort()
+    found: dict[int, str] = {}
+    for index, (col, year, end_col) in enumerate(own):
+        found[col] = year
+        if end_col is None or end_col <= col:
+            continue
+        nxt = own[index + 1][0] if index + 1 < len(own) else end_col + 1
+        stop = min(end_col, nxt - 1)
+        for covered in range(col + 1, stop + 1):
+            found.setdefault(covered, year)
     return found
 
 

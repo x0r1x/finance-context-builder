@@ -4,6 +4,7 @@ import re
 import unicodedata
 from collections import Counter
 
+from finance_context.excel.a1 import value_coord
 from finance_context.excel.dates import is_date_format
 from finance_context.layout.cells import parse_number
 from finance_context.layout.models import Layout, LayoutRow, TimeAxis, is_series_column
@@ -296,7 +297,8 @@ def _annotate_axis(
     for index, header in enumerate(periods_in, start=1):
         flag_map: dict[str, bool] = {}
         for row, key in zip(flags, flag_keys, strict=True):
-            flag_map[key] = _flag_on(by_addr, sheet_name, row.row, header.col, date1904)
+            col, line = value_coord(row.value_col, header.row, header.col, row.row)
+            flag_map[key] = _flag_on(by_addr, sheet_name, line, col, date1904)
         calendar = header.period_key if is_calendar_key(header.period_key) else None
         if calendar and len(calendar) >= 4 and calendar[:4].isdigit():
             calendar = calendar[:4]
@@ -316,6 +318,7 @@ def _annotate_axis(
                 end_date=getattr(header, "end_date", None),
                 flags=flag_map,
                 hidden=bool(getattr(header, "hidden", False)),
+                row=header.row,
             )
         )
     live = {name for period in periods for name, on in period.flags.items() if on}
@@ -326,6 +329,7 @@ def _annotate_axis(
         sheet=sheet_name,
         grain=grain,
         header_row=axis.header_row,
+        transposed=bool(axis.transposed),
         periods=periods,
     )
 
