@@ -32,9 +32,9 @@ from finance_context.graph.models import (
 )
 from finance_context.graph.ranges import CellGrid, RangeHops, SegmentIds, hop_flags, is_cell_id
 from finance_context.graph.refs import parse_node_id
-from finance_context.layout.models import Layout
+from finance_context.layout.models import Layout, is_series_column, published_row_key
 from finance_context.layout.periods import period_position
-from finance_context.layout.resolve import period_headers
+from finance_context.layout.resolve import axes_for, period_headers
 from finance_context.memory import trim_process_heap
 from finance_context.models.context import GraphPointer
 from finance_context.observability import log_event
@@ -114,16 +114,25 @@ def _rss_mark(mark: str, **fields: object) -> None:
 
 
 class _Periods:
-    """Period of a node from its column. No per-cell dictionary."""
+    """Period of a node. A transposed value is keyed by its own cell."""
 
-    def __init__(self, period_by_cell: dict[tuple[str, int], str]) -> None:
+    def __init__(
+        self,
+        period_by_cell: dict[tuple[str, int], str],
+        transposed: dict[tuple[str, int, int], tuple[str, str]] | None = None,
+    ) -> None:
         self._columns = period_by_cell
+        self._cells = transposed or {}
 
     def get(self, node: str, default: str | None = None) -> str | None:
         parsed = parse_node_id(node)
         if parsed is None:
             return default
-        return self._columns.get((parsed[0], parsed[1]), default)
+        sheet, col, row = parsed
+        hit = self._cells.get((sheet, row, col))
+        if hit is not None:
+            return hit[1]
+        return self._columns.get((sheet, col), default)
 
 
 class _Formula:
@@ -152,26 +161,43 @@ class _Formula:
         self.lag_bits = 0
 
 
-def _formula_record(sheet, row, col, addr, raw, row_meta, period_by_cell) -> tuple[str, _Formula]:
-    return f"{sheet}!{addr}", _Formula(
-        str(raw),
-        row_meta.get((str(sheet), int(row))),
-        period_by_cell.get((str(sheet), int(col))),
-    )
+def _formula_record(
+    sheet, row, col, addr, raw, row_meta, period_by_cell, transposed
+) -> tuple[str, _Formula]:
+    row_key, period_id = _at_cell(transposed, row_meta, period_by_cell, sheet, row, col)
+    return f"{sheet}!{addr}", _Formula(str(raw), row_key, period_id)
 
 
-def _formula_identity(sheet, row, col, addr, row_meta, period_by_cell) -> tuple[str, _Formula]:
+def _formula_identity(
+    sheet, row, col, addr, row_meta, period_by_cell, transposed
+) -> tuple[str, _Formula]:
     """Same identity as ``_formula_record`` with the formula text left on disk."""
-    return f"{sheet}!{addr}", _Formula(
-        None,
+    row_key, period_id = _at_cell(transposed, row_meta, period_by_cell, sheet, row, col)
+    return f"{sheet}!{addr}", _Formula(None, row_key, period_id, formula_cell=True)
+
+
+def _at_cell(
+    transposed: dict[tuple[str, int, int], tuple[str, str]],
+    row_meta: dict[tuple[str, int], str],
+    period_by_col: dict[tuple[str, int], str],
+    sheet: str,
+    row: int,
+    col: int,
+) -> tuple[str | None, str | None]:
+    """Row key and period id of one cell. A vertical value wins over the column."""
+    hit = transposed.get((str(sheet), int(row), int(col)))
+    if hit is not None:
+        return hit
+    return (
         row_meta.get((str(sheet), int(row))),
-        period_by_cell.get((str(sheet), int(col))),
-        formula_cell=True,
+        period_by_col.get((str(sheet), int(col))),
     )
 
 
-def _load_formulas(book: Path, row_meta, period_by_cell) -> dict[str, _Formula]:
+def _load_formulas(book: Path, row_meta, period_by_cell, transposed=None) -> dict[str, _Formula]:
     """Formula rows only. Value cells and formula text stay in the parquet file."""
+    if transposed is None:
+        transposed = {}
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
@@ -198,6 +224,7 @@ def _load_formulas(book: Path, row_meta, period_by_cell) -> dict[str, _Formula]:
                 addrs[index],
                 row_meta,
                 period_by_cell,
+                transposed,
             )
             found[node] = rec
     return found
@@ -231,7 +258,9 @@ def _attach_formula_text(book: Path, formulas: dict[str, _Formula]) -> None:
         del raw
 
 
-def _formulas_from_cells(cells, row_meta, period_by_cell) -> dict[str, _Formula]:
+def _formulas_from_cells(cells, row_meta, period_by_cell, transposed=None) -> dict[str, _Formula]:
+    if transposed is None:
+        transposed = {}
     found: dict[str, _Formula] = {}
     for cell in cells:
         raw = cell.get("formula_raw")
@@ -245,6 +274,7 @@ def _formulas_from_cells(cells, row_meta, period_by_cell) -> dict[str, _Formula]
             raw,
             row_meta,
             period_by_cell,
+            transposed,
         )
         found[node] = rec
     return found
@@ -304,6 +334,7 @@ def _stream_index(
     path: Path,
     row_meta: dict[tuple[str, int], str],
     period_by_cell: dict[tuple[str, int], str],
+    transposed: dict[tuple[str, int, int], tuple[str, str]],
     circular: dict[tuple[str, int], str],
     cell_edge_path: Path | None,
     cell_edges: list | None,
@@ -344,12 +375,15 @@ def _stream_index(
                     else:
                         node_type = "empty"
                     node_id = f"{sheet}!{addr}"
+                    row_key, period_id = _at_cell(
+                        transposed, row_meta, period_by_cell, sheet, row_n, col_n
+                    )
                     row = (
                         node_id,
                         sheet,
                         addr,
-                        row_meta.get((sheet, row_n)),
-                        period_by_cell.get((sheet, col_n)),
+                        row_key,
+                        period_id,
                         node_type,
                     )
                     for slot, item in enumerate(row):
@@ -367,7 +401,7 @@ def _stream_index(
         for node_id in empty_ids:
             if node_id not in still_empty:
                 continue
-            row = _empty_index_row(node_id, row_meta, period_by_cell)
+            row = _empty_index_row(node_id, row_meta, period_by_cell, transposed)
             for slot, item in enumerate(row):
                 chunk[slot].append(item)
             count += 1
@@ -445,6 +479,7 @@ def build_formula_graph(
 
     row_meta = _row_meta(layout)
     period_by_cell, _period_index = _period_maps(layout)
+    transposed = _transposed_cells(layout)
     circular = _circular_rows(layout)
     if stream:
         # Row maps are copied. The caller's list slot is already empty.
@@ -457,23 +492,25 @@ def build_formula_graph(
             dest_dir / "graph" / "index.parquet",
             row_meta,
             period_by_cell,
+            transposed,
             circular,
             cell_edge_path if stream else None,
             cell_edges if not stream else None,
             chosen.parquet_row_group_rows,
         )
-        formulas = _load_formulas(book, row_meta, period_by_cell)
+        formulas = _load_formulas(book, row_meta, period_by_cell, transposed)
         del row_meta
         _rss_mark("formulas_loaded", nodes=node_count, formulas=len(formulas))
         index_rows: list[tuple[object, ...]] = []
     else:
-        index_rows = _index_rows(cells, row_meta, period_by_cell)
+        index_rows = _index_rows(cells, row_meta, period_by_cell, transposed)
         if stream:
             empty_nodes = _empty_nodes_from_parquet(cell_edge_path, {row[0] for row in index_rows})
         else:
             empty_nodes = _empty_range_nodes(cell_edges, {row[0] for row in index_rows})
         index_rows.extend(
-            _empty_index_row(node_id, row_meta, period_by_cell) for node_id in empty_nodes
+            _empty_index_row(node_id, row_meta, period_by_cell, transposed)
+            for node_id in empty_nodes
         )
         write_parquet(
             dest_dir / "graph" / "index.parquet",
@@ -483,7 +520,7 @@ def build_formula_graph(
         )
         node_count = len(index_rows)
         circular_ids = None
-        formulas = _formulas_from_cells(cells, row_meta, period_by_cell)
+        formulas = _formulas_from_cells(cells, row_meta, period_by_cell, transposed)
 
     if stream:
         cycles, doc, iterate = _graph_from_parquet(
@@ -495,13 +532,14 @@ def build_formula_graph(
             edges,
             index_rows,
             period_by_cell,
+            transposed,
             cell_edge_path,
             stream_json=chosen.json_stream,
             node_count=node_count,
             circular_ids=circular_ids,
         )
     else:
-        period_of = _Periods(period_by_cell)
+        period_of = _Periods(period_by_cell, transposed)
         view = _RangeView(book, formulas, period_by_cell)
         enriched = [_enrich_edge(edge, period_of, view) for edge in cell_edges]
         write_parquet(
@@ -638,11 +676,40 @@ def circularity_hints(
 
 
 def _row_meta(layout: Layout) -> dict[tuple[str, int], str]:
+    """Horizontal rows only. A transposed line shares its label row."""
     out: dict[tuple[str, int], str] = {}
     for sheet in layout.sheets:
         for block in sheet.blocks:
             for row in block.rows:
-                out[(sheet.name, row.row)] = f"{sheet.name}|{row.row}|{block.block_id}"
+                if row.value_col:
+                    continue
+                out[(sheet.name, row.row)] = published_row_key(
+                    sheet.name, row.row, block.block_id
+                )
+    return out
+
+
+def _transposed_cells(
+    layout: Layout,
+) -> dict[tuple[str, int, int], tuple[str, str]]:
+    """``(sheet, period row, value col)`` to ``(row_key, period_key)``."""
+    out: dict[tuple[str, int, int], tuple[str, str]] = {}
+    for sheet in layout.sheets:
+        for block in sheet.blocks:
+            for row in block.rows:
+                if not row.value_col:
+                    continue
+                row_key = published_row_key(
+                    sheet.name, row.row, block.block_id, row.value_col
+                )
+                for axis in axes_for(sheet, block):
+                    for period in axis.periods:
+                        if not period.row or not is_series_column(period.kind, period.period_key):
+                            continue
+                        out[(sheet.name, int(period.row), int(row.value_col))] = (
+                            row_key,
+                            period.period_key,
+                        )
     return out
 
 
@@ -686,7 +753,10 @@ def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, 
     for sheet in layout.sheets:
         for block in sheet.blocks:
             for header in period_headers(sheet, block):
-                period_by_cell[(sheet.name, header.col)] = header.period_key
+                # A vertical period lives on a row. The column map would keep
+                # only the last year of that ruler.
+                if not header.row:
+                    period_by_cell[(sheet.name, header.col)] = header.period_key
                 position = period_position(calendar_key(header.period_key))
                 if position is not None:
                     index[header.period_key] = position[1]
@@ -697,6 +767,7 @@ def _index_rows(
     cells: list[dict],
     row_meta: dict[tuple[str, int], str],
     period_by_cell: dict[tuple[str, int], str],
+    transposed: dict[tuple[str, int, int], tuple[str, str]],
 ) -> list[tuple[object, ...]]:
     rows: list[tuple[object, ...]] = []
     for cell in cells:
@@ -704,7 +775,9 @@ def _index_rows(
         addr = str(cell["addr"])
         row_n = int(cell["row"])
         col_n = int(cell["col"])
-        meta = row_meta.get((sheet, row_n))
+        row_key, period_id = _at_cell(
+            transposed, row_meta, period_by_cell, sheet, row_n, col_n
+        )
         formula = cell.get("formula_raw")
         cached = cell.get("cached_value")
         if formula:
@@ -718,8 +791,8 @@ def _index_rows(
                 f"{sheet}!{addr}",
                 sheet,
                 addr,
-                meta,
-                period_by_cell.get((sheet, col_n)),
+                row_key,
+                period_id,
                 node_type,
             )
         )
@@ -744,19 +817,22 @@ def _empty_index_row(
     node_id: str,
     row_meta: dict[tuple[str, int], str],
     period_by_cell: dict[tuple[str, int], str],
+    transposed: dict[tuple[str, int, int], tuple[str, str]],
 ) -> tuple[object, ...]:
     parsed = parse_node_id(node_id)
     if parsed is None:
         return (node_id, None, None, None, None, "empty")
     sheet, col_n, row_n = parsed
     addr = f"{index_to_col(col_n)}{row_n}"
-    meta = row_meta.get((sheet, row_n))
+    row_key, period_id = _at_cell(
+        transposed, row_meta, period_by_cell, sheet, row_n, col_n
+    )
     return (
         node_id,
         sheet,
         addr,
-        meta,
-        period_by_cell.get((sheet, col_n)),
+        row_key,
+        period_id,
         "empty",
     )
 
@@ -835,11 +911,11 @@ class _RangeView:
         first = self.grid().first(node)
         if first is None:
             return None, "unaligned"
-        col, _row = first
+        col, row = first
         src = parse_node_id(source)
         offset = None if src is None else col - src[1]
         src_period = period_of.get(source)
-        member_period = self._period_by_cell.get((node.sheet, col))
+        member_period = period_of.get(f"{node.sheet}!{index_to_col(col)}{row}")
         if not src_period or not member_period:
             return offset, "unaligned"
         return offset, calendar_lag(str(src_period), str(member_period))
@@ -1322,6 +1398,7 @@ def _graph_from_parquet(
     edges,
     index_rows,
     period_by_cell,
+    transposed,
     path: Path,
     *,
     stream_json: bool,
@@ -1335,7 +1412,7 @@ def _graph_from_parquet(
 
     from finance_context.store.fs import RowGroupWriter
 
-    period_of = _Periods(period_by_cell)
+    period_of = _Periods(period_by_cell, transposed)
     kinds: Counter[str] = Counter()
     classes: Counter[str] = Counter()
     seen_class: set[tuple[str, str]] = set()

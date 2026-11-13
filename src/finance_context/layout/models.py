@@ -39,6 +39,18 @@ def is_series_column(kind: str | None, period_key: str) -> bool:
     return kind in SERIES_KINDS and period_key not in STRUCTURAL_PERIOD_KEYS
 
 
+def published_row_key(
+    sheet: str, row: int, block_id: str, value_col: int | None = None
+) -> str:
+    """Context row key. A transposed line adds its value column.
+
+    Several lines share the label row, so the column keeps their keys apart.
+    """
+    if value_col:
+        return f"{sheet}|{row}|c{int(value_col)}|{block_id}"
+    return f"{sheet}|{row}|{block_id}"
+
+
 class PeriodHit(BaseModel):
     # Shared from the classification cache, so callers cannot change it.
     model_config = ConfigDict(frozen=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from finance_context.excel.a1 import parse_addr
+from finance_context.graph.stage import _row_meta, _transposed_cells
 from finance_context.layout.detect import detect_layout
 from finance_context.layout.models import Block, Layout, LayoutRow, SheetLayout
 from finance_context.layout.relations import _CellIndex, formula_relations
@@ -709,3 +710,133 @@ def test_transposed_lines_do_not_take_the_label_row() -> None:
     )
     kept = _CellIndex(mixed).row_index[("Debt", 1)]
     assert kept[1].label == "Горизонтальная"
+    assert ("Debt", 1) not in _row_meta(layout)
+    mapped = _transposed_cells(layout)
+    assert mapped[("Debt", 2, 2)] == ("Debt|1|c2|Debt!c1r2", "2020")
+    assert mapped[("Debt", 4, 3)] == ("Debt|1|c3|Debt!c1r2", "2022")
+
+
+def test_a_unit_row_does_not_replace_vertical_names() -> None:
+    cells = [
+        _c("U", "B1", "Debt"),
+        _c("U", "C1", "Rate"),
+        _c("U", "B2", "млн руб."),
+        _c("U", "C2", "%"),
+    ]
+    for row, year in enumerate(("2020", "2021", "2022", "2023"), start=3):
+        cells.append(_c("U", f"A{row}", year))
+        cells.append(_c("U", f"B{row}", "10"))
+        cells.append(_c("U", f"C{row}", "1"))
+    sheet = detect_layout(cells).sheets[0]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Debt", "Rate"]
+
+
+def test_a_unit_in_the_period_column_still_finds_the_names() -> None:
+    cells = [
+        _c("U", "B1", "Debt"),
+        _c("U", "C1", "Rate"),
+        _c("U", "A2", "млн руб."),
+    ]
+    for row, year in enumerate(("2020", "2021", "2022", "2023"), start=3):
+        cells.append(_c("U", f"A{row}", year))
+        cells.append(_c("U", f"B{row}", "10"))
+        cells.append(_c("U", f"C{row}", "1"))
+    sheet = detect_layout(cells).sheets[0]
+    assert sheet.axes[0].transposed is True
+    assert [row.label for row in sheet.blocks[0].rows] == ["Debt", "Rate"]
+
+
+def test_vertical_periods_without_names_are_noted() -> None:
+    cells = [
+        _c("U", "B1", "Debt"),
+        _c("U", "A2", "см. комментарий"),
+    ]
+    for row, year in enumerate(("2020", "2021", "2022", "2023"), start=3):
+        cells.append(_c("U", f"A{row}", year))
+        cells.append(_c("U", f"B{row}", "10"))
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    assert [axis for axis in sheet.axes if axis.transposed] == []
+    assert sheet.notes == ["Vertical periods on U!A3 have no series names"]
+
+
+def test_amounts_that_pass_through_the_year_range_are_not_a_ruler() -> None:
+    cells = [_c("S", "A1", "key"), _c("S", "B1", "val"), _c("S", "C1", "other")]
+    for row in range(2, 16):
+        cells.append(_c("S", f"A{row}", str(row)))
+        cells.append(_c("S", f"B{row}", str(2010 + row if 5 <= row <= 8 else 1000 + row)))
+        cells.append(_c("S", f"C{row}", "10"))
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    assert [axis for axis in sheet.axes if axis.transposed] == []
+    assert sheet.notes == []
+
+
+def test_line_labels_in_the_year_range_are_not_a_ruler() -> None:
+    cells = [_c("S", "B1", "Amount")]
+    for row in range(1898, 1904):
+        cells.append(_c("S", f"A{row}", f"Item {row}"))
+        cells.append(_c("S", f"B{row}", "10"))
+    layout = detect_layout(cells)
+    sheet = layout.sheets[0]
+    assert [axis for axis in sheet.axes if axis.transposed] == []
+    assert sheet.notes == []
+
+
+def test_a_vertical_ruler_can_reuse_a_horizontal_period_column() -> None:
+    cells = [
+        _c("M", "A2", "Sales"),
+        _c("M", "A4", "Company"),
+        _c("M", "B4", "Founded"),
+        _c("M", "C4", "Revenue"),
+        _c("M", "A5", "A"),
+        _c("M", "B5", "2010"),
+        _c("M", "C5", "100"),
+        _c("M", "A6", "B"),
+        _c("M", "B6", "2011"),
+        _c("M", "C6", "200"),
+        _c("M", "A7", "C"),
+        _c("M", "B7", "2012"),
+        _c("M", "C7", "300"),
+        _c("M", "A9", "Date"),
+        _c("M", "B9", "Amount"),
+        _c("M", "C15", "Debt"),
+        _c("M", "D15", "Rate"),
+    ]
+    for col, year in zip("BCDE", ("2020", "2021", "2022", "2023"), strict=True):
+        cells.append(_c("M", f"{col}1", year))
+        cells.append(_c("M", f"{col}2", "1"))
+    for row, day in enumerate(("15.01.2024", "16.01.2024", "17.01.2024", "18.01.2024"), start=10):
+        cells.append(_c("M", f"A{row}", day))
+        cells.append(_c("M", f"B{row}", "10"))
+    for row, year in enumerate(("2020", "2021", "2022", "2023"), start=16):
+        cells.append(_c("M", f"B{row}", year))
+        cells.append(_c("M", f"C{row}", "10"))
+        cells.append(_c("M", f"D{row}", "1"))
+    sheet = detect_layout(cells).sheets[0]
+    horizontal = [axis for axis in sheet.axes if not axis.transposed]
+    vertical = [axis for axis in sheet.axes if axis.transposed]
+    assert len(horizontal) == 1
+    assert [period.period_key for period in horizontal[0].periods] == [
+        "2020",
+        "2021",
+        "2022",
+        "2023",
+    ]
+    assert len(vertical) == 1
+    assert [period.row for period in vertical[0].periods] == [16, 17, 18, 19]
+    timeline_labels = [
+        row.label
+        for block in sheet.blocks
+        if block.kind == "timeline"
+        for row in block.rows
+    ]
+    assert "Sales" in timeline_labels
+    assert "Debt" in timeline_labels and "Rate" in timeline_labels
+    vertical_labels = [
+        row.label
+        for block in sheet.blocks
+        if block.axis_ids == [vertical[0].id]
+        for row in block.rows
+    ]
+    assert vertical_labels == ["Debt", "Rate"]

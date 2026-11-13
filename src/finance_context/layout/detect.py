@@ -30,6 +30,7 @@ from finance_context.layout.rows import (
     _year_label_section,
 )
 from finance_context.layout.timelines import _share_repeated_axes, link_workbook_timelines
+from finance_context.layout.units import is_unit_text
 
 
 def detect_layout(
@@ -149,7 +150,7 @@ def _blocks_indexed(
     defined_names: list | None,
 ) -> tuple[list[Block], list[TimeAxis], list[str]]:
     row_ids = sorted(by_row)
-    found = _axis_candidates(sheet, by_row, date1904, hidden_cols)
+    found, axis_notes = _axis_candidates(sheet, by_row, date1904, hidden_cols)
     vertical = [item for item in found if item[1].transposed]
     candidates = [item for item in found if not item[1].transposed]
     groups = _table_groups(candidates)
@@ -248,7 +249,7 @@ def _blocks_indexed(
             [*blocks, *covered],
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
-    return blocks, axes, notes
+    return blocks, axes, [*axis_notes, *notes]
 
 
 def _vertical_period_cells(axes: list[TimeAxis]) -> set[tuple[int, int]]:
@@ -413,7 +414,12 @@ def _transposed_items(
             if col <= period_col:
                 continue
             text = _text(cell, date1904)
-            if text and classify_header(text) is None and not _is_number(text):
+            if (
+                text
+                and classify_header(text) is None
+                and not _is_number(text)
+                and not is_unit_text(text)
+            ):
                 labels[col] = text.strip()
     value_cols: set[int] = set()
     for row_n in period_rows:

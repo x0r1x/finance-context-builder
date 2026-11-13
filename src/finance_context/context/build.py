@@ -22,7 +22,7 @@ from finance_context.context.timeline import (
     _period_warning_value,
     build_axes,
 )
-from finance_context.excel.a1 import format_addr, index_to_col
+from finance_context.excel.a1 import format_addr, index_to_col, value_coord
 from finance_context.formulas.csr import SheetUsage
 from finance_context.formulas.edge_file import iterate_edges
 from finance_context.layout.adjacency import RangeReads, row_adjacency
@@ -589,12 +589,16 @@ def _axis_cell_rows(layout: Layout) -> dict[str, set[int]]:
             header = getattr(axis, "header_row", None)
             if header:
                 rows.add(int(header))
+            if getattr(axis, "transposed", False):
+                for period in axis.periods:
+                    if period.row:
+                        rows.add(int(period.row))
         for block in sheet.blocks:
             axis = getattr(block, "axis", None)
             if axis is not None and getattr(axis, "row", None):
                 rows.add(int(axis.row))
             for row in block.rows:
-                if row.kind == "flag":
+                if row.kind == "flag" or row.value_col:
                     rows.add(int(row.row))
     return {name: rows for name, rows in found.items() if rows}
 
@@ -732,15 +736,22 @@ def _value_cell(
     row_num: int,
 ) -> dict | None:
     """The cached cell for one period of one line."""
-    if _transposed_value(layout_row, header):
-        return by_addr.get((sheet_name, int(header.row), int(layout_row.value_col)))
-    return by_addr.get((sheet_name, row_num, int(header.col)))
+    col, line = _value_coord(layout_row, header, row_num)
+    return by_addr.get((sheet_name, line, col))
 
 
 def _value_addr(layout_row: LayoutRow, header) -> str:
-    if _transposed_value(layout_row, header):
-        return format_addr(int(layout_row.value_col), int(header.row))
-    return format_addr(int(header.col), int(layout_row.row))
+    col, line = _value_coord(layout_row, header, layout_row.row)
+    return format_addr(col, line)
+
+
+def _value_coord(layout_row: LayoutRow, header, row_num: int) -> tuple[int, int]:
+    return value_coord(
+        layout_row.value_col,
+        getattr(header, "row", None),
+        int(header.col),
+        row_num,
+    )
 
 
 def _row_number_formats(
@@ -814,7 +825,7 @@ def _row_formula_and_numbers(
     fingerprint = Counter(templates).most_common(1)[0][0] if templates else None
     if fingerprint:
         for header in headers:
-            cell = by_addr.get((sheet_name, row_num, header.col))
+            cell = _value_cell(sheet_name, layout_row, header, by_addr, row_num)
             if cell is None:
                 continue
             template = cell.get("formula_template")
@@ -869,6 +880,10 @@ def _header_unit(sheet, block, by_addr: dict, date1904: bool) -> str | None:
     rows = {axis.header_row for axis in axes_for(sheet, block)}
     if block.axis is not None:
         rows.add(block.axis.row)
+    # The corner above a vertical ruler is the label row of the period column.
+    for layout_row in block.rows:
+        if layout_row.value_col:
+            rows.add(int(layout_row.row))
     label_col = getattr(block, "label_col", None)
     if not rows or label_col is None:
         return None
@@ -1338,6 +1353,8 @@ def _period_dict(header: AxisHeader) -> dict[str, object]:
         "text": header.text,
         "period_key": header.period_key,
     }
+    if header.row:
+        item["row"] = header.row
     # Params columns keep value/unit/note. Period columns have no role.
     if header.role:
         item["role"] = header.role

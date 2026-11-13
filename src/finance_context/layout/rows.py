@@ -109,12 +109,19 @@ def _row_layers(row_cells: list[dict], date1904: bool) -> set[str]:
 def _is_starter_row(row_cells: list[dict], date1904: bool) -> bool:
     calendar = 0
     bare_only = True
-    quarters = 0
+    texts: list[str] = []
     for cell in row_cells:
         text = _text(cell, date1904)
-        atom = classify_atom(text)
-        if atom is not None and atom.kind == "quarter_token":
-            quarters += 1
+        if not text:
+            continue
+        # A number is never a quarter token. Years still count as calendar hits.
+        if _is_number(text):
+            if is_calendar_hit(classify_header(text)):
+                calendar += 1
+                if not _is_bare_year_text(text):
+                    bare_only = False
+            continue
+        texts.append(text)
         if not is_calendar_hit(classify_header(text)):
             continue
         calendar += 1
@@ -123,6 +130,11 @@ def _is_starter_row(row_cells: list[dict], date1904: bool) -> bool:
     # A row of "4Q" / "1 кв." is a header even when no year sits in the same cells.
     # Two tokens are a note. CFS keeps a run only from three periods.
     if calendar < 2:
+        quarters = 0
+        for text in texts:
+            atom = classify_atom(text)
+            if atom is not None and atom.kind == "quarter_token":
+                quarters += 1
         return quarters >= 3
     # Dates, quarters and "2025E" are headers. Bare years are a header only when
     # the visible run is non-decreasing, with one positive step if it advances.
@@ -136,6 +148,10 @@ def _is_quarter_token_row(row_cells: list[dict], date1904: bool) -> bool:
     quarters = 0
     for cell in row_cells:
         text = _text(cell, date1904)
+        if not text or _is_number(text):
+            if text and is_calendar_hit(classify_header(text)):
+                return False
+            continue
         if is_calendar_hit(classify_header(text)):
             return False
         atom = classify_atom(text)

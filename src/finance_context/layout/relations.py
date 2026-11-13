@@ -71,6 +71,9 @@ def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation
     Cells of one sheet row are contiguous, which is how ``ir/cells.parquet`` is
     stored and how ``load_relation_cells`` yields them. The row is reduced to a
     pattern and its AST strings are dropped before the next row.
+
+    A transposed line is a column, so it gets none of these relations. The graph
+    still links each of its formula cells once ``row_key`` and ``period_id`` are set.
     """
     book = _CellIndex(layout)
     periods: dict[tuple[str, int], list[list[int]]] = {}

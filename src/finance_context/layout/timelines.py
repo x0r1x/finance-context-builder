@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from finance_context.excel.a1 import value_coord
 from finance_context.layout.axes import _derived_axis
 from finance_context.layout.cells import _cell_at, _text
 from finance_context.layout.models import (
@@ -208,15 +209,17 @@ def _has_explicit_marker(axis: TimeAxis) -> bool:
 
 def _flag_addr(sheet: str, row, period, by_addr: dict) -> dict | None:
     """Flag bit of one period. A transposed line reads down its own column."""
-    if row.value_col and period.row:
-        return by_addr.get((sheet, int(period.row), int(row.value_col)))
-    return by_addr.get((sheet, row.row, period.col))
+    col, line = value_coord(
+        row.value_col, getattr(period, "row", None), period.col, row.row
+    )
+    return by_addr.get((sheet, line, col))
 
 
 def _flag_on_row(row, period, by_row: dict[int, list[dict]]) -> dict | None:
-    if row.value_col and period.row:
-        return _cell_at(by_row.get(int(period.row), []), int(row.value_col))
-    return _cell_at(by_row.get(row.row, []), period.col)
+    col, line = value_coord(
+        row.value_col, getattr(period, "row", None), period.col, row.row
+    )
+    return _cell_at(by_row.get(line, []), col)
 
 
 def _flag_bit(cell: dict | None, date1904: bool) -> bool:

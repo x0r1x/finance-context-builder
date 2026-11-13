@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from finance_context.context.measure import Measure, _combine_measure, _parse_text
 from finance_context.context.series import normalize_series, scale_factor_for, value_status
-from finance_context.layout.models import LayoutRow
+from finance_context.excel.a1 import value_coord
+from finance_context.layout.models import LayoutRow, published_row_key
 from finance_context.layout.periods import display_cell_text
 from finance_context.layout.relations import RowRelation
 from finance_context.models.context import (
@@ -39,9 +40,7 @@ def _row_for_layout(
     series: list[RowSeries] | None = None,
 ) -> BlockRow:
     row_num = layout_row.row
-    row_key = f"{sheet_name}|{row_num}|{block_id}"
-    if layout_row.value_col:
-        row_key = f"{sheet_name}|{row_num}|c{layout_row.value_col}|{block_id}"
+    row_key = published_row_key(sheet_name, row_num, block_id, layout_row.value_col)
     keep_cols = {header.col for header in value_headers}
     values: list[str | None] = []
     statuses: list[ValueStatus] = []
@@ -50,10 +49,13 @@ def _row_for_layout(
             values.append(None)
             statuses.append("not_applicable")
             continue
-        if getattr(header, "row", None) and layout_row.value_col:
-            cell = by_addr.get((sheet_name, int(header.row), int(layout_row.value_col)))
-        else:
-            cell = by_addr.get((sheet_name, row_num, header.col))
+        col, line = value_coord(
+            layout_row.value_col,
+            getattr(header, "row", None),
+            int(header.col),
+            row_num,
+        )
+        cell = by_addr.get((sheet_name, line, col))
         cached = None if cell is None else cell.get("cached_value")
         fmt = None if cell is None else cell.get("number_format")
         displayed = display_cell_text(
