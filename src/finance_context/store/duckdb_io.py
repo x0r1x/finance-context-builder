@@ -1,4 +1,4 @@
-"""DuckDB reads and writes of one local file or one MinIO object."""
+"""DuckDB reads and writes of one local file. MinIO objects are copied in chunks."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import pyarrow as pa
+import pyarrow.fs as pafs
 
 from finance_context.observability import log_event
 from finance_context.settings import Settings, _duckdb_size_bytes
@@ -48,9 +49,43 @@ _SESSION = (
     "meta/meta.json",
 )
 _EXPORT_WARNING = "minio export failed"
-_OBJECT_SIZE_SQL = "SELECT size FROM read_blob(?)"
+# One part. A large context.json stays out of the buffer manager.
+_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 _HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
 _S3_LINE = re.compile(r"(?m)^([A-Z][A-Za-z0-9]+): ([^\r\n]{1,160})")
+# PyArrow prints the AWS SDK error, not DuckDB's ``(HTTP 403)`` essay.
+_AWS_NAMED = re.compile(
+    r"AWS Error ([A-Za-z][A-Za-z0-9]*) \(HTTP (\d{3})\): ([^\r\n]{1,160})"
+)
+_AWS_DURING = re.compile(
+    r"AWS Error ([A-Z][A-Z0-9_]*) during \S+ operation: ([^\r\n]{1,160})"
+)
+_AWS_BRACKET = re.compile(r"AWS Error \[code (\d+)\]: ([^\r\n]{1,160})")
+_AWS_RESPONSE_CODE = re.compile(r"HTTP response code: (\d{3})")
+_AWS_NAME_STATUS = {
+    "ACCESS_DENIED": 403,
+    "FORBIDDEN": 403,
+    "SLOW_DOWN": 503,
+    "INTERNAL_FAILURE": 500,
+    "INTERNAL_ERROR": 500,
+    "SERVICE_UNAVAILABLE": 503,
+    "NO_SUCH_KEY": 404,
+    "NO_SUCH_BUCKET": 404,
+    "NOT_FOUND": 404,
+    "RESOURCE_NOT_FOUND": 404,
+}
+_AWS_PUBLIC_NAME = {
+    "ACCESS_DENIED": "AccessDenied",
+    "FORBIDDEN": "AccessDenied",
+    "SLOW_DOWN": "SlowDown",
+    "INTERNAL_FAILURE": "InternalError",
+    "INTERNAL_ERROR": "InternalError",
+    "SERVICE_UNAVAILABLE": "ServiceUnavailable",
+    "NO_SUCH_KEY": "NoSuchKey",
+    "NO_SUCH_BUCKET": "NoSuchBucket",
+    "NOT_FOUND": "NoSuchKey",
+    "RESOURCE_NOT_FOUND": "NoSuchKey",
+}
 _publish_held = threading.local()
 # One connection may spill up to 2 GiB. The free-space raise is split across
 # max_concurrent_jobs first, so two builds cannot each take a 4 GiB volume.
@@ -78,6 +113,42 @@ def object_key(prefix: str, job_id: str, relative: str) -> str:
 
 def object_url(bucket: str, key: str) -> str:
     return f"s3://{bucket}/{key}"
+
+
+class PublishedFile:
+    """A body the API can stream. ``content_length`` is the byte size.
+
+    Chunks are ``_UPLOAD_CHUNK_BYTES``. The handle closes when iteration
+    finishes, or when ``close`` runs because the client stopped early.
+    """
+
+    def __init__(self, content_length: int, handle: Any, *, owner: Any = None) -> None:
+        self.content_length = content_length
+        self._handle = handle
+        self._owner = owner
+
+    def __iter__(self) -> Iterator[bytes]:
+        handle = self._handle
+        try:
+            while handle is not None:
+                block = handle.read(_UPLOAD_CHUNK_BYTES)
+                if not block:
+                    break
+                yield block if isinstance(block, bytes) else bytes(block)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        handle = self._handle
+        self._handle = None
+        if handle is not None:
+            handle.close()
+        self._owner = None
+
+
+def stream_local_file(path: Path) -> PublishedFile:
+    """Stream one local file. The length is ``stat``, not a read of the body."""
+    return PublishedFile(path.stat().st_size, path.open("rb"))
 
 
 def copy_arrow_parquet(table: pa.Table, dest: Path) -> None:
@@ -348,34 +419,55 @@ def read_blob_bytes(uri: str, settings: Settings | None = None) -> bytes:
     return bytes(payload)
 
 
-def read_published_file(settings: Settings, local: Path, job_id: str, relative: str) -> bytes:
+def read_published_file(
+    settings: Settings, local: Path, job_id: str, relative: str
+) -> PublishedFile:
     """Return the bucket object when the completion marker lists it.
 
     A missing marker, an empty key list, a recorded export warning, or a
     failed bucket read uses the local file. An object left by a copy that
     did not finish is not served. A settled local book with no marker is
-    copied once, then read from the bucket.
+    copied once, then read from the bucket. The body is a stream of 8 MiB
+    chunks, so a large ``context.json`` is not held in the API process.
     """
     if not settings.minio_configured() or _export_warning_recorded(local, relative):
-        return read_blob_bytes(str(local))
+        return stream_local_file(local)
     if _marker_lists(settings, job_id, relative):
         return _read_bucket_or_local(settings, local, job_id, relative)
     _ensure_published_book(settings, local, job_id, relative)
     if _marker_lists(settings, job_id, relative):
         return _read_bucket_or_local(settings, local, job_id, relative)
-    return read_blob_bytes(str(local))
+    return stream_local_file(local)
 
 
-def _read_bucket_or_local(settings: Settings, local: Path, job_id: str, relative: str) -> bytes:
+def _read_bucket_or_local(
+    settings: Settings, local: Path, job_id: str, relative: str
+) -> PublishedFile:
     url = object_url(
         settings.minio_bucket,
         object_key(settings.minio_prefix, job_id, relative),
     )
     try:
-        return read_blob_bytes(url, settings)
-    except Exception:
-        _LOGGER.warning("minio read failed for %s", relative)
-    return read_blob_bytes(str(local))
+        return _open_published_object(settings, url)
+    except Exception as exc:
+        # Same rule as an export failure: memory text, or one HTTP line.
+        # Anything else can carry a credential essay.
+        _log_export_failure(
+            "minio read failed for %s",
+            relative,
+            detail=_s3_failure(exc)[1] or _export_error_detail(exc),
+        )
+    return stream_local_file(local)
+
+
+def _open_published_object(settings: Settings, url: str) -> PublishedFile:
+    """Open one bucket object. The length comes from the object info, not the body."""
+    filesystem = _s3_filesystem(settings)
+    path = _s3_object_path(url)
+    info = filesystem.get_file_info(path)
+    if info.type != pafs.FileType.File or info.size is None:
+        raise OSError(f"missing object {url}")
+    return PublishedFile(int(info.size), filesystem.open_input_stream(path), owner=filesystem)
 
 
 def _ensure_published_book(settings: Settings, local: Path, job_id: str, relative: str) -> None:
@@ -618,26 +710,31 @@ def _export_warning_recorded(local: Path, relative: str) -> bool:
 
 
 class DuckDBObjectStore:
-    def __init__(self, settings: Settings) -> None:
+    """One S3 filesystem for every object copied from one book."""
+
+    def __init__(self, settings: Settings, *, filesystem: Any | None = None) -> None:
         self._settings = settings
+        self._fs = filesystem
 
     def put(self, local: Path, url: str) -> None:
-        # shortcut: read_blob under duckdb_memory_limit, fix when the object must land in MinIO
-        with limited_connection() as con:
-            _configure_s3(con, self._settings)
-            con.execute(
-                "COPY (SELECT content FROM read_blob(?)) TO ? "
-                "(FORMAT BLOB, COMPRESSION 'none', USE_TMP_FILE false)",
-                [str(local), url],
-            )
+        path = _s3_object_path(url)
+        with local.open("rb") as source, self._filesystem().open_output_stream(path) as dest:
+            while True:
+                chunk = source.read(_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                dest.write(chunk)
 
     def size(self, url: str) -> int:
-        with limited_connection() as con:
-            _configure_s3(con, self._settings)
-            row = con.execute(_OBJECT_SIZE_SQL, [url]).fetchone()
-        if row is None or row[0] is None:
+        info = self._filesystem().get_file_info(_s3_object_path(url))
+        if info.type != pafs.FileType.File or info.size is None:
             raise OSError(f"missing object {url}")
-        return int(row[0])
+        return int(info.size)
+
+    def _filesystem(self) -> Any:
+        if self._fs is None:
+            self._fs = _s3_filesystem(self._settings)
+        return self._fs
 
 
 def _put_and_check(store: ObjectStore, local: Path, url: str) -> None:
@@ -680,17 +777,43 @@ def _http_404(exc: Exception) -> bool:
 
 
 def _s3_failure(exc: BaseException) -> tuple[int | None, str | None]:
-    """HTTP status and one ``Code: message`` line. The DuckDB essay stays out."""
+    """HTTP status and one ``Code: message`` line. The client essay stays out."""
     text = str(exc)
     status_match = _HTTP_STATUS.search(text)
-    if status_match is None:
+    if status_match is not None:
+        status = int(status_match.group(1))
+        for code, message in _S3_LINE.findall(text):
+            if code == "HTTP":
+                continue
+            return status, f"HTTP {status} {code}: {message.strip()}"
+        return status, f"HTTP {status}"
+    return _pyarrow_s3_failure(text)
+
+
+def _pyarrow_s3_failure(text: str) -> tuple[int | None, str | None]:
+    """One HTTP line from a PyArrow S3 error. Unknown text is not logged."""
+    named = _AWS_NAMED.search(text)
+    if named:
+        code = named.group(1)
+        status = int(named.group(2))
+        message = named.group(3).strip()
+        return status, f"HTTP {status} {code}: {message}"
+    during = _AWS_DURING.search(text)
+    if during:
+        token = during.group(1)
+        status = _AWS_NAME_STATUS.get(token)
+        if status is None:
+            return None, None
+        message = during.group(2).strip()
+        return status, f"HTTP {status} {_AWS_PUBLIC_NAME.get(token, token)}: {message}"
+    response = _AWS_RESPONSE_CODE.search(text)
+    if response is None:
         return None, None
-    status = int(status_match.group(1))
-    for code, message in _S3_LINE.findall(text):
-        if code == "HTTP":
-            continue
-        return status, f"HTTP {status} {code}: {message.strip()}"
-    return status, f"HTTP {status}"
+    status = int(response.group(1))
+    bracket = _AWS_BRACKET.search(text)
+    if bracket is None:
+        return status, f"HTTP {status}"
+    return status, f"HTTP {status} S3: {bracket.group(2).strip()}"
 
 
 def _export_error_detail(exc: BaseException) -> str | None:
@@ -766,6 +889,49 @@ def _put_marker(store: ObjectStore, bucket: str, key: str, uploaded: list[str]) 
 
 # Image build installs httpfs here. The process only loads that file.
 _IMAGE_HTTPFS = Path("/app/.duckdb/extensions")
+
+
+def _s3_object_path(url: str) -> str:
+    """``s3://bucket/key`` without the scheme. That is the path PyArrow addresses."""
+    if not url.startswith("s3://"):
+        raise ValueError(f"not an s3 url: {url}")
+    return url[len("s3://") :]
+
+
+def _s3_filesystem(settings: Settings | None) -> pafs.S3FileSystem:
+    """The same endpoint, region, keys, and path-style as ``_configure_s3``."""
+    if settings is None or not settings.minio_configured():
+        raise RuntimeError("MINIO settings are empty")
+    endpoint, use_ssl = _endpoint(settings.minio_endpoint)
+    secret = ""
+    if settings.minio_secret_key is not None:
+        secret = settings.minio_secret_key.get_secret_value()
+    # One SDK attempt. A 403 must surface here; the export loop decides what to repeat.
+    retry = _s3_retry_once()
+    kwargs: dict[str, Any] = {
+        "access_key": settings.minio_access_key,
+        "secret_key": secret,
+        "region": settings.minio_region,
+        "scheme": "https" if use_ssl else "http",
+        "endpoint_override": endpoint,
+        # Path-style. Virtual-hosted turns the host into ``bucket.host``.
+        "force_virtual_addressing": False,
+        # A background queue would hold every part of a large object.
+        "background_writes": False,
+    }
+    if retry is not None:
+        kwargs["retry_strategy"] = retry
+    return pafs.S3FileSystem(**kwargs)
+
+
+def _s3_retry_once() -> Any:
+    strategy = getattr(pafs, "AwsDefaultS3RetryStrategy", None)
+    if strategy is None:
+        return None
+    try:
+        return strategy(max_attempts=1)
+    except TypeError:
+        return None
 
 
 def _configure_s3(con: Any, settings: Settings | None) -> None:
