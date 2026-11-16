@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -127,6 +128,25 @@ def object_key(prefix: str, job_id: str, relative: str) -> str:
     if cleaned:
         return f"{cleaned}/{head}"
     return head
+
+
+def _new_export_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _export_object_key(prefix: str, job_id: str, export_id: str, relative: str) -> str:
+    """A key no published manifest names yet. The id is one path segment."""
+    tail = relative.strip().lstrip("/")
+    return object_key(prefix, job_id, f"exports/{export_id}/{tail}")
+
+
+def _names_relative(key: str, relative: str) -> bool:
+    tail = relative.strip().lstrip("/")
+    return bool(tail) and key.endswith("/" + tail)
+
+
+def _keys_for_relative(keys: list[str] | set[str], relative: str) -> list[str]:
+    return [key for key in keys if _names_relative(key, relative)]
 
 
 def object_url(bucket: str, key: str) -> str:
@@ -501,30 +521,36 @@ def read_published_file(
 def _open_while_publish_idle(
     settings: Settings, local: Path, job_id: str, relative: str
 ) -> PublishedFile | None:
-    """Open a listed object, or the local file when a copy holds the lock.
+    """Open the listed object, or the local file when a copy holds the lock.
 
-    ``None`` means the marker does not list this key and no copy is running.
+    ``None`` means the marker does not list this file and no copy is running.
     The lock covers the marker check and the first chunk, then the body streams
-    without it.
+    without it. A live export holds the exclusive lock, so this read stays local
+    until that copy finishes.
     """
     from finance_context.store.fs import file_lock
 
     lock_path = _publish_lock_path(settings, job_id, local, relative)
     with file_lock(lock_path, blocking=False, shared=True) as locked:
-        if not locked or _book_export_in_progress(settings, local, job_id, relative):
+        if not locked:
             return stream_local_file(local)
-        if _marker_lists(settings, job_id, relative):
-            return _read_bucket_or_local(settings, local, job_id, relative)
+        state, keys = _load_marker(settings, job_id)
+        if state == "unread":
+            return stream_local_file(local)
+        if state != "ok":
+            return None
+        matches = _keys_for_relative(keys, relative)
+        if len(matches) == 1:
+            return _read_bucket_or_local(settings, local, relative, matches[0])
+        if len(matches) > 1:
+            return stream_local_file(local)
         return None
 
 
 def _read_bucket_or_local(
-    settings: Settings, local: Path, job_id: str, relative: str
+    settings: Settings, local: Path, relative: str, key: str
 ) -> PublishedFile:
-    url = object_url(
-        settings.minio_bucket,
-        object_key(settings.minio_prefix, job_id, relative),
-    )
+    url = object_url(settings.minio_bucket, key)
     opened: PublishedFile | None = None
     try:
         opened = _open_published_object(settings, url)
@@ -572,8 +598,7 @@ def _ensure_published_book(settings: Settings, local: Path, job_id: str, relativ
             if warning:
                 _set_export_warning(dest, warning)
             return
-        wanted = object_key(settings.minio_prefix, job_id, relative)
-        if wanted in keys:
+        if _keys_for_relative(keys, relative):
             return
         try:
             republish_file(settings, local, job_id, relative)
@@ -701,10 +726,10 @@ def export_succeeded_book(
 ) -> str | None:
     """Copy a finished book into the bucket. ``None`` means nothing to report.
 
-    Empty MinIO settings return immediately. A key is left in place only when
-    the marker hash matches the local file and the bucket size matches too.
-    A failed copy drops that key and leaves the others. A missing local file
-    is skipped. The returned warning keeps reads on the local files.
+    Empty MinIO settings return immediately. Changed bytes are written to a new
+    key. The previous object stays until ``_complete.json`` names the new key.
+    A matching hash and size keeps the previous key. A missing local file is
+    skipped. The returned warning keeps reads on the local files.
     """
     if not settings.minio_configured():
         return None
@@ -724,8 +749,6 @@ def _export_body(
     pairs = [(book / name, name) for name in _SHARED]
     pairs.extend((dest / name, name) for name in _SESSION)
     marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
-    confirmed: list[str] = []
-    confirmed_digests: dict[str, str] = {}
     log_event(
         _LOGGER,
         logging.INFO,
@@ -736,109 +759,90 @@ def _export_body(
     started = time.monotonic()
     warning: str | None = None
     failing: str | None = "_complete.json"
-    existed = False
-    listed: list[str] = []
-    # Readers keep the local book until the marker is rewritten below.
-    active = book / ".minio-exporting"
-    active.write_text("1", encoding="utf-8")
+    ready = 0
     try:
-        try:
-            existed, listed, listed_digests = _read_marker_keys(target, settings, job_id)
-            for local, relative in pairs:
-                failing = relative
-                key = object_key(settings.minio_prefix, job_id, relative)
-                if not local.is_file():
-                    _LOGGER.warning("minio export skipped missing %s", relative)
-                    continue
-                url = object_url(settings.minio_bucket, key)
-                digest = _sha256_file(local)
-                if _same_published_file(target, local, url, listed_digests.get(key), digest):
-                    confirmed.append(key)
-                    confirmed_digests[key] = digest
-                    continue
-
-                def upload(local: Path = local, url: str = url) -> None:
-                    _put_and_check(target, local, url)
-
-                _call_with_retry(upload)
-                confirmed.append(key)
-                confirmed_digests[key] = digest
-                failing = None
-            failing = "_complete.json"
-            final = _keys_to_publish(pairs, confirmed, listed, settings, job_id)
-            final_digests = {
-                key: confirmed_digests[key] if key in confirmed_digests else listed_digests[key]
-                for key in final
-                if key in confirmed_digests or key in listed_digests
-            }
-            if not existed or final != listed or any(
-                listed_digests.get(key) != final_digests.get(key) for key in final
+        existed, listed, listed_digests = _read_marker_keys(target, settings, job_id)
+        export_id = _new_export_id()
+        final: list[str] = []
+        final_digests: dict[str, str] = {}
+        uploads: list[tuple[Path, str, str]] = []
+        for local, relative in pairs:
+            failing = relative
+            if not local.is_file():
+                _LOGGER.warning("minio export skipped missing %s", relative)
+                for key in _keys_for_relative(listed, relative):
+                    final.append(key)
+                    if key in listed_digests:
+                        final_digests[key] = listed_digests[key]
+                continue
+            digest = _sha256_file(local)
+            current = _keys_for_relative(listed, relative)
+            published = current[0] if len(current) == 1 else None
+            if published is not None and _same_published_file(
+                target,
+                local,
+                object_url(settings.minio_bucket, published),
+                listed_digests.get(published),
+                digest,
             ):
-                _call_with_retry(
-                    lambda: _put_marker(
-                        target, settings.minio_bucket, marker_key, final, final_digests
-                    )
+                final.append(published)
+                final_digests[published] = digest
+                ready += 1
+                continue
+            key = _export_object_key(settings.minio_prefix, job_id, export_id, relative)
+            uploads.append((local, relative, key))
+            final.append(key)
+            final_digests[key] = digest
+        for local, relative, key in uploads:
+            failing = relative
+            url = object_url(settings.minio_bucket, key)
+
+            def upload(local: Path = local, url: str = url) -> None:
+                _put_and_check(target, local, url)
+
+            _call_with_retry(upload)
+            ready += 1
+        failing = "_complete.json"
+        if not existed or final != listed or any(
+            listed_digests.get(key) != final_digests.get(key) for key in final
+        ):
+            _call_with_retry(
+                lambda: _put_marker(
+                    target, settings.minio_bucket, marker_key, final, final_digests
                 )
-            failing = None
-        except Exception as exc:
-            status, detail = _s3_failure(exc)
-            local_bytes = 0
-            if failing is not None and failing != "_complete.json":
-                local_bytes = next(
-                    (
-                        path.stat().st_size
-                        for path, name in pairs
-                        if name == failing and path.is_file()
-                    ),
-                    0,
-                )
-            _log_export_failure(
-                "minio export failed for job %s at %s (%s bytes)",
-                job_id,
-                failing or "-",
-                local_bytes,
-                detail=detail or _export_error_detail(exc),
             )
-            # 403 and 404 will not update the marker either. Any other failure
-            # drops only the key that did not land, and leaves the rest listed.
-            if status not in {403, 404} and failing not in {None, "_complete.json"}:
-                failed_key = object_key(settings.minio_prefix, job_id, failing)
-                try:
-                    _drop_failed_key(
-                        target,
-                        settings,
-                        marker_key,
-                        listed,
-                        failed_key,
-                        existed=existed,
-                        digests=listed_digests,
-                    )
-                except Exception as drop_exc:
-                    _log_export_failure(
-                        "minio export failed for _complete.json",
-                        detail=_s3_failure(drop_exc)[1] or _export_error_detail(drop_exc),
-                    )
-            warning = _EXPORT_WARNING
-        log_event(
-            _LOGGER,
-            logging.INFO,
-            "export_done",
-            "minio export done",
-            duration_ms=int((time.monotonic() - started) * 1000),
-            objects=len(confirmed),
-            ok=warning is None,
+        failing = None
+    except Exception as exc:
+        detail = _s3_failure(exc)[1]
+        local_bytes = 0
+        if failing is not None and failing != "_complete.json":
+            local_bytes = next(
+                (
+                    path.stat().st_size
+                    for path, name in pairs
+                    if name == failing and path.is_file()
+                ),
+                0,
+            )
+        _log_export_failure(
+            "minio export failed for job %s at %s (%s bytes)",
+            job_id,
+            failing or "-",
+            local_bytes,
+            detail=detail or _export_error_detail(exc),
         )
-        return warning
-    finally:
-        active.unlink(missing_ok=True)
-
-
-def _book_export_in_progress(
-    settings: Settings, local: Path, job_id: str, relative: str
-) -> bool:
-    """True while ``_export_body`` holds this book. The marker is then stale."""
-    lock = _publish_lock_path(settings, job_id, local, relative)
-    return lock.with_name(".minio-exporting").is_file()
+        # The new objects are not in the marker. The previous generation stays published.
+        warning = _EXPORT_WARNING
+    log_event(
+        _LOGGER,
+        logging.INFO,
+        "export_done",
+        "minio export done",
+        duration_ms=int((time.monotonic() - started) * 1000),
+        objects=ready,
+        ok=warning is None,
+    )
+    return warning
 
 
 def _export_retryable(exc: BaseException) -> bool:
@@ -961,47 +965,6 @@ def _remote_size_matches(store: ObjectStore, local: Path, url: str) -> bool:
     return remote == local.stat().st_size
 
 
-def _keys_to_publish(
-    pairs: list[tuple[Path, str]],
-    confirmed: list[str],
-    listed: list[str],
-    settings: Settings,
-    job_id: str,
-) -> list[str]:
-    """Confirmed keys, plus a listed key whose local file is gone."""
-    confirmed_set = set(confirmed)
-    listed_set = set(listed)
-    final: list[str] = []
-    for local, relative in pairs:
-        key = object_key(settings.minio_prefix, job_id, relative)
-        if key in confirmed_set or (key in listed_set and not local.is_file()):
-            final.append(key)
-    return final
-
-
-def _drop_failed_key(
-    store: ObjectStore,
-    settings: Settings,
-    marker_key: str,
-    listed: list[str],
-    failed_key: str,
-    *,
-    existed: bool,
-    digests: dict[str, str],
-) -> None:
-    if failed_key not in listed:
-        return
-    updated = [key for key in listed if key != failed_key]
-    if not existed and not updated:
-        return
-    kept = {key: value for key, value in digests.items() if key in set(updated)}
-
-    def write() -> None:
-        _put_marker(store, settings.minio_bucket, marker_key, updated, kept)
-
-    _call_with_retry(write)
-
-
 def _export_warning_recorded(local: Path, relative: str) -> bool:
     parts = Path(relative).parts
     if not parts:
@@ -1062,13 +1025,6 @@ def _put_and_check(store: ObjectStore, local: Path, url: str) -> None:
     store.put(local, url)
     if store.size(url) != local.stat().st_size:
         raise OSError(f"size mismatch for {url}")
-
-
-def _marker_lists(settings: Settings, job_id: str, relative: str) -> bool:
-    state, keys = _load_marker(settings, job_id)
-    if state != "ok":
-        return False
-    return object_key(settings.minio_prefix, job_id, relative) in keys
 
 
 def _load_marker(settings: Settings, job_id: str) -> tuple[str, set[str]]:
@@ -1189,12 +1145,16 @@ def _mark_published_key(
     digests = _marker_digests(parsed)
     wanted = object_key(settings.minio_prefix, job_id, relative)
     if present:
-        updated = keys if wanted in keys else [*keys, wanted]
+        updated = [key for key in keys if key == wanted or not _names_relative(key, relative)]
+        if wanted not in updated:
+            updated.append(wanted)
         if digest:
             digests[wanted] = digest
     else:
-        updated = [key for key in keys if key != wanted]
-        digests.pop(wanted, None)
+        updated = [key for key in keys if not _names_relative(key, relative)]
+        for key in keys:
+            if _names_relative(key, relative):
+                digests.pop(key, None)
     kept = {key: value for key, value in digests.items() if key in set(updated)}
     if updated == keys and kept == _marker_digests(parsed):
         return True
