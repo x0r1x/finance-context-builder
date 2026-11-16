@@ -143,24 +143,54 @@ class PublishedFile:
         self.content_length = content_length
         self._handle = handle
         self._owner = owner
+        self._pending: bytes | None = None
+        self._gate = threading.Condition()
+        self._busy = False
+
+    def prime(self) -> None:
+        """Read the first chunk before a response is committed."""
+        handle = self._handle
+        if handle is None:
+            self._pending = b""
+            return
+        block = handle.read(_UPLOAD_CHUNK_BYTES)
+        if not block:
+            self._pending = b""
+            return
+        self._pending = block if isinstance(block, bytes) else bytes(block)
 
     def __iter__(self) -> Iterator[bytes]:
-        handle = self._handle
+        with self._gate:
+            self._busy = True
+            handle = self._handle
         try:
+            pending = self._pending
+            self._pending = None
+            if pending:
+                yield pending
+            elif pending is not None:
+                return
             while handle is not None:
                 block = handle.read(_UPLOAD_CHUNK_BYTES)
                 if not block:
                     break
                 yield block if isinstance(block, bytes) else bytes(block)
         finally:
+            with self._gate:
+                self._busy = False
+                self._gate.notify_all()
             self.close()
 
     def close(self) -> None:
-        handle = self._handle
-        self._handle = None
+        """Close the handle. A read that is already inside the handle is left to finish."""
+        with self._gate:
+            while self._busy:
+                self._gate.wait()
+            handle = self._handle
+            self._handle = None
+            self._owner = None
         if handle is not None:
             handle.close()
-        self._owner = None
 
 
 def stream_local_file(path: Path) -> PublishedFile:
@@ -449,6 +479,9 @@ def read_published_file(
     """
     if not settings.minio_configured() or _export_warning_recorded(local, relative):
         return stream_local_file(local)
+    # The marker still names the previous objects until this copy finishes.
+    if _book_export_in_progress(settings, local, job_id, relative):
+        return stream_local_file(local)
     if _marker_lists(settings, job_id, relative):
         return _read_bucket_or_local(settings, local, job_id, relative)
     _ensure_published_book(settings, local, job_id, relative)
@@ -464,9 +497,14 @@ def _read_bucket_or_local(
         settings.minio_bucket,
         object_key(settings.minio_prefix, job_id, relative),
     )
+    opened: PublishedFile | None = None
     try:
-        return _open_published_object(settings, url)
+        opened = _open_published_object(settings, url)
+        opened.prime()
+        return opened
     except Exception as exc:
+        if opened is not None:
+            opened.close()
         # Same rule as an export failure: memory text, or one HTTP line.
         # Anything else can carry a credential essay.
         _log_export_failure(
@@ -664,76 +702,94 @@ def _export_body(
     failing: str | None = "_complete.json"
     existed = False
     listed: list[str] = []
+    # Readers keep the local book until the marker is rewritten below.
+    active = book / ".minio-exporting"
+    active.write_text("1", encoding="utf-8")
     try:
-        existed, listed = _read_marker_keys(target, settings, job_id)
-        for local, relative in pairs:
-            failing = relative
-            key = object_key(settings.minio_prefix, job_id, relative)
-            if not local.is_file():
-                _LOGGER.warning("minio export skipped missing %s", relative)
-                continue
-            url = object_url(settings.minio_bucket, key)
-            if _remote_size_matches(target, local, url):
+        try:
+            existed, listed = _read_marker_keys(target, settings, job_id)
+            for local, relative in pairs:
+                failing = relative
+                key = object_key(settings.minio_prefix, job_id, relative)
+                if not local.is_file():
+                    _LOGGER.warning("minio export skipped missing %s", relative)
+                    continue
+                url = object_url(settings.minio_bucket, key)
+                if _remote_size_matches(target, local, url):
+                    confirmed.append(key)
+                    continue
+
+                def upload(local: Path = local, url: str = url) -> None:
+                    _put_and_check(target, local, url)
+
+                _call_with_retry(upload)
                 confirmed.append(key)
-                continue
-
-            def upload(local: Path = local, url: str = url) -> None:
-                _put_and_check(target, local, url)
-
-            _call_with_retry(upload)
-            confirmed.append(key)
+                failing = None
+            failing = "_complete.json"
+            final = _keys_to_publish(pairs, confirmed, listed, settings, job_id)
+            if not existed or final != listed:
+                _call_with_retry(
+                    lambda: _put_marker(target, settings.minio_bucket, marker_key, final)
+                )
             failing = None
-        failing = "_complete.json"
-        final = _keys_to_publish(pairs, confirmed, listed, settings, job_id)
-        if not existed or final != listed:
-            _call_with_retry(
-                lambda: _put_marker(target, settings.minio_bucket, marker_key, final)
+        except Exception as exc:
+            status, detail = _s3_failure(exc)
+            local_bytes = 0
+            if failing is not None and failing != "_complete.json":
+                local_bytes = next(
+                    (
+                        path.stat().st_size
+                        for path, name in pairs
+                        if name == failing and path.is_file()
+                    ),
+                    0,
+                )
+            _log_export_failure(
+                "minio export failed for job %s at %s (%s bytes)",
+                job_id,
+                failing or "-",
+                local_bytes,
+                detail=detail or _export_error_detail(exc),
             )
-        failing = None
-    except Exception as exc:
-        status, detail = _s3_failure(exc)
-        local_bytes = 0
-        if failing is not None and failing != "_complete.json":
-            local_bytes = next(
-                (path.stat().st_size for path, name in pairs if name == failing and path.is_file()),
-                0,
-            )
-        _log_export_failure(
-            "minio export failed for job %s at %s (%s bytes)",
-            job_id,
-            failing or "-",
-            local_bytes,
-            detail=detail or _export_error_detail(exc),
+            # 403 and 404 will not update the marker either. Any other failure
+            # drops only the key that did not land, and leaves the rest listed.
+            if status not in {403, 404} and failing not in {None, "_complete.json"}:
+                failed_key = object_key(settings.minio_prefix, job_id, failing)
+                try:
+                    _drop_failed_key(
+                        target,
+                        settings,
+                        marker_key,
+                        listed,
+                        failed_key,
+                        existed=existed,
+                    )
+                except Exception as drop_exc:
+                    _log_export_failure(
+                        "minio export failed for _complete.json",
+                        detail=_s3_failure(drop_exc)[1] or _export_error_detail(drop_exc),
+                    )
+            warning = _EXPORT_WARNING
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "export_done",
+            "minio export done",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            objects=len(confirmed),
+            ok=warning is None,
         )
-        # 403 and 404 will not update the marker either. Any other failure
-        # drops only the key that did not land, and leaves the rest listed.
-        if status not in {403, 404} and failing not in {None, "_complete.json"}:
-            failed_key = object_key(settings.minio_prefix, job_id, failing)
-            try:
-                _drop_failed_key(
-                    target,
-                    settings,
-                    marker_key,
-                    listed,
-                    failed_key,
-                    existed=existed,
-                )
-            except Exception as drop_exc:
-                _log_export_failure(
-                    "minio export failed for _complete.json",
-                    detail=_s3_failure(drop_exc)[1] or _export_error_detail(drop_exc),
-                )
-        warning = _EXPORT_WARNING
-    log_event(
-        _LOGGER,
-        logging.INFO,
-        "export_done",
-        "minio export done",
-        duration_ms=int((time.monotonic() - started) * 1000),
-        objects=len(confirmed),
-        ok=warning is None,
-    )
-    return warning
+        return warning
+    finally:
+        active.unlink(missing_ok=True)
+
+
+def _book_export_in_progress(
+    settings: Settings, local: Path, job_id: str, relative: str
+) -> bool:
+    """True while ``_export_body`` holds this book. The marker is then stale."""
+    lock = _publish_lock_path(settings, job_id, local, relative)
+    return lock.with_name(".minio-exporting").is_file()
 
 
 def _export_retryable(exc: BaseException) -> bool:
@@ -801,6 +857,9 @@ def _read_marker_keys(
 
     try:
         return True, _call_with_retry(read)
+    except ValueError:
+        # Truncated or non-object JSON. Treat it as absent so this export rewrites it.
+        return False, []
     except Exception as exc:
         if _is_missing_object(exc):
             return False, []

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 
 import pyarrow as pa
@@ -549,6 +550,71 @@ def test_failed_recopy_hides_the_bucket_until_the_marker_is_rewritten(
     assert _body(read_published_file(settings, cells, _JOB, "raw/cells.parquet")) == (
         store.objects[prefix + "raw/cells.parquet"]
     )
+
+
+def test_reexport_does_not_serve_a_stale_graph_after_context_json_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """context.json is already the new object; graph.json must not stay the old one."""
+    root = tmp_path / "data"
+    book = root / "shared" / "books" / _JOB
+    dest = root / "sessions" / "local" / "jobs" / _JOB
+    _fill(book, dest)
+    settings = _minio(data_dir=root)
+    store = _MemoryStore()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    context = dest / "context" / "context.json"
+    graph = dest / "graph" / "graph.json"
+    context.write_bytes(b'{"v":2}\n')
+    graph.write_bytes(b'{"nodes":2}\n')
+    replaced = threading.Event()
+    release = threading.Event()
+    original_put = store.put
+
+    def put(local: Path, url: str) -> None:
+        if url.endswith("/context/context.json"):
+            original_put(local, url)
+            replaced.set()
+            assert release.wait(5)
+            return
+        original_put(local, url)
+
+    monkeypatch.setattr(store, "put", put)
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    worker = threading.Thread(
+        target=export_succeeded_book,
+        kwargs={
+            "settings": settings,
+            "job_id": _JOB,
+            "book": book,
+            "dest": dest,
+            "store": store,
+        },
+    )
+    worker.start()
+    assert replaced.wait(5)
+    try:
+        served = _body(read_published_file(settings, graph, _JOB, "graph/graph.json"))
+    finally:
+        release.set()
+        worker.join(5)
+    assert served == b'{"nodes":2}\n'
+
+
+def test_corrupt_marker_is_replaced_by_the_next_export(tmp_path: Path) -> None:
+    """A truncated ``_complete.json`` must not stick. Payload is the single byte ``{``."""
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    settings = _minio()
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    store.objects[prefix + "_complete.json"] = b"{"
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    marker = json.loads(store.objects[prefix + "_complete.json"])
+    assert object_key("team/a", _JOB, "context/context.json") in marker["keys"]
+    assert len(marker["keys"]) == len(_SHARED) + len(_SESSION)
 
 
 def test_failed_republish_drops_the_key_so_the_next_read_is_local(
@@ -1172,6 +1238,87 @@ def test_published_read_streams_the_bucket_in_chunks(
     body = read_published_file(_minio(), local, _JOB, "context/context.json")
     assert body.content_length == len(payload)
     assert list(body) == [payload[:_UPLOAD_CHUNK_BYTES], payload[_UPLOAD_CHUNK_BYTES:]]
+
+
+def test_opened_bucket_falls_back_to_local_when_the_first_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HEAD and open succeed. The first chunk read is what used to escape the try."""
+    local = tmp_path / "context" / "context.json"
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"local-bytes")
+    marker = (
+        json.dumps({"keys": [object_key("team/a", _JOB, "context/context.json")]}) + "\n"
+    ).encode()
+
+    class _Reset:
+        def read(self, size: int) -> bytes:
+            del size
+            raise OSError("connection reset")
+
+        def close(self) -> None:
+            return None
+
+    def open_object(settings: Settings, url: str) -> PublishedFile:
+        del settings, url
+        return PublishedFile(4, _Reset())
+
+    def fake_read(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.endswith("/_complete.json"):
+            return marker
+        raise AssertionError(uri)
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    monkeypatch.setattr("finance_context.store.duckdb_io._open_published_object", open_object)
+    assert _body(read_published_file(_minio(), local, _JOB, "context/context.json")) == (
+        b"local-bytes"
+    )
+
+
+def test_close_during_a_blocked_read_waits_until_that_read_returns() -> None:
+    """A client disconnect calls close while the worker thread is inside read."""
+
+    class _Handle:
+        def __init__(self) -> None:
+            self.in_read = threading.Event()
+            self.finish = threading.Event()
+            self.closed_during_read = False
+            self._closed = False
+            self._calls = 0
+
+        def read(self, size: int) -> bytes:
+            del size
+            self._calls += 1
+            if self._calls > 1:
+                return b""
+            self.in_read.set()
+            assert self.finish.wait(5)
+            self.closed_during_read = self._closed
+            return b"abc"
+
+        def close(self) -> None:
+            self._closed = True
+
+    handle = _Handle()
+    body = PublishedFile(3, handle)
+
+    def consume() -> None:
+        assert list(body) == [b"abc"]
+
+    worker = threading.Thread(target=consume)
+    closer = threading.Thread(target=body.close)
+    worker.start()
+    assert handle.in_read.wait(5)
+    closer.start()
+    # close() currently calls handle.close() on this thread, so it returns at once.
+    closer.join(1)
+    assert closer.is_alive()
+    handle.finish.set()
+    worker.join(5)
+    closer.join(5)
+    assert not worker.is_alive()
+    assert handle.closed_during_read is False
 
 
 def test_bucket_read_logs_a_memory_error_and_hides_the_essay(
