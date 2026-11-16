@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -33,7 +34,13 @@ from finance_context.store.duckdb_io import (
     republish_file,
     stream_local_file,
 )
-from finance_context.store.fs import RowGroupWriter, read_parquet, write_json, write_parquet
+from finance_context.store.fs import (
+    RowGroupWriter,
+    file_lock,
+    read_parquet,
+    write_json,
+    write_parquet,
+)
 
 _JOB = "ab" * 32
 _SECRET = "super-secret-value"
@@ -194,6 +201,7 @@ def test_export_lists_every_book_key_and_writes_the_marker_last(tmp_path: Path) 
         assert all(name not in url for url in store.order)
     marker = json.loads(store.objects[store.order[-1]])
     assert marker["keys"] == [object_key("team/a", _JOB, name) for name in (*_SHARED, *_SESSION)]
+    assert set(marker["sha256"]) == set(marker["keys"])
     assert store.objects[prefix + "raw/cells.parquet"] == b"shared:raw/cells.parquet\n"
     assert store.objects[prefix + "context/context.json"] == b"session:context/context.json\n"
     assert store.objects[prefix + "context/context.md"] == b"session:context/context.md\n"
@@ -408,11 +416,97 @@ def test_second_export_skips_a_key_whose_size_matches(tmp_path: Path) -> None:
     local = dest / "context" / "context.json"
     local.write_bytes(b'{"v":2}\n')
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
-    # The key was already listed, so a same-size check does not rewrite the marker.
-    assert store.order[len(copied) :] == [prefix + "context/context.json"]
+    context_key = object_key("team/a", _JOB, "context/context.json")
+    assert store.order[len(copied) :] == [
+        prefix + "context/context.json",
+        prefix + "_complete.json",
+    ]
     marker = json.loads(store.objects[prefix + "_complete.json"])
-    assert object_key("team/a", _JOB, "context/context.json") in marker["keys"]
+    assert context_key in marker["keys"]
+    assert marker["sha256"][context_key] == hashlib.sha256(local.read_bytes()).hexdigest()
     assert len(marker["keys"]) == len(_SHARED) + len(_SESSION)
+
+
+def test_same_size_and_different_bytes_are_uploaded(tmp_path: Path) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    settings = _minio()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    context_key = object_key("team/a", _JOB, "context/context.json")
+    local = dest / "context" / "context.json"
+    flipped = bytearray(local.read_bytes())
+    flipped[0] ^= 0x1
+    local.write_bytes(bytes(flipped))
+    copied = len(store.order)
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    assert store.order[copied:] == [prefix + "context/context.json", prefix + "_complete.json"]
+    assert store.objects[prefix + "context/context.json"] == bytes(flipped)
+    marker = json.loads(store.objects[prefix + "_complete.json"])
+    assert marker["sha256"][context_key] == hashlib.sha256(bytes(flipped)).hexdigest()
+
+
+def test_marker_without_a_hash_uploads_the_same_bytes_again(tmp_path: Path) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    settings = _minio()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    marker_url = prefix + "_complete.json"
+    context_key = object_key("team/a", _JOB, "context/context.json")
+    marker = json.loads(store.objects[marker_url])
+    marker["sha256"].pop(context_key)
+    store.objects[marker_url] = (json.dumps(marker, indent=2) + "\n").encode()
+    copied = len(store.order)
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    assert store.order[copied:] == [prefix + "context/context.json", prefix + "_complete.json"]
+    restored = json.loads(store.objects[marker_url])
+    assert restored["sha256"][context_key] == hashlib.sha256(
+        (dest / "context" / "context.json").read_bytes()
+    ).hexdigest()
+
+
+def test_failed_marker_keeps_the_old_hash_and_the_next_export_uploads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    settings = _minio()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    marker_url = prefix + "_complete.json"
+    context_key = object_key("team/a", _JOB, "context/context.json")
+    old_hash = json.loads(store.objects[marker_url])["sha256"][context_key]
+    local = dest / "context" / "context.json"
+    flipped = bytearray(local.read_bytes())
+    flipped[0] ^= 0x1
+    local.write_bytes(bytes(flipped))
+    original_put = store.put
+    failed = {"done": False}
+
+    def put(local_path: Path, url: str) -> None:
+        if url.endswith("/_complete.json") and not failed["done"]:
+            failed["done"] = True
+            raise RuntimeError("marker down")
+        original_put(local_path, url)
+
+    monkeypatch.setattr(store, "put", put)
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) == (
+        "minio export failed"
+    )
+    marker = json.loads(store.objects[marker_url])
+    assert marker["sha256"][context_key] == old_hash
+    assert store.objects[prefix + "context/context.json"] == bytes(flipped)
+    monkeypatch.setattr(store, "put", original_put)
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    rewritten = json.loads(store.objects[marker_url])
+    assert rewritten["sha256"][context_key] == hashlib.sha256(bytes(flipped)).hexdigest()
 
 
 def test_missing_local_file_does_not_drop_the_other_keys(
@@ -1319,6 +1413,154 @@ def test_close_during_a_blocked_read_waits_until_that_read_returns() -> None:
     closer.join(5)
     assert not worker.is_alive()
     assert handle.closed_during_read is False
+
+
+def test_close_between_chunks_returns_and_a_second_close_waits_for_nothing() -> None:
+    class _Handle:
+        def __init__(self) -> None:
+            self.closed = False
+            self._calls = 0
+
+        def read(self, size: int) -> bytes:
+            del size
+            self._calls += 1
+            if self._calls == 1:
+                return b"a" * 4
+            if self._calls == 2:
+                return b"b" * 4
+            return b""
+
+        def close(self) -> None:
+            self.closed = True
+
+    handle = _Handle()
+    body = PublishedFile(8, handle)
+    iterator = iter(body)
+    assert next(iterator) == b"aaaa"
+    closer = threading.Thread(target=body.close)
+    closer.start()
+    closer.join(1)
+    assert not closer.is_alive()
+    assert handle.closed
+    iterator.close()
+    body.close()
+
+    whole = PublishedFile(3, _MemoryHandle(b"abc"))
+    assert _body(whole) == b"abc"
+    whole.close()
+
+
+def test_busy_publish_lock_serves_the_local_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "data"
+    book = root / "shared" / "books" / _JOB
+    dest = root / "sessions" / "local" / "jobs" / _JOB
+    _fill(book, dest)
+    settings = _minio(data_dir=root)
+    store = _MemoryStore()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    local = dest / "context" / "context.json"
+    local.write_bytes(b"local-bytes")
+    store.objects[prefix + "context/context.json"] = b"bucket-bytes"
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    release = threading.Event()
+    held = threading.Event()
+
+    def hold() -> None:
+        with file_lock(book / ".minio-publish.lock"):
+            held.set()
+            assert release.wait(5)
+
+    worker = threading.Thread(target=hold)
+    worker.start()
+    assert held.wait(5)
+    try:
+        served = _body(read_published_file(settings, local, _JOB, "context/context.json"))
+    finally:
+        release.set()
+        worker.join(5)
+    assert served == b"local-bytes"
+
+
+def test_idle_publish_lock_serves_the_bucket_and_frees_the_lock_after_prime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "data"
+    book = root / "shared" / "books" / _JOB
+    dest = root / "sessions" / "local" / "jobs" / _JOB
+    _fill(book, dest)
+    settings = _minio(data_dir=root)
+    local = dest / "context" / "context.json"
+    local.write_bytes(b"local-bytes")
+    payload = b"b" * (_UPLOAD_CHUNK_BYTES + 5)
+    marker = (
+        json.dumps({"keys": [object_key("team/a", _JOB, "context/context.json")]}) + "\n"
+    ).encode()
+
+    class _Handle:
+        def __init__(self) -> None:
+            self._offset = 0
+            self.in_prime = threading.Event()
+            self.release_prime = threading.Event()
+            self.in_rest = threading.Event()
+            self.release_rest = threading.Event()
+
+        def read(self, size: int) -> bytes:
+            if self._offset == 0:
+                self.in_prime.set()
+                assert self.release_prime.wait(5)
+            elif self._offset == _UPLOAD_CHUNK_BYTES:
+                self.in_rest.set()
+                assert self.release_rest.wait(5)
+            chunk = payload[self._offset : self._offset + size]
+            self._offset += len(chunk)
+            return chunk
+
+        def close(self) -> None:
+            return None
+
+    handle = _Handle()
+
+    def open_object(settings: Settings, url: str) -> PublishedFile:
+        del settings, url
+        return PublishedFile(len(payload), handle)
+
+    def fake_read(uri: str, settings: Settings | None = None) -> bytes:
+        del settings
+        if uri.endswith("/_complete.json"):
+            return marker
+        raise AssertionError(uri)
+
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    monkeypatch.setattr("finance_context.store.duckdb_io._open_published_object", open_object)
+    found: list[PublishedFile] = []
+
+    def read() -> None:
+        found.append(read_published_file(settings, local, _JOB, "context/context.json"))
+
+    worker = threading.Thread(target=read)
+    worker.start()
+    assert handle.in_prime.wait(5)
+    try:
+        with file_lock(book / ".minio-publish.lock", blocking=False) as locked:
+            assert locked is False
+    finally:
+        handle.release_prime.set()
+    worker.join(5)
+    assert found
+    with file_lock(book / ".minio-publish.lock", blocking=False) as locked:
+        assert locked is True
+    consumer = threading.Thread(target=lambda: list(found[0]))
+    consumer.start()
+    assert handle.in_rest.wait(5)
+    with file_lock(book / ".minio-publish.lock", blocking=False) as locked:
+        assert locked is True
+    handle.release_rest.set()
+    consumer.join(5)
+    assert not consumer.is_alive()
 
 
 def test_bucket_read_logs_a_memory_error_and_hides_the_essay(

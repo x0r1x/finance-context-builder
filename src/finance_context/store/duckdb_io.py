@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -160,9 +161,6 @@ class PublishedFile:
         self._pending = block if isinstance(block, bytes) else bytes(block)
 
     def __iter__(self) -> Iterator[bytes]:
-        with self._gate:
-            self._busy = True
-            handle = self._handle
         try:
             pending = self._pending
             self._pending = None
@@ -170,19 +168,29 @@ class PublishedFile:
                 yield pending
             elif pending is not None:
                 return
-            while handle is not None:
-                block = handle.read(_UPLOAD_CHUNK_BYTES)
+            while True:
+                with self._gate:
+                    current = self._handle
+                    if current is None:
+                        return
+                    self._busy = True
+                try:
+                    block = current.read(_UPLOAD_CHUNK_BYTES)
+                finally:
+                    with self._gate:
+                        self._busy = False
+                        self._gate.notify_all()
                 if not block:
                     break
                 yield block if isinstance(block, bytes) else bytes(block)
         finally:
-            with self._gate:
-                self._busy = False
-                self._gate.notify_all()
             self.close()
 
     def close(self) -> None:
-        """Close the handle. A read that is already inside the handle is left to finish."""
+        """Close the handle. A read that is already inside the handle is left to finish.
+
+        Between chunks the iterator is paused, so ``close`` does not wait.
+        """
         with self._gate:
             while self._busy:
                 self._gate.wait()
@@ -479,15 +487,35 @@ def read_published_file(
     """
     if not settings.minio_configured() or _export_warning_recorded(local, relative):
         return stream_local_file(local)
-    # The marker still names the previous objects until this copy finishes.
-    if _book_export_in_progress(settings, local, job_id, relative):
-        return stream_local_file(local)
-    if _marker_lists(settings, job_id, relative):
-        return _read_bucket_or_local(settings, local, job_id, relative)
+    opened = _open_while_publish_idle(settings, local, job_id, relative)
+    if opened is not None:
+        return opened
+    # The shared lock is released before a copy. The copy takes the exclusive one.
     _ensure_published_book(settings, local, job_id, relative)
-    if _marker_lists(settings, job_id, relative):
-        return _read_bucket_or_local(settings, local, job_id, relative)
+    opened = _open_while_publish_idle(settings, local, job_id, relative)
+    if opened is not None:
+        return opened
     return stream_local_file(local)
+
+
+def _open_while_publish_idle(
+    settings: Settings, local: Path, job_id: str, relative: str
+) -> PublishedFile | None:
+    """Open a listed object, or the local file when a copy holds the lock.
+
+    ``None`` means the marker does not list this key and no copy is running.
+    The lock covers the marker check and the first chunk, then the body streams
+    without it.
+    """
+    from finance_context.store.fs import file_lock
+
+    lock_path = _publish_lock_path(settings, job_id, local, relative)
+    with file_lock(lock_path, blocking=False, shared=True) as locked:
+        if not locked or _book_export_in_progress(settings, local, job_id, relative):
+            return stream_local_file(local)
+        if _marker_lists(settings, job_id, relative):
+            return _read_bucket_or_local(settings, local, job_id, relative)
+        return None
 
 
 def _read_bucket_or_local(
@@ -652,7 +680,14 @@ def _republish_body(
     if not _mark_published_key(target, settings, job_id, relative, present=False):
         raise OSError("minio export failed for _complete.json")
     _put_and_check(target, local, url)
-    if not _mark_published_key(target, settings, job_id, relative, present=True):
+    if not _mark_published_key(
+        target,
+        settings,
+        job_id,
+        relative,
+        present=True,
+        digest=_sha256_file(local),
+    ):
         raise OSError("minio export failed for _complete.json")
 
 
@@ -666,10 +701,10 @@ def export_succeeded_book(
 ) -> str | None:
     """Copy a finished book into the bucket. ``None`` means nothing to report.
 
-    Empty MinIO settings return immediately. A key whose bucket object is
-    already the same size is left in place. A failed copy drops that key and
-    leaves the others. A missing local file is skipped. The returned warning
-    keeps reads on the local files.
+    Empty MinIO settings return immediately. A key is left in place only when
+    the marker hash matches the local file and the bucket size matches too.
+    A failed copy drops that key and leaves the others. A missing local file
+    is skipped. The returned warning keeps reads on the local files.
     """
     if not settings.minio_configured():
         return None
@@ -690,6 +725,7 @@ def _export_body(
     pairs.extend((dest / name, name) for name in _SESSION)
     marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
     confirmed: list[str] = []
+    confirmed_digests: dict[str, str] = {}
     log_event(
         _LOGGER,
         logging.INFO,
@@ -707,7 +743,7 @@ def _export_body(
     active.write_text("1", encoding="utf-8")
     try:
         try:
-            existed, listed = _read_marker_keys(target, settings, job_id)
+            existed, listed, listed_digests = _read_marker_keys(target, settings, job_id)
             for local, relative in pairs:
                 failing = relative
                 key = object_key(settings.minio_prefix, job_id, relative)
@@ -715,8 +751,10 @@ def _export_body(
                     _LOGGER.warning("minio export skipped missing %s", relative)
                     continue
                 url = object_url(settings.minio_bucket, key)
-                if _remote_size_matches(target, local, url):
+                digest = _sha256_file(local)
+                if _same_published_file(target, local, url, listed_digests.get(key), digest):
                     confirmed.append(key)
+                    confirmed_digests[key] = digest
                     continue
 
                 def upload(local: Path = local, url: str = url) -> None:
@@ -724,12 +762,22 @@ def _export_body(
 
                 _call_with_retry(upload)
                 confirmed.append(key)
+                confirmed_digests[key] = digest
                 failing = None
             failing = "_complete.json"
             final = _keys_to_publish(pairs, confirmed, listed, settings, job_id)
-            if not existed or final != listed:
+            final_digests = {
+                key: confirmed_digests[key] if key in confirmed_digests else listed_digests[key]
+                for key in final
+                if key in confirmed_digests or key in listed_digests
+            }
+            if not existed or final != listed or any(
+                listed_digests.get(key) != final_digests.get(key) for key in final
+            ):
                 _call_with_retry(
-                    lambda: _put_marker(target, settings.minio_bucket, marker_key, final)
+                    lambda: _put_marker(
+                        target, settings.minio_bucket, marker_key, final, final_digests
+                    )
                 )
             failing = None
         except Exception as exc:
@@ -763,6 +811,7 @@ def _export_body(
                         listed,
                         failed_key,
                         existed=existed,
+                        digests=listed_digests,
                     )
                 except Exception as drop_exc:
                     _log_export_failure(
@@ -841,29 +890,62 @@ def _is_missing_object(exc: BaseException) -> bool:
 
 def _read_marker_keys(
     store: ObjectStore, settings: Settings, job_id: str
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], dict[str, str]]:
     """``False`` means the marker object is absent. The key order is kept."""
     url = object_url(
         settings.minio_bucket,
         object_key(settings.minio_prefix, job_id, "_complete.json"),
     )
 
-    def read() -> list[str]:
+    def read() -> tuple[list[str], dict[str, str]]:
         parsed = json.loads(store.get(url))
         keys = parsed.get("keys") if isinstance(parsed, dict) else None
         if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
             raise ValueError("marker")
-        return list(keys)
+        digests = _marker_digests(parsed) if isinstance(parsed, dict) else {}
+        return list(keys), digests
 
     try:
-        return True, _call_with_retry(read)
+        keys, digests = _call_with_retry(read)
     except ValueError:
         # Truncated or non-object JSON. Treat it as absent so this export rewrites it.
-        return False, []
+        return False, [], {}
     except Exception as exc:
         if _is_missing_object(exc):
-            return False, []
+            return False, [], {}
         raise
+    return True, keys, digests
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(_UPLOAD_CHUNK_BYTES)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _marker_digests(parsed: dict[str, object]) -> dict[str, str]:
+    raw = parsed.get("sha256")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def _same_published_file(
+    store: ObjectStore, local: Path, url: str, listed_digest: str | None, digest: str
+) -> bool:
+    """True when the marker hash and the bucket size both match this file."""
+    if not listed_digest or listed_digest != digest:
+        return False
+    return _remote_size_matches(store, local, url)
 
 
 def _remote_size_matches(store: ObjectStore, local: Path, url: str) -> bool:
@@ -905,15 +987,17 @@ def _drop_failed_key(
     failed_key: str,
     *,
     existed: bool,
+    digests: dict[str, str],
 ) -> None:
     if failed_key not in listed:
         return
     updated = [key for key in listed if key != failed_key]
     if not existed and not updated:
         return
+    kept = {key: value for key, value in digests.items() if key in set(updated)}
 
     def write() -> None:
-        _put_marker(store, settings.minio_bucket, marker_key, updated)
+        _put_marker(store, settings.minio_bucket, marker_key, updated, kept)
 
     _call_with_retry(write)
 
@@ -1090,6 +1174,7 @@ def _mark_published_key(
     relative: str,
     *,
     present: bool,
+    digest: str | None = None,
 ) -> bool:
     marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
     url = object_url(settings.minio_bucket, marker_key)
@@ -1099,25 +1184,39 @@ def _mark_published_key(
         _LOGGER.warning("minio export failed for _complete.json")
         return False
     keys = parsed.get("keys") if isinstance(parsed, dict) else None
-    if not isinstance(keys, list):
+    if not isinstance(keys, list) or not isinstance(parsed, dict):
         return False
+    digests = _marker_digests(parsed)
     wanted = object_key(settings.minio_prefix, job_id, relative)
     if present:
         updated = keys if wanted in keys else [*keys, wanted]
+        if digest:
+            digests[wanted] = digest
     else:
         updated = [key for key in keys if key != wanted]
-    if updated == keys:
+        digests.pop(wanted, None)
+    kept = {key: value for key, value in digests.items() if key in set(updated)}
+    if updated == keys and kept == _marker_digests(parsed):
         return True
     try:
-        _put_marker(store, settings.minio_bucket, marker_key, updated)
+        _put_marker(store, settings.minio_bucket, marker_key, updated, kept)
     except Exception:
         _LOGGER.warning("minio export failed for _complete.json")
         return False
     return True
 
 
-def _put_marker(store: ObjectStore, bucket: str, key: str, uploaded: list[str]) -> None:
-    payload = (json.dumps({"keys": uploaded}, indent=2) + "\n").encode("utf-8")
+def _put_marker(
+    store: ObjectStore,
+    bucket: str,
+    key: str,
+    uploaded: list[str],
+    digests: dict[str, str] | None = None,
+) -> None:
+    body: dict[str, object] = {"keys": uploaded}
+    if digests:
+        body["sha256"] = {name: digests[name] for name in uploaded if name in digests}
+    payload = (json.dumps(body, indent=2) + "\n").encode("utf-8")
     with tempfile.NamedTemporaryFile(prefix=".complete.", suffix=".json") as handle:
         handle.write(payload)
         handle.flush()
