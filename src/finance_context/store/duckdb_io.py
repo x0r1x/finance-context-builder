@@ -149,6 +149,28 @@ def _keys_for_relative(keys: list[str] | set[str], relative: str) -> list[str]:
     return [key for key in keys if _names_relative(key, relative)]
 
 
+def _session_file(relative: str) -> bool:
+    return relative in _SESSION
+
+
+def _marker_object_key(settings: Settings, job_id: str, relative: str) -> str:
+    """Session documents do not share a manifest with another session of this book."""
+    if _session_file(relative):
+        session = settings.session_id
+        return object_key(settings.minio_prefix, job_id, f"sessions/{session}/_complete.json")
+    return object_key(settings.minio_prefix, job_id, "_complete.json")
+
+
+def _fresh_object_key(settings: Settings, job_id: str, export_id: str, relative: str) -> str:
+    tail = relative.strip().lstrip("/")
+    if _session_file(relative):
+        session = settings.session_id
+        return object_key(
+            settings.minio_prefix, job_id, f"sessions/{session}/exports/{export_id}/{tail}"
+        )
+    return _export_object_key(settings.minio_prefix, job_id, export_id, relative)
+
+
 def object_url(bucket: str, key: str) -> str:
     return f"s3://{bucket}/{key}"
 
@@ -507,6 +529,9 @@ def read_published_file(
     """
     if not settings.minio_configured() or _export_warning_recorded(local, relative):
         return stream_local_file(local)
+    dest = _session_dest(local, relative)
+    if dest is not None and publish_generation_pending(dest):
+        _ensure_published_book(settings, local, job_id, relative)
     opened = _open_while_publish_idle(settings, local, job_id, relative)
     if opened is not None:
         return opened
@@ -534,7 +559,7 @@ def _open_while_publish_idle(
     with file_lock(lock_path, blocking=False, shared=True) as locked:
         if not locked:
             return stream_local_file(local)
-        state, keys = _load_marker(settings, job_id)
+        state, keys = _load_marker(settings, job_id, relative)
         if state == "unread":
             return stream_local_file(local)
         if state != "ok":
@@ -587,27 +612,37 @@ def _ensure_published_book(settings: Settings, local: Path, job_id: str, relativ
     if not _local_book_complete(settings, job_id, dest):
         return
     book = shared_book_dir(settings.data_dir, job_id)
-    with _publish_lock(book / ".minio-publish.lock"):
-        if _export_warning_recorded(local, relative) or not _job_is_settled(dest):
+    # The pipeline holds book/.lock across the rebuild and then this publish lock.
+    # Take the book lock first so the two never wait on each other.
+    from finance_context.store.fs import file_lock
+
+    with file_lock(book / ".lock", blocking=False) as held:
+        if not held:
             return
-        state, keys = _load_marker(settings, job_id)
-        if state == "unread":
-            return
-        if state == "missing":
-            warning = export_succeeded_book(settings, job_id=job_id, book=book, dest=dest)
-            if warning:
-                _set_export_warning(dest, warning)
-            return
-        if _keys_for_relative(keys, relative):
-            return
-        try:
-            republish_file(settings, local, job_id, relative)
-        except Exception as exc:
-            detail = _export_error_detail(exc)
-            if detail is None:
-                _LOGGER.warning("minio export failed for %s", relative)
-            else:
-                _LOGGER.warning("minio export failed for %s: %s", relative, detail)
+        with _publish_lock(book / ".minio-publish.lock"):
+            if _export_warning_recorded(local, relative) or not _job_is_settled(dest):
+                return
+            pending = publish_generation_pending(dest)
+            state, keys = _load_marker(settings, job_id, relative)
+            if state == "unread":
+                return
+            if state == "missing" or pending:
+                warning = export_succeeded_book(settings, job_id=job_id, book=book, dest=dest)
+                if warning:
+                    _set_export_warning(dest, warning)
+                else:
+                    record_published_generation(dest)
+                return
+            if _keys_for_relative(keys, relative):
+                return
+            try:
+                republish_file(settings, local, job_id, relative)
+            except Exception as exc:
+                detail = _export_error_detail(exc)
+                if detail is None:
+                    _LOGGER.warning("minio export failed for %s", relative)
+                else:
+                    _LOGGER.warning("minio export failed for %s: %s", relative, detail)
 
 
 def _session_dest(local: Path, relative: str) -> Path | None:
@@ -636,6 +671,36 @@ def _local_book_complete(settings: Settings, job_id: str, dest: Path) -> bool:
     shared_ready = all((book / name).is_file() for name in _SHARED)
     session_ready = all((dest / name).is_file() for name in _SESSION)
     return shared_ready and session_ready
+
+
+def publish_generation_pending(dest: Path) -> bool:
+    """True when this session's meta generation is not the one last published."""
+    meta_path = dest / "meta" / "meta.json"
+    try:
+        stored = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(stored, dict) or "generation" not in stored:
+        return False
+    warnings = stored.get("warnings")
+    if isinstance(warnings, list) and _EXPORT_WARNING in warnings:
+        return False
+    return stored.get("minio_published_generation") != stored.get("generation")
+
+
+def record_published_generation(dest: Path) -> None:
+    """Remember that the current meta generation reached the bucket."""
+    from finance_context.store.fs import update_json
+
+    def mutate(stored: dict) -> dict:
+        generation = stored.get("generation")
+        if generation is None or stored.get("minio_published_generation") == generation:
+            return stored
+        return {**stored, "minio_published_generation": generation}
+
+    path = dest / "meta" / "meta.json"
+    if path.is_file():
+        update_json(path, mutate)
 
 
 def _set_export_warning(dest: Path, warning: str) -> None:
@@ -681,11 +746,10 @@ def republish_file(
     relative: str,
     store: ObjectStore | None = None,
 ) -> None:
-    """Copy one local file onto its bucket key. No MinIO settings is a no-op.
+    """Copy one local file to a new key. No MinIO settings is a no-op.
 
-    The key is taken off the marker before the copy and put back only after
-    the size check. A failed copy leaves the key off, so the next read uses
-    the local file.
+    The manifest names that key only after the size check and a second hash.
+    A failed copy leaves the previous key in place.
     """
     if not settings.minio_configured():
         return
@@ -701,17 +765,20 @@ def _republish_body(
     store: ObjectStore | None,
 ) -> None:
     target = store if store is not None else DuckDBObjectStore(settings)
-    url = object_url(settings.minio_bucket, object_key(settings.minio_prefix, job_id, relative))
-    if not _mark_published_key(target, settings, job_id, relative, present=False):
-        raise OSError("minio export failed for _complete.json")
+    digest = _sha256_file(local)
+    key = _fresh_object_key(settings, job_id, _new_export_id(), relative)
+    url = object_url(settings.minio_bucket, key)
     _put_and_check(target, local, url)
+    if _sha256_file(local) != digest:
+        raise OSError(f"changed during upload {relative}")
     if not _mark_published_key(
         target,
         settings,
         job_id,
         relative,
         present=True,
-        digest=_sha256_file(local),
+        digest=digest,
+        published_key=key,
     ):
         raise OSError("minio export failed for _complete.json")
 
@@ -737,6 +804,22 @@ def export_succeeded_book(
         return _export_body(settings, job_id=job_id, book=book, dest=dest, store=store)
 
 
+class _MarkerPlan:
+    def __init__(
+        self,
+        existed: bool,
+        listed: list[str],
+        digests: dict[str, str],
+        marker: str,
+    ) -> None:
+        self.existed = existed
+        self.listed = listed
+        self.digests = digests
+        self.marker = marker
+        self.final: list[str] = []
+        self.final_digests: dict[str, str] = {}
+
+
 def _export_body(
     settings: Settings,
     *,
@@ -748,7 +831,6 @@ def _export_body(
     target = store if store is not None else DuckDBObjectStore(settings)
     pairs = [(book / name, name) for name in _SHARED]
     pairs.extend((dest / name, name) for name in _SESSION)
-    marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
     log_event(
         _LOGGER,
         logging.INFO,
@@ -761,38 +843,44 @@ def _export_body(
     failing: str | None = "_complete.json"
     ready = 0
     try:
-        existed, listed, listed_digests = _read_marker_keys(target, settings, job_id)
+        plans: dict[bool, _MarkerPlan] = {}
+        for session in (False, True):
+            sample = _SESSION[0] if session else _SHARED[0]
+            marker_key = _marker_object_key(settings, job_id, sample)
+            plans[session] = _MarkerPlan(
+                *_read_marker_keys(target, settings, marker_key),
+                marker_key,
+            )
         export_id = _new_export_id()
-        final: list[str] = []
-        final_digests: dict[str, str] = {}
         uploads: list[tuple[Path, str, str]] = []
         for local, relative in pairs:
             failing = relative
+            plan = plans[_session_file(relative)]
             if not local.is_file():
                 _LOGGER.warning("minio export skipped missing %s", relative)
-                for key in _keys_for_relative(listed, relative):
-                    final.append(key)
-                    if key in listed_digests:
-                        final_digests[key] = listed_digests[key]
+                for key in _keys_for_relative(plan.listed, relative):
+                    plan.final.append(key)
+                    if key in plan.digests:
+                        plan.final_digests[key] = plan.digests[key]
                 continue
             digest = _sha256_file(local)
-            current = _keys_for_relative(listed, relative)
+            current = _keys_for_relative(plan.listed, relative)
             published = current[0] if len(current) == 1 else None
             if published is not None and _same_published_file(
                 target,
                 local,
                 object_url(settings.minio_bucket, published),
-                listed_digests.get(published),
+                plan.digests.get(published),
                 digest,
             ):
-                final.append(published)
-                final_digests[published] = digest
+                plan.final.append(published)
+                plan.final_digests[published] = digest
                 ready += 1
                 continue
-            key = _export_object_key(settings.minio_prefix, job_id, export_id, relative)
+            key = _fresh_object_key(settings, job_id, export_id, relative)
             uploads.append((local, relative, key))
-            final.append(key)
-            final_digests[key] = digest
+            plan.final.append(key)
+            plan.final_digests[key] = digest
         for local, relative, key in uploads:
             failing = relative
             url = object_url(settings.minio_bucket, key)
@@ -803,14 +891,20 @@ def _export_body(
             _call_with_retry(upload)
             ready += 1
         failing = "_complete.json"
-        if not existed or final != listed or any(
-            listed_digests.get(key) != final_digests.get(key) for key in final
-        ):
-            _call_with_retry(
-                lambda: _put_marker(
-                    target, settings.minio_bucket, marker_key, final, final_digests
+        for session in (False, True):
+            plan = plans[session]
+            if not plan.existed or plan.final != plan.listed or any(
+                plan.digests.get(key) != plan.final_digests.get(key) for key in plan.final
+            ):
+                _call_with_retry(
+                    lambda plan=plan: _put_marker(
+                        target,
+                        settings.minio_bucket,
+                        plan.marker,
+                        plan.final,
+                        plan.final_digests,
+                    )
                 )
-            )
         failing = None
     except Exception as exc:
         detail = _s3_failure(exc)[1]
@@ -893,13 +987,10 @@ def _is_missing_object(exc: BaseException) -> bool:
 
 
 def _read_marker_keys(
-    store: ObjectStore, settings: Settings, job_id: str
+    store: ObjectStore, settings: Settings, marker_key: str
 ) -> tuple[bool, list[str], dict[str, str]]:
     """``False`` means the marker object is absent. The key order is kept."""
-    url = object_url(
-        settings.minio_bucket,
-        object_key(settings.minio_prefix, job_id, "_complete.json"),
-    )
+    url = object_url(settings.minio_bucket, marker_key)
 
     def read() -> tuple[list[str], dict[str, str]]:
         parsed = json.loads(store.get(url))
@@ -1027,9 +1118,9 @@ def _put_and_check(store: ObjectStore, local: Path, url: str) -> None:
         raise OSError(f"size mismatch for {url}")
 
 
-def _load_marker(settings: Settings, job_id: str) -> tuple[str, set[str]]:
+def _load_marker(settings: Settings, job_id: str, relative: str) -> tuple[str, set[str]]:
     """``missing`` is no object. ``unread`` is a failed or unusable read."""
-    marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
+    marker_key = _marker_object_key(settings, job_id, relative)
     url = object_url(settings.minio_bucket, marker_key)
     try:
         parsed = json.loads(read_blob_bytes(url, settings))
@@ -1131,8 +1222,9 @@ def _mark_published_key(
     *,
     present: bool,
     digest: str | None = None,
+    published_key: str | None = None,
 ) -> bool:
-    marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
+    marker_key = _marker_object_key(settings, job_id, relative)
     url = object_url(settings.minio_bucket, marker_key)
     try:
         parsed = json.loads(read_blob_bytes(url, settings))
@@ -1143,7 +1235,7 @@ def _mark_published_key(
     if not isinstance(keys, list) or not isinstance(parsed, dict):
         return False
     digests = _marker_digests(parsed)
-    wanted = object_key(settings.minio_prefix, job_id, relative)
+    wanted = published_key or object_key(settings.minio_prefix, job_id, relative)
     if present:
         updated = [key for key in keys if key == wanted or not _names_relative(key, relative)]
         if wanted not in updated:

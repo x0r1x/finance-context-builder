@@ -154,9 +154,17 @@ def _listed(marker: dict, relative: str) -> str:
     return matches[0]
 
 
-def _stored_marker(store: _MemoryStore) -> dict:
-    url = f"s3://finance-context/team/a/books/{_JOB}/_complete.json"
-    return json.loads(store.objects[url])
+def _marker_url(*, session: bool = False, session_id: str = "local") -> str:
+    base = f"s3://finance-context/team/a/books/{_JOB}/"
+    if session:
+        return base + f"sessions/{session_id}/_complete.json"
+    return base + "_complete.json"
+
+
+def _stored_marker(
+    store: _MemoryStore, *, session: bool = False, session_id: str = "local"
+) -> dict:
+    return json.loads(store.objects[_marker_url(session=session, session_id=session_id)])
 
 
 def _fill(book: Path, dest: Path) -> None:
@@ -209,23 +217,29 @@ def test_export_lists_every_book_key_and_writes_the_marker_last(tmp_path: Path) 
         is None
     )
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    assert store.order[-1] == prefix + "_complete.json"
+    assert store.order[-2] == prefix + "_complete.json"
+    assert store.order[-1] == _marker_url(session=True)
     for name in _LOCAL_ONLY:
         assert all(name not in url for url in store.order)
-    marker = json.loads(store.objects[store.order[-1]])
-    names = (*_SHARED, *_SESSION)
-    assert [url[len("s3://finance-context/") :] for url in store.order[:-1]] == marker["keys"]
-    assert [_listed(marker, name) for name in names] == marker["keys"]
-    export_ids = {key.split("/exports/")[1].split("/", 1)[0] for key in marker["keys"]}
+    shared = _stored_marker(store)
+    session = _stored_marker(store, session=True)
+    assert [_listed(shared, name) for name in _SHARED] == shared["keys"]
+    assert [_listed(session, name) for name in _SESSION] == session["keys"]
+    data_keys = [url[len("s3://finance-context/") :] for url in store.order[:-2]]
+    assert data_keys == [*shared["keys"], *session["keys"]]
+    export_ids = {key.split("/exports/")[1].split("/", 1)[0] for key in data_keys}
     assert len(export_ids) == 1
-    assert set(marker["sha256"]) == set(marker["keys"])
-    assert store.objects[_bucket(_listed(marker, "raw/cells.parquet"))] == (
+    assert set(shared["sha256"]) == set(shared["keys"])
+    assert set(session["sha256"]) == set(session["keys"])
+    assert "/sessions/" not in _listed(shared, "raw/cells.parquet")
+    assert "/sessions/local/exports/" in _listed(session, "context/context.json")
+    assert store.objects[_bucket(_listed(shared, "raw/cells.parquet"))] == (
         b"shared:raw/cells.parquet\n"
     )
-    assert store.objects[_bucket(_listed(marker, "context/context.json"))] == (
+    assert store.objects[_bucket(_listed(session, "context/context.json"))] == (
         b"session:context/context.json\n"
     )
-    assert store.objects[_bucket(_listed(marker, "context/context.md"))] == (
+    assert store.objects[_bucket(_listed(session, "context/context.md"))] == (
         b"session:context/context.md\n"
     )
 
@@ -437,8 +451,7 @@ def test_second_export_skips_a_key_whose_size_matches(tmp_path: Path) -> None:
     copied = list(store.order)
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
     assert store.order == copied
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    previous = _listed(_stored_marker(store), "context/context.json")
+    previous = _listed(_stored_marker(store, session=True), "context/context.json")
     previous_bytes = store.objects[_bucket(previous)]
     local = dest / "context" / "context.json"
     local.write_bytes(b'{"v":2}\n')
@@ -447,14 +460,14 @@ def test_second_export_skips_a_key_whose_size_matches(tmp_path: Path) -> None:
     assert len(written) == 2
     assert written[0].endswith("/context/context.json")
     assert "/exports/" in written[0]
-    assert written[1] == prefix + "_complete.json"
-    marker = _stored_marker(store)
+    assert written[1] == _marker_url(session=True)
+    marker = _stored_marker(store, session=True)
     context_key = _listed(marker, "context/context.json")
     assert context_key != previous
     assert store.objects[_bucket(previous)] == previous_bytes
     assert store.objects[_bucket(context_key)] == local.read_bytes()
     assert marker["sha256"][context_key] == hashlib.sha256(local.read_bytes()).hexdigest()
-    assert len(marker["keys"]) == len(_SHARED) + len(_SESSION)
+    assert len(marker["keys"]) == len(_SESSION)
 
 
 def test_same_size_and_different_bytes_are_uploaded(tmp_path: Path) -> None:
@@ -464,8 +477,7 @@ def test_same_size_and_different_bytes_are_uploaded(tmp_path: Path) -> None:
     store = _MemoryStore()
     settings = _minio()
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    previous = _listed(_stored_marker(store), "context/context.json")
+    previous = _listed(_stored_marker(store, session=True), "context/context.json")
     local = dest / "context" / "context.json"
     flipped = bytearray(local.read_bytes())
     flipped[0] ^= 0x1
@@ -475,8 +487,8 @@ def test_same_size_and_different_bytes_are_uploaded(tmp_path: Path) -> None:
     written = store.order[copied:]
     assert len(written) == 2
     assert written[0].endswith("/context/context.json")
-    assert written[1] == prefix + "_complete.json"
-    marker = _stored_marker(store)
+    assert written[1] == _marker_url(session=True)
+    marker = _stored_marker(store, session=True)
     context_key = _listed(marker, "context/context.json")
     assert context_key != previous
     assert store.objects[_bucket(context_key)] == bytes(flipped)
@@ -490,9 +502,8 @@ def test_marker_without_a_hash_uploads_the_same_bytes_again(tmp_path: Path) -> N
     store = _MemoryStore()
     settings = _minio()
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    marker_url = prefix + "_complete.json"
-    context_key = _listed(_stored_marker(store), "context/context.json")
+    marker_url = _marker_url(session=True)
+    context_key = _listed(_stored_marker(store, session=True), "context/context.json")
     marker = json.loads(store.objects[marker_url])
     marker["sha256"].pop(context_key)
     store.objects[marker_url] = (json.dumps(marker, indent=2) + "\n").encode()
@@ -501,7 +512,7 @@ def test_marker_without_a_hash_uploads_the_same_bytes_again(tmp_path: Path) -> N
     written = store.order[copied:]
     assert len(written) == 2
     assert written[0].endswith("/context/context.json")
-    assert written[1] == prefix + "_complete.json"
+    assert written[1] == marker_url
     restored = json.loads(store.objects[marker_url])
     published = _listed(restored, "context/context.json")
     assert published != context_key
@@ -519,9 +530,8 @@ def test_failed_marker_keeps_the_old_hash_and_the_next_export_uploads(
     store = _MemoryStore()
     settings = _minio()
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    marker_url = prefix + "_complete.json"
-    context_key = _listed(_stored_marker(store), "context/context.json")
+    marker_url = _marker_url(session=True)
+    context_key = _listed(_stored_marker(store, session=True), "context/context.json")
     old_hash = json.loads(store.objects[marker_url])["sha256"][context_key]
     old_bytes = store.objects[_bucket(context_key)]
     local = dest / "context" / "context.json"
@@ -571,10 +581,12 @@ def test_missing_local_file_does_not_drop_the_other_keys(
     caplog.set_level(logging.WARNING, logger="finance_context.store")
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
     assert "minio export skipped missing context/context.json" in caplog.text
-    marker = _stored_marker(store)
-    assert _listed(marker, "context/context.json")
-    assert _listed(marker, "raw/cells.parquet")
-    assert len(marker["keys"]) == len(_SHARED) + len(_SESSION)
+    session = _stored_marker(store, session=True)
+    shared = _stored_marker(store)
+    assert _listed(session, "context/context.json")
+    assert _listed(shared, "raw/cells.parquet")
+    assert len(session["keys"]) == len(_SESSION)
+    assert len(shared["keys"]) == len(_SHARED)
 
 
 def test_http_404_is_not_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -656,9 +668,8 @@ def test_failed_copy_leaves_the_previous_generation_published(
     store = _MemoryStore()
     settings = _minio()
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
     local = dest / "context" / "context.json"
-    published_key = _listed(_stored_marker(store), "context/context.json")
+    published_key = _listed(_stored_marker(store, session=True), "context/context.json")
     published = store.objects[_bucket(published_key)]
     local.write_bytes(b'{"source":"budget.xlsx","v":2}\n')
 
@@ -679,12 +690,12 @@ def test_failed_copy_leaves_the_previous_generation_published(
         export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
         == "minio export failed"
     )
-    marker = json.loads(store.objects[prefix + "_complete.json"])
-    assert _listed(marker, "context/context.json") == published_key
-    assert _listed(marker, "raw/cells.parquet")
+    session_marker = _stored_marker(store, session=True)
+    shared_marker = _stored_marker(store)
+    assert _listed(session_marker, "context/context.json") == published_key
+    cells_key = _listed(shared_marker, "raw/cells.parquet")
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == published
     cells = book / "raw" / "cells.parquet"
-    cells_key = _listed(marker, "raw/cells.parquet")
     cells.write_bytes(b"local-only-cells\n")
     assert store.objects[_bucket(cells_key)] != b"local-only-cells\n"
     assert _body(read_published_file(settings, cells, _JOB, "raw/cells.parquet")) == (
@@ -752,25 +763,27 @@ def test_corrupt_marker_is_replaced_by_the_next_export(tmp_path: Path) -> None:
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
     store.objects[prefix + "_complete.json"] = b"{"
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
-    marker = json.loads(store.objects[prefix + "_complete.json"])
-    assert _listed(marker, "context/context.json")
-    assert len(marker["keys"]) == len(_SHARED) + len(_SESSION)
+    shared = _stored_marker(store)
+    session = _stored_marker(store, session=True)
+    assert _listed(shared, "raw/cells.parquet")
+    assert len(shared["keys"]) == len(_SHARED)
+    assert _listed(session, "context/context.json")
+    assert len(session["keys"]) == len(_SESSION)
 
 
-def test_failed_republish_drops_the_key_so_the_next_read_is_local(
+def test_failed_republish_keeps_the_previous_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     local = tmp_path / "context.md"
     local.write_bytes(b"new-md\n")
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    marker_url = prefix + "_complete.json"
+    marker_url = _marker_url(session=True)
     markdown_key = object_key("team/a", _JOB, "context/context.md")
     other_key = object_key("team/a", _JOB, "context/context.json")
     store = _MemoryStore()
     store.objects[marker_url] = (
         json.dumps({"keys": [markdown_key, other_key]}, indent=2) + "\n"
     ).encode()
-    store.objects[prefix + "context/context.md"] = b"old-md\n"
+    store.objects[_bucket(markdown_key)] = b"old-md\n"
     store.fail_on = "context/context.md"
 
     def fake_read(uri: str, settings: Settings | None = None) -> bytes:
@@ -782,13 +795,14 @@ def test_failed_republish_drops_the_key_so_the_next_read_is_local(
         return Path(uri).read_bytes()
 
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    _serve_memory(monkeypatch, store)
     settings = _minio()
     with pytest.raises(RuntimeError, match="stopped"):
         republish_file(settings, local, _JOB, "context/context.md", store=store)
     marker = json.loads(store.objects[marker_url])
-    assert markdown_key not in marker["keys"]
+    assert markdown_key in marker["keys"]
     assert other_key in marker["keys"]
-    assert _body(read_published_file(settings, local, _JOB, "context/context.md")) == b"new-md\n"
+    assert _body(read_published_file(settings, local, _JOB, "context/context.md")) == b"old-md\n"
 
 
 def test_failed_marker_write_keeps_the_listed_keys(
@@ -801,9 +815,9 @@ def test_failed_marker_write_keeps_the_listed_keys(
     store = _MemoryStore()
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
     prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    marker_url = prefix + "_complete.json"
-    dropped = _listed(_stored_marker(store), "graph/graph.md")
-    published_context = _listed(_stored_marker(store), "context/context.json")
+    marker_url = _marker_url(session=True)
+    dropped = _listed(_stored_marker(store, session=True), "graph/graph.md")
+    published_context = _listed(_stored_marker(store, session=True), "context/context.json")
     published_bytes = store.objects[_bucket(published_context)]
     listed = json.loads(store.objects[marker_url])
     listed["keys"] = [key for key in listed["keys"] if key != dropped]
@@ -837,8 +851,8 @@ def test_failed_marker_write_keeps_the_listed_keys(
     )
     kept = json.loads(store.objects[marker_url])
     assert dropped not in kept["keys"]
-    assert _listed(kept, "raw/cells.parquet")
-    assert len(kept["keys"]) == len(_SHARED) + len(_SESSION) - 1
+    assert _listed(kept, "context/context.json") == published_context
+    assert len(kept["keys"]) == len(_SESSION) - 1
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
         published_bytes
     )
@@ -910,9 +924,8 @@ def test_http_404_is_a_missing_marker_and_a_connection_error_is_not(
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
         local.read_bytes()
     )
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    marker = json.loads(store.objects[prefix + "_complete.json"])
-    assert "/exports/" in _listed(marker, "context/context.json")
+    marker = _stored_marker(store, session=True)
+    assert "/sessions/local/exports/" in _listed(marker, "context/context.json")
 
 
 def test_missing_marker_is_filled_from_the_local_book(
@@ -947,9 +960,8 @@ def test_missing_marker_is_filled_from_the_local_book(
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
         local.read_bytes()
     )
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    marker = json.loads(store.objects[prefix + "_complete.json"])
-    assert "/exports/" in _listed(marker, "context/context.json")
+    marker = _stored_marker(store, session=True)
+    assert "/sessions/local/exports/" in _listed(marker, "context/context.json")
     copied = len(store.order)
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
         local.read_bytes()
@@ -972,10 +984,10 @@ def test_one_missing_key_is_republished_without_clearing_the_marker(
     )
     settings = _minio(data_dir=root)
     store = _MemoryStore()
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
+    marker_url = _marker_url(session=True)
     other = object_key("team/a", _JOB, "graph/graph.json")
-    store.objects[prefix + "_complete.json"] = (json.dumps({"keys": [other]}) + "\n").encode()
-    store.objects[prefix + "graph/graph.json"] = b"keep\n"
+    store.objects[marker_url] = (json.dumps({"keys": [other]}) + "\n").encode()
+    store.objects[_bucket(other)] = b"keep\n"
     monkeypatch.setattr(
         "finance_context.store.duckdb_io.DuckDBObjectStore",
         lambda _settings: store,
@@ -986,9 +998,11 @@ def test_one_missing_key_is_republished_without_clearing_the_marker(
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
         local.read_bytes()
     )
-    marker = json.loads(store.objects[prefix + "_complete.json"])
+    marker = json.loads(store.objects[marker_url])
     assert other in marker["keys"]
-    assert object_key("team/a", _JOB, "context/context.json") in marker["keys"]
+    published = _listed(marker, "context/context.json")
+    assert published != object_key("team/a", _JOB, "context/context.json")
+    assert "/sessions/local/exports/" in published
     written = _marker_bodies(store)
     assert written
     assert all(body["keys"] for body in written)
@@ -1007,12 +1021,11 @@ def test_truncated_republish_is_not_served(
 ) -> None:
     local = tmp_path / "context.md"
     local.write_bytes(b"new-md\n")
-    prefix = f"s3://finance-context/team/a/books/{_JOB}/"
-    marker_url = prefix + "_complete.json"
+    marker_url = _marker_url(session=True)
     markdown_key = object_key("team/a", _JOB, "context/context.md")
     store = _MemoryStore()
     store.objects[marker_url] = (json.dumps({"keys": [markdown_key]}, indent=2) + "\n").encode()
-    store.objects[prefix + "context/context.md"] = b"old-md\n"
+    store.objects[_bucket(markdown_key)] = b"old-md\n"
 
     original_put = store.put
     original_size = store.size
@@ -1041,11 +1054,12 @@ def test_truncated_republish_is_not_served(
         return Path(uri).read_bytes()
 
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", fake_read)
+    _serve_memory(monkeypatch, store)
     settings = _minio()
     with pytest.raises(OSError, match="size mismatch"):
         republish_file(settings, local, _JOB, "context/context.md", store=store)
-    assert markdown_key not in json.loads(store.objects[marker_url])["keys"]
-    assert _body(read_published_file(settings, local, _JOB, "context/context.md")) == b"new-md\n"
+    assert markdown_key in json.loads(store.objects[marker_url])["keys"]
+    assert _body(read_published_file(settings, local, _JOB, "context/context.md")) == b"old-md\n"
 
 
 def test_requested_row_groups_are_separate_files_stitched_by_pyarrow(tmp_path: Path) -> None:
@@ -1512,12 +1526,151 @@ def test_leftover_export_sentinel_still_serves_the_bucket(
     store = _MemoryStore()
     assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
     local = dest / "context" / "context.json"
-    published = store.objects[_bucket(_listed(_stored_marker(store), "context/context.json"))]
+    published_key = _listed(_stored_marker(store, session=True), "context/context.json")
+    published = store.objects[_bucket(published_key)]
     local.write_bytes(b"local-bytes")
     (book / ".minio-exporting").write_text("1", encoding="utf-8")
     monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
     _serve_memory(monkeypatch, store)
     assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == published
+
+
+def test_sessions_publish_separate_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "data"
+    book = root / "shared" / "books" / _JOB
+    dest_local = root / "sessions" / "local" / "jobs" / _JOB
+    dest_beta = root / "sessions" / "beta" / "jobs" / _JOB
+    _fill(book, dest_local)
+    _fill(book, dest_beta)
+    beta_bytes = b'{"session":"beta"}\n'
+    (dest_beta / "context" / "context.json").write_bytes(beta_bytes)
+    store = _MemoryStore()
+    local_settings = _minio(data_dir=root, session_id="local")
+    beta_settings = _minio(data_dir=root, session_id="beta")
+    assert (
+        export_succeeded_book(
+            local_settings, job_id=_JOB, book=book, dest=dest_local, store=store
+        )
+        is None
+    )
+    assert (
+        export_succeeded_book(
+            beta_settings, job_id=_JOB, book=book, dest=dest_beta, store=store
+        )
+        is None
+    )
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    local_file = dest_local / "context" / "context.json"
+    beta_file = dest_beta / "context" / "context.json"
+    assert _body(read_published_file(local_settings, local_file, _JOB, "context/context.json")) == (
+        local_file.read_bytes()
+    )
+    assert _body(read_published_file(beta_settings, beta_file, _JOB, "context/context.json")) == (
+        beta_bytes
+    )
+    local_key = _listed(_stored_marker(store, session=True), "context/context.json")
+    beta_key = _listed(
+        _stored_marker(store, session=True, session_id="beta"), "context/context.json"
+    )
+    assert local_key != beta_key
+    assert "/sessions/local/" in local_key
+    assert "/sessions/beta/" in beta_key
+
+
+def test_republish_leaves_the_old_key_when_bytes_change_during_put(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local = tmp_path / "context.md"
+    local.write_bytes(b"new-md\n")
+    marker_url = _marker_url(session=True)
+    markdown_key = object_key("team/a", _JOB, "context/context.md")
+    store = _MemoryStore()
+    store.objects[marker_url] = (json.dumps({"keys": [markdown_key]}) + "\n").encode()
+    store.objects[_bucket(markdown_key)] = b"old-md\n"
+    original_put = store.put
+
+    def put(path: Path, url: str) -> None:
+        original_put(path, url)
+        path.write_bytes(b"other!\n")
+
+    monkeypatch.setattr(store, "put", put)
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    with pytest.raises(OSError, match="changed during upload"):
+        republish_file(_minio(), local, _JOB, "context/context.md", store=store)
+    assert json.loads(store.objects[marker_url])["keys"] == [markdown_key]
+    assert _body(read_published_file(_minio(), local, _JOB, "context/context.md")) == b"old-md\n"
+
+
+def test_busy_book_lock_does_not_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "data"
+    book = root / "shared" / "books" / _JOB
+    dest = root / "sessions" / "local" / "jobs" / _JOB
+    _fill(book, dest)
+    (dest / "meta" / "meta.json").write_text(
+        json.dumps({"status": "succeeded", "warnings": []}),
+        encoding="utf-8",
+    )
+    settings = _minio(data_dir=root)
+    store = _MemoryStore()
+    monkeypatch.setattr(
+        "finance_context.store.duckdb_io.DuckDBObjectStore",
+        lambda _settings: store,
+    )
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    local = dest / "context" / "context.json"
+    release = threading.Event()
+    held = threading.Event()
+
+    def hold() -> None:
+        with file_lock(book / ".lock"):
+            held.set()
+            assert release.wait(5)
+
+    worker = threading.Thread(target=hold)
+    worker.start()
+    assert held.wait(5)
+    try:
+        served = _body(read_published_file(settings, local, _JOB, "context/context.json"))
+    finally:
+        release.set()
+        worker.join(5)
+    assert served == local.read_bytes()
+    assert store.order == []
+
+
+def test_unpublished_generation_is_copied_on_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "data"
+    book = root / "shared" / "books" / _JOB
+    dest = root / "sessions" / "local" / "jobs" / _JOB
+    _fill(book, dest)
+    settings = _minio(data_dir=root)
+    store = _MemoryStore()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    (dest / "meta" / "meta.json").write_text(
+        json.dumps({"status": "succeeded", "warnings": [], "generation": 3}),
+        encoding="utf-8",
+    )
+    local = dest / "context" / "context.json"
+    local.write_bytes(b'{"v":2}\n')
+    monkeypatch.setattr(
+        "finance_context.store.duckdb_io.DuckDBObjectStore",
+        lambda _settings: store,
+    )
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == b'{"v":2}\n'
+    published = _listed(_stored_marker(store, session=True), "context/context.json")
+    assert store.objects[_bucket(published)] == b'{"v":2}\n'
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
+    assert stored["minio_published_generation"] == 3
 
 
 def test_busy_publish_lock_serves_the_local_file(
