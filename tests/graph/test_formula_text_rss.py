@@ -91,8 +91,8 @@ def emit(book: Path, dest: Path, keep: str) -> None:
     if keep == "1":
         real_load = stage._load_formulas
 
-        def load_with_text(path, row_meta, period_by_cell, transposed=None):
-            found = real_load(path, row_meta, period_by_cell, transposed)
+        def load_with_text(path, row_meta, period_by_cell, transposed=None, side=None):
+            found = real_load(path, row_meta, period_by_cell, transposed, side)
             stage._attach_formula_text(path, found)
             return found
 
