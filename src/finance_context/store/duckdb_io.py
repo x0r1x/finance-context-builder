@@ -1,7 +1,8 @@
-"""DuckDB reads and writes of one local file or one MinIO object."""
+"""DuckDB reads and writes of one local file. MinIO objects are copied in chunks."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -9,12 +10,14 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
 import pyarrow as pa
+import pyarrow.fs as pafs
 
 from finance_context.observability import log_event
 from finance_context.settings import Settings, _duckdb_size_bytes
@@ -48,9 +51,47 @@ _SESSION = (
     "meta/meta.json",
 )
 _EXPORT_WARNING = "minio export failed"
-_OBJECT_SIZE_SQL = "SELECT size FROM read_blob(?)"
+# One part. A large context.json stays out of the buffer manager.
+_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 _HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
 _S3_LINE = re.compile(r"(?m)^([A-Z][A-Za-z0-9]+): ([^\r\n]{1,160})")
+# PyArrow prints the AWS SDK error, not DuckDB's ``(HTTP 403)`` essay.
+_AWS_NAMED = re.compile(
+    r"AWS Error ([A-Za-z][A-Za-z0-9]*) \(HTTP (\d{3})\): ([^\r\n]{1,160})"
+)
+_AWS_DURING = re.compile(
+    r"AWS Error ([A-Z][A-Z0-9_]*) during \S+ operation: ([^\r\n]{1,160})"
+)
+_AWS_BRACKET = re.compile(r"AWS Error \[code (\d+)\]: ([^\r\n]{1,160})")
+# HeadObject has no XML body, so PyArrow reports the status and not the S3 code.
+_AWS_HTTP_STATUS = re.compile(
+    r"\(HTTP status (\d{3})\) during \S+ operation: ([^\r\n]{1,160})"
+)
+_AWS_RESPONSE_CODE = re.compile(r"HTTP response code: (\d{3})")
+_AWS_NAME_STATUS = {
+    "ACCESS_DENIED": 403,
+    "FORBIDDEN": 403,
+    "SLOW_DOWN": 503,
+    "INTERNAL_FAILURE": 500,
+    "INTERNAL_ERROR": 500,
+    "SERVICE_UNAVAILABLE": 503,
+    "NO_SUCH_KEY": 404,
+    "NO_SUCH_BUCKET": 404,
+    "NOT_FOUND": 404,
+    "RESOURCE_NOT_FOUND": 404,
+}
+_AWS_PUBLIC_NAME = {
+    "ACCESS_DENIED": "AccessDenied",
+    "FORBIDDEN": "AccessDenied",
+    "SLOW_DOWN": "SlowDown",
+    "INTERNAL_FAILURE": "InternalError",
+    "INTERNAL_ERROR": "InternalError",
+    "SERVICE_UNAVAILABLE": "ServiceUnavailable",
+    "NO_SUCH_KEY": "NoSuchKey",
+    "NO_SUCH_BUCKET": "NoSuchBucket",
+    "NOT_FOUND": "NoSuchKey",
+    "RESOURCE_NOT_FOUND": "NoSuchKey",
+}
 _publish_held = threading.local()
 # One connection may spill up to 2 GiB. The free-space raise is split across
 # max_concurrent_jobs first, so two builds cannot each take a 4 GiB volume.
@@ -60,8 +101,21 @@ _SPILL_CEILING_BYTES = 2 << 30
 _SPILL_RESERVE_BYTES = 1 << 30
 
 
+# First try plus three repeats. A SlowDown or a dropped connection gets a pause.
+# 403 and 404 are not repeated: another attempt would get the same answer.
+_EXPORT_ATTEMPTS = 4
+_EXPORT_RETRY_PAUSE_SEC = 1.0
+_NETWORK_ERROR = re.compile(
+    r"NETWORK_CONNECTION|REQUEST_TIMEOUT|Could not connect|Connection refused|"
+    r"timed out|Timeout|Temporary failure|Name or service not known",
+    re.IGNORECASE,
+)
+
+
 class ObjectStore(Protocol):
     def put(self, local: Path, url: str) -> None: ...
+
+    def get(self, url: str) -> bytes: ...
 
     def size(self, url: str) -> int: ...
 
@@ -76,8 +130,122 @@ def object_key(prefix: str, job_id: str, relative: str) -> str:
     return head
 
 
+def _new_export_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _export_object_key(prefix: str, job_id: str, export_id: str, relative: str) -> str:
+    """A key no published manifest names yet. The id is one path segment."""
+    tail = relative.strip().lstrip("/")
+    return object_key(prefix, job_id, f"exports/{export_id}/{tail}")
+
+
+def _names_relative(key: str, relative: str) -> bool:
+    tail = relative.strip().lstrip("/")
+    return bool(tail) and key.endswith("/" + tail)
+
+
+def _keys_for_relative(keys: list[str] | set[str], relative: str) -> list[str]:
+    return [key for key in keys if _names_relative(key, relative)]
+
+
+def _session_file(relative: str) -> bool:
+    return relative in _SESSION
+
+
+def _marker_object_key(settings: Settings, job_id: str, relative: str) -> str:
+    """Session documents do not share a manifest with another session of this book."""
+    if _session_file(relative):
+        session = settings.session_id
+        return object_key(settings.minio_prefix, job_id, f"sessions/{session}/_complete.json")
+    return object_key(settings.minio_prefix, job_id, "_complete.json")
+
+
+def _fresh_object_key(settings: Settings, job_id: str, export_id: str, relative: str) -> str:
+    tail = relative.strip().lstrip("/")
+    if _session_file(relative):
+        session = settings.session_id
+        return object_key(
+            settings.minio_prefix, job_id, f"sessions/{session}/exports/{export_id}/{tail}"
+        )
+    return _export_object_key(settings.minio_prefix, job_id, export_id, relative)
+
+
 def object_url(bucket: str, key: str) -> str:
     return f"s3://{bucket}/{key}"
+
+
+class PublishedFile:
+    """A body the API can stream. ``content_length`` is the byte size.
+
+    Chunks are ``_UPLOAD_CHUNK_BYTES``. The handle closes when iteration
+    finishes, or when ``close`` runs because the client stopped early.
+    """
+
+    def __init__(self, content_length: int, handle: Any, *, owner: Any = None) -> None:
+        self.content_length = content_length
+        self._handle = handle
+        self._owner = owner
+        self._pending: bytes | None = None
+        self._gate = threading.Condition()
+        self._busy = False
+
+    def prime(self) -> None:
+        """Read the first chunk before a response is committed."""
+        handle = self._handle
+        if handle is None:
+            self._pending = b""
+            return
+        block = handle.read(_UPLOAD_CHUNK_BYTES)
+        if not block:
+            self._pending = b""
+            return
+        self._pending = block if isinstance(block, bytes) else bytes(block)
+
+    def __iter__(self) -> Iterator[bytes]:
+        try:
+            pending = self._pending
+            self._pending = None
+            if pending:
+                yield pending
+            elif pending is not None:
+                return
+            while True:
+                with self._gate:
+                    current = self._handle
+                    if current is None:
+                        return
+                    self._busy = True
+                try:
+                    block = current.read(_UPLOAD_CHUNK_BYTES)
+                finally:
+                    with self._gate:
+                        self._busy = False
+                        self._gate.notify_all()
+                if not block:
+                    break
+                yield block if isinstance(block, bytes) else bytes(block)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        """Close the handle. A read that is already inside the handle is left to finish.
+
+        Between chunks the iterator is paused, so ``close`` does not wait.
+        """
+        with self._gate:
+            while self._busy:
+                self._gate.wait()
+            handle = self._handle
+            self._handle = None
+            self._owner = None
+        if handle is not None:
+            handle.close()
+
+
+def stream_local_file(path: Path) -> PublishedFile:
+    """Stream one local file. The length is ``stat``, not a read of the body."""
+    return PublishedFile(path.stat().st_size, path.open("rb"))
 
 
 def copy_arrow_parquet(table: pa.Table, dest: Path) -> None:
@@ -348,34 +516,92 @@ def read_blob_bytes(uri: str, settings: Settings | None = None) -> bytes:
     return bytes(payload)
 
 
-def read_published_file(settings: Settings, local: Path, job_id: str, relative: str) -> bytes:
+def read_published_file(
+    settings: Settings, local: Path, job_id: str, relative: str
+) -> PublishedFile:
     """Return the bucket object when the completion marker lists it.
 
     A missing marker, an empty key list, a recorded export warning, or a
     failed bucket read uses the local file. An object left by a copy that
     did not finish is not served. A settled local book with no marker is
-    copied once, then read from the bucket.
+    copied once, then read from the bucket. The body is a stream of 8 MiB
+    chunks, so a large ``context.json`` is not held in the API process.
     """
     if not settings.minio_configured() or _export_warning_recorded(local, relative):
-        return read_blob_bytes(str(local))
-    if _marker_lists(settings, job_id, relative):
-        return _read_bucket_or_local(settings, local, job_id, relative)
+        return stream_local_file(local)
+    dest = _session_dest(local, relative)
+    if dest is not None and publish_generation_pending(dest):
+        _ensure_published_book(settings, local, job_id, relative)
+    opened = _open_while_publish_idle(settings, local, job_id, relative)
+    if opened is not None:
+        return opened
+    # The shared lock is released before a copy. The copy takes the exclusive one.
     _ensure_published_book(settings, local, job_id, relative)
-    if _marker_lists(settings, job_id, relative):
-        return _read_bucket_or_local(settings, local, job_id, relative)
-    return read_blob_bytes(str(local))
+    opened = _open_while_publish_idle(settings, local, job_id, relative)
+    if opened is not None:
+        return opened
+    return stream_local_file(local)
 
 
-def _read_bucket_or_local(settings: Settings, local: Path, job_id: str, relative: str) -> bytes:
-    url = object_url(
-        settings.minio_bucket,
-        object_key(settings.minio_prefix, job_id, relative),
-    )
+def _open_while_publish_idle(
+    settings: Settings, local: Path, job_id: str, relative: str
+) -> PublishedFile | None:
+    """Open the listed object, or the local file when a copy holds the lock.
+
+    ``None`` means the marker does not list this file and no copy is running.
+    The lock covers the marker check and the first chunk, then the body streams
+    without it. A live export holds the exclusive lock, so this read stays local
+    until that copy finishes.
+    """
+    from finance_context.store.fs import file_lock
+
+    lock_path = _publish_lock_path(settings, job_id, local, relative)
+    with file_lock(lock_path, blocking=False, shared=True) as locked:
+        if not locked:
+            return stream_local_file(local)
+        state, keys = _load_marker(settings, job_id, relative)
+        if state == "unread":
+            return stream_local_file(local)
+        if state != "ok":
+            return None
+        matches = _keys_for_relative(keys, relative)
+        if len(matches) == 1:
+            return _read_bucket_or_local(settings, local, relative, matches[0])
+        if len(matches) > 1:
+            return stream_local_file(local)
+        return None
+
+
+def _read_bucket_or_local(
+    settings: Settings, local: Path, relative: str, key: str
+) -> PublishedFile:
+    url = object_url(settings.minio_bucket, key)
+    opened: PublishedFile | None = None
     try:
-        return read_blob_bytes(url, settings)
-    except Exception:
-        _LOGGER.warning("minio read failed for %s", relative)
-    return read_blob_bytes(str(local))
+        opened = _open_published_object(settings, url)
+        opened.prime()
+        return opened
+    except Exception as exc:
+        if opened is not None:
+            opened.close()
+        # Same rule as an export failure: memory text, or one HTTP line.
+        # Anything else can carry a credential essay.
+        _log_export_failure(
+            "minio read failed for %s",
+            relative,
+            detail=_s3_failure(exc)[1] or _export_error_detail(exc),
+        )
+    return stream_local_file(local)
+
+
+def _open_published_object(settings: Settings, url: str) -> PublishedFile:
+    """Open one bucket object. The length comes from the object info, not the body."""
+    filesystem = _s3_filesystem(settings)
+    path = _s3_object_path(url)
+    info = filesystem.get_file_info(path)
+    if info.type != pafs.FileType.File or info.size is None:
+        raise OSError(f"missing object {url}")
+    return PublishedFile(int(info.size), filesystem.open_input_stream(path), owner=filesystem)
 
 
 def _ensure_published_book(settings: Settings, local: Path, job_id: str, relative: str) -> None:
@@ -386,24 +612,37 @@ def _ensure_published_book(settings: Settings, local: Path, job_id: str, relativ
     if not _local_book_complete(settings, job_id, dest):
         return
     book = shared_book_dir(settings.data_dir, job_id)
-    with _publish_lock(book / ".minio-publish.lock"):
-        if _export_warning_recorded(local, relative) or not _job_is_settled(dest):
+    # The pipeline holds book/.lock across the rebuild and then this publish lock.
+    # Take the book lock first so the two never wait on each other.
+    from finance_context.store.fs import file_lock
+
+    with file_lock(book / ".lock", blocking=False) as held:
+        if not held:
             return
-        state, keys = _load_marker(settings, job_id)
-        if state == "unread":
-            return
-        if state == "missing":
-            warning = export_succeeded_book(settings, job_id=job_id, book=book, dest=dest)
-            if warning:
-                _set_export_warning(dest, warning)
-            return
-        wanted = object_key(settings.minio_prefix, job_id, relative)
-        if wanted in keys:
-            return
-        try:
-            republish_file(settings, local, job_id, relative)
-        except Exception:
-            _LOGGER.warning("minio export failed for %s", relative)
+        with _publish_lock(book / ".minio-publish.lock"):
+            if _export_warning_recorded(local, relative) or not _job_is_settled(dest):
+                return
+            pending = publish_generation_pending(dest)
+            state, keys = _load_marker(settings, job_id, relative)
+            if state == "unread":
+                return
+            if state == "missing" or pending:
+                warning = export_succeeded_book(settings, job_id=job_id, book=book, dest=dest)
+                if warning:
+                    _set_export_warning(dest, warning)
+                else:
+                    record_published_generation(dest)
+                return
+            if _keys_for_relative(keys, relative):
+                return
+            try:
+                republish_file(settings, local, job_id, relative)
+            except Exception as exc:
+                detail = _export_error_detail(exc)
+                if detail is None:
+                    _LOGGER.warning("minio export failed for %s", relative)
+                else:
+                    _LOGGER.warning("minio export failed for %s: %s", relative, detail)
 
 
 def _session_dest(local: Path, relative: str) -> Path | None:
@@ -432,6 +671,36 @@ def _local_book_complete(settings: Settings, job_id: str, dest: Path) -> bool:
     shared_ready = all((book / name).is_file() for name in _SHARED)
     session_ready = all((dest / name).is_file() for name in _SESSION)
     return shared_ready and session_ready
+
+
+def publish_generation_pending(dest: Path) -> bool:
+    """True when this session's meta generation is not the one last published."""
+    meta_path = dest / "meta" / "meta.json"
+    try:
+        stored = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(stored, dict) or "generation" not in stored:
+        return False
+    warnings = stored.get("warnings")
+    if isinstance(warnings, list) and _EXPORT_WARNING in warnings:
+        return False
+    return stored.get("minio_published_generation") != stored.get("generation")
+
+
+def record_published_generation(dest: Path) -> None:
+    """Remember that the current meta generation reached the bucket."""
+    from finance_context.store.fs import update_json
+
+    def mutate(stored: dict) -> dict:
+        generation = stored.get("generation")
+        if generation is None or stored.get("minio_published_generation") == generation:
+            return stored
+        return {**stored, "minio_published_generation": generation}
+
+    path = dest / "meta" / "meta.json"
+    if path.is_file():
+        update_json(path, mutate)
 
 
 def _set_export_warning(dest: Path, warning: str) -> None:
@@ -477,11 +746,10 @@ def republish_file(
     relative: str,
     store: ObjectStore | None = None,
 ) -> None:
-    """Copy one local file onto its bucket key. No MinIO settings is a no-op.
+    """Copy one local file to a new key. No MinIO settings is a no-op.
 
-    The key is taken off the marker before the copy and put back only after
-    the size check. A failed copy leaves the key off, so the next read uses
-    the local file.
+    The manifest names that key only after the size check and a second hash.
+    A failed copy leaves the previous key in place.
     """
     if not settings.minio_configured():
         return
@@ -497,11 +765,21 @@ def _republish_body(
     store: ObjectStore | None,
 ) -> None:
     target = store if store is not None else DuckDBObjectStore(settings)
-    url = object_url(settings.minio_bucket, object_key(settings.minio_prefix, job_id, relative))
-    if not _mark_published_key(target, settings, job_id, relative, present=False):
-        raise OSError("minio export failed for _complete.json")
+    digest = _sha256_file(local)
+    key = _fresh_object_key(settings, job_id, _new_export_id(), relative)
+    url = object_url(settings.minio_bucket, key)
     _put_and_check(target, local, url)
-    if not _mark_published_key(target, settings, job_id, relative, present=True):
+    if _sha256_file(local) != digest:
+        raise OSError(f"changed during upload {relative}")
+    if not _mark_published_key(
+        target,
+        settings,
+        job_id,
+        relative,
+        present=True,
+        digest=digest,
+        published_key=key,
+    ):
         raise OSError("minio export failed for _complete.json")
 
 
@@ -515,16 +793,31 @@ def export_succeeded_book(
 ) -> str | None:
     """Copy a finished book into the bucket. ``None`` means nothing to report.
 
-    Empty MinIO settings return immediately. The copy clears the completion
-    marker before it replaces objects, then writes the marker again only after
-    every key. A failed copy tries to leave the marker empty. If that write
-    also fails, the previous marker stays. The returned warning keeps reads
-    on the local files.
+    Empty MinIO settings return immediately. Changed bytes are written to a new
+    key. The previous object stays until ``_complete.json`` names the new key.
+    A matching hash and size keeps the previous key. A missing local file is
+    skipped. The returned warning keeps reads on the local files.
     """
     if not settings.minio_configured():
         return None
     with _publish_lock(book / ".minio-publish.lock"):
         return _export_body(settings, job_id=job_id, book=book, dest=dest, store=store)
+
+
+class _MarkerPlan:
+    def __init__(
+        self,
+        existed: bool,
+        listed: list[str],
+        digests: dict[str, str],
+        marker: str,
+    ) -> None:
+        self.existed = existed
+        self.listed = listed
+        self.digests = digests
+        self.marker = marker
+        self.final: list[str] = []
+        self.final_digests: dict[str, str] = {}
 
 
 def _export_body(
@@ -538,8 +831,6 @@ def _export_body(
     target = store if store is not None else DuckDBObjectStore(settings)
     pairs = [(book / name, name) for name in _SHARED]
     pairs.extend((dest / name, name) for name in _SESSION)
-    marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
-    uploaded: list[str] = []
     log_event(
         _LOGGER,
         logging.INFO,
@@ -549,27 +840,92 @@ def _export_body(
     )
     started = time.monotonic()
     warning: str | None = None
+    failing: str | None = "_complete.json"
+    ready = 0
     try:
-        _put_marker(target, settings.minio_bucket, marker_key, [])
+        plans: dict[bool, _MarkerPlan] = {}
+        for session in (False, True):
+            sample = _SESSION[0] if session else _SHARED[0]
+            marker_key = _marker_object_key(settings, job_id, sample)
+            plans[session] = _MarkerPlan(
+                *_read_marker_keys(target, settings, marker_key),
+                marker_key,
+            )
+        export_id = _new_export_id()
+        uploads: list[tuple[Path, str, str]] = []
         for local, relative in pairs:
+            failing = relative
+            plan = plans[_session_file(relative)]
             if not local.is_file():
-                raise FileNotFoundError(relative)
-            key = object_key(settings.minio_prefix, job_id, relative)
-            _put_and_check(target, local, object_url(settings.minio_bucket, key))
-            uploaded.append(key)
-        _put_marker(target, settings.minio_bucket, marker_key, uploaded)
-    except Exception as exc:
-        status, detail = _s3_failure(exc)
-        _log_export_failure("minio export failed for job %s", job_id, detail=detail)
-        # A 403 will not clear the marker either. Skip the second PUT.
-        if status != 403:
-            try:
-                _put_marker(target, settings.minio_bucket, marker_key, [])
-            except Exception as clear_exc:
-                _log_export_failure(
-                    "minio export failed for _complete.json",
-                    detail=_s3_failure(clear_exc)[1],
+                _LOGGER.warning("minio export skipped missing %s", relative)
+                for key in _keys_for_relative(plan.listed, relative):
+                    plan.final.append(key)
+                    if key in plan.digests:
+                        plan.final_digests[key] = plan.digests[key]
+                continue
+            digest = _sha256_file(local)
+            current = _keys_for_relative(plan.listed, relative)
+            published = current[0] if len(current) == 1 else None
+            if published is not None and _same_published_file(
+                target,
+                local,
+                object_url(settings.minio_bucket, published),
+                plan.digests.get(published),
+                digest,
+            ):
+                plan.final.append(published)
+                plan.final_digests[published] = digest
+                ready += 1
+                continue
+            key = _fresh_object_key(settings, job_id, export_id, relative)
+            uploads.append((local, relative, key))
+            plan.final.append(key)
+            plan.final_digests[key] = digest
+        for local, relative, key in uploads:
+            failing = relative
+            url = object_url(settings.minio_bucket, key)
+
+            def upload(local: Path = local, url: str = url) -> None:
+                _put_and_check(target, local, url)
+
+            _call_with_retry(upload)
+            ready += 1
+        failing = "_complete.json"
+        for session in (False, True):
+            plan = plans[session]
+            if not plan.existed or plan.final != plan.listed or any(
+                plan.digests.get(key) != plan.final_digests.get(key) for key in plan.final
+            ):
+                _call_with_retry(
+                    lambda plan=plan: _put_marker(
+                        target,
+                        settings.minio_bucket,
+                        plan.marker,
+                        plan.final,
+                        plan.final_digests,
+                    )
                 )
+        failing = None
+    except Exception as exc:
+        detail = _s3_failure(exc)[1]
+        local_bytes = 0
+        if failing is not None and failing != "_complete.json":
+            local_bytes = next(
+                (
+                    path.stat().st_size
+                    for path, name in pairs
+                    if name == failing and path.is_file()
+                ),
+                0,
+            )
+        _log_export_failure(
+            "minio export failed for job %s at %s (%s bytes)",
+            job_id,
+            failing or "-",
+            local_bytes,
+            detail=detail or _export_error_detail(exc),
+        )
+        # The new objects are not in the marker. The previous generation stays published.
         warning = _EXPORT_WARNING
     log_event(
         _LOGGER,
@@ -577,10 +933,127 @@ def _export_body(
         "export_done",
         "minio export done",
         duration_ms=int((time.monotonic() - started) * 1000),
-        objects=len(uploaded),
+        objects=ready,
         ok=warning is None,
     )
     return warning
+
+
+def _export_retryable(exc: BaseException) -> bool:
+    """Network, HTTP 5xx, and SlowDown. A 403 or 404 does not change on retry."""
+    if isinstance(exc, (MemoryError, FileNotFoundError, ValueError)):
+        return False
+    if type(exc).__name__ == "OutOfMemoryException":
+        return False
+    text = str(exc)
+    if "size mismatch" in text:
+        return False
+    status, detail = _s3_failure(exc)
+    if status in {403, 404}:
+        return False
+    if (detail and "SlowDown" in detail) or "SlowDown" in text or "SLOW_DOWN" in text:
+        return True
+    if status is not None and status >= 500:
+        return True
+    if status is not None:
+        return False
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    if type(exc).__name__ in {"IOException", "ArrowIOError"}:
+        return True
+    return _NETWORK_ERROR.search(text) is not None
+
+
+def _call_with_retry(action: Any) -> Any:
+    attempt = 1
+    while True:
+        try:
+            return action()
+        except Exception as exc:
+            if attempt >= _EXPORT_ATTEMPTS or not _export_retryable(exc):
+                raise
+            time.sleep(_EXPORT_RETRY_PAUSE_SEC)
+            attempt += 1
+
+
+def _is_missing_object(exc: BaseException) -> bool:
+    if isinstance(exc, FileNotFoundError):
+        return True
+    status, _detail = _s3_failure(exc)
+    if status == 404:
+        return True
+    text = str(exc)
+    return "NoSuchKey" in text or "HTTP 404" in text
+
+
+def _read_marker_keys(
+    store: ObjectStore, settings: Settings, marker_key: str
+) -> tuple[bool, list[str], dict[str, str]]:
+    """``False`` means the marker object is absent. The key order is kept."""
+    url = object_url(settings.minio_bucket, marker_key)
+
+    def read() -> tuple[list[str], dict[str, str]]:
+        parsed = json.loads(store.get(url))
+        keys = parsed.get("keys") if isinstance(parsed, dict) else None
+        if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+            raise ValueError("marker")
+        digests = _marker_digests(parsed) if isinstance(parsed, dict) else {}
+        return list(keys), digests
+
+    try:
+        keys, digests = _call_with_retry(read)
+    except ValueError:
+        # Truncated or non-object JSON. Treat it as absent so this export rewrites it.
+        return False, [], {}
+    except Exception as exc:
+        if _is_missing_object(exc):
+            return False, [], {}
+        raise
+    return True, keys, digests
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(_UPLOAD_CHUNK_BYTES)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _marker_digests(parsed: dict[str, object]) -> dict[str, str]:
+    raw = parsed.get("sha256")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def _same_published_file(
+    store: ObjectStore, local: Path, url: str, listed_digest: str | None, digest: str
+) -> bool:
+    """True when the marker hash and the bucket size both match this file."""
+    if not listed_digest or listed_digest != digest:
+        return False
+    return _remote_size_matches(store, local, url)
+
+
+def _remote_size_matches(store: ObjectStore, local: Path, url: str) -> bool:
+    def probe() -> int:
+        return store.size(url)
+
+    try:
+        remote = _call_with_retry(probe)
+    except Exception as exc:
+        if _is_missing_object(exc):
+            return False
+        raise
+    return remote == local.stat().st_size
 
 
 def _export_warning_recorded(local: Path, relative: str) -> bool:
@@ -597,26 +1070,46 @@ def _export_warning_recorded(local: Path, relative: str) -> bool:
 
 
 class DuckDBObjectStore:
-    def __init__(self, settings: Settings) -> None:
+    """One S3 filesystem for every object copied from one book."""
+
+    def __init__(self, settings: Settings, *, filesystem: Any | None = None) -> None:
         self._settings = settings
+        self._fs = filesystem
 
     def put(self, local: Path, url: str) -> None:
-        # shortcut: read_blob under duckdb_memory_limit, fix when the object must land in MinIO
-        with limited_connection() as con:
-            _configure_s3(con, self._settings)
-            con.execute(
-                "COPY (SELECT content FROM read_blob(?)) TO ? "
-                "(FORMAT BLOB, COMPRESSION 'none', USE_TMP_FILE false)",
-                [str(local), url],
-            )
+        path = _s3_object_path(url)
+        with local.open("rb") as source, self._filesystem().open_output_stream(path) as dest:
+            while True:
+                chunk = source.read(_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                dest.write(chunk)
+
+    def get(self, url: str) -> bytes:
+        filesystem = self._filesystem()
+        path = _s3_object_path(url)
+        info = filesystem.get_file_info(path)
+        if info.type != pafs.FileType.File or info.size is None:
+            raise FileNotFoundError(f"missing object {url}")
+        handle = filesystem.open_input_stream(path)
+        try:
+            payload = handle.read()
+        finally:
+            handle.close()
+        if not payload:
+            return b""
+        return payload if isinstance(payload, bytes) else bytes(payload)
 
     def size(self, url: str) -> int:
-        with limited_connection() as con:
-            _configure_s3(con, self._settings)
-            row = con.execute(_OBJECT_SIZE_SQL, [url]).fetchone()
-        if row is None or row[0] is None:
-            raise OSError(f"missing object {url}")
-        return int(row[0])
+        info = self._filesystem().get_file_info(_s3_object_path(url))
+        if info.type != pafs.FileType.File or info.size is None:
+            raise FileNotFoundError(f"missing object {url}")
+        return int(info.size)
+
+    def _filesystem(self) -> Any:
+        if self._fs is None:
+            self._fs = _s3_filesystem(self._settings)
+        return self._fs
 
 
 def _put_and_check(store: ObjectStore, local: Path, url: str) -> None:
@@ -625,16 +1118,9 @@ def _put_and_check(store: ObjectStore, local: Path, url: str) -> None:
         raise OSError(f"size mismatch for {url}")
 
 
-def _marker_lists(settings: Settings, job_id: str, relative: str) -> bool:
-    state, keys = _load_marker(settings, job_id)
-    if state != "ok":
-        return False
-    return object_key(settings.minio_prefix, job_id, relative) in keys
-
-
-def _load_marker(settings: Settings, job_id: str) -> tuple[str, set[str]]:
+def _load_marker(settings: Settings, job_id: str, relative: str) -> tuple[str, set[str]]:
     """``missing`` is no object. ``unread`` is a failed or unusable read."""
-    marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
+    marker_key = _marker_object_key(settings, job_id, relative)
     url = object_url(settings.minio_bucket, marker_key)
     try:
         parsed = json.loads(read_blob_bytes(url, settings))
@@ -659,17 +1145,56 @@ def _http_404(exc: Exception) -> bool:
 
 
 def _s3_failure(exc: BaseException) -> tuple[int | None, str | None]:
-    """HTTP status and one ``Code: message`` line. The DuckDB essay stays out."""
+    """HTTP status and one ``Code: message`` line. The client essay stays out."""
     text = str(exc)
     status_match = _HTTP_STATUS.search(text)
-    if status_match is None:
+    if status_match is not None:
+        status = int(status_match.group(1))
+        for code, message in _S3_LINE.findall(text):
+            if code == "HTTP":
+                continue
+            return status, f"HTTP {status} {code}: {message.strip()}"
+        return status, f"HTTP {status}"
+    return _pyarrow_s3_failure(text)
+
+
+def _pyarrow_s3_failure(text: str) -> tuple[int | None, str | None]:
+    """One HTTP line from a PyArrow S3 error. Unknown text is not logged."""
+    named = _AWS_NAMED.search(text)
+    if named:
+        code = named.group(1)
+        status = int(named.group(2))
+        message = named.group(3).strip()
+        return status, f"HTTP {status} {code}: {message}"
+    during = _AWS_DURING.search(text)
+    if during:
+        token = during.group(1)
+        status = _AWS_NAME_STATUS.get(token)
+        if status is None:
+            return None, None
+        message = during.group(2).strip()
+        return status, f"HTTP {status} {_AWS_PUBLIC_NAME.get(token, token)}: {message}"
+    http_status = _AWS_HTTP_STATUS.search(text)
+    if http_status:
+        status = int(http_status.group(1))
+        return status, f"HTTP {status}: {http_status.group(2).strip()}"
+    response = _AWS_RESPONSE_CODE.search(text)
+    if response is None:
         return None, None
-    status = int(status_match.group(1))
-    for code, message in _S3_LINE.findall(text):
-        if code == "HTTP":
-            continue
-        return status, f"HTTP {status} {code}: {message.strip()}"
-    return status, f"HTTP {status}"
+    status = int(response.group(1))
+    bracket = _AWS_BRACKET.search(text)
+    if bracket is None:
+        return status, f"HTTP {status}"
+    return status, f"HTTP {status} S3: {bracket.group(2).strip()}"
+
+
+def _export_error_detail(exc: BaseException) -> str | None:
+    """First line of a memory error. Other text can carry a credential essay."""
+    if isinstance(exc, MemoryError) or type(exc).__name__ == "OutOfMemoryException":
+        lines = str(exc).strip().splitlines()
+        head = lines[0][:300] if lines else ""
+        return f"{type(exc).__name__}: {head}"
+    return None
 
 
 def _log_export_failure(template: str, *args: object, detail: str | None) -> None:
@@ -696,8 +1221,10 @@ def _mark_published_key(
     relative: str,
     *,
     present: bool,
+    digest: str | None = None,
+    published_key: str | None = None,
 ) -> bool:
-    marker_key = object_key(settings.minio_prefix, job_id, "_complete.json")
+    marker_key = _marker_object_key(settings, job_id, relative)
     url = object_url(settings.minio_bucket, marker_key)
     try:
         parsed = json.loads(read_blob_bytes(url, settings))
@@ -705,25 +1232,43 @@ def _mark_published_key(
         _LOGGER.warning("minio export failed for _complete.json")
         return False
     keys = parsed.get("keys") if isinstance(parsed, dict) else None
-    if not isinstance(keys, list):
+    if not isinstance(keys, list) or not isinstance(parsed, dict):
         return False
-    wanted = object_key(settings.minio_prefix, job_id, relative)
+    digests = _marker_digests(parsed)
+    wanted = published_key or object_key(settings.minio_prefix, job_id, relative)
     if present:
-        updated = keys if wanted in keys else [*keys, wanted]
+        updated = [key for key in keys if key == wanted or not _names_relative(key, relative)]
+        if wanted not in updated:
+            updated.append(wanted)
+        if digest:
+            digests[wanted] = digest
     else:
-        updated = [key for key in keys if key != wanted]
-    if updated == keys:
+        updated = [key for key in keys if not _names_relative(key, relative)]
+        for key in keys:
+            if _names_relative(key, relative):
+                digests.pop(key, None)
+    kept = {key: value for key, value in digests.items() if key in set(updated)}
+    if updated == keys and kept == _marker_digests(parsed):
         return True
     try:
-        _put_marker(store, settings.minio_bucket, marker_key, updated)
+        _put_marker(store, settings.minio_bucket, marker_key, updated, kept)
     except Exception:
         _LOGGER.warning("minio export failed for _complete.json")
         return False
     return True
 
 
-def _put_marker(store: ObjectStore, bucket: str, key: str, uploaded: list[str]) -> None:
-    payload = (json.dumps({"keys": uploaded}, indent=2) + "\n").encode("utf-8")
+def _put_marker(
+    store: ObjectStore,
+    bucket: str,
+    key: str,
+    uploaded: list[str],
+    digests: dict[str, str] | None = None,
+) -> None:
+    body: dict[str, object] = {"keys": uploaded}
+    if digests:
+        body["sha256"] = {name: digests[name] for name in uploaded if name in digests}
+    payload = (json.dumps(body, indent=2) + "\n").encode("utf-8")
     with tempfile.NamedTemporaryFile(prefix=".complete.", suffix=".json") as handle:
         handle.write(payload)
         handle.flush()
@@ -736,6 +1281,49 @@ def _put_marker(store: ObjectStore, bucket: str, key: str, uploaded: list[str]) 
 
 # Image build installs httpfs here. The process only loads that file.
 _IMAGE_HTTPFS = Path("/app/.duckdb/extensions")
+
+
+def _s3_object_path(url: str) -> str:
+    """``s3://bucket/key`` without the scheme. That is the path PyArrow addresses."""
+    if not url.startswith("s3://"):
+        raise ValueError(f"not an s3 url: {url}")
+    return url[len("s3://") :]
+
+
+def _s3_filesystem(settings: Settings | None) -> pafs.S3FileSystem:
+    """The same endpoint, region, keys, and path-style as ``_configure_s3``."""
+    if settings is None or not settings.minio_configured():
+        raise RuntimeError("MINIO settings are empty")
+    endpoint, use_ssl = _endpoint(settings.minio_endpoint)
+    secret = ""
+    if settings.minio_secret_key is not None:
+        secret = settings.minio_secret_key.get_secret_value()
+    # One SDK attempt. A 403 must surface here; the export loop decides what to repeat.
+    retry = _s3_retry_once()
+    kwargs: dict[str, Any] = {
+        "access_key": settings.minio_access_key,
+        "secret_key": secret,
+        "region": settings.minio_region,
+        "scheme": "https" if use_ssl else "http",
+        "endpoint_override": endpoint,
+        # Path-style. Virtual-hosted turns the host into ``bucket.host``.
+        "force_virtual_addressing": False,
+        # A background queue would hold every part of a large object.
+        "background_writes": False,
+    }
+    if retry is not None:
+        kwargs["retry_strategy"] = retry
+    return pafs.S3FileSystem(**kwargs)
+
+
+def _s3_retry_once() -> Any:
+    strategy = getattr(pafs, "AwsDefaultS3RetryStrategy", None)
+    if strategy is None:
+        return None
+    try:
+        return strategy(max_attempts=1)
+    except TypeError:
+        return None
 
 
 def _configure_s3(con: Any, settings: Settings | None) -> None:

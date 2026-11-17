@@ -69,7 +69,12 @@ from finance_context.render.markdown import (
     write_context_markdown,
 )
 from finance_context.settings import Settings
-from finance_context.store.duckdb_io import export_succeeded_book, republish_file
+from finance_context.store.duckdb_io import (
+    export_succeeded_book,
+    publish_generation_pending,
+    record_published_generation,
+    republish_file,
+)
 from finance_context.store.fs import JsonItems, file_lock, read_parquet, update_json
 from finance_context.store.paths import session_job_dir, shared_book_dir
 
@@ -187,6 +192,25 @@ class Pipeline:
         context_path = dest_dir / "context" / "context.json"
         markdown_path = dest_dir / "context" / "context.md"
         if context_path.is_file() and markdown_path.is_file():
+            if self.settings.minio_configured() and publish_generation_pending(dest_dir):
+                export_warning = export_succeeded_book(
+                    self.settings,
+                    job_id=job_id,
+                    book=book,
+                    dest=dest_dir,
+                )
+                if export_warning:
+                    update_json(
+                        dest_dir / "meta" / "meta.json",
+                        lambda stored: _append_export_warning(
+                            stored,
+                            generation=generation,
+                            warning=export_warning,
+                        ),
+                        stream=self.settings.json_stream,
+                    )
+                else:
+                    record_published_generation(dest_dir)
             if refresh_context_markdown(dest_dir / "context"):
                 try:
                     republish_file(self.settings, markdown_path, job_id, "context/context.md")
@@ -452,6 +476,8 @@ class Pipeline:
                 ),
                 stream=self.settings.json_stream,
             )
+        else:
+            record_published_generation(dest_dir)
         if progress_enabled():
             if open_stage is not None:
                 emit_progress(

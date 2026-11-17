@@ -108,8 +108,15 @@ def test_get_context_md_rewrites_a_finished_job(tmp_path: Path) -> None:
     (dest / "graph" / "graph.md").write_text("PF Model!AA172 | Z172*(1+AA165)\n", encoding="utf-8")
     with _app(tmp_path) as client:
         response = client.get(f"/v1/context-jobs/{job_id}/context.md")
+        context_json = client.get(f"/v1/context-jobs/{job_id}/context.json")
+        graph_json = client.get(f"/v1/context-jobs/{job_id}/graph.json")
+        graph_md = client.get(f"/v1/context-jobs/{job_id}/graph.md")
     assert response.status_code == 200
+    assert response.headers["content-length"] == str(len(response.content))
     assert "1.3458683383241299 [PF Model!AA172]" in response.text
+    for document in (context_json, graph_json, graph_md):
+        assert document.status_code == 200
+        assert document.headers["content-length"] == str(len(document.content))
     assert "Z172*(1+AA165)" not in response.text
     stored = json.loads((dest / "context" / "context.json").read_text(encoding="utf-8"))
     assert stored["blocks"][0]["rows"][0]["values"] == ["1.3458683383241299"]

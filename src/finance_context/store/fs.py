@@ -88,13 +88,18 @@ def _fsync_dir(directory: Path) -> None:
 
 
 @contextmanager
-def file_lock(path: Path, *, blocking: bool = True) -> Iterator[bool]:
-    """Exclusive flock on a sidecar. Non-blocking failure yields False."""
+def file_lock(path: Path, *, blocking: bool = True, shared: bool = False) -> Iterator[bool]:
+    """Flock on a sidecar. Non-blocking failure yields False.
+
+    ``shared`` is a read lock. A writer still takes the exclusive lock.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+")
     locked = False
     try:
-        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        flags = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        if not blocking:
+            flags |= fcntl.LOCK_NB
         try:
             fcntl.flock(handle.fileno(), flags)
             locked = True
