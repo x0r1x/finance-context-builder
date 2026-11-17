@@ -358,3 +358,56 @@ def test_a_wide_grid_keeps_every_value_column() -> None:
     assert [block.kind for block in sheet.blocks] == ["matrix"]
     assert [header.col for header in sheet.blocks[0].axis.headers] == list(range(2, 42))
     assert sheet.notes == []
+
+
+def _timeline_with_side_list(*side_cells: tuple[str, str]) -> list[dict]:
+    cells = [
+        _c("Sheet", "A1", "Item"),
+        _c("Sheet", "B1", "2020"),
+        _c("Sheet", "C1", "2021"),
+        _c("Sheet", "D1", "2022"),
+        _c("Sheet", "A2", "Revenue"),
+        _c("Sheet", "B2", "10"),
+        _c("Sheet", "C2", "11"),
+        _c("Sheet", "D2", "12"),
+        _c("Sheet", "A3", "Cost"),
+        _c("Sheet", "B3", "1"),
+        _c("Sheet", "C3", "2"),
+        _c("Sheet", "D3", "3"),
+    ]
+    cells.extend(_c("Sheet", addr, value) for addr, value in side_cells)
+    return cells
+
+
+def test_side_list_titles_on_the_year_row_stay_with_the_list() -> None:
+    cells = _timeline_with_side_list(
+        ("F1", "Name"),
+        ("G1", "Amount"),
+        ("H1", "Share"),
+        ("F2", "Fee"),
+        ("G2", "5"),
+        ("H2", "0.1"),
+        ("F3", "Tax"),
+        ("G3", "6"),
+        ("H3", "0.2"),
+    )
+    sheet = detect_layout(cells).sheets[0]
+    lists = [block for block in sheet.blocks if block.kind == "key_value"]
+    assert len(lists) == 1
+    assert [row.label for row in lists[0].rows] == ["Fee", "Tax"]
+    assert [header.text for header in lists[0].axis.headers] == ["Amount", "Share"]
+
+
+def test_one_column_side_list_keeps_the_caption_from_the_year_row() -> None:
+    cells = _timeline_with_side_list(
+        ("F1", "Name"),
+        ("G1", "Amount"),
+        ("F2", "Fee"),
+        ("G2", "5"),
+        ("F3", "Tax"),
+        ("G3", "6"),
+    )
+    sheet = detect_layout(cells).sheets[0]
+    lists = [block for block in sheet.blocks if block.kind == "key_value"]
+    assert len(lists) == 1
+    assert lists[0].axis.headers[0].text == "Amount"

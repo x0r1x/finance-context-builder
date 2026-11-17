@@ -53,10 +53,13 @@ def coverage_blocks(
     by_row = _without_taken(by_row, taken or set())
     spans, rectangles = _ownership(blocks, axes or [])
     by_row = _without_rectangles(by_row, rectangles)
+    # Cells that survived a timeline rectangle are not part of the year header.
+    # A title sitting on that row still names the list beside the years.
+    open_headers = {row for row in header_rows if row in by_row} if rectangles else set()
     free = [
         row
         for row in sorted(by_row)
-        if not _is_owned(row, header_rows, spans)
+        if not _is_owned(row, header_rows, spans, open_headers)
         and _row_has_value(by_row[row], date1904, hidden)
     ]
     # A caption row has no numbers, so it is not free. Keep the row directly
@@ -65,7 +68,7 @@ def coverage_blocks(
         row - 1
         for row in free
         if (row - 1) in by_row
-        and not _is_owned(row - 1, header_rows, spans)
+        and not _is_owned(row - 1, header_rows, spans, open_headers)
         and not _row_has_value(by_row[row - 1], date1904, hidden)
     ]
     free = sorted(set(free) | set(captions))
@@ -115,16 +118,26 @@ def _ownership(
             continue
         horizontal = block.kind == "timeline" and not any(row.value_col for row in block.rows)
         columns: set[int] = set()
+        header_row_ns: list[int] = []
         if horizontal:
             columns.add(int(block.label_col))
             if block.axis is not None:
                 columns.update(int(header.col) for header in block.axis.headers)
+                if block.axis.row:
+                    header_row_ns.append(int(block.axis.row))
             for axis_id in block.axis_ids:
                 axis = by_id.get(axis_id)
                 if axis is not None and not getattr(axis, "transposed", False):
                     columns.update(int(period.col) for period in axis.periods)
+                    header_row = getattr(axis, "header_row", None)
+                    if header_row:
+                        header_row_ns.append(int(header_row))
         if horizontal and columns:
-            rectangles.append((min(rows), max(rows), min(columns), max(columns)))
+            row_lo, row_hi = min(rows), max(rows)
+            if header_row_ns:
+                row_lo = min(row_lo, *header_row_ns)
+                row_hi = max(row_hi, *header_row_ns)
+            rectangles.append((row_lo, row_hi, min(columns), max(columns)))
         else:
             spans.append((min(rows), max(rows)))
     return spans, rectangles
@@ -176,10 +189,17 @@ def _suffix_repeated(blocks: list[Block], suffix) -> None:
             block.axis.id = block.block_id
 
 
-def _is_owned(row: int, header_rows: set[int], spans: list[tuple[int, int]]) -> bool:
-    if row in header_rows:
+def _is_owned(
+    row: int,
+    header_rows: set[int],
+    spans: list[tuple[int, int]],
+    open_headers: set[int] | None = None,
+) -> bool:
+    if any(start <= row <= end for start, end in spans):
         return True
-    return any(start <= row <= end for start, end in spans)
+    if row in header_rows and row not in (open_headers or ()):
+        return True
+    return False
 
 
 def _bands(rows: list[int]) -> list[list[int]]:
