@@ -18,6 +18,17 @@ from finance_context.vocab import ValueStatus
 _SERIES_KINDS = {"fact", "flag", "helper"}
 
 
+def block_label_col(
+    layout_row: LayoutRow, share_label: bool, label_col: int | None
+) -> int | None:
+    """Label column only when this sheet row also belongs to another block."""
+    if layout_row.value_col or not share_label:
+        return None
+    if label_col is not None:
+        return label_col
+    return layout_row.label_col
+
+
 def _row_for_layout(
     *,
     sheet_name: str,
@@ -38,9 +49,14 @@ def _row_for_layout(
     role_cells: list[RoleCell],
     series_unit: str | None,
     series: list[RowSeries] | None = None,
+    share_label: bool = False,
+    label_col: int | None = None,
 ) -> BlockRow:
     row_num = layout_row.row
-    row_key = published_row_key(sheet_name, row_num, block_id, layout_row.value_col)
+    shared_col = block_label_col(layout_row, share_label, label_col)
+    row_key = published_row_key(
+        sheet_name, row_num, block_id, layout_row.value_col, label_col=shared_col
+    )
     keep_cols = {header.col for header in value_headers}
     values: list[str | None] = []
     statuses: list[ValueStatus] = []

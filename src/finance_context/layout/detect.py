@@ -243,6 +243,7 @@ def _blocks_indexed(
         header_rows,
         hidden_cols,
         taken=_vertical_period_cells(axes),
+        axes=axes,
     )
     if covered:
         blocks = sorted(

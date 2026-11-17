@@ -33,6 +33,7 @@ from finance_context.layout.models import (
     LayoutRow,
     is_series_column,
     is_value_block,
+    shared_horizontal_rows,
 )
 from finance_context.layout.params import selector_rows
 from finance_context.layout.periods import (
@@ -416,6 +417,7 @@ def _stream_one_block(
         for heading, headers, axis_id in tables
     ]
     state = {"n": 0}
+    shared_rows = shared_horizontal_rows(sheet.blocks)
 
     def _rows() -> Iterator[dict]:
         running_unit = block_unit
@@ -530,6 +532,8 @@ def _stream_one_block(
                     role_cells=role_cells,
                     series_unit=series_unit,
                     series=series,
+                    share_label=layout_row.row in shared_rows,
+                    label_col=block.label_col,
                 )
                 for (_axis_id, headers), item in zip(views, series, strict=False):
                     for header, item_state in zip(headers, item.value_statuses, strict=False):

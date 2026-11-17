@@ -7,7 +7,15 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from finance_context.layout.formulas_shape import RowPattern, _pattern_for_row
-from finance_context.layout.models import Block, Layout, LayoutRow, SheetLayout, is_value_block
+from finance_context.layout.models import (
+    Block,
+    Layout,
+    LayoutRow,
+    SheetLayout,
+    is_value_block,
+    published_row_key,
+    shared_horizontal_rows,
+)
 from finance_context.layout.resolve import period_headers
 
 
@@ -29,12 +37,18 @@ class _RelationBook(Protocol):
 class _CellIndex:
     def __init__(self, layout: Layout) -> None:
         self.row_index: dict[tuple[str, int], tuple[Block, LayoutRow]] = {}
+        self.shared: dict[str, set[int]] = {}
+        self.label_of: dict[tuple[str, str], int] = {}
         for sheet in layout.sheets:
+            shared_rows = shared_horizontal_rows(sheet.blocks)
+            self.shared[sheet.name] = shared_rows
             for block in sheet.blocks:
+                self.label_of[(sheet.name, block.block_id)] = block.label_col
                 for row in block.rows:
                     # A transposed line shares the label row with its siblings.
                     # Indexing it here would hide them, and a horizontal row.
-                    if row.value_col:
+                    # A row in two blocks has no single target.
+                    if row.value_col or row.row in shared_rows:
                         continue
                     self.row_index[(sheet.name, row.row)] = (block, row)
         buckets: dict[str, list[tuple[int, str]]] = {}
@@ -47,7 +61,10 @@ class _CellIndex:
         self.sheet_rows = buckets
 
     def row_key(self, sheet: str, row: int, block_id: str) -> str:
-        return f"{sheet}|{row}|{block_id}"
+        label_col = None
+        if row in self.shared.get(sheet, ()):
+            label_col = self.label_of.get((sheet, block_id))
+        return published_row_key(sheet, row, block_id, label_col=label_col)
 
 
 class _RowCells:

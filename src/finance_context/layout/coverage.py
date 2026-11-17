@@ -42,6 +42,7 @@ def coverage_blocks(
     header_rows: set[int],
     hidden_cols: set[int] | None = None,
     taken: set[tuple[int, int]] | None = None,
+    axes: list | None = None,
 ) -> tuple[list[Block], list[str]]:
     """Blocks and notes for rows outside every existing block span.
 
@@ -50,7 +51,8 @@ def coverage_blocks(
     """
     hidden = hidden_cols or set()
     by_row = _without_taken(by_row, taken or set())
-    spans = _owned_spans(blocks)
+    spans, rectangles = _ownership(blocks, axes or [])
+    by_row = _without_rectangles(by_row, rectangles)
     free = [
         row
         for row in sorted(by_row)
@@ -73,6 +75,7 @@ def coverage_blocks(
         blocks, band_notes = _band_blocks(sheet, band, by_row, date1904, hidden)
         found.extend(blocks)
         notes.extend(band_notes)
+    _disambiguate_ids(found)
     return found, notes
 
 
@@ -93,12 +96,84 @@ def _without_taken(
 
 def _owned_spans(blocks: list[Block]) -> list[tuple[int, int]]:
     """Vertical spans of blocks that already exist. Not a filled set of every row."""
+    return _ownership(blocks, [])[0]
+
+
+def _ownership(
+    blocks: list[Block], axes: list
+) -> tuple[list[tuple[int, int]], list[tuple[int, int, int, int]]]:
+    """Timelines own the columns of their scale. Other blocks own the whole row.
+
+    A list to the right of the years stays free. A list under the years does not.
+    """
+    by_id = {axis.id: axis for axis in axes}
     spans: list[tuple[int, int]] = []
+    rectangles: list[tuple[int, int, int, int]] = []
     for block in blocks:
         rows = [row.row for row in block.rows]
-        if rows:
+        if not rows:
+            continue
+        horizontal = block.kind == "timeline" and not any(row.value_col for row in block.rows)
+        columns: set[int] = set()
+        if horizontal:
+            columns.add(int(block.label_col))
+            if block.axis is not None:
+                columns.update(int(header.col) for header in block.axis.headers)
+            for axis_id in block.axis_ids:
+                axis = by_id.get(axis_id)
+                if axis is not None and not getattr(axis, "transposed", False):
+                    columns.update(int(period.col) for period in axis.periods)
+        if horizontal and columns:
+            rectangles.append((min(rows), max(rows), min(columns), max(columns)))
+        else:
             spans.append((min(rows), max(rows)))
-    return spans
+    return spans, rectangles
+
+
+def _without_rectangles(
+    by_row: dict[int, list[dict]], rectangles: list[tuple[int, int, int, int]]
+) -> dict[int, list[dict]]:
+    if not rectangles:
+        return by_row
+    kept: dict[int, list[dict]] = {}
+    for row_n, cells in by_row.items():
+        free = [
+            cell
+            for cell in cells
+            if not any(
+                start <= row_n <= end and left <= int(cell["col"]) <= right
+                for start, end, left, right in rectangles
+            )
+        ]
+        if free:
+            kept[row_n] = free
+    return kept
+
+
+def _disambiguate_ids(blocks: list[Block]) -> None:
+    """Lists that start on one row need distinct ids. A lone list keeps ``!c{row}``."""
+    _suffix_repeated(blocks, lambda block: f"l{block.label_col}")
+    _suffix_repeated(
+        blocks,
+        lambda block: (
+            f"c{block.axis.headers[0].col}"
+            if block.axis is not None and block.axis.headers
+            else f"c{block.label_col}"
+        ),
+    )
+
+
+def _suffix_repeated(blocks: list[Block], suffix) -> None:
+    counts: dict[str, int] = {}
+    for block in blocks:
+        counts[block.block_id] = counts.get(block.block_id, 0) + 1
+    for block in blocks:
+        base = block.block_id
+        if counts.get(base, 0) < 2:
+            continue
+        block.block_id = f"{base}{suffix(block)}"
+        if block.axis is not None and block.axis.id == base:
+            block.axis.id = block.block_id
 
 
 def _is_owned(row: int, header_rows: set[int], spans: list[tuple[int, int]]) -> bool:
