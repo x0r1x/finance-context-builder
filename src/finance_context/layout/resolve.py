@@ -64,6 +64,26 @@ def axes_for(sheet: SheetLayout, block: Block) -> list[TimeAxis]:
     return []
 
 
+def horizontal_columns(sheet: SheetLayout, block: Block, row_n: int) -> set[int]:
+    """Columns one horizontal block owns on a single sheet row.
+
+    Period headers apply on every row of the block. A stub or unit cell applies
+    only on the row that carries it.
+    """
+    columns = {int(block.label_col)}
+    for header in period_headers(sheet, block):
+        if not header.row:
+            columns.add(int(header.col))
+    for row in block.rows:
+        if int(row.row) != int(row_n) or row.value_col:
+            continue
+        if row.label_col:
+            columns.add(int(row.label_col))
+        for cell in row.cells:
+            columns.add(int(cell.col))
+    return columns
+
+
 def period_headers(sheet: SheetLayout, block: Block) -> list[AxisHeader]:
     if is_value_block(getattr(block, "kind", "timeline")) and block.axis is not None:
         return list(block.axis.headers)
