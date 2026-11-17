@@ -32,9 +32,14 @@ from finance_context.graph.models import (
 )
 from finance_context.graph.ranges import CellGrid, RangeHops, SegmentIds, hop_flags, is_cell_id
 from finance_context.graph.refs import parse_node_id
-from finance_context.layout.models import Layout, is_series_column, published_row_key
+from finance_context.layout.models import (
+    Layout,
+    is_series_column,
+    published_row_key,
+    shared_horizontal_rows,
+)
 from finance_context.layout.periods import period_position
-from finance_context.layout.resolve import axes_for, period_headers
+from finance_context.layout.resolve import axes_for, horizontal_columns, period_headers
 from finance_context.memory import trim_process_heap
 from finance_context.models.context import GraphPointer
 from finance_context.observability import log_event
@@ -708,10 +713,15 @@ def _side_cells(layout: Layout) -> dict[tuple[str, int, int], str]:
     for sheet in layout.sheets:
         grouped: dict[int, list] = {}
         for block in sheet.blocks:
+            seen_rows: set[int] = set()
             for row in block.rows:
                 if row.value_col:
                     continue
-                grouped.setdefault(int(row.row), []).append(block)
+                row_n = int(row.row)
+                if row_n in seen_rows:
+                    continue
+                seen_rows.add(row_n)
+                grouped.setdefault(row_n, []).append(block)
         for row_n, blocks in grouped.items():
             if len(blocks) < 2:
                 continue
@@ -719,11 +729,7 @@ def _side_cells(layout: Layout) -> dict[tuple[str, int, int], str]:
                 key = published_row_key(
                     sheet.name, row_n, block.block_id, label_col=block.label_col
                 )
-                columns = {int(block.label_col)}
-                for header in period_headers(sheet, block):
-                    if not header.row:
-                        columns.add(int(header.col))
-                for col in columns:
+                for col in horizontal_columns(sheet, block, row_n):
                     slot = (sheet.name, row_n, col)
                     previous = claimed.get(slot)
                     if previous is not None and previous != key:
@@ -740,15 +746,16 @@ def _row_meta(
 ) -> dict[tuple[str, int], str]:
     """Horizontal rows only. A transposed line shares its label row.
 
-    A row shared by two blocks is not entered: the column map in ``side``
-    names the block, and a single key here would hide the other one.
+    A row shared by two blocks is not entered. ``side`` may have dropped every
+    column of that row, and a single key here would still hide the other block.
     """
-    shared = {(sheet, row) for sheet, row, _col in side or {}}
+    del side
     out: dict[tuple[str, int], str] = {}
     for sheet in layout.sheets:
+        shared = shared_horizontal_rows(sheet.blocks)
         for block in sheet.blocks:
             for row in block.rows:
-                if row.value_col or (sheet.name, int(row.row)) in shared:
+                if row.value_col or int(row.row) in shared:
                     continue
                 out[(sheet.name, row.row)] = published_row_key(
                     sheet.name, row.row, block.block_id
