@@ -404,15 +404,27 @@ def _value_columns(
     date1904: bool,
     hidden_cols: set[int],
 ) -> list[int]:
-    """Every value column. Runs are split later, so a left index stays separate."""
-    cols: set[int] = set()
+    """Columns whose body is numbers.
+
+    A name column stays a name when text outnumbers numbers. One number in a
+    flipped header row would otherwise join the name columns to the amounts
+    and turn several lists into one matrix. A year caption is neither.
+    """
+    numbers: dict[int, int] = {}
+    texts: dict[int, int] = {}
     for row_n in band:
         for cell in by_row[row_n]:
             col = int(cell["col"])
-            if col in hidden_cols or not _is_value(cell, date1904):
+            if col in hidden_cols:
                 continue
-            cols.add(col)
-    return sorted(cols)
+            text = _text(cell, date1904)
+            if not text or _is_year_text(text):
+                continue
+            if _is_number(text):
+                numbers[col] = numbers.get(col, 0) + 1
+            else:
+                texts[col] = texts.get(col, 0) + 1
+    return sorted(col for col, count in numbers.items() if count >= texts.get(col, 0))
 
 
 def _column_titles(
