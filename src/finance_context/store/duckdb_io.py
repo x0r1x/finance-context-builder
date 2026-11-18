@@ -115,6 +115,8 @@ _NETWORK_ERROR = re.compile(
 class ObjectStore(Protocol):
     def put(self, local: Path, url: str) -> None: ...
 
+    def delete(self, url: str) -> None: ...
+
     def get(self, url: str) -> bytes: ...
 
     def size(self, url: str) -> int: ...
@@ -559,6 +561,11 @@ def _open_while_publish_idle(
     with file_lock(lock_path, blocking=False, shared=True) as locked:
         if not locked:
             return stream_local_file(local)
+        dest = _session_dest(local, relative)
+        if dest is not None and (
+            publish_generation_pending(dest) or _export_warning_recorded(local, relative)
+        ):
+            return stream_local_file(local)
         state, keys = _load_marker(settings, job_id, relative)
         if state == "unread":
             return stream_local_file(local)
@@ -808,8 +815,30 @@ def export_succeeded_book(
     """
     if not settings.minio_configured():
         return None
-    with _publish_lock(book / ".minio-publish.lock"):
-        return _export_body(settings, job_id=job_id, book=book, dest=dest, store=store)
+    with _publish_lock(book / ".minio-publish.lock"), tempfile.TemporaryDirectory() as temp:
+        meta = _published_meta(dest, Path(temp))
+        return _export_body(settings, job_id=job_id, book=book, dest=dest, store=store, meta=meta)
+
+
+def _published_meta(dest: Path, scratch: Path) -> Path:
+    path = dest / "meta" / "meta.json"
+    try:
+        payload = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return path
+    if not isinstance(payload, dict):
+        return path
+    warning = payload.get("warnings")
+    generation = payload.get("generation")
+    if generation is None and not (isinstance(warning, list) and _EXPORT_WARNING in warning):
+        return path
+    if generation is not None:
+        payload["minio_published_generation"] = generation
+    if isinstance(warning, list):
+        payload["warnings"] = [item for item in warning if item != _EXPORT_WARNING]
+    prepared = scratch / "meta.json"
+    prepared.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    return prepared
 
 
 class _MarkerPlan:
@@ -835,10 +864,11 @@ def _export_body(
     book: Path,
     dest: Path,
     store: ObjectStore | None,
+    meta: Path,
 ) -> str | None:
     target = store if store is not None else DuckDBObjectStore(settings)
     pairs = [(book / name, name) for name in _SHARED]
-    pairs.extend((dest / name, name) for name in _SESSION)
+    pairs.extend((meta if name == "meta/meta.json" else dest / name, name) for name in _SESSION)
     log_event(
         _LOGGER,
         logging.INFO,
@@ -850,7 +880,7 @@ def _export_body(
     warning: str | None = None
     failing: str | None = "_complete.json"
     ready = 0
-    replaced: list[tuple[str, bytes]] = []
+    replaced: list[tuple[str, bytes | None]] = []
     try:
         plans: dict[bool, _MarkerPlan] = {}
         for session in (False, True):
@@ -900,41 +930,48 @@ def _export_body(
             _call_with_retry(upload)
             ready += 1
         failing = "_complete.json"
+        shared = {"keys": plans[False].final, "sha256": plans[False].final_digests}
         for session in (False, True):
             plan = plans[session]
             changed = not plan.existed or plan.final != plan.listed or any(
                 plan.digests.get(key) != plan.final_digests.get(key) for key in plan.final
             )
-            if not changed:
-                continue
             url = object_url(settings.minio_bucket, plan.marker)
-            previous = target.get(url) if plan.existed else None
+            if not changed and not session:
+                continue
+            previous = _call_with_retry(lambda url=url: target.get(url)) if plan.existed else None
+            if (
+                not changed
+                and previous is not None
+                and json.loads(previous).get("shared") == shared
+            ):
+                continue
+            replaced.append((url, previous))
 
-            def publish(plan: _MarkerPlan = plan) -> None:
+            def publish(plan: _MarkerPlan = plan, session: bool = session) -> None:
                 _put_marker(
                     target,
                     settings.minio_bucket,
                     plan.marker,
                     plan.final,
                     plan.final_digests,
+                    shared=shared if session else None,
                 )
 
-            try:
-                _call_with_retry(publish)
-            except Exception:
-                if previous is not None:
-                    try:
-                        _put_bytes(target, url, previous)
-                    except Exception:
-                        _LOGGER.warning("minio export failed to restore _complete.json")
-                raise
-            if previous is not None:
-                replaced.append((url, previous))
+            _call_with_retry(publish)
         failing = None
     except Exception as exc:
         for url, previous in reversed(replaced):
             try:
-                _put_bytes(target, url, previous)
+                if previous is None:
+                    try:
+                        _call_with_retry(lambda url=url: target.delete(url))
+                    except FileNotFoundError:
+                        pass
+                else:
+                    _call_with_retry(
+                        lambda url=url, previous=previous: _put_bytes(target, url, previous)
+                    )
             except Exception:
                 _LOGGER.warning("minio export failed to restore _complete.json")
         detail = _s3_failure(exc)[1]
@@ -955,9 +992,8 @@ def _export_body(
             local_bytes,
             detail=detail or _export_error_detail(exc),
         )
-        # A marker that this attempt already replaced is put back. Both markers stay
-        # on the previous pair, or both name the new keys. A new object that no
-        # marker lists is left in the bucket.
+        # Restore mutable pointers where possible. Session readers can use the
+        # shared snapshot embedded in their marker independently of that rollback.
         warning = _EXPORT_WARNING
     log_event(
         _LOGGER,
@@ -1116,6 +1152,9 @@ class DuckDBObjectStore:
                 if not chunk:
                     break
                 dest.write(chunk)
+
+    def delete(self, url: str) -> None:
+        self._filesystem().delete_file(_s3_object_path(url))
 
     def get(self, url: str) -> bytes:
         filesystem = self._filesystem()
@@ -1283,7 +1322,9 @@ def _mark_published_key(
     if updated == keys and kept == _marker_digests(parsed):
         return True
     try:
-        _put_marker(store, settings.minio_bucket, marker_key, updated, kept)
+        _put_marker(
+            store, settings.minio_bucket, marker_key, updated, kept, shared=parsed.get("shared")
+        )
     except Exception:
         _LOGGER.warning("minio export failed for _complete.json")
         return False
@@ -1306,10 +1347,14 @@ def _put_marker(
     key: str,
     uploaded: list[str],
     digests: dict[str, str] | None = None,
+    *,
+    shared: dict | None = None,
 ) -> None:
     body: dict[str, object] = {"keys": uploaded}
     if digests:
         body["sha256"] = {name: digests[name] for name in uploaded if name in digests}
+    if shared is not None:
+        body["shared"] = shared
     payload = (json.dumps(body, indent=2) + "\n").encode("utf-8")
     with tempfile.NamedTemporaryFile(prefix=".complete.", suffix=".json") as handle:
         handle.write(payload)

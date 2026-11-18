@@ -87,6 +87,9 @@ class _MemoryStore:
         self.objects[url] = local.read_bytes()
         self.order.append(url)
 
+    def delete(self, url: str) -> None:
+        self.objects.pop(url, None)
+
     def get(self, url: str) -> bytes:
         try:
             return self.objects[url]
@@ -617,6 +620,63 @@ def test_session_marker_failure_restores_the_shared_marker(
     assert store.objects[
         _bucket(_listed(_stored_marker(store, session=True), "context/context.json"))
     ] == b"session:new\n"
+
+
+def test_first_session_marker_failure_removes_new_shared_marker(tmp_path: Path) -> None:
+    book, dest = tmp_path / "book", tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    store.fail_on = "/sessions/local/_complete.json"
+    warning = export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store)
+    assert warning == "minio export failed"
+    assert _marker_url() not in store.objects
+    assert _marker_url(session=True) not in store.objects
+
+
+def test_export_pins_shared_keys_and_publishes_recovered_meta(tmp_path: Path) -> None:
+    book, dest = tmp_path / "book", tmp_path / "dest"
+    _fill(book, dest)
+    meta = {"generation": 4, "warnings": ["minio export failed", "keep"]}
+    (dest / "meta/meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    store = _MemoryStore()
+    assert export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store) is None
+    session = _stored_marker(store, session=True)
+    assert session["shared"] == _stored_marker(store)
+    published = json.loads(store.objects[_bucket(_listed(session, "meta/meta.json"))])
+    assert published["warnings"] == ["keep"]
+    assert published["minio_published_generation"] == 4
+    assert json.loads((dest / "meta/meta.json").read_text(encoding="utf-8")) == meta
+
+
+def test_pending_generation_stays_local_on_busy_lock_and_failed_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import finance_context.store.duckdb_io as io
+    from finance_context.store.fs import file_lock
+
+    book = tmp_path / "shared/books" / _JOB
+    dest = tmp_path / "sessions/local/jobs" / _JOB
+    _fill(book, dest)
+    settings, store = _minio(data_dir=tmp_path), _MemoryStore()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    local = dest / "context/context.json"
+    local.write_bytes(b"new generation")
+    (dest / "meta/meta.json").write_text(
+        json.dumps({"status": "succeeded", "generation": 4, "warnings": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(io, "DuckDBObjectStore", lambda _settings: store)
+    monkeypatch.setattr(io, "read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    with file_lock(book / ".lock") as held:
+        assert held
+        assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+            b"new generation"
+        )
+    store.fail_on = "context/context.json"
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        b"new generation"
+    )
 
 
 def test_export_warning_still_retries_the_unpublished_generation(tmp_path: Path) -> None:
