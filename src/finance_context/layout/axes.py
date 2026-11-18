@@ -982,11 +982,17 @@ def _split_header_runs(
             and left_cls != right_cls
             and "other" not in {left_cls, right_cls}
         )
-        # The next copy of the same ruler repeats a key it already passed
-        # (three quarter bands, or 2024–2029 four times). The same key in the
-        # next column stays on this run: fact and plan share one year.
-        seen = {header.period_key for header in runs[-1]}
-        restarts = item.period_key in seen and item.period_key != prev.period_key
+        # A second copy starts over at the first key of a steady ruler
+        # (2020Q1 after 2020Q1–Q4, or 2024 after 2024–2029). A later repeat
+        # inside an uneven row stays here: ``2025 план`` then ``2025 факт``
+        # at the end is one axis, and the same key in the next column is too.
+        opening = runs[-1][0].period_key
+        restarts = (
+            len(runs[-1]) >= 2
+            and item.period_key != prev.period_key
+            and item.period_key == opening
+            and _run_continues(runs[-1])
+        )
         if gap or grain_break or restarts:
             runs.append([item])
         else:

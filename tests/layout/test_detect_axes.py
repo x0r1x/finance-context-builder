@@ -548,6 +548,25 @@ def test_repeated_year_span_is_not_one_axis() -> None:
     assert all(axis.grain == "year" for axis in sheet.axes)
 
 
+def test_repeated_year_after_an_uneven_row_stays_on_the_axis() -> None:
+    """``2025 план`` early and ``2025 факт`` at the end are one axis, not a dropped column."""
+    labels = ["2025 план", "2026 план", "2023 факт", "2024 факт", "2025 факт"]
+    cells = [_c("P&L", "A2", "Revenue")]
+    for offset, label in enumerate(labels):
+        col = index_to_col(2 + offset)
+        cells.append(_c("P&L", f"{col}1", label))
+        cells.append(_c("P&L", f"{col}2", "10"))
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2025@план",
+        "2026",
+        "2023",
+        "2024",
+        "2025@факт",
+    ]
+
+
 def test_two_indicators_under_one_year_run_stay_together() -> None:
     """One year ruler 2024–2034 keeps both indicator rows. The copy split does not cut it."""
     years = [str(year) for year in range(2024, 2035)]
