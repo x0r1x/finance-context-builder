@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 from finance_context.excel.a1 import index_to_col, parse_addr
+from finance_context.layout.coverage import coverage_blocks
 from finance_context.layout.detect import detect_layout
 
 
@@ -358,3 +361,116 @@ def test_a_wide_grid_keeps_every_value_column() -> None:
     assert [block.kind for block in sheet.blocks] == ["matrix"]
     assert [header.col for header in sheet.blocks[0].axis.headers] == list(range(2, 42))
     assert sheet.notes == []
+
+
+def _timeline_with_side_list(*side_cells: tuple[str, str]) -> list[dict]:
+    cells = [
+        _c("Sheet", "A1", "Item"),
+        _c("Sheet", "B1", "2020"),
+        _c("Sheet", "C1", "2021"),
+        _c("Sheet", "D1", "2022"),
+        _c("Sheet", "A2", "Revenue"),
+        _c("Sheet", "B2", "10"),
+        _c("Sheet", "C2", "11"),
+        _c("Sheet", "D2", "12"),
+        _c("Sheet", "A3", "Cost"),
+        _c("Sheet", "B3", "1"),
+        _c("Sheet", "C3", "2"),
+        _c("Sheet", "D3", "3"),
+    ]
+    cells.extend(_c("Sheet", addr, value) for addr, value in side_cells)
+    return cells
+
+
+def test_side_list_titles_on_the_year_row_stay_with_the_list() -> None:
+    cells = _timeline_with_side_list(
+        ("F1", "Name"),
+        ("G1", "Amount"),
+        ("H1", "Share"),
+        ("F2", "Fee"),
+        ("G2", "5"),
+        ("H2", "0.1"),
+        ("F3", "Tax"),
+        ("G3", "6"),
+        ("H3", "0.2"),
+    )
+    sheet = detect_layout(cells).sheets[0]
+    lists = [block for block in sheet.blocks if block.kind == "key_value"]
+    assert len(lists) == 1
+    assert [row.label for row in lists[0].rows] == ["Fee", "Tax"]
+    assert [header.text for header in lists[0].axis.headers] == ["Amount", "Share"]
+
+
+def _band(cells: list[tuple[int, int, str]]) -> list:
+    by_row: dict[int, list[dict]] = defaultdict(list)
+    for col, row, value in cells:
+        by_row[row].append(_c("Cost", f"{index_to_col(col)}{row}", value))
+    found, _notes = coverage_blocks("Cost", dict(by_row), False, [], set())
+    return found
+
+
+def test_a_flipped_header_does_not_glue_the_lists() -> None:
+    """Row 13 has numbers in the name columns. Rows 14..18 stay separate lists."""
+    names = (45, 47, 49, 51, 53, 55)
+    amounts = (46, 48, 50, 52, 54, 56)
+    cells: list[tuple[int, int, str]] = []
+    for col in names:
+        cells.append((col, 13, "100"))
+    for col in amounts:
+        cells.append((col, 13, "Head"))
+    for row in range(14, 19):
+        for col in names:
+            cells.append((col, row, f"Item {col}"))
+        for col in amounts:
+            cells.append((col, row, "10"))
+    blocks = _band(cells)
+    assert [block.kind for block in blocks] == ["key_value"] * 6
+    assert [[header.col for header in block.axis.headers] for block in blocks] == [
+        [46],
+        [48],
+        [50],
+        [52],
+        [54],
+        [56],
+    ]
+
+
+def test_the_lower_cost_band_keeps_its_lists() -> None:
+    """Rows 52..59. Column 58 stays with 56 because nothing is between them."""
+    names = (45, 47, 49, 51, 53, 55)
+    amounts = (46, 48, 50, 52, 54, 56, 58)
+    cells: list[tuple[int, int, str]] = [(col, 50, "Amt") for col in amounts]
+    for row in range(52, 60):
+        for col in names:
+            cells.append((col, row, f"Item {col}"))
+        for col in amounts:
+            cells.append((col, row, "10"))
+    for col in amounts:
+        cells.append((col, 51, "10"))
+    blocks = _band(cells)
+    assert [block.kind for block in blocks] == ["key_value"] * 6
+    assert [header.col for header in blocks[-1].axis.headers] == [56, 58]
+
+
+def test_a_grid_of_numbers_stays_one_matrix() -> None:
+    cells = [(col, row, "10") for row in range(14, 19) for col in range(47, 57)]
+    cells.extend((45, row, f"Item {row}") for row in range(14, 19))
+    blocks = _band(cells)
+    assert len(blocks) == 1
+    assert blocks[0].kind == "matrix"
+    assert [header.col for header in blocks[0].axis.headers] == list(range(47, 57))
+
+
+def test_one_column_side_list_keeps_the_caption_from_the_year_row() -> None:
+    cells = _timeline_with_side_list(
+        ("F1", "Name"),
+        ("G1", "Amount"),
+        ("F2", "Fee"),
+        ("G2", "5"),
+        ("F3", "Tax"),
+        ("G3", "6"),
+    )
+    sheet = detect_layout(cells).sheets[0]
+    lists = [block for block in sheet.blocks if block.kind == "key_value"]
+    assert len(lists) == 1
+    assert lists[0].axis.headers[0].text == "Amount"

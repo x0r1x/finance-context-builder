@@ -281,7 +281,7 @@ def test_pipeline_traces_blank_ref_and_styled_blank(tmp_path: Path) -> None:
     graph = json.loads((dest / "graph" / "graph.json").read_text(encoding="utf-8"))
     assert graph["dangling_classes"].get("empty_ref", 0) >= 1
     assert "Ghost!A1" not in {link["cell"] for link in graph["links"]}
-    assert any("unresolved formula targets" in warning for warning in doc.warnings)
+    assert any("dangling targets" in warning for warning in doc.warnings)
     assert all("empty range" not in warning for warning in doc.warnings)
 
 

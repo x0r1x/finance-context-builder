@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from finance_context.app.artifacts import clear_downstream_artifacts
 from finance_context.app.publisher import (
+    build_commit,
     publisher_changed,
     publisher_fingerprint,
     publisher_matches,
     stage_fingerprints,
     stale_from_meta,
 )
+
+
+def test_build_commit_uses_the_environment_when_it_is_set(monkeypatch) -> None:
+    monkeypatch.setenv("FCB_BUILD_COMMIT", "abc123")
+    assert build_commit() == "abc123"
 
 
 def test_fingerprint_is_a_stable_sha256() -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 
 _PACKAGE = Path(__file__).resolve().parents[1]
@@ -175,6 +177,37 @@ def stage_fingerprints() -> dict[str, str]:
 def publisher_fingerprint() -> str:
     """Hash of the stage fingerprints on disk at this call."""
     return _live()[1]
+
+
+def build_commit() -> str | None:
+    """Git commit of this build. ``FCB_BUILD_COMMIT`` wins when the image has no ``.git``."""
+    override = os.environ.get("FCB_BUILD_COMMIT", "").strip()
+    if override:
+        return override
+    root = _PACKAGE
+    for _ in range(4):
+        if (root / ".git").exists():
+            break
+        if root.parent == root:
+            return None
+        root = root.parent
+    else:
+        return None
+    if not (root / ".git").exists():
+        return None
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sha = out.decode().strip()
+    if len(sha) == 40 and all(char in "0123456789abcdef" for char in sha):
+        return sha
+    return None
 
 
 def publisher_stamp() -> str:

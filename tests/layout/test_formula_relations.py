@@ -232,6 +232,89 @@ def test_span_members_match_a_full_scan_when_rows_are_unsorted() -> None:
     assert listed[0].member_row_keys == relations._member_keys_in_span(book, "CF", 2, 5)
 
 
+def _shared_row_layout() -> Layout:
+    timeline = Block(
+        block_id="CF!r1",
+        label_col=1,
+        kind="timeline",
+        axis=Axis(
+            id="CF!r1",
+            row=1,
+            headers=[
+                AxisHeader(col=4, text="2024", kind="period", period_key="2024"),
+                AxisHeader(col=5, text="2025", kind="period", period_key="2025"),
+            ],
+        ),
+        rows=[
+            LayoutRow(row=2, label="Revenue"),
+            LayoutRow(row=3, label="Costs"),
+            LayoutRow(row=4, label="Total"),
+        ],
+    )
+    side = Block(
+        block_id="CF!c2l6",
+        label_col=6,
+        kind="key_value",
+        axis=Axis(
+            id="CF!c2l6",
+            row=1,
+            headers=[AxisHeader(col=7, text="Amount", role="value", period_key="c7")],
+        ),
+        rows=[
+            LayoutRow(row=2, label="Fee"),
+            LayoutRow(row=3, label="Tax"),
+        ],
+    )
+    return Layout(sheets=[SheetLayout(name="CF", blocks=[timeline, side])])
+
+
+def _formula(row: int, col: int, formula: str) -> dict:
+    letter = {4: "D", 5: "E", 7: "G"}[col]
+    return {
+        "sheet": "CF",
+        "row": row,
+        "col": col,
+        "addr": f"{letter}{row}",
+        "formula_raw": formula,
+    }
+
+
+def test_shared_rows_stay_in_their_own_aggregate_and_difference() -> None:
+    layout = _shared_row_layout()
+    aggregate = formula_relations(layout, [_formula(4, 4, "=SUM(D2:D3)")])
+    assert len(aggregate) == 1
+    assert aggregate[0].kind == "aggregate"
+    assert aggregate[0].source_row_key == "CF|4|CF!r1"
+    assert aggregate[0].member_row_keys == [
+        "CF|2|c1|CF!r1",
+        "CF|3|c1|CF!r1",
+    ]
+    difference = formula_relations(layout, [_formula(4, 4, "=D2-D3")])
+    assert len(difference) == 1
+    assert difference[0].kind == "difference"
+    assert difference[0].member_row_keys == [
+        "CF|2|c1|CF!r1",
+        "CF|3|c1|CF!r1",
+    ]
+
+
+def test_alias_on_a_shared_row_follows_the_formula_column() -> None:
+    layout = _shared_row_layout()
+    found = formula_relations(layout, [_formula(3, 4, "=D2"), _formula(3, 7, "=G2")])
+    by_source = {rel.source_row_key: rel for rel in found}
+    timeline = by_source["CF|3|c1|CF!r1"]
+    assert timeline.kind == "alias"
+    assert timeline.target_row_key == "CF|2|c1|CF!r1"
+    side = by_source["CF|3|c6|CF!c2l6"]
+    assert side.kind == "alias"
+    assert side.target_row_key == "CF|2|c6|CF!c2l6"
+    rolled = formula_relations(layout, [_formula(3, 5, "=D2")])
+    assert len(rolled) == 1
+    assert rolled[0].kind == "roll_forward"
+    assert rolled[0].source_row_key == "CF|3|c1|CF!r1"
+    assert rolled[0].target_row_key == "CF|2|c1|CF!r1"
+
+
 def test_params_total_under_an_unknown_header_is_an_aggregate() -> None:
     layout = _layout()
     block = layout.sheets[0].blocks[0]

@@ -7,8 +7,16 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from finance_context.layout.formulas_shape import RowPattern, _pattern_for_row
-from finance_context.layout.models import Block, Layout, LayoutRow, SheetLayout, is_value_block
-from finance_context.layout.resolve import period_headers
+from finance_context.layout.models import (
+    Block,
+    Layout,
+    LayoutRow,
+    SheetLayout,
+    is_value_block,
+    published_row_key,
+    shared_horizontal_rows,
+)
+from finance_context.layout.resolve import horizontal_columns, period_headers
 
 
 class RowRelation(BaseModel):
@@ -29,12 +37,26 @@ class _RelationBook(Protocol):
 class _CellIndex:
     def __init__(self, layout: Layout) -> None:
         self.row_index: dict[tuple[str, int], tuple[Block, LayoutRow]] = {}
+        self.owners: dict[tuple[str, int], list[Block]] = {}
+        self.sheet_of: dict[str, SheetLayout] = {}
+        self.shared: dict[str, set[int]] = {}
+        self.label_of: dict[tuple[str, str], int] = {}
         for sheet in layout.sheets:
+            shared_rows = shared_horizontal_rows(sheet.blocks)
+            self.shared[sheet.name] = shared_rows
+            self.sheet_of[sheet.name] = sheet
             for block in sheet.blocks:
+                self.label_of[(sheet.name, block.block_id)] = block.label_col
                 for row in block.rows:
                     # A transposed line shares the label row with its siblings.
                     # Indexing it here would hide them, and a horizontal row.
                     if row.value_col:
+                        continue
+                    owners = self.owners.setdefault((sheet.name, row.row), [])
+                    if not any(existing is block for existing in owners):
+                        owners.append(block)
+                    # A row in two blocks has no single target.
+                    if row.row in shared_rows:
                         continue
                     self.row_index[(sheet.name, row.row)] = (block, row)
         buckets: dict[str, list[tuple[int, str]]] = {}
@@ -47,7 +69,10 @@ class _CellIndex:
         self.sheet_rows = buckets
 
     def row_key(self, sheet: str, row: int, block_id: str) -> str:
-        return f"{sheet}|{row}|{block_id}"
+        label_col = None
+        if row in self.shared.get(sheet, ()):
+            label_col = self.label_of.get((sheet, block_id))
+        return published_row_key(sheet, row, block_id, label_col=label_col)
 
 
 class _RowCells:
@@ -127,25 +152,70 @@ def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation
     return relations
 
 
-def _member_keys_in_span(book: _RelationBook, sheet: str, lo: int, hi: int) -> list[str]:
-    rows = book.sheet_rows.get(sheet)
-    if not rows:
+def _member_keys_in_span(
+    book: _RelationBook, sheet: str, lo: int, hi: int, block: Block | None = None
+) -> list[str]:
+    """Rows in the span. The source block keeps its own rows when they are shared."""
+    if hi < lo:
         return []
-    start = bisect_left(rows, (lo,))
-    stop = bisect_left(rows, (hi + 1,))
-    return [book.row_key(sheet, row_n, block_id) for row_n, block_id in rows[start:stop]]
+    found: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+
+    def add(row_n: int, block_id: str) -> None:
+        if row_n < lo or row_n > hi:
+            return
+        item = (row_n, block_id)
+        if item in seen:
+            return
+        seen.add(item)
+        found.append(item)
+
+    if block is not None:
+        for layout_row in block.rows:
+            if layout_row.value_col:
+                continue
+            add(int(layout_row.row), block.block_id)
+    rows = book.sheet_rows.get(sheet)
+    if rows:
+        start = bisect_left(rows, (lo,))
+        stop = bisect_left(rows, (hi + 1,))
+        for row_n, block_id in rows[start:stop]:
+            if block is not None and block_id == block.block_id:
+                continue
+            add(row_n, block_id)
+    found.sort()
+    return [book.row_key(sheet, row_n, block_id) for row_n, block_id in found]
 
 
-def _block_id(book: _RelationBook, sheet: str, row: int) -> str | None:
-    found = book.row_index.get((sheet, row))
-    if found is None:
-        return None
-    block = found[0]
-    return getattr(block, "block_id", None)
+def _owner_id(
+    book: _CellIndex,
+    sheet: str,
+    row: int,
+    col: int | None,
+    source: Block | None,
+) -> str | None:
+    """Block that owns this cell. A shared row is resolved by column."""
+    owners = book.owners.get((sheet, int(row)), [])
+    layout_sheet = book.sheet_of.get(sheet)
+    if col is not None and layout_sheet is not None and owners:
+        claimed = [
+            block
+            for block in owners
+            if int(col) in horizontal_columns(layout_sheet, block, int(row))
+        ]
+        if len(claimed) == 1:
+            return claimed[0].block_id
+        if len(claimed) > 1:
+            return None
+    if len(owners) == 1:
+        return owners[0].block_id
+    if source is not None and any(block.block_id == source.block_id for block in owners):
+        return source.block_id
+    return None
 
 
 def _relation_from_pattern(
-    book: _RelationBook,
+    book: _CellIndex,
     sheet: str,
     block: Block,
     layout_row: LayoutRow,
@@ -153,20 +223,25 @@ def _relation_from_pattern(
 ) -> RowRelation | None:
     source = book.row_key(sheet, layout_row.row, block.block_id)
     if pattern.kind == "alias" and pattern.alias_row is not None:
-        target_block = _block_id(book, pattern.alias_sheet or sheet, pattern.alias_row)
+        target_sheet = pattern.alias_sheet or sheet
+        target_block = _owner_id(
+            book,
+            target_sheet,
+            pattern.alias_row,
+            pattern.alias_col,
+            block if target_sheet == sheet else None,
+        )
         if target_block is None:
             return None
         return RowRelation(
             kind="alias",
             source_row_key=source,
-            target_row_key=book.row_key(
-                pattern.alias_sheet or sheet, pattern.alias_row, target_block
-            ),
+            target_row_key=book.row_key(target_sheet, pattern.alias_row, target_block),
             evidence=pattern.template,
         )
     if pattern.kind == "aggregate" and pattern.aggregate_span is not None:
         lo, hi = pattern.aggregate_span
-        members = _member_keys_in_span(book, sheet, lo, hi)
+        members = _member_keys_in_span(book, sheet, lo, hi, block)
         return RowRelation(
             kind="aggregate",
             source_row_key=source,
@@ -176,7 +251,7 @@ def _relation_from_pattern(
     if pattern.kind == "diff" and pattern.diff_rows:
         members = []
         for row_n in pattern.diff_rows:
-            block_id = _block_id(book, sheet, row_n)
+            block_id = _owner_id(book, sheet, row_n, None, block)
             if block_id:
                 members.append(book.row_key(sheet, row_n, block_id))
         return RowRelation(
@@ -186,7 +261,7 @@ def _relation_from_pattern(
             evidence=pattern.template,
         )
     if pattern.kind == "roll" and pattern.roll_from_row is not None:
-        block_id = _block_id(book, sheet, pattern.roll_from_row)
+        block_id = _owner_id(book, sheet, pattern.roll_from_row, None, block)
         if block_id is None:
             return None
         return RowRelation(
