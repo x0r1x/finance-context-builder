@@ -16,6 +16,7 @@ class RowPattern:
         "kind",
         "alias_sheet",
         "alias_row",
+        "alias_col",
         "aggregate_span",
         "diff_rows",
         "roll_from_row",
@@ -28,6 +29,7 @@ class RowPattern:
         self.kind = "value"
         self.alias_sheet: str | None = None
         self.alias_row: int | None = None
+        self.alias_col: int | None = None
         self.aggregate_span: tuple[int, int] | None = None
         self.diff_rows: tuple[int, int] | None = None
         self.roll_from_row: int | None = None
@@ -77,6 +79,13 @@ def _pattern_for_row(
     if top == "alias":
         pattern.alias_sheet = sample.get("sheet")
         pattern.alias_row = sample.get("row")
+        cols = {
+            int(item["col"])
+            for item in shapes
+            if item.get("type") == "alias" and item.get("col") is not None
+        }
+        if len(cols) == 1:
+            pattern.alias_col = next(iter(cols))
     elif top == "aggregate":
         span = sample.get("span")
         if isinstance(span, tuple):
@@ -124,7 +133,7 @@ def _shape(ast: dict[str, Any], sheet: str, col: int, row: int) -> dict[str, Any
         if same_sheet and target_col == col - 1 and target_row != row:
             return {"type": "roll", "sheet": target_sheet, "row": target_row}
         if target_row != row:
-            return {"type": "alias", "sheet": target_sheet, "row": target_row}
+            return {"type": "alias", "sheet": target_sheet, "row": target_row, "col": target_col}
         return None
     if op == "func" and str(ast.get("name", "")).upper() in {"SUM", "СУММ"}:
         args = ast.get("args") or []

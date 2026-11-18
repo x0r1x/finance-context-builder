@@ -42,6 +42,7 @@ def coverage_blocks(
     header_rows: set[int],
     hidden_cols: set[int] | None = None,
     taken: set[tuple[int, int]] | None = None,
+    axes: list | None = None,
 ) -> tuple[list[Block], list[str]]:
     """Blocks and notes for rows outside every existing block span.
 
@@ -50,11 +51,15 @@ def coverage_blocks(
     """
     hidden = hidden_cols or set()
     by_row = _without_taken(by_row, taken or set())
-    spans = _owned_spans(blocks)
+    spans, rectangles = _ownership(blocks, axes or [])
+    by_row = _without_rectangles(by_row, rectangles)
+    # Cells that survived a timeline rectangle are not part of the year header.
+    # A title sitting on that row still names the list beside the years.
+    open_headers = {row for row in header_rows if row in by_row} if rectangles else set()
     free = [
         row
         for row in sorted(by_row)
-        if not _is_owned(row, header_rows, spans)
+        if not _is_owned(row, header_rows, spans, open_headers)
         and _row_has_value(by_row[row], date1904, hidden)
     ]
     # A caption row has no numbers, so it is not free. Keep the row directly
@@ -63,7 +68,7 @@ def coverage_blocks(
         row - 1
         for row in free
         if (row - 1) in by_row
-        and not _is_owned(row - 1, header_rows, spans)
+        and not _is_owned(row - 1, header_rows, spans, open_headers)
         and not _row_has_value(by_row[row - 1], date1904, hidden)
     ]
     free = sorted(set(free) | set(captions))
@@ -73,6 +78,7 @@ def coverage_blocks(
         blocks, band_notes = _band_blocks(sheet, band, by_row, date1904, hidden)
         found.extend(blocks)
         notes.extend(band_notes)
+    _disambiguate_ids(found)
     return found, notes
 
 
@@ -93,18 +99,107 @@ def _without_taken(
 
 def _owned_spans(blocks: list[Block]) -> list[tuple[int, int]]:
     """Vertical spans of blocks that already exist. Not a filled set of every row."""
+    return _ownership(blocks, [])[0]
+
+
+def _ownership(
+    blocks: list[Block], axes: list
+) -> tuple[list[tuple[int, int]], list[tuple[int, int, int, int]]]:
+    """Timelines own the columns of their scale. Other blocks own the whole row.
+
+    A list to the right of the years stays free. A list under the years does not.
+    """
+    by_id = {axis.id: axis for axis in axes}
     spans: list[tuple[int, int]] = []
+    rectangles: list[tuple[int, int, int, int]] = []
     for block in blocks:
         rows = [row.row for row in block.rows]
-        if rows:
+        if not rows:
+            continue
+        horizontal = block.kind == "timeline" and not any(row.value_col for row in block.rows)
+        columns: set[int] = set()
+        header_row_ns: list[int] = []
+        if horizontal:
+            columns.add(int(block.label_col))
+            if block.axis is not None:
+                columns.update(int(header.col) for header in block.axis.headers)
+                if block.axis.row:
+                    header_row_ns.append(int(block.axis.row))
+            for axis_id in block.axis_ids:
+                axis = by_id.get(axis_id)
+                if axis is not None and not getattr(axis, "transposed", False):
+                    columns.update(int(period.col) for period in axis.periods)
+                    header_row = getattr(axis, "header_row", None)
+                    if header_row:
+                        header_row_ns.append(int(header_row))
+        if horizontal and columns:
+            row_lo, row_hi = min(rows), max(rows)
+            if header_row_ns:
+                row_lo = min(row_lo, *header_row_ns)
+                row_hi = max(row_hi, *header_row_ns)
+            rectangles.append((row_lo, row_hi, min(columns), max(columns)))
+        else:
             spans.append((min(rows), max(rows)))
-    return spans
+    return spans, rectangles
 
 
-def _is_owned(row: int, header_rows: set[int], spans: list[tuple[int, int]]) -> bool:
-    if row in header_rows:
+def _without_rectangles(
+    by_row: dict[int, list[dict]], rectangles: list[tuple[int, int, int, int]]
+) -> dict[int, list[dict]]:
+    if not rectangles:
+        return by_row
+    kept: dict[int, list[dict]] = {}
+    for row_n, cells in by_row.items():
+        free = [
+            cell
+            for cell in cells
+            if not any(
+                start <= row_n <= end and left <= int(cell["col"]) <= right
+                for start, end, left, right in rectangles
+            )
+        ]
+        if free:
+            kept[row_n] = free
+    return kept
+
+
+def _disambiguate_ids(blocks: list[Block]) -> None:
+    """Lists that start on one row need distinct ids. A lone list keeps ``!c{row}``."""
+    _suffix_repeated(blocks, lambda block: f"l{block.label_col}")
+    _suffix_repeated(
+        blocks,
+        lambda block: (
+            f"c{block.axis.headers[0].col}"
+            if block.axis is not None and block.axis.headers
+            else f"c{block.label_col}"
+        ),
+    )
+
+
+def _suffix_repeated(blocks: list[Block], suffix) -> None:
+    counts: dict[str, int] = {}
+    for block in blocks:
+        counts[block.block_id] = counts.get(block.block_id, 0) + 1
+    for block in blocks:
+        base = block.block_id
+        if counts.get(base, 0) < 2:
+            continue
+        block.block_id = f"{base}{suffix(block)}"
+        if block.axis is not None and block.axis.id == base:
+            block.axis.id = block.block_id
+
+
+def _is_owned(
+    row: int,
+    header_rows: set[int],
+    spans: list[tuple[int, int]],
+    open_headers: set[int] | None = None,
+) -> bool:
+    if any(start <= row <= end for start, end in spans):
         return True
-    return any(start <= row <= end for start, end in spans)
+    if row in header_rows and row not in (open_headers or ()):
+        return True
+    return False
 
 
 def _bands(rows: list[int]) -> list[list[int]]:
@@ -309,15 +404,27 @@ def _value_columns(
     date1904: bool,
     hidden_cols: set[int],
 ) -> list[int]:
-    """Every value column. Runs are split later, so a left index stays separate."""
-    cols: set[int] = set()
+    """Columns whose body is numbers.
+
+    A name column stays a name when text outnumbers numbers. One number in a
+    flipped header row would otherwise join the name columns to the amounts
+    and turn several lists into one matrix. A year caption is neither.
+    """
+    numbers: dict[int, int] = {}
+    texts: dict[int, int] = {}
     for row_n in band:
         for cell in by_row[row_n]:
             col = int(cell["col"])
-            if col in hidden_cols or not _is_value(cell, date1904):
+            if col in hidden_cols:
                 continue
-            cols.add(col)
-    return sorted(cols)
+            text = _text(cell, date1904)
+            if not text or _is_year_text(text):
+                continue
+            if _is_number(text):
+                numbers[col] = numbers.get(col, 0) + 1
+            else:
+                texts[col] = texts.get(col, 0) + 1
+    return sorted(col for col, count in numbers.items() if count >= texts.get(col, 0))
 
 
 def _column_titles(

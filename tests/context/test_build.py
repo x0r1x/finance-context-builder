@@ -440,7 +440,7 @@ def test_unknown_header_warnings_do_not_crowd_out_formula_warnings() -> None:
     assert len(doc.warnings) == 50
     assert "1 unparsed formula(s) (e.g. S!A1)" in doc.warnings
     assert "1 formula cell(s) missing cached values (e.g. S!A1)" in doc.warnings
-    assert "Graph: 3 unresolved formula targets (see graph.json)" in doc.warnings
+    assert "Graph: 3 dangling targets (see graph.json)" in doc.warnings
     assert any("Unrecognized column headers" in warning for warning in doc.warnings)
 
 
@@ -468,7 +468,7 @@ def test_hidden_warnings_do_not_crowd_out_formula_warnings() -> None:
     assert doc.meta.warnings == doc.warnings
     assert "1 unparsed formula(s) (e.g. S0!A1)" in doc.warnings
     assert "1 formula cell(s) missing cached values (e.g. S0!A1)" in doc.warnings
-    assert "Graph: 3 unresolved formula targets (see graph.json)" in doc.warnings
+    assert "Graph: 3 dangling targets (see graph.json)" in doc.warnings
 
 
 def test_many_unparsed_formulas_collapse_and_keep_missing_cached_warning() -> None:
@@ -496,7 +496,7 @@ def test_many_unparsed_formulas_collapse_and_keep_missing_cached_warning() -> No
     assert unparsed_lines == ["60 unparsed formula(s) (e.g. S!Z9, S!M4, S!B2)"]
     assert not any(warning.startswith("Unparsed formula at ") for warning in doc.warnings)
     assert "60 formula cell(s) missing cached values (e.g. S!Z9, S!M4, S!B2)" in doc.warnings
-    assert "Graph: 2 unresolved formula targets (see graph.json)" in doc.warnings
+    assert "Graph: 2 dangling targets (see graph.json)" in doc.warnings
     assert doc.meta.warnings == doc.warnings
     assert doc.workbook.unparsed_formulas == 60
     assert doc.workbook.missing_cached_values == 60
@@ -558,9 +558,10 @@ def test_build_warns_on_missing_graph_targets() -> None:
         workbook_meta={"sheets": [{"name": "CF"}]},
         cells=cells,
         layout=_layout(),
-        graph=GraphPointer(dangling=12, empty_range_members=718),
+        graph=GraphPointer(dangling=12, unresolved=4, empty_range_members=718),
     )
-    assert "Graph: 12 unresolved formula targets (see graph.json)" in doc.warnings
+    assert "Graph: 12 dangling targets (see graph.json)" in doc.warnings
+    assert "Graph: 4 unresolved formula targets (see graph.json)" in doc.warnings
     assert all("empty range" not in warning for warning in doc.warnings)
 
 

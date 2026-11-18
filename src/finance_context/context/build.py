@@ -33,6 +33,7 @@ from finance_context.layout.models import (
     LayoutRow,
     is_series_column,
     is_value_block,
+    shared_horizontal_rows,
 )
 from finance_context.layout.params import selector_rows
 from finance_context.layout.periods import (
@@ -237,10 +238,7 @@ def build_context(
             warnings.append(
                 f"{formula_stats.missing_values} formula cell(s) missing cached values{extra}"
             )
-        if graph is not None and graph.dangling:
-            warnings.append(
-                f"Graph: {graph.dangling} unresolved formula targets (see graph.json)"
-            )
+        warnings.extend(_graph_count_warnings(graph))
         warnings.extend(hidden_warnings)
         warnings.extend(_unknown_header_warnings(layout))
         for item in layout.sheets:
@@ -416,6 +414,7 @@ def _stream_one_block(
         for heading, headers, axis_id in tables
     ]
     state = {"n": 0}
+    shared_rows = shared_horizontal_rows(sheet.blocks)
 
     def _rows() -> Iterator[dict]:
         running_unit = block_unit
@@ -530,6 +529,8 @@ def _stream_one_block(
                     role_cells=role_cells,
                     series_unit=series_unit,
                     series=series,
+                    share_label=layout_row.row in shared_rows,
+                    label_col=block.label_col,
                 )
                 for (_axis_id, headers), item in zip(views, series, strict=False):
                     for header, item_state in zip(headers, item.value_statuses, strict=False):
@@ -902,6 +903,20 @@ def _header_unit(sheet, block, by_addr: dict, date1904: bool) -> str | None:
         return None
     found.sort()
     return found[0][1]
+
+
+def _graph_count_warnings(graph: GraphPointer | None) -> list[str]:
+    """Name each graph counter. A dangling target is not an unresolved edge."""
+    if graph is None:
+        return []
+    lines: list[str] = []
+    if graph.dangling:
+        lines.append(f"Graph: {graph.dangling} dangling targets (see graph.json)")
+    if graph.unresolved:
+        lines.append(
+            f"Graph: {graph.unresolved} unresolved formula targets (see graph.json)"
+        )
+    return lines
 
 
 def _unknown_header_warnings(layout: Layout) -> list[str]:

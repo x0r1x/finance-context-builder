@@ -40,15 +40,37 @@ def is_series_column(kind: str | None, period_key: str) -> bool:
 
 
 def published_row_key(
-    sheet: str, row: int, block_id: str, value_col: int | None = None
+    sheet: str,
+    row: int,
+    block_id: str,
+    value_col: int | None = None,
+    *,
+    label_col: int | None = None,
 ) -> str:
     """Context row key. A transposed line adds its value column.
 
     Several lines share the label row, so the column keeps their keys apart.
+    A horizontal row that also belongs to another block adds its label column
+    for the same reason. A row in one block keeps ``sheet|row|block``.
     """
     if value_col:
         return f"{sheet}|{row}|c{int(value_col)}|{block_id}"
+    if label_col is not None:
+        return f"{sheet}|{row}|c{int(label_col)}|{block_id}"
     return f"{sheet}|{row}|{block_id}"
+
+
+def shared_horizontal_rows(blocks: list) -> set[int]:
+    """Sheet rows that sit in two horizontal blocks at once."""
+    counts: dict[int, int] = {}
+    for block in blocks:
+        seen: set[int] = set()
+        for row in block.rows:
+            if row.value_col or row.row in seen:
+                continue
+            seen.add(row.row)
+            counts[row.row] = counts.get(row.row, 0) + 1
+    return {row for row, count in counts.items() if count > 1}
 
 
 class PeriodHit(BaseModel):

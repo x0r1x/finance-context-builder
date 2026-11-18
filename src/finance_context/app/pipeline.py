@@ -11,7 +11,7 @@ from pathlib import Path
 
 from finance_context.adapters.soffice import SofficeConverter
 from finance_context.app.job_clock import process_mono_start
-from finance_context.app.publisher import publisher_stamp, stamped_stages
+from finance_context.app.publisher import build_commit, publisher_stamp, stamped_stages
 from finance_context.app.shared_cache import (
     SharedCacheBusy,
     invalidate_for_run,
@@ -984,6 +984,7 @@ def _write_meta(dest_dir: Path, **fields: object) -> None:
     meta["generation"] = generation
     meta["publisher"] = publisher_stamp()
     meta["stages"] = stamped_stages()
+    meta["build_commit"] = build_commit()
 
     def mutate(current: dict) -> dict:
         seen = _stored_generation(current)
