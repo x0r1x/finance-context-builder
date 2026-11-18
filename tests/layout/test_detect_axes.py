@@ -619,6 +619,71 @@ def test_repeated_year_after_an_uneven_row_stays_on_the_axis() -> None:
     ]
 
 
+def test_marked_return_to_the_opening_year_stays_on_the_axis() -> None:
+    """``2024 факт`` after ``2024–2026 план`` is the same ruler, not a dropped column."""
+    labels = ["2024 план", "2025 план", "2026 план", "2024 факт"]
+    cells = [_c("P&L", "A2", "Revenue")]
+    for offset, label in enumerate(labels):
+        col = index_to_col(2 + offset)
+        cells.append(_c("P&L", f"{col}1", label))
+        cells.append(_c("P&L", f"{col}2", "10"))
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024@план",
+        "2025",
+        "2026",
+        "2024@факт",
+    ]
+    assert [row.label for row in sheet.blocks[0].rows] == ["Revenue"]
+
+
+def test_fact_and_plan_copies_keep_distinct_period_keys() -> None:
+    """Two steady copies stay one axis so факт and план do not share a bare year."""
+    labels = [
+        "2024 план",
+        "2025 план",
+        "2026 план",
+        "2024 факт",
+        "2025 факт",
+        "2026 факт",
+    ]
+    cells = [_c("P&L", "A2", "Revenue")]
+    for offset, label in enumerate(labels):
+        col = index_to_col(2 + offset)
+        cells.append(_c("P&L", f"{col}1", label))
+        cells.append(_c("P&L", f"{col}2", "10"))
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024@план",
+        "2025@план",
+        "2026@план",
+        "2024@факт",
+        "2025@факт",
+        "2026@факт",
+    ]
+
+
+def test_lone_repeat_of_the_opening_quarter_stays_on_the_axis() -> None:
+    """One extra ``1 кв. 2020`` after a full year is not a second ruler and is not dropped."""
+    labels = ["1 кв. 2020", "2 кв. 2020", "3 кв. 2020", "4 кв. 2020", "1 кв. 2020"]
+    cells = [_c("P&L", "A2", "Revenue")]
+    for offset, label in enumerate(labels):
+        col = index_to_col(2 + offset)
+        cells.append(_c("P&L", f"{col}1", label))
+        cells.append(_c("P&L", f"{col}2", "10"))
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2020Q1",
+        "2020Q2",
+        "2020Q3",
+        "2020Q4",
+        "2020Q1",
+    ]
+
+
 def test_two_indicators_under_one_year_run_stay_together() -> None:
     """One year ruler 2024–2034 keeps both indicator rows. The copy split does not cut it."""
     years = [str(year) for year in range(2024, 2035)]

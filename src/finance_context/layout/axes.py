@@ -1007,7 +1007,8 @@ def _split_header_runs(
     bridge = hidden_cols or set()
     ordered = sorted(headers, key=lambda item: item.col)
     runs: list[list[AxisHeader]] = [[ordered[0]]]
-    for prev, item in zip(ordered, ordered[1:], strict=False):
+    for index, item in enumerate(ordered[1:], start=1):
+        prev = ordered[index - 1]
         # An empty hidden column keeps a run together. A prefix that lives only
         # in hidden columns stays attached when the next header continues the
         # sequence (2024, empty hidden column, 2025). Scratch that does not
@@ -1038,21 +1039,56 @@ def _split_header_runs(
             and "other" not in {left_cls, right_cls}
         )
         # A second copy starts over at the first key of a steady ruler
-        # (2020Q1 after 2020Q1–Q4, or 2024 after 2024–2029). A later repeat
-        # inside an uneven row stays here: ``2025 план`` then ``2025 факт``
-        # at the end is one axis, and the same key in the next column is too.
-        opening = runs[-1][0].period_key
+        # (2020Q1 after 2020Q1–Q4, or 2024 after 2024–2029). The marker is part
+        # of that identity: ``2024 план`` then ``2024 факт`` is still one ruler,
+        # so the suffix can be written onto the key. A lone return of the
+        # opening key is not a copy and stays here. A later repeat inside an
+        # uneven row stays here too, and the same key in the next column does.
+        opening = runs[-1][0]
         restarts = (
             len(runs[-1]) >= 2
             and item.period_key != prev.period_key
-            and item.period_key == opening
+            and item.period_key == opening.period_key
+            and marker_token(item.variant) == marker_token(opening.variant)
             and _run_continues(runs[-1])
+            and _second_copy_follows(ordered, index, bridge)
         )
         if gap or grain_break or restarts:
             runs.append([item])
         else:
             runs[-1].append(item)
     return [run for run in runs if len(run) >= 2]
+
+
+def _second_copy_follows(
+    ordered: list[AxisHeader],
+    index: int,
+    hidden_cols: set[int],
+) -> bool:
+    """True when a second ruler of at least two periods starts at ``ordered[index]``.
+
+    A single repeated opening key is not a copy. That column stays on the
+    ruler that is already open instead of being discarded.
+    """
+    start = ordered[index]
+    prev = start
+    seen = 1
+    mark = marker_token(start.variant)
+    for nxt in ordered[index + 1:]:
+        if marker_token(nxt.variant) != mark:
+            return False
+        physical_gap = nxt.col - prev.col > 1
+        if physical_gap and not _cols_connected(prev.col, nxt.col, hidden_cols):
+            return False
+        if nxt.period_key != prev.period_key and not _period_continues(
+            prev.period_key, nxt.period_key
+        ):
+            return False
+        seen += 1
+        if seen >= 2:
+            return True
+        prev = nxt
+    return False
 
 
 def _gap_is_total(
