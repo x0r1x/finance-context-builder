@@ -571,6 +571,50 @@ def test_repeated_quarter_over_months_is_not_an_axis() -> None:
     ]
 
 
+def test_stacked_monthly_and_quarterly_tables_keep_their_own_axes() -> None:
+    cells = [
+        _c("Report", "A2", "Revenue"),
+        _c("Report", "A3", "Cost"),
+        _c("Report", "A10", "Quarterly section"),
+        _c("Report", "A11", "Balance"),
+        _c("Report", "A12", "Debt"),
+    ]
+    for index, col in enumerate("BCDEFG", start=1):
+        quarter = 1 if index <= 3 else 2
+        cells.extend([
+            _c("Report", f"{col}1", f"2024-{index:02d}"),
+            _c("Report", f"{col}2", "10"),
+            _c("Report", f"{col}3", "20"),
+            _c("Report", f"{col}10", f"2024Q{quarter}"),
+            _c("Report", f"{col}11", "30"),
+            _c("Report", f"{col}12", "40"),
+        ])
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.grain for axis in sheet.axes] == ["month", "quarter"]
+    quarter_axis = sheet.axes[1]
+    assert [period.period_key for period in quarter_axis.periods] == ["2024Q1"] * 3 + ["2024Q2"] * 3
+    balance = next(block for block in sheet.blocks if any(r.label == "Balance" for r in block.rows))
+    assert balance.axis_ids == [quarter_axis.id]
+
+
+def test_shifted_quarter_banner_reprint_does_not_create_an_axis() -> None:
+    quarters = ["2020Q2", "2020Q3", "2020Q3", "2020Q3", "2020Q4"]
+    cells = [_c("Costs", "A3", "Revenue"), _c("Costs", "A8", "Expenses")]
+    for index, quarter in enumerate(quarters):
+        month_col = index_to_col(index + 3)
+        shifted_col = index_to_col(index + 2)
+        cells.extend([
+            _c("Costs", f"{month_col}1", quarter),
+            _c("Costs", f"{month_col}2", f"01.{index + 6:02d}.2020"),
+            _c("Costs", f"{month_col}3", "10"),
+            _c("Costs", f"{shifted_col}7", quarter),
+            _c("Costs", f"{month_col}8", "20"),
+        ])
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.grain for axis in sheet.axes] == ["month"]
+    assert [period.col for period in sheet.axes[0].periods] == [3, 4, 5, 6, 7]
+
+
 def test_repeated_year_over_pivot_quarters_is_one_quarter_axis() -> None:
     """``2024`` four times over ``Кв-л1``…``Кв-л4`` is one quarterly axis."""
     cells = [_c("Инфраструктура", "A4", "Сумма")]
@@ -684,6 +728,33 @@ def test_lone_repeat_of_the_opening_quarter_stays_on_the_axis() -> None:
     ]
 
 
+def test_duplicate_opening_quarters_do_not_start_a_second_axis() -> None:
+    labels = ["2020Q1", "2020Q2", "2020Q3", "2020Q4", "2020Q1", "2020Q1"]
+    cells = [_c("P&L", "A2", "Revenue")]
+    for col, label in zip("BCDEFG", labels, strict=True):
+        cells.extend([_c("P&L", f"{col}1", label), _c("P&L", f"{col}2", "10")])
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == labels
+    assert [period.col for period in sheet.axes[0].periods] == [2, 3, 4, 5, 6, 7]
+
+
+def test_fact_and_plan_banners_keep_one_axis() -> None:
+    cells = [_c("P&L", "A3", "Revenue")]
+    for col, year in zip("BCDEFG", ["2024", "2025", "2026"] * 2, strict=True):
+        marker = "План" if col in "BCD" else "Факт"
+        cells.extend([
+            _c("P&L", f"{col}1", marker),
+            _c("P&L", f"{col}2", year),
+            _c("P&L", f"{col}3", "10"),
+        ])
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2024@план", "2025@план", "2026@план", "2024@факт", "2025@факт", "2026@факт"
+    ]
+
+
 def test_two_indicators_under_one_year_run_stay_together() -> None:
     """One year ruler 2024–2034 keeps both indicator rows. The copy split does not cut it."""
     years = [str(year) for year in range(2024, 2035)]
@@ -714,6 +785,15 @@ def test_six_day_step_is_not_a_week_axis() -> None:
         "2026-01-23",
         "2026-01-29",
     ]
+
+
+def test_median_of_seven_days_does_not_make_an_irregular_week_axis() -> None:
+    cells = [_c("Dash", "A2", "Receipts")]
+    dates = ["01.01.2026", "07.01.2026", "14.01.2026", "22.01.2026"]
+    for col, text in zip("BCDE", dates, strict=True):
+        cells.extend([_c("Dash", f"{col}1", text), _c("Dash", f"{col}2", "10")])
+    axis = detect_layout(cells).sheets[0].axes[0]
+    assert axis.grain != "week"
 
 
 def test_quarter_key_beside_weekly_dates_is_not_a_week_axis() -> None:

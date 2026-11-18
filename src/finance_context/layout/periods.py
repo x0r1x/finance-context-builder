@@ -946,7 +946,7 @@ def infer_grain(keys: list[str]) -> str | None:
             # a quarter key in the same series (2019Q4 beside weekly dates).
             if 5 <= med_days <= 9:
                 quarter_key = any(_QUARTER_KEY.fullmatch(key) for key in calendar)
-                if med_days == 7 and not quarter_key:
+                if not quarter_key and all(step == 7 for step in day_steps):
                     return "week"
                 return None
             if 13 <= med_days <= 17:
