@@ -92,6 +92,8 @@ _QUARTER_WORD_FORMS = _compile_forms(
     (
         rf"(?P<num>[1-4]|IV|I{{1,3}}){_ORDINAL}\s*{_QUARTER_WORD}",
         rf"{_QUARTER_WORD}\s*(?P<num>[1-4]|IV|I{{1,3}})",
+        # Pivot header «Кв-л1». The hyphen and «л» sit between the word and the number.
+        r"кв\s*[-–—−]?\s*л\s*(?P<num>[1-4])",
     )
 )
 _QUARTER_CODE_FORMS = _compile_forms((r"Q(?P<num>[1-4])", r"(?P<num>[1-4])\s*Q"))

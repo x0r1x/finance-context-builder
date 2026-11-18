@@ -128,9 +128,64 @@ def _axis_candidates(
         )
         candidates.append(([row_n], axis))
         taken.add(row_n)
-    horizontal = _keep_dominant(_fold_year_banners(candidates))
+    horizontal = _drop_repeated_over_finer(_keep_dominant(_fold_year_banners(candidates)))
     vertical, notes = _vertical_axes(sheet, by_row, date1904, horizontal)
     return [*horizontal, *vertical], notes
+
+
+# A smaller rank is a finer period. A repeated quarter label over months is not
+# a second axis.
+_GRAIN_RANK = {
+    "week": 1,
+    "biweek": 2,
+    "month": 3,
+    "quarter": 4,
+    "half_year": 5,
+    "year": 6,
+}
+
+
+def _drop_repeated_over_finer(
+    candidates: list[tuple[list[int], TimeAxis]],
+) -> list[tuple[list[int], TimeAxis]]:
+    """Drop a ruler that repeats one full key where a finer ruler already covers it.
+
+    ``3 кв. 2020`` three times, over June–September, is the month axis. The
+    quarter text does not become 115 periods of the same keys.
+    """
+    axes = [axis for _band, axis in candidates]
+    kept: list[tuple[list[int], TimeAxis]] = []
+    for band, axis in candidates:
+        if _repeated_full_keys(axis) and _finer_axis_covers(axis, axes):
+            continue
+        kept.append((band, axis))
+    return kept
+
+
+def _repeated_full_keys(axis: TimeAxis) -> bool:
+    keys = [
+        period.period_key
+        for period in axis.periods
+        if is_series_column(period.kind, period.period_key)
+    ]
+    return any(left == right for left, right in zip(keys, keys[1:], strict=False))
+
+
+def _finer_axis_covers(axis: TimeAxis, axes: list[TimeAxis]) -> bool:
+    rank = _GRAIN_RANK.get(axis.grain or "")
+    cols = _axis_cols(axis)
+    if rank is None or not cols:
+        return False
+    for other in axes:
+        if other is axis or _repeated_full_keys(other):
+            continue
+        other_rank = _GRAIN_RANK.get(other.grain or "")
+        if other_rank is None or other_rank >= rank:
+            continue
+        other_cols = _axis_cols(other)
+        if other_cols and len(cols & other_cols) >= 0.6 * len(cols):
+            return True
+    return False
 
 
 def _period_count(axis: TimeAxis) -> int:

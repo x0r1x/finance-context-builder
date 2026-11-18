@@ -112,6 +112,18 @@ def test_quarter_token_without_year() -> None:
     assert classify_header("1 кв.") is None
 
 
+def test_pivot_quarter_label_is_a_quarter_token() -> None:
+    atom = classify_atom("Кв-л1")
+    assert atom is not None
+    assert atom.kind == "quarter_token"
+    assert atom.quarter == 1
+    year = classify_atom("2024")
+    assert year is not None
+    hit = compose_period([year, atom])
+    assert hit is not None
+    assert hit.period_key == "2024Q1"
+
+
 def test_compose_year_and_quarter_token() -> None:
     year = classify_atom("2026")
     q = classify_atom("2 кв.")

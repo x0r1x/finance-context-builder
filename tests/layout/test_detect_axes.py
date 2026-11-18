@@ -548,6 +548,58 @@ def test_repeated_year_span_is_not_one_axis() -> None:
     assert all(axis.grain == "year" for axis in sheet.axes)
 
 
+def test_repeated_quarter_over_months_is_not_an_axis() -> None:
+    """Three copies of one quarter sit on three months. The month row is the axis."""
+    quarters = ["2 кв. 2020", "3 кв. 2020", "3 кв. 2020", "3 кв. 2020", "4 кв. 2020"]
+    months = ["01.06.2020", "01.07.2020", "01.08.2020", "01.09.2020", "01.10.2020"]
+    cells = [_c("Затраты", "A2", "Освоение"), _c("Затраты", "A6", "Расход")]
+    for offset, (quarter, month) in enumerate(zip(quarters, months, strict=True)):
+        col = index_to_col(2 + offset)
+        cells.append(_c("Затраты", f"{col}1", quarter))
+        cells.append(_c("Затраты", f"{col}2", month))
+        cells.append(_c("Затраты", f"{col}3", "10"))
+        cells.append(_c("Затраты", f"{col}6", quarter))
+        cells.append(_c("Затраты", f"{col}7", "20"))
+    sheet = detect_layout(cells).sheets[0]
+    assert [axis.grain for axis in sheet.axes] == ["month"]
+    assert [period.period_key for period in sheet.axes[0].periods] == [
+        "2020-06",
+        "2020-07",
+        "2020-08",
+        "2020-09",
+        "2020-10",
+    ]
+
+
+def test_repeated_year_over_pivot_quarters_is_one_quarter_axis() -> None:
+    """``2024`` four times over ``Кв-л1``…``Кв-л4`` is one quarterly axis."""
+    cells = [_c("Инфраструктура", "A4", "Сумма")]
+    labels = [("Факт", "2024"), ("План", "2025")]
+    quarters = ["Кв-л1", "Кв-л2", "Кв-л3", "Кв-л4"]
+    column = 2
+    for marker, year in labels:
+        for quarter in quarters:
+            col = index_to_col(column)
+            cells.append(_c("Инфраструктура", f"{col}1", marker))
+            cells.append(_c("Инфраструктура", f"{col}2", year))
+            cells.append(_c("Инфраструктура", f"{col}3", quarter))
+            cells.append(_c("Инфраструктура", f"{col}4", "10"))
+            column += 1
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert sheet.axes[0].grain == "quarter"
+    assert [period.period_key.split("@", 1)[0] for period in sheet.axes[0].periods] == [
+        "2024Q1",
+        "2024Q2",
+        "2024Q3",
+        "2024Q4",
+        "2025Q1",
+        "2025Q2",
+        "2025Q3",
+        "2025Q4",
+    ]
+
+
 def test_repeated_year_after_an_uneven_row_stays_on_the_axis() -> None:
     """``2025 план`` early and ``2025 факт`` at the end are one axis, not a dropped column."""
     labels = ["2025 план", "2026 план", "2023 факт", "2024 факт", "2025 факт"]
