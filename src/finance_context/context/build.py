@@ -74,17 +74,6 @@ from finance_context.vocab import ValueStatus
 _CONTEXT_DIRS: dict[int, Path] = {}
 
 
-def _without_name_scope(items: list) -> list:
-    """Drop the sheet a name is local to. Context keeps the name and its formula."""
-    published = []
-    for item in items:
-        if isinstance(item, dict):
-            published.append({key: value for key, value in item.items() if key != "sheet"})
-        else:
-            published.append(item)
-    return published
-
-
 def build_context(
     *,
     job_id: str,
@@ -256,7 +245,7 @@ def build_context(
             externals=list(workbook_meta.get("externals") or []),
             locale_hint=workbook_meta.get("locale_hint"),
             date1904=date_flag,
-            defined_names=_without_name_scope(defined_names),
+            defined_names=defined_names,
             iterate=bool(workbook_meta.get("iterate")),
             formula_count=formula_stats.formula_count,
             missing_cached_values=formula_stats.missing_cached,

@@ -122,6 +122,40 @@ def test_defined_name_resolves_to_its_cell() -> None:
     assert cell.named is False
 
 
+def test_sheet_local_name_hides_the_workbook_name() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+    from finance_context.formulas.names import resolve_defined_name_edges
+
+    engine = FormulaEngine(locale_hint="en")
+    on_cf = engine.parse("=Pick", sheet="CF", addr="A1")
+    on_cf2 = engine.parse("=Pick", sheet="CF2", addr="A1")
+    names = [
+        {"name": "Pick", "formula": "$B$2", "sheet": "CF"},
+        {"name": "Pick", "formula": "CF2!$C$9", "sheet": "CF2"},
+        {"name": "Pick", "formula": "Global!$Z$1"},
+    ]
+    resolve_defined_name_edges(on_cf.edges, names)
+    resolve_defined_name_edges(on_cf2.edges, names)
+    assert on_cf.edges[0].target == "CF!B2"
+    assert on_cf.edges[0].unresolved is False
+    assert on_cf2.edges[0].target == "CF2!C9"
+    assert on_cf2.edges[0].unresolved is False
+
+
+def test_bare_workbook_name_stays_unresolved() -> None:
+    from finance_context.formulas.engine import FormulaEngine
+    from finance_context.formulas.names import resolve_defined_name_edges
+
+    engine = FormulaEngine(locale_hint="en")
+    parsed = engine.parse("=Pick", sheet="CF", addr="A1")
+    resolve_defined_name_edges(
+        parsed.edges,
+        [{"name": "Pick", "formula": "$B$2"}],
+    )
+    assert parsed.edges[0].target == "Pick"
+    assert parsed.edges[0].unresolved is True
+
+
 def test_defined_name_range_resolves_to_one_range() -> None:
     from finance_context.formulas.engine import FormulaEngine
     from finance_context.formulas.names import resolve_defined_name_edges
