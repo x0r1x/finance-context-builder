@@ -17,7 +17,7 @@ class NameIndex:
     """
 
     def __init__(self, defined_names: list[Any] | None) -> None:
-        self._local: dict[tuple[str, str], str] = {}
+        self._local: dict[tuple[str, str], tuple[str, str]] = {}
         self._workbook: dict[str, str] = {}
         self._engine: FormulaEngine | None = None
         self._parsed: dict[str, dict[str, Any] | None] = {}
@@ -28,17 +28,19 @@ class NameIndex:
             name, formula, scope = fields
             key = name.casefold()
             if scope:
-                self._local[(scope.casefold(), key)] = formula
+                self._local[(scope.casefold(), key)] = (formula, scope)
             else:
                 self._workbook[key] = formula
 
     def apply(self, edge: Edge) -> None:
         if not _is_open_name(edge):
             return
-        found = self._formula(str(edge.target), _source_sheet(edge.source))
+        sheet, qualified, name = str(edge.target).rpartition("!")
+        home = sheet if qualified else _source_sheet(edge.source)
+        found = self._formula(name, home, local_only=bool(qualified))
         if found is None:
             return
-        formula, local = found
+        formula, home = found
         if "#REF!" in formula:
             return
         if "[" in formula:
@@ -49,17 +51,19 @@ class NameIndex:
         ast = self._ast(formula)
         if ast is None:
             return
-        _apply_formula(edge, ast, home=_source_sheet(edge.source) if local else None)
+        _apply_formula(edge, ast, home=home)
 
-    def _formula(self, name: str, sheet: str) -> tuple[str, bool] | None:
+    def _formula(self, name: str, sheet: str, *, local_only: bool) -> tuple[str, str | None] | None:
         key = name.casefold()
         if sheet:
             local = self._local.get((sheet.casefold(), key))
             if local is not None:
-                return local, True
+                return local
+        if local_only:
+            return None
         workbook = self._workbook.get(key)
         if workbook is not None:
-            return workbook, False
+            return workbook, None
         return None
 
     def _ast(self, formula: str) -> dict[str, Any] | None:
@@ -122,13 +126,14 @@ def _is_open_name(edge: Edge) -> bool:
         and edge.unresolved
         and edge.kind == "ref"
         and target
-        and "!" not in target
         and ":" not in target
     )
 
 
 def _apply_formula(edge: Edge, ast: dict[str, Any], *, home: str | None) -> None:
     if ast.get("op") == "ref":
+        if not (ast.get("abs_col") and ast.get("abs_row")):
+            return
         sheet = ast.get("sheet") or home
         if not sheet or "col" not in ast or "row" not in ast:
             return
@@ -151,6 +156,7 @@ def _apply_formula(edge: Edge, ast: dict[str, Any], *, home: str | None) -> None
         or "row" not in start
         or "col" not in end
         or "row" not in end
+        or not all(point.get(flag) for point in (start, end) for flag in ("abs_col", "abs_row"))
     ):
         return
     edge.kind = "range"

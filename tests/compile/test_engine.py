@@ -329,7 +329,7 @@ def test_sheet_qualified_ref_error_inside_an_expression() -> None:
 def test_sheet_qualifier_does_not_hide_other_unparseable_formulas() -> None:
     engine = FormulaEngine(locale_hint="en")
     assert engine.parse("=Sheet1!#NAME?", sheet="CF", addr="C2").unparsed is True
-    assert engine.parse("=Sheet1!not_a_cell", sheet="CF", addr="C2").unparsed is True
+    assert engine.parse("=Sheet1!", sheet="CF", addr="C2").unparsed is True
     assert engine.parse("='Денежные потоки'!???", sheet="CF", addr="C2").unparsed is True
 
 
