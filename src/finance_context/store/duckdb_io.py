@@ -682,9 +682,6 @@ def publish_generation_pending(dest: Path) -> bool:
         return False
     if not isinstance(stored, dict) or "generation" not in stored:
         return False
-    warnings = stored.get("warnings")
-    if isinstance(warnings, list) and _EXPORT_WARNING in warnings:
-        return False
     return stored.get("minio_published_generation") != stored.get("generation")
 
 
@@ -694,9 +691,20 @@ def record_published_generation(dest: Path) -> None:
 
     def mutate(stored: dict) -> dict:
         generation = stored.get("generation")
-        if generation is None or stored.get("minio_published_generation") == generation:
+        warnings = stored.get("warnings")
+        items = list(warnings) if isinstance(warnings, list) else []
+        cleaned = [item for item in items if item != _EXPORT_WARNING]
+        published = (
+            generation is not None and stored.get("minio_published_generation") == generation
+        )
+        if published and cleaned == items:
             return stored
-        return {**stored, "minio_published_generation": generation}
+        updated = dict(stored)
+        if generation is not None:
+            updated["minio_published_generation"] = generation
+        if cleaned != items:
+            updated["warnings"] = cleaned
+        return updated
 
     path = dest / "meta" / "meta.json"
     if path.is_file():
@@ -842,6 +850,7 @@ def _export_body(
     warning: str | None = None
     failing: str | None = "_complete.json"
     ready = 0
+    replaced: list[tuple[str, bytes]] = []
     try:
         plans: dict[bool, _MarkerPlan] = {}
         for session in (False, True):
@@ -893,20 +902,41 @@ def _export_body(
         failing = "_complete.json"
         for session in (False, True):
             plan = plans[session]
-            if not plan.existed or plan.final != plan.listed or any(
+            changed = not plan.existed or plan.final != plan.listed or any(
                 plan.digests.get(key) != plan.final_digests.get(key) for key in plan.final
-            ):
-                _call_with_retry(
-                    lambda plan=plan: _put_marker(
-                        target,
-                        settings.minio_bucket,
-                        plan.marker,
-                        plan.final,
-                        plan.final_digests,
-                    )
+            )
+            if not changed:
+                continue
+            url = object_url(settings.minio_bucket, plan.marker)
+            previous = target.get(url) if plan.existed else None
+
+            def publish(plan: _MarkerPlan = plan) -> None:
+                _put_marker(
+                    target,
+                    settings.minio_bucket,
+                    plan.marker,
+                    plan.final,
+                    plan.final_digests,
                 )
+
+            try:
+                _call_with_retry(publish)
+            except Exception:
+                if previous is not None:
+                    try:
+                        _put_bytes(target, url, previous)
+                    except Exception:
+                        _LOGGER.warning("minio export failed to restore _complete.json")
+                raise
+            if previous is not None:
+                replaced.append((url, previous))
         failing = None
     except Exception as exc:
+        for url, previous in reversed(replaced):
+            try:
+                _put_bytes(target, url, previous)
+            except Exception:
+                _LOGGER.warning("minio export failed to restore _complete.json")
         detail = _s3_failure(exc)[1]
         local_bytes = 0
         if failing is not None and failing != "_complete.json":
@@ -925,7 +955,9 @@ def _export_body(
             local_bytes,
             detail=detail or _export_error_detail(exc),
         )
-        # The new objects are not in the marker. The previous generation stays published.
+        # A marker that this attempt already replaced is put back. Both markers stay
+        # on the previous pair, or both name the new keys. A new object that no
+        # marker lists is left in the bucket.
         warning = _EXPORT_WARNING
     log_event(
         _LOGGER,
@@ -1256,6 +1288,16 @@ def _mark_published_key(
         _LOGGER.warning("minio export failed for _complete.json")
         return False
     return True
+
+
+def _put_bytes(store: ObjectStore, url: str, payload: bytes) -> None:
+    with tempfile.NamedTemporaryFile(prefix=".complete.", suffix=".json") as handle:
+        handle.write(payload)
+        handle.flush()
+        path = Path(handle.name)
+        store.put(path, url)
+        if store.size(url) != len(payload):
+            raise OSError(f"size mismatch for {url}")
 
 
 def _put_marker(
