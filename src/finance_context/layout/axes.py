@@ -982,7 +982,12 @@ def _split_header_runs(
             and left_cls != right_cls
             and "other" not in {left_cls, right_cls}
         )
-        if gap or grain_break:
+        # The next copy of the same ruler repeats a key it already passed
+        # (three quarter bands, or 2024–2029 four times). The same key in the
+        # next column stays on this run: fact and plan share one year.
+        seen = {header.period_key for header in runs[-1]}
+        restarts = item.period_key in seen and item.period_key != prev.period_key
+        if gap or grain_break or restarts:
             runs.append([item])
         else:
             runs[-1].append(item)

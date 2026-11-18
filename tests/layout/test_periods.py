@@ -146,6 +146,18 @@ def test_weekly_cadence_from_dates() -> None:
     assert grain == "week"
 
 
+def test_week_grain_needs_a_seven_day_step() -> None:
+    six_days = ["2026-01-11", "2026-01-17", "2026-01-23", "2026-01-29"]
+    assert infer_grain(six_days) is None
+    eight_days = ["2026-01-11", "2026-01-19", "2026-01-27", "2026-02-04"]
+    assert infer_grain(eight_days) is None
+
+
+def test_a_quarter_key_blocks_week_grain() -> None:
+    keys = ["2019Q4", "2019-10-08", "2019-10-15", "2019-10-22"]
+    assert infer_grain(keys) is None
+
+
 def test_apply_grain_week_keeps_day_keys() -> None:
     assert apply_grain("2026-01-11", "week") == "2026-01-11"
     assert apply_grain("2026-01-11", None) == "2026-01-11"

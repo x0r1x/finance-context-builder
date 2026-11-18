@@ -940,8 +940,13 @@ def infer_grain(keys: list[str]) -> str | None:
                 month_steps.append(delta)
         if day_steps:
             med_days = sorted(day_steps)[len(day_steps) // 2]
+            # Week is a 7-day step. A 5–9 day gap is not a week, and neither is
+            # a quarter key in the same series (2019Q4 beside weekly dates).
             if 5 <= med_days <= 9:
-                return "week"
+                quarter_key = any(_QUARTER_KEY.fullmatch(key) for key in calendar)
+                if med_days == 7 and not quarter_key:
+                    return "week"
+                return None
             if 13 <= med_days <= 17:
                 return "biweek"
             if 25 <= med_days <= 35:

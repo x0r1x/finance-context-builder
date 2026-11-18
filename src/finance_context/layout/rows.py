@@ -136,8 +136,8 @@ def _is_starter_row(row_cells: list[dict], date1904: bool) -> bool:
             if atom is not None and atom.kind == "quarter_token":
                 quarters += 1
         return quarters >= 3
-    # Dates, quarters and "2025E" are headers. Bare years are a header only when
-    # the visible run is non-decreasing, with one positive step if it advances.
+    # Dates, quarters and "2025E" are headers. Bare years are a header when the
+    # run does not go backwards, or when that same forward run is copied sideways.
     if not bare_only:
         return True
     return _bare_years_are_header(row_cells, date1904)
@@ -372,18 +372,40 @@ def _bare_year_values(row_cells: list[dict], date1904: bool) -> list[int]:
 
 
 def _year_run_is_header(values: list[int]) -> bool:
-    """Non-decreasing years. A positive step, when one exists, stays constant.
+    """Non-decreasing years, or the same forward run copied side by side.
 
     ``2022, 2022, 2023, 2023`` is a banner. ``2016, 2017, 2018`` is a ruler.
-    ``2074, 2035, 1988`` is a data row.
+    ``2024…2029`` four times is four copies of one ruler. ``2074, 2035, 1988``
+    is a data row.
     """
     if len(values) < 2:
         return False
+    if _forward_year_run(values):
+        return True
+    return _repeated_year_copies(values)
+
+
+def _forward_year_run(values: list[int]) -> bool:
+    """One ruler. A positive step, when one exists, stays constant."""
     steps = [right - left for left, right in zip(values, values[1:], strict=False)]
     if any(step < 0 for step in steps):
         return False
     positive = {step for step in steps if step > 0}
     return len(positive) <= 1
+
+
+def _repeated_year_copies(values: list[int]) -> bool:
+    """True when ``values`` is the same forward ruler repeated across the row."""
+    cut = next(
+        (index for index in range(1, len(values)) if values[index] < values[index - 1]),
+        None,
+    )
+    if cut is None or cut < 2 or len(values) % cut != 0:
+        return False
+    pattern = values[:cut]
+    if not _forward_year_run(pattern):
+        return False
+    return all(values[index : index + cut] == pattern for index in range(cut, len(values), cut))
 
 
 def _bare_years_are_header(row_cells: list[dict], date1904: bool) -> bool:
