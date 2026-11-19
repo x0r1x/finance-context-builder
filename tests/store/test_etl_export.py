@@ -29,8 +29,10 @@ from finance_context.store.duckdb_io import (
     _sql_literal,
     export_succeeded_book,
     object_key,
+    publish_generation_pending,
     read_blob_bytes,
     read_published_file,
+    record_published_generation,
     republish_file,
     stream_local_file,
 )
@@ -84,6 +86,9 @@ class _MemoryStore:
             raise RuntimeError("stopped")
         self.objects[url] = local.read_bytes()
         self.order.append(url)
+
+    def delete(self, url: str) -> None:
+        self.objects.pop(url, None)
 
     def get(self, url: str) -> bytes:
         try:
@@ -565,6 +570,184 @@ def test_failed_marker_keeps_the_old_hash_and_the_next_export_uploads(
     assert published != context_key
     assert rewritten["sha256"][published] == hashlib.sha256(bytes(flipped)).hexdigest()
     assert store.objects[_bucket(published)] == bytes(flipped)
+
+
+def test_session_marker_failure_restores_the_shared_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    book = tmp_path / "book"
+    dest = tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    settings = _minio()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    shared_url = _marker_url()
+    session_url = _marker_url(session=True)
+    shared_before = store.objects[shared_url]
+    session_before = store.objects[session_url]
+    old_source = _listed(json.loads(shared_before), "source/source.xlsx")
+    old_context = _listed(json.loads(session_before), "context/context.json")
+    old_context_bytes = store.objects[_bucket(old_context)]
+    (book / "source" / "source.xlsx").write_bytes(b"shared:new\n")
+    local = dest / "context" / "context.json"
+    local.write_bytes(b"session:new\n")
+    original_put = store.put
+    seen = {"markers": 0}
+
+    def put(local_path: Path, url: str) -> None:
+        if url.endswith("/_complete.json"):
+            seen["markers"] += 1
+            if seen["markers"] == 2:
+                raise RuntimeError("session marker down")
+        original_put(local_path, url)
+
+    monkeypatch.setattr(store, "put", put)
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) == (
+        "minio export failed"
+    )
+    assert store.objects[shared_url] == shared_before
+    assert store.objects[session_url] == session_before
+    assert _listed(json.loads(shared_before), "source/source.xlsx") == old_source
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        old_context_bytes
+    )
+    monkeypatch.setattr(store, "put", original_put)
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    assert _listed(_stored_marker(store), "source/source.xlsx") != old_source
+    assert _listed(_stored_marker(store, session=True), "context/context.json") != old_context
+    assert store.objects[
+        _bucket(_listed(_stored_marker(store, session=True), "context/context.json"))
+    ] == b"session:new\n"
+
+
+def test_unverified_rollback_stays_local_until_a_verified_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "shared/books" / _JOB
+    dest = tmp_path / "sessions/local/jobs" / _JOB
+    _fill(book, dest)
+    settings, store = _minio(data_dir=tmp_path), _MemoryStore()
+    meta = dest / "meta/meta.json"
+    meta.write_text(json.dumps({"generation": 4, "status": "succeeded"}), encoding="utf-8")
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    record_published_generation(dest)
+    previous_session = store.get(_marker_url(session=True))
+    local = dest / "context/context.json"
+    local.write_bytes(b"current context")
+    (book / "source/source.xlsx").write_bytes(b"current source")
+    original_put = store.put
+
+    def lost_acknowledgement(path: Path, url: str) -> None:
+        if url == _marker_url(session=True):
+            if path.read_bytes() == previous_session:
+                raise OSError("rollback denied")
+            original_put(path, url)
+            raise TimeoutError("timeout after writing marker")
+        original_put(path, url)
+
+    monkeypatch.setattr(store, "put", lost_acknowledgement)
+    warning = export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
+    assert warning == "publication_uncertain"
+    assert store.get(_marker_url(session=True)) != previous_session
+    assert "publication_uncertain" in json.loads(meta.read_bytes())["warnings"]
+    assert publish_generation_pending(dest)
+    assert any(record.levelno >= logging.ERROR for record in caplog.records)
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        b"current context"
+    )
+
+    monkeypatch.setattr(store, "put", original_put)
+    store.fail_on = "source/source.xlsx"
+    warning = export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
+    assert warning == "publication_uncertain"
+    assert publish_generation_pending(dest)
+
+    store.fail_on = None
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    record_published_generation(dest)
+    assert not publish_generation_pending(dest)
+    session = _stored_marker(store, session=True)
+    assert session["shared"] == _stored_marker(store)
+    published_meta = json.loads(store.get(_bucket(_listed(session, "meta/meta.json"))))
+    assert "publication_uncertain" not in published_meta["warnings"]
+
+
+def test_first_session_marker_failure_removes_new_shared_marker(tmp_path: Path) -> None:
+    book, dest = tmp_path / "book", tmp_path / "dest"
+    _fill(book, dest)
+    store = _MemoryStore()
+    store.fail_on = "/sessions/local/_complete.json"
+    warning = export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store)
+    assert warning == "minio export failed"
+    assert _marker_url() not in store.objects
+    assert _marker_url(session=True) not in store.objects
+
+
+def test_export_pins_shared_keys_and_publishes_recovered_meta(tmp_path: Path) -> None:
+    book, dest = tmp_path / "book", tmp_path / "dest"
+    _fill(book, dest)
+    meta = {"generation": 4, "warnings": ["minio export failed", "keep"]}
+    (dest / "meta/meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    store = _MemoryStore()
+    assert export_succeeded_book(_minio(), job_id=_JOB, book=book, dest=dest, store=store) is None
+    session = _stored_marker(store, session=True)
+    assert session["shared"] == _stored_marker(store)
+    published = json.loads(store.objects[_bucket(_listed(session, "meta/meta.json"))])
+    assert published["warnings"] == ["keep"]
+    assert published["minio_published_generation"] == 4
+    assert json.loads((dest / "meta/meta.json").read_text(encoding="utf-8")) == meta
+
+
+def test_pending_generation_stays_local_on_busy_lock_and_failed_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import finance_context.store.duckdb_io as io
+    from finance_context.store.fs import file_lock
+
+    book = tmp_path / "shared/books" / _JOB
+    dest = tmp_path / "sessions/local/jobs" / _JOB
+    _fill(book, dest)
+    settings, store = _minio(data_dir=tmp_path), _MemoryStore()
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    local = dest / "context/context.json"
+    local.write_bytes(b"new generation")
+    (dest / "meta/meta.json").write_text(
+        json.dumps({"status": "succeeded", "generation": 4, "warnings": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(io, "DuckDBObjectStore", lambda _settings: store)
+    monkeypatch.setattr(io, "read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    with file_lock(book / ".lock") as held:
+        assert held
+        assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+            b"new generation"
+        )
+    store.fail_on = "context/context.json"
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        b"new generation"
+    )
+
+
+def test_export_warning_still_retries_the_unpublished_generation(tmp_path: Path) -> None:
+    dest = tmp_path / "dest"
+    (dest / "meta").mkdir(parents=True)
+    (dest / "meta" / "meta.json").write_text(
+        json.dumps(
+            {"status": "succeeded", "generation": 4, "warnings": ["minio export failed"]}
+        ),
+        encoding="utf-8",
+    )
+    assert publish_generation_pending(dest) is True
+    record_published_generation(dest)
+    stored = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
+    assert stored["minio_published_generation"] == 4
+    assert stored["warnings"] == []
+    assert publish_generation_pending(dest) is False
 
 
 def test_missing_local_file_does_not_drop_the_other_keys(
@@ -1095,7 +1278,7 @@ def test_newer_generation_skips_the_export_warning() -> None:
     assert updated["warnings"] == ["kept", "minio export failed"]
 
 
-def test_pipeline_records_the_warning_and_does_not_export_a_reuse(
+def test_pipeline_records_the_warning_and_retries_the_export(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dest = tmp_path / "job"
@@ -1132,18 +1315,18 @@ def test_pipeline_records_the_warning_and_does_not_export_a_reuse(
 
     monkeypatch.setattr("finance_context.app.pipeline.export_succeeded_book", fake_export)
     monkeypatch.setattr("finance_context.app.pipeline.republish_file", fake_republish)
-    pipeline = Pipeline(Settings(data_dir=tmp_path / "data", _env_file=None))
+    pipeline = Pipeline(_minio(data_dir=tmp_path / "data"))
     pipeline.run(dest, job_id="job-test", source_filename="model.xlsx")
     meta = json.loads((dest / "meta" / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "succeeded"
     assert meta["warnings"] == ["minio export failed"]
     assert (dest / "context" / "context.json").is_file()
     pipeline.run(dest, job_id="job-test")
-    assert calls == ["job-test"]
+    assert calls == ["job-test", "job-test"]
     assert published == []
     (dest / "context" / "context.md.renderer").write_text("old\n", encoding="utf-8")
     pipeline.run(dest, job_id="job-test")
-    assert calls == ["job-test"]
+    assert calls == ["job-test", "job-test", "job-test"]
     assert published == ["context/context.md"]
     assert (dest / "context" / "context.md.renderer").read_text(encoding="utf-8") == (
         "transposed-cells\n"
