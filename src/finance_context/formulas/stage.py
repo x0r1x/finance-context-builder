@@ -21,7 +21,7 @@ from finance_context.formulas.models import (
     ast_json_text,
     cell_parquet_row,
 )
-from finance_context.formulas.names import resolve_defined_name_edges
+from finance_context.formulas.names import NameIndex, resolve_defined_name_edges
 from finance_context.memory import load_presence, trim_process_heap, usage_from_presence
 from finance_context.settings import Settings
 from finance_context.store.fs import (
@@ -201,6 +201,7 @@ def _compile_cells_loaded(
     known = KnownNodes()
     formula_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
+    name_index = NameIndex(meta.get("defined_names"))
     for row, (parsed, release) in zip(raw_rows, _iter_parsed(engine, raw_rows), strict=True):
         cell, added = _take_cell(
             row, parsed, release, pool=pool, edges=edges, known=known, chosen=chosen
@@ -208,7 +209,7 @@ def _compile_cells_loaded(
         if added:
             formula_count += 1
         cells.append(cell)
-    _intern_resolved_edges(edges, meta.get("defined_names"), pool)
+    _intern_resolved_edges(edges, name_index, pool)
     return cells, edges, known, formula_count, pool
 
 
@@ -245,7 +246,7 @@ def _compile_cells_streaming(
     cell_count = 0
     edge_count = 0
     pool: dict[str, str] | None = {} if chosen.compile_string_pool else None
-    defined_names = meta.get("defined_names")
+    name_index = NameIndex(meta.get("defined_names"))
     published = False
     try:
         try:
@@ -275,7 +276,7 @@ def _compile_cells_streaming(
                             formula_count += 1
                         cell_count += 1
                         chunk.append(cell_parquet_row(cell))
-                    _intern_resolved_edges(chunk_edges, defined_names, pool)
+                    _intern_resolved_edges(chunk_edges, name_index, pool)
                     if chunk_edges:
                         spill.write_lists(
                             _columns_from_rows([_spill_row(edge) for edge in chunk_edges])
@@ -358,9 +359,9 @@ def _take_cell(
 
 
 def _intern_resolved_edges(
-    edges: list[Edge], defined_names: list | None, pool: dict[str, str] | None
+    edges: list[Edge], names: NameIndex, pool: dict[str, str] | None
 ) -> None:
-    resolve_defined_name_edges(edges, defined_names)
+    resolve_defined_name_edges(edges, index=names)
     if pool is None:
         return
     for edge in edges:

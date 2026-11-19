@@ -77,6 +77,8 @@ def _collect_edges(
     if op == "name":
         token = str(node.get("value") or "")
         if token:
+            if sheet := node.get("sheet"):
+                token = f"{sheet}!{token}"
             edges.append(
                 Edge(
                     kind="ref",
@@ -212,7 +214,7 @@ def _render(node: dict[str, Any], ocol: int, orow: int, sep: str, decimal: str) 
     if op == "err":
         return node["value"]
     if op == "name":
-        return node["value"]
+        return _sheet_prefix(node) + node["value"]
     if op == "ref":
         return _render_ref(node, ocol, orow)
     if op == "range":

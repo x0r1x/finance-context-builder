@@ -122,6 +122,46 @@ def test_compile_resolves_a_defined_name_into_the_edge(tmp_path: Path, dest: Pat
     assert not any(edge["target"] == "Thousand" for edge in edges)
 
 
+def test_compile_resolves_each_sheets_local_name(tmp_path: Path, dest: Path) -> None:
+    source = tmp_path / "scoped.xlsx"
+    build_xlsx(
+        source,
+        sheets=[
+            SheetSpec(
+                name="CF",
+                cells=[
+                    CellSpec(addr="B2", value="1"),
+                    CellSpec(addr="A1", value="1", formula="Pick"),
+                ],
+            ),
+            SheetSpec(
+                name="CF2",
+                cells=[
+                    CellSpec(addr="C9", value="2"),
+                    CellSpec(addr="A1", value="2", formula="Pick"),
+                ],
+            ),
+        ],
+        defined_names=[
+            ("Pick", "$B$2", 0),
+            ("Pick", "$C$9", 1),
+            ("Pick", "Global!$Z$1"),
+        ],
+    )
+    parse_workbook(source, dest)
+    compile_workbook(dest)
+    edges = load_parquet(dest / "ir" / "edges.parquet")
+    assert any(
+        edge["source"] == "CF!A1" and edge["target"] == "CF!B2" and edge["unresolved"] is False
+        for edge in edges
+    )
+    assert any(
+        edge["source"] == "CF2!A1" and edge["target"] == "CF2!C9" and edge["unresolved"] is False
+        for edge in edges
+    )
+    assert not any(edge["target"] == "Global!Z1" for edge in edges)
+
+
 def test_compile_template_roundtrips_through_parquet(tmp_path: Path, dest: Path) -> None:
     source = tmp_path / "ok.xlsx"
     build_xlsx(

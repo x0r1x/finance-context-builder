@@ -30,8 +30,8 @@ class DefinedName(BaseModel):
     name: str
     formula: str
     hidden: bool = False
-    # Sheet the name is local to. Workbook-scoped names omit it. Context does
-    # not publish this; layout uses it to resolve a named scenario switch.
+    # Sheet the name is local to. Workbook-scoped names omit it. Context publishes
+    # it so two names with the same title stay distinct. Layout uses it for a switch.
     sheet: str | None = None
 
     @model_serializer(mode="wrap")

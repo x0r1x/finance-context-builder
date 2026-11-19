@@ -88,7 +88,7 @@ def test_scenario_selector_is_in_inventory_and_markdown() -> None:
     assert "1" in rendered
 
 
-def test_context_does_not_publish_defined_name_scope() -> None:
+def test_context_publishes_defined_name_scope() -> None:
     cells = _scenario_matrix()
     doc = build_context(
         job_id="sel",
@@ -107,5 +107,10 @@ def test_context_does_not_publish_defined_name_scope() -> None:
         layout=detect_layout(cells),
     )
     assert doc.workbook.defined_names == [
-        {"name": "Pick", "formula": "$D$3", "hidden": False}
+        {
+            "name": "Pick",
+            "formula": "$D$3",
+            "hidden": False,
+            "sheet": "Input Assumptions",
+        }
     ]

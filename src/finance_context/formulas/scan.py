@@ -179,7 +179,11 @@ def _scan_reference(text: str, i: int) -> tuple[dict[str, Any], int] | None:
         body = _scan_range_body(text, sheet_match.end())
         if body is None:
             # Excel keeps the sheet on a deleted cell: Sheet1!#REF!.
-            return _scan_deleted_ref(text, sheet_match.end())
+            if deleted := _scan_deleted_ref(text, sheet_match.end()):
+                return deleted
+            body = _scan_named_body(text, sheet_match.end())
+            if body is None:
+                return None
         node, j = body
         node["sheet"] = sheet_match.group(0)[:-1]
         return node, j
@@ -207,7 +211,12 @@ def _scan_quoted_ref(text: str, i: int) -> tuple[dict[str, Any], int] | None:
     quoted = "".join(buf)
     body = _scan_range_body(text, j)
     if body is None:
-        return _scan_deleted_ref(text, j)
+        if deleted := _scan_deleted_ref(text, j):
+            return deleted
+        if not quoted.startswith("["):
+            body = _scan_named_body(text, j)
+        if body is None:
+            return None
     node, k = body
     if quoted.startswith("[") and "]" in quoted:
         close = quoted.index("]")
@@ -245,6 +254,13 @@ def _scan_bracket_ref(text: str, i: int) -> tuple[dict[str, Any], int] | None:
     if sheet:
         node["sheet"] = sheet
     return node, k
+
+
+def _scan_named_body(text: str, start: int) -> tuple[dict[str, Any], int] | None:
+    match = re.match(r"[^\W\d][\w.]*", text[start:])
+    if match is None:
+        return None
+    return {"op": "name", "value": match.group()}, start + match.end()
 
 
 def _scan_deleted_ref(text: str, i: int) -> tuple[dict[str, Any], int] | None:
