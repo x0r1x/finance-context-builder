@@ -90,7 +90,8 @@ def test_indent_parent_skips_unit_text_and_section_boundaries() -> None:
     assert parents["Total"] == "Current"
     assert parents["Income Statement"] is None
     assert parents["Revenue"] == "Income Statement"
-    assert parents["Costs"] == "Revenue"
+    # Revenue has numbers, so it is a line. Costs hangs off the section.
+    assert parents["Costs"] == "Income Statement"
     assert parents["Tax"] == "Income Statement"
 
 
@@ -114,8 +115,9 @@ def test_outline_summary_ignores_unit_text_and_resets_at_the_next_section() -> N
     ):
         below.extend(_line("O", row, label, value, outline=outline))
     parents = _parents(below, {"O": True})
-    assert parents["IaaS"] == "CAPEX"
-    assert parents["DC"] == "CAPEX"
+    # CAPEX carries numbers, so the outline summary is not a section parent.
+    assert parents["IaaS"] is None
+    assert parents["DC"] is None
     assert parents["k£"] is None
     assert parents["Revenue"] == "Income"
 
@@ -130,8 +132,8 @@ def test_outline_summary_ignores_unit_text_and_resets_at_the_next_section() -> N
     ):
         above.extend(_line("A", row, label, value, outline=outline))
     parents = _parents(above, {"A": False})
-    assert parents["IaaS"] == "CAPEX"
-    assert parents["DC"] == "CAPEX"
+    assert parents["IaaS"] is None
+    assert parents["DC"] is None
     assert parents["k£"] is None
     assert parents["Revenue"] == "Income"
 
