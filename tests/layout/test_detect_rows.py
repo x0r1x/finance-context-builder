@@ -876,7 +876,76 @@ def test_formula_cache_text_is_the_label_and_other_caches_are_not() -> None:
     assert rows[7].label == "Выручка"
 
 
-def test_a_block_label_area_does_not_take_the_other_table() -> None:
+def test_a_note_column_stays_out_of_the_name_and_the_row_stays_fact() -> None:
+    cells = [
+        _c("P&L", "A1", "Item"),
+        _c("P&L", "B1", "Notes"),
+        _c("P&L", "C1", "2024"),
+        _c("P&L", "D1", "2025"),
+        _c("P&L", "A2", "Revenue"),
+        _c("P&L", "B2", "Check"),
+        _c("P&L", "C2", "10"),
+        _c("P&L", "D2", "11"),
+    ]
+    row = detect_layout(cells).sheets[0].blocks[0].rows[0]
+    assert row.label == "Revenue"
+    assert row.kind == "fact"
+
+
+def test_a_named_second_column_survives_extra_rows() -> None:
+    cells = [_c("ОПиУ", "A1", "Группа"), _c("ОПиУ", "B1", "Показатель")]
+    cells += _years("ОПиУ", 1, "DE")
+    cells += [
+        _c("ОПиУ", "A2", "Коэффициент"),
+        _c("ОПиУ", "B2", "Текущая ликвидность"),
+        _c("ОПиУ", "D2", "1.2"),
+        _c("ОПиУ", "E2", "1.4"),
+        _c("ОПиУ", "A3", "Выручка"),
+        _c("ОПиУ", "D3", "10"),
+        _c("ОПиУ", "E3", "11"),
+        _c("ОПиУ", "A4", "Себестоимость"),
+        _c("ОПиУ", "D4", "4"),
+        _c("ОПиУ", "E4", "5"),
+        _c("ОПиУ", "A5", "Прибыль"),
+        _c("ОПиУ", "D5", "6"),
+        _c("ОПиУ", "E5", "7"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Коэффициент Текущая ликвидность"
+
+
+def test_a_formula_in_the_name_keeps_the_section_abstract() -> None:
+    cells = [_c("CF", "C1", "2024"), _c("CF", "D1", "2025")]
+    cells += [
+        _c("CF", "A2", "Section"),
+        _c("CF", "B2", "Operating Activities", formula="=A10"),
+        _c("CF", "A3", "Revenue"),
+        _c("CF", "C3", "10"),
+        _c("CF", "D3", "11"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Section Operating Activities"
+    assert rows[2].kind == "abstract"
+    assert rows[3].section_path == ["Section Operating Activities"]
+
+
+def test_modern_formula_errors_stay_out_of_the_label() -> None:
+    cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
+    cells += [
+        _c("ОПиУ", "A2", "Revenue"),
+        _c("ОПиУ", "B2", "#SPILL!", formula="=B10"),
+        _c("ОПиУ", "C2", "5"),
+        _c("ОПиУ", "A3", "Costs"),
+        _c("ОПиУ", "B3", "#CALC!", formula="=B11"),
+        _c("ОПиУ", "C3", "1"),
+        _c("ОПиУ", "A4", "Tax"),
+        _c("ОПиУ", "B4", "#N/A", formula="=B12"),
+        _c("ОПиУ", "C4", "2"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Revenue"
+    assert rows[3].label == "Costs"
+    assert rows[4].label == "Tax"
     from finance_context.layout.rows import _name_columns
 
     row = [

@@ -77,15 +77,17 @@ def attach_stub_cells(
     date1904: bool,
     by_row: dict[int, list[dict]] | None = None,
     floor_row: int | None = None,
+    name_cols: set[int] | None = None,
 ) -> LayoutRow:
     if not period_cols:
         return row
     left_edge = min(period_cols)
     span_max = max(label_span) if label_span else 0
+    named = name_cols or set()
     tagged: list[RowCell] = []
     for cell in row_cells:
         col = int(cell["col"])
-        if col <= span_max or col >= left_edge or col in period_cols:
+        if col in named or col <= span_max or col >= left_edge or col in period_cols:
             continue
         role = _stub_role(cell, row.row, date1904)
         if role is None:

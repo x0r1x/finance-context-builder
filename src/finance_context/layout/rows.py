@@ -11,6 +11,13 @@ from finance_context.layout.cells import (
     parse_int,
     parse_number,
 )
+from finance_context.layout.format_words import (
+    LABEL_WORDS,
+    NOTE_WORDS,
+    UNIT_WORDS,
+    VALUE_WORDS,
+    searcher,
+)
 from finance_context.layout.models import LayoutRow
 from finance_context.layout.params import attach_stub_cells
 from finance_context.layout.periods import (
@@ -71,9 +78,11 @@ _PLACEHOLDER_LABEL = re.compile(r"^(spare|none)$", re.IGNORECASE)
 _DASH = re.compile(r"\s*[-\u2013\u2014]\s*")
 # Cached formula errors are not names. The formula text itself never is.
 _EXCEL_ERROR = re.compile(
-    r"^#(?:NULL!|DIV/0!|VALUE!|REF!|NAME\?|NUM!|N/A|GETTING_DATA)$",
+    r"^#(?:NULL!|DIV/0!|VALUE!|REF!|NAME\?|NUM!|N/A|GETTING_DATA|"
+    r"SPILL!|CALC!|FIELD!|BLOCKED!|CONNECT!|UNKNOWN!|BUSY!)$",
     re.IGNORECASE,
 )
+_NAME_COLUMN_SKIP = {"note", "unit", "value"}
 # A marker beside a real name is not part of that name. Alone, it still is.
 _SERVICE_MARK = re.compile(
     r"^(?:факт|план|budget|forecast|actual|base(?:\s+case)?)$",
@@ -525,6 +534,7 @@ def _label_span(
 ) -> tuple[int, list[int]]:
     left_edge = min(period_cols) if period_cols else 10**6
     leftmost: dict[int, int] = defaultdict(int)
+    roles: dict[int, str | None] = {}
     for row_n in body_rows:
         if row_n in header_rows:
             continue
@@ -537,6 +547,8 @@ def _label_span(
             text = _text(cell, date1904)
             if not text or _is_number(text) or _is_column_header_text(text):
                 continue
+            if _column_role(by_row, header_rows, col, date1904, roles) in _NAME_COLUMN_SKIP:
+                continue
             leftmost[col] += 1
             break
     if not leftmost:
@@ -545,6 +557,8 @@ def _label_span(
             for row_n in body_rows
             for cell in by_row[row_n]
             if not cell.get("hidden")
+            and _column_role(by_row, header_rows, int(cell["col"]), date1904, roles)
+            not in _NAME_COLUMN_SKIP
         ]
         fallback = min(visible) if visible else 1
         return fallback, [fallback]
@@ -570,6 +584,7 @@ def _data_rows(
     extra_names = _extra_name_columns(
         by_row, band_rows, header_rows, label_span, period_cols, date1904
     )
+    roles: dict[int, str | None] = {}
     out: list[LayoutRow] = []
     # Non-unit rows, indents strictly increasing. The nearest shallower row is
     # the top of this stack, so a flat table does not rescan every earlier row.
@@ -586,7 +601,7 @@ def _data_rows(
         reveal = row_n in revealed or _row_all_hidden(
             row_n, by_row[row_n], hidden_row_ids
         )
-        label, depth, label_cell = _composed_label(
+        label, depth, label_cell, name_cols = _composed_label(
             by_row[row_n],
             _name_columns(label_span, extra_names, by_row[row_n]),
             date1904,
@@ -594,8 +609,14 @@ def _data_rows(
             span=label_span,
         )
         if label is None or label_cell is None:
-            label, depth, label_cell = _left_of_axis_label(
-                by_row[row_n], period_cols, date1904, include_hidden=reveal
+            label, depth, label_cell, name_cols = _left_of_axis_label(
+                by_row[row_n],
+                period_cols,
+                date1904,
+                include_hidden=reveal,
+                by_row=by_row,
+                header_rows=header_rows,
+                roles=roles,
             )
         if label is None or label_cell is None:
             continue
@@ -615,10 +636,13 @@ def _data_rows(
             label_span=label_span,
             period_cols=period_cols,
             date1904=date1904,
+            name_cols=name_cols,
         )
         if kind == "abstract" and (
             _has_scalar_value(probe, by_row[row_n], date1904)
-            or _is_blank_data_row(by_row[row_n], label_cell, period_cols, date1904)
+            or _is_blank_data_row(
+                by_row[row_n], name_cols, period_cols, date1904
+            )
         ):
             in_check = any(_CHECK.search(item.label) for item in section_stack) or any(
                 prev.check_row for prev in _ancestors(out, indent)
@@ -666,6 +690,7 @@ def _data_rows(
             date1904=date1904,
             by_row=by_row,
             floor_row=band_rows[0] if band_rows else None,
+            name_cols=name_cols,
         )
         out.append(item)
         outlines.append(outline)
@@ -752,17 +777,20 @@ def _rewire_parents(
 
 
 def _deeper_follower(rows: list[LayoutRow], outlines: list[int]) -> list[bool]:
-    """A later row nested by indent or by a deeper Excel outline."""
+    """Whether the next row is nested by indent or by a deeper Excel outline.
+
+    Only that next row matters. The tail is not copied.
+    """
+    count = len(rows)
     found: list[bool] = []
     for index, row in enumerate(rows):
-        deeper = False
+        nxt = index + 1
+        if nxt >= count:
+            found.append(False)
+            continue
         level = outlines[index] if index < len(outlines) else 0
-        for nxt, nxt_level in zip(rows[index + 1 :], outlines[index + 1 :], strict=False):
-            if nxt.indent <= row.indent and nxt_level <= level:
-                break
-            deeper = True
-            break
-        found.append(deeper)
+        nxt_level = outlines[nxt] if nxt < len(outlines) else 0
+        found.append(rows[nxt].indent > row.indent or nxt_level > level)
     return found
 
 
@@ -906,7 +934,7 @@ def _band_title(
     cells = by_row.get(header_row, [])
     if not any(int(cell["col"]) in period_cols and cell.get("formula_raw") for cell in cells):
         return None
-    label, depth, cell = _row_span_label(cells, label_span, date1904)
+    label, depth, cell, _name_cols = _row_span_label(cells, label_span, date1904)
     if label is None or cell is None:
         return None
     if is_start_period_label(label) or is_end_period_label(label):
@@ -934,18 +962,22 @@ def _has_scalar_value(probe: LayoutRow, row_cells: list[dict], date1904: bool) -
 
 
 def _is_blank_data_row(
-    row_cells: list[dict], label_cell: dict, period_cols: set[int], date1904: bool
+    row_cells: list[dict],
+    name_cols: set[int],
+    period_cols: set[int],
+    date1904: bool,
 ) -> bool:
     """A data line with nothing to show, not a section title.
 
     A formula beside the label (`=IF(ISERROR(E9),"",E9)` returning blank) or a dash
     placeholder (`-`) in a period column marks a list item whose values are empty.
-    A section title carries only its label, or formulas that print period captions.
+    Every cell that formed the name is the label, including a formula whose cache
+    is the second half of that name. A section title carries only its label, or
+    formulas that print period captions.
     """
-    label_col = int(label_cell["col"])
     for cell in row_cells:
         col = int(cell["col"])
-        if col == label_col:
+        if col in name_cols:
             continue
         text = _text(cell, date1904) or ""
         if cell.get("formula_raw") and classify_atom(text) is None:
@@ -961,7 +993,7 @@ def _row_span_label(
     date1904: bool,
     *,
     include_hidden: bool = False,
-) -> tuple[str | None, int, dict | None]:
+) -> tuple[str | None, int, dict | None, set[int]]:
     return _composed_label(
         row_cells,
         list(label_span),
@@ -1017,9 +1049,16 @@ def _extra_name_columns(
             seen.add(col)
             found[col].append(text.strip().casefold())
     extra: set[int] = set()
+    roles: dict[int, str | None] = {}
     for col, values in found.items():
+        role = _column_role(by_row, header_rows, col, date1904, roles)
+        if role in _NAME_COLUMN_SKIP:
+            continue
         distinct = set(values)
-        if len(distinct) >= 2 or (len(distinct) == 1 and body <= 3 and len(values) == 1):
+        named = role == "label"
+        if named or len(distinct) >= 2 or (
+            len(distinct) == 1 and body <= 3 and len(values) == 1
+        ):
             extra.add(col)
     return extra
 
@@ -1029,20 +1068,62 @@ def _calendar_caption(text: str) -> bool:
     return is_calendar_hit(hit)
 
 
+def _column_role(
+    by_row: dict[int, list[dict]],
+    header_rows: set[int],
+    col: int,
+    date1904: bool,
+    cache: dict[int, str | None],
+) -> str | None:
+    """Header word for this column: label, note, unit, or value."""
+    if col in cache:
+        return cache[col]
+    role = None
+    for row_n in sorted(header_rows, reverse=True):
+        cell = _cell_at(by_row.get(row_n, []), col)
+        text = _text(cell, date1904) if cell else None
+        if not text:
+            continue
+        for name, words in (
+            ("note", NOTE_WORDS),
+            ("unit", UNIT_WORDS),
+            ("value", VALUE_WORDS),
+            ("label", LABEL_WORDS),
+        ):
+            if searcher(words).search(text) is not None:
+                role = name
+                break
+        if role is not None:
+            break
+    cache[col] = role
+    return role
+
+
 def _left_of_axis_label(
     row_cells: list[dict],
     period_cols: set[int],
     date1904: bool,
     *,
     include_hidden: bool = False,
-) -> tuple[str | None, int, dict | None]:
+    by_row: dict[int, list[dict]] | None = None,
+    header_rows: set[int] | None = None,
+    roles: dict[int, str | None] | None = None,
+) -> tuple[str | None, int, dict | None, set[int]]:
     """Text left of the period axis when the label span is empty."""
     if not period_cols:
-        return None, 0, None
+        return None, 0, None, set()
     left_edge = min(period_cols)
     columns = sorted(
         {int(cell["col"]) for cell in row_cells if int(cell["col"]) < left_edge}
     )
+    if by_row is not None and header_rows:
+        known = roles if roles is not None else {}
+        columns = [
+            col
+            for col in columns
+            if _column_role(by_row, header_rows, col, date1904, known)
+            not in _NAME_COLUMN_SKIP
+        ]
     return _composed_label(
         row_cells,
         columns,
@@ -1059,7 +1140,7 @@ def _composed_label(
     *,
     include_hidden: bool,
     span: list[int] | None,
-) -> tuple[str | None, int, dict | None]:
+) -> tuple[str | None, int, dict | None, set[int]]:
     """Join the useful name cells in ``columns``, left to right.
 
     A formula contributes its cached text. An empty cache, an Excel error and a
@@ -1083,7 +1164,7 @@ def _composed_label(
         seen.add(key)
         pieces.append((text, cell, depth))
     if not pieces:
-        return None, 0, None
+        return None, 0, None, set()
     content = [
         item
         for item in pieces
@@ -1099,7 +1180,8 @@ def _composed_label(
     anchor = int(cell["col"])
     if span and anchor in span:
         depth = span.index(anchor)
-    return label, depth, cell
+    name_cols = {int(item[1]["col"]) for item in chosen}
+    return label, depth, cell, name_cols
 
 
 def _label_piece(cell: dict, date1904: bool) -> str | None:
