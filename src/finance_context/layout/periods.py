@@ -92,6 +92,8 @@ _QUARTER_WORD_FORMS = _compile_forms(
     (
         rf"(?P<num>[1-4]|IV|I{{1,3}}){_ORDINAL}\s*{_QUARTER_WORD}",
         rf"{_QUARTER_WORD}\s*(?P<num>[1-4]|IV|I{{1,3}})",
+        # Pivot header «Кв-л1». The hyphen and «л» sit between the word and the number.
+        r"кв\s*[-–—−]?\s*л\s*(?P<num>[1-4])",
     )
 )
 _QUARTER_CODE_FORMS = _compile_forms((r"Q(?P<num>[1-4])", r"(?P<num>[1-4])\s*Q"))
@@ -940,8 +942,13 @@ def infer_grain(keys: list[str]) -> str | None:
                 month_steps.append(delta)
         if day_steps:
             med_days = sorted(day_steps)[len(day_steps) // 2]
+            # Week is a 7-day step. A 5–9 day gap is not a week, and neither is
+            # a quarter key in the same series (2019Q4 beside weekly dates).
             if 5 <= med_days <= 9:
-                return "week"
+                quarter_key = any(_QUARTER_KEY.fullmatch(key) for key in calendar)
+                if not quarter_key and all(step == 7 for step in day_steps):
+                    return "week"
+                return None
             if 13 <= med_days <= 17:
                 return "biweek"
             if 25 <= med_days <= 35:

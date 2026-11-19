@@ -112,6 +112,18 @@ def test_quarter_token_without_year() -> None:
     assert classify_header("1 кв.") is None
 
 
+def test_pivot_quarter_label_is_a_quarter_token() -> None:
+    atom = classify_atom("Кв-л1")
+    assert atom is not None
+    assert atom.kind == "quarter_token"
+    assert atom.quarter == 1
+    year = classify_atom("2024")
+    assert year is not None
+    hit = compose_period([year, atom])
+    assert hit is not None
+    assert hit.period_key == "2024Q1"
+
+
 def test_compose_year_and_quarter_token() -> None:
     year = classify_atom("2026")
     q = classify_atom("2 кв.")
@@ -144,6 +156,18 @@ def test_quarter_cadence_from_dates() -> None:
 def test_weekly_cadence_from_dates() -> None:
     grain = infer_grain(["2026-01-11", "2026-01-18", "2026-01-25", "2026-02-01"])
     assert grain == "week"
+
+
+def test_week_grain_needs_a_seven_day_step() -> None:
+    six_days = ["2026-01-11", "2026-01-17", "2026-01-23", "2026-01-29"]
+    assert infer_grain(six_days) is None
+    eight_days = ["2026-01-11", "2026-01-19", "2026-01-27", "2026-02-04"]
+    assert infer_grain(eight_days) is None
+
+
+def test_a_quarter_key_blocks_week_grain() -> None:
+    keys = ["2019Q4", "2019-10-08", "2019-10-15", "2019-10-22"]
+    assert infer_grain(keys) is None
 
 
 def test_apply_grain_week_keeps_day_keys() -> None:

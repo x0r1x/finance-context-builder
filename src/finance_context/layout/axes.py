@@ -9,7 +9,7 @@ from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import _cell_at, _is_number, _text, parse_int, parse_number
 from finance_context.layout.format_words import is_total_word
-from finance_context.layout.markers import DerivedScan, apply_axis_markers
+from finance_context.layout.markers import DerivedScan, _fill_banner, apply_axis_markers
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
 from finance_context.layout.periods import (
     _HALF_KEY,
@@ -128,9 +128,95 @@ def _axis_candidates(
         )
         candidates.append(([row_n], axis))
         taken.add(row_n)
-    horizontal = _keep_dominant(_fold_year_banners(candidates))
+    horizontal = _drop_repeated_over_finer(
+        _keep_dominant(_fold_year_banners(candidates)), by_row, date1904
+    )
     vertical, notes = _vertical_axes(sheet, by_row, date1904, horizontal)
     return [*horizontal, *vertical], notes
+
+
+# A smaller rank is a finer period. A repeated quarter label over months is not
+# a second axis.
+_GRAIN_RANK = {
+    "week": 1,
+    "biweek": 2,
+    "month": 3,
+    "quarter": 4,
+    "half_year": 5,
+    "year": 6,
+}
+
+
+def _drop_repeated_over_finer(
+    candidates: list[tuple[list[int], TimeAxis]],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> list[tuple[list[int], TimeAxis]]:
+    """Drop a ruler that repeats one full key where a finer ruler already covers it.
+
+    ``3 кв. 2020`` three times, over June–September, is the month axis. The
+    quarter text does not become 115 periods of the same keys.
+    """
+    header_keys: dict[int, dict[int, str]] = {}
+    kept: list[tuple[list[int], TimeAxis]] = []
+    for band, axis in candidates:
+        if _repeated_full_keys(axis) and _finer_axis_covers(
+            axis, candidates, by_row, date1904, header_keys
+        ):
+            continue
+        kept.append((band, axis))
+    return kept
+
+
+def _repeated_full_keys(axis: TimeAxis) -> bool:
+    keys = [
+        period.period_key
+        for period in axis.periods
+        if is_series_column(period.kind, period.period_key)
+    ]
+    return any(left == right for left, right in zip(keys, keys[1:], strict=False))
+
+
+def _finer_axis_covers(
+    axis: TimeAxis,
+    candidates: list[tuple[list[int], TimeAxis]],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    header_keys: dict[int, dict[int, str]],
+) -> bool:
+    rank = _GRAIN_RANK.get(axis.grain or "")
+    cols = _axis_cols(axis)
+    if rank is None or not cols:
+        return False
+    periods = [
+        period for period in axis.periods if is_series_column(period.kind, period.period_key)
+    ]
+    for band, other in candidates:
+        other_rank = _GRAIN_RANK.get(other.grain or "")
+        if other_rank is None or other_rank >= rank or _repeated_full_keys(other):
+            continue
+        other_cols = _axis_cols(other)
+        if len(cols & other_cols) < 0.6 * len(cols):
+            continue
+        # A lower section can reprint the banner beside the finer header.
+        # Column overlap alone also occurs between independent stacked tables.
+        for row in (*band, min(band) - 1, max(band) + 1):
+            if row not in header_keys:
+                header_keys[row] = {
+                    int(cell["col"]): hit.period_key
+                    for cell in by_row.get(row, ())
+                    if (hit := classify_header(_text(cell, date1904))) is not None
+                }
+            keys = header_keys[row]
+            for shift in (0, -1, 1):
+                matches = sum(
+                    period.col + shift in other_cols
+                    and keys.get(period.col + shift) == period.period_key
+                    for period in periods
+                )
+                if matches >= 0.6 * len(periods):
+                    return True
+    return False
 
 
 def _period_count(axis: TimeAxis) -> int:
@@ -950,9 +1036,11 @@ def _split_header_runs(
     if not headers:
         return []
     bridge = hidden_cols or set()
+    banner: dict[int, str] | None = None
     ordered = sorted(headers, key=lambda item: item.col)
     runs: list[list[AxisHeader]] = [[ordered[0]]]
-    for prev, item in zip(ordered, ordered[1:], strict=False):
+    for index, item in enumerate(ordered[1:], start=1):
+        prev = ordered[index - 1]
         # An empty hidden column keeps a run together. A prefix that lives only
         # in hidden columns stays attached when the next header continues the
         # sequence (2024, empty hidden column, 2025). Scratch that does not
@@ -982,11 +1070,58 @@ def _split_header_runs(
             and left_cls != right_cls
             and "other" not in {left_cls, right_cls}
         )
-        if gap or grain_break:
+        # A second copy starts over at the first key of a steady ruler
+        # (2020Q1 after 2020Q1–Q4, or 2024 after 2024–2029). The marker is part
+        # of that identity: ``2024 план`` then ``2024 факт`` is still one ruler,
+        # so the suffix can be written onto the key. A lone return of the
+        # opening key is not a copy and stays here. A later repeat inside an
+        # uneven row stays here too, and the same key in the next column does.
+        opening = runs[-1][0]
+        restarts = (
+            len(runs[-1]) >= 2
+            and item.period_key != prev.period_key
+            and item.period_key == opening.period_key
+            and marker_token(item.variant) == marker_token(opening.variant)
+            and _run_continues(runs[-1])
+            and _second_copy_follows(ordered, index, bridge)
+        )
+        if restarts and by_row and band_rows:
+            if banner is None:
+                banner = _fill_banner(
+                    by_row.get(min(band_rows) - 1, []),
+                    [header.col for header in ordered],
+                    date1904,
+                )
+            marks = {marker_token(banner.get(header.col)) for header in (opening, item)}
+            restarts = len(marks) != 2 or not marks <= _SCENARIO_BANNERS
+        if gap or grain_break or restarts:
             runs.append([item])
         else:
             runs[-1].append(item)
     return [run for run in runs if len(run) >= 2]
+
+
+_SCENARIO_BANNERS = {"actual", "budget", "forecast", "plan", "бюджет", "план", "прогноз", "факт"}
+
+
+def _second_copy_follows(
+    ordered: list[AxisHeader],
+    index: int,
+    hidden_cols: set[int],
+) -> bool:
+    """True when a second ruler of at least two periods starts at ``ordered[index]``.
+
+    A single repeated opening key is not a copy. That column stays on the
+    ruler that is already open instead of being discarded.
+    """
+    if index + 1 == len(ordered):
+        return False
+    start, next_header = ordered[index], ordered[index + 1]
+    return (
+        marker_token(next_header.variant) == marker_token(start.variant)
+        and _cols_connected(start.col, next_header.col, hidden_cols)
+        and _period_continues(start.period_key, next_header.period_key)
+    )
 
 
 def _gap_is_total(
