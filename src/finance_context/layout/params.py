@@ -78,12 +78,14 @@ def attach_stub_cells(
     by_row: dict[int, list[dict]] | None = None,
     floor_row: int | None = None,
     name_cols: set[int] | None = None,
+    note_cols: set[int] | None = None,
 ) -> LayoutRow:
     if not period_cols:
         return row
     left_edge = min(period_cols)
     span_max = max(label_span) if label_span else 0
     named = name_cols or set()
+    notes = note_cols or set()
     tagged: list[RowCell] = []
     for cell in row_cells:
         col = int(cell["col"])
@@ -92,6 +94,8 @@ def attach_stub_cells(
         role = _stub_role(cell, row.row, date1904)
         if role is None:
             continue
+        if col in notes:
+            role = "note"
         header = None
         if role == "value" and by_row is not None and floor_row is not None:
             header = column_header_text(

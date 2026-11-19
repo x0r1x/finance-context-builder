@@ -16,7 +16,7 @@ from finance_context.layout.format_words import (
     NOTE_WORDS,
     UNIT_WORDS,
     VALUE_WORDS,
-    searcher,
+    accepts,
 )
 from finance_context.layout.models import LayoutRow
 from finance_context.layout.params import attach_stub_cells
@@ -531,10 +531,11 @@ def _label_span(
     date1904: bool,
     *,
     col_floor: int = 0,
+    column_roles: dict[int, str] | None = None,
 ) -> tuple[int, list[int]]:
     left_edge = min(period_cols) if period_cols else 10**6
     leftmost: dict[int, int] = defaultdict(int)
-    roles: dict[int, str | None] = {}
+    roles = column_roles or {}
     for row_n in body_rows:
         if row_n in header_rows:
             continue
@@ -547,7 +548,7 @@ def _label_span(
             text = _text(cell, date1904)
             if not text or _is_number(text) or _is_column_header_text(text):
                 continue
-            if _column_role(by_row, header_rows, col, date1904, roles) in _NAME_COLUMN_SKIP:
+            if roles.get(col) in _NAME_COLUMN_SKIP:
                 continue
             leftmost[col] += 1
             break
@@ -557,11 +558,10 @@ def _label_span(
             for row_n in body_rows
             for cell in by_row[row_n]
             if not cell.get("hidden")
-            and _column_role(by_row, header_rows, int(cell["col"]), date1904, roles)
-            not in _NAME_COLUMN_SKIP
+            and roles.get(int(cell["col"])) not in _NAME_COLUMN_SKIP
         ]
         fallback = min(visible) if visible else 1
-        return fallback, [fallback]
+        return fallback, [] if roles.get(fallback) in _NAME_COLUMN_SKIP else [fallback]
     primary = max(leftmost.items(), key=lambda item: (item[1], -item[0]))[0]
     span = sorted(col for col in leftmost if col < primary)
     span.append(primary)
@@ -579,12 +579,15 @@ def _data_rows(
     reveal_rows: set[int] | None = None,
     summary_below: bool = True,
     hidden_row_ids: set[int] | None = None,
+    column_roles: dict[int, str] | None = None,
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
+    roles = column_roles or {}
+    excluded_names = {col for col, role in roles.items() if role in _NAME_COLUMN_SKIP}
+    note_cols = {col for col, role in roles.items() if role == "note"}
     extra_names = _extra_name_columns(
-        by_row, band_rows, header_rows, label_span, period_cols, date1904
+        by_row, band_rows, header_rows, label_span, period_cols, date1904, roles
     )
-    roles: dict[int, str | None] = {}
     out: list[LayoutRow] = []
     # Non-unit rows, indents strictly increasing. The nearest shallower row is
     # the top of this stack, so a flat table does not rescan every earlier row.
@@ -614,9 +617,7 @@ def _data_rows(
                 period_cols,
                 date1904,
                 include_hidden=reveal,
-                by_row=by_row,
-                header_rows=header_rows,
-                roles=roles,
+                excluded_cols=excluded_names,
             )
         if label is None or label_cell is None:
             continue
@@ -637,12 +638,11 @@ def _data_rows(
             period_cols=period_cols,
             date1904=date1904,
             name_cols=name_cols,
+            note_cols=note_cols,
         )
         if kind == "abstract" and (
             _has_scalar_value(probe, by_row[row_n], date1904)
-            or _is_blank_data_row(
-                by_row[row_n], name_cols, period_cols, date1904
-            )
+            or _is_blank_data_row(by_row[row_n], name_cols | note_cols, period_cols, date1904)
         ):
             in_check = any(_CHECK.search(item.label) for item in section_stack) or any(
                 prev.check_row for prev in _ancestors(out, indent)
@@ -691,6 +691,7 @@ def _data_rows(
             by_row=by_row,
             floor_row=band_rows[0] if band_rows else None,
             name_cols=name_cols,
+            note_cols=note_cols,
         )
         out.append(item)
         outlines.append(outline)
@@ -963,7 +964,7 @@ def _has_scalar_value(probe: LayoutRow, row_cells: list[dict], date1904: bool) -
 
 def _is_blank_data_row(
     row_cells: list[dict],
-    name_cols: set[int],
+    non_value_cols: set[int],
     period_cols: set[int],
     date1904: bool,
 ) -> bool:
@@ -971,13 +972,12 @@ def _is_blank_data_row(
 
     A formula beside the label (`=IF(ISERROR(E9),"",E9)` returning blank) or a dash
     placeholder (`-`) in a period column marks a list item whose values are empty.
-    Every cell that formed the name is the label, including a formula whose cache
-    is the second half of that name. A section title carries only its label, or
-    formulas that print period captions.
+    Name and note columns cannot supply evidence of data. A section title can
+    also carry formulas that print period captions.
     """
     for cell in row_cells:
         col = int(cell["col"])
-        if col in name_cols:
+        if col in non_value_cols:
             continue
         text = _text(cell, date1904) or ""
         if cell.get("formula_raw") and classify_atom(text) is None:
@@ -1018,6 +1018,7 @@ def _extra_name_columns(
     label_span: list[int],
     period_cols: set[int],
     date1904: bool,
+    column_roles: dict[int, str],
 ) -> set[int]:
     """A name just to the right of the label span, when it is not one repeated note.
 
@@ -1041,7 +1042,7 @@ def _extra_name_columns(
             col = int(cell["col"])
             if col < start or col > limit or col >= left or col in period_cols or col in seen:
                 continue
-            if cell.get("hidden"):
+            if cell.get("hidden") or column_roles.get(col) in _NAME_COLUMN_SKIP:
                 continue
             text = _label_piece(cell, date1904)
             if text is None or _calendar_caption(text):
@@ -1049,13 +1050,9 @@ def _extra_name_columns(
             seen.add(col)
             found[col].append(text.strip().casefold())
     extra: set[int] = set()
-    roles: dict[int, str | None] = {}
     for col, values in found.items():
-        role = _column_role(by_row, header_rows, col, date1904, roles)
-        if role in _NAME_COLUMN_SKIP:
-            continue
         distinct = set(values)
-        named = role == "label"
+        named = column_roles.get(col) == "label"
         if named or len(distinct) >= 2 or (
             len(distinct) == 1 and body <= 3 and len(values) == 1
         ):
@@ -1068,35 +1065,50 @@ def _calendar_caption(text: str) -> bool:
     return is_calendar_hit(hit)
 
 
-def _column_role(
+def _column_headers(
     by_row: dict[int, list[dict]],
-    header_rows: set[int],
-    col: int,
+    band_rows: list[int],
+    owned_titles: set[int],
+    period_cols: set[int],
     date1904: bool,
-    cache: dict[int, str | None],
-) -> str | None:
-    """Header word for this column: label, note, unit, or value."""
-    if col in cache:
-        return cache[col]
-    role = None
-    for row_n in sorted(header_rows, reverse=True):
-        cell = _cell_at(by_row.get(row_n, []), col)
-        text = _text(cell, date1904) if cell else None
-        if not text:
-            continue
-        for name, words in (
-            ("note", NOTE_WORDS),
-            ("unit", UNIT_WORDS),
-            ("value", VALUE_WORDS),
-            ("label", LABEL_WORDS),
-        ):
-            if searcher(words).search(text) is not None:
-                role = name
-                break
-        if role is not None:
+) -> tuple[set[int], dict[int, str]]:
+    """Collect roles from the ruler and its column captions above the periods."""
+    headers = set(band_rows)
+    roles: dict[int, str] = {}
+    if not period_cols:
+        return headers, roles
+    left = min(period_cols)
+    top = min(band_rows)
+    for row_n in sorted(headers | {row for row in owned_titles if row < top}, reverse=True):
+        captions: dict[int, str] = {}
+        for cell in by_row[row_n]:
+            col = int(cell["col"])
+            if col >= left or cell.get("hidden"):
+                continue
+            text = _text(cell, date1904)
+            if text and not _is_number(text):
+                captions[col] = text
+        row_roles = {col: role for col, text in captions.items() if (role := _caption_role(text))}
+        # A section title above the column captions remains a row of the table.
+        if row_n < top and (len(captions) < 2 or not row_roles):
             break
-    cache[col] = role
-    return role
+        headers.add(row_n)
+        for col, role in row_roles.items():
+            roles.setdefault(col, role)
+    return headers, roles
+
+
+def _caption_role(text: str) -> str | None:
+    caption = re.sub(r"[\W_]+", " ", text).strip()
+    for role, words in (
+        ("note", (*NOTE_WORDS, "прим")),
+        ("unit", UNIT_WORDS),
+        ("value", VALUE_WORDS),
+        ("label", LABEL_WORDS),
+    ):
+        if accepts(words, caption):
+            return role
+    return None
 
 
 def _left_of_axis_label(
@@ -1105,25 +1117,15 @@ def _left_of_axis_label(
     date1904: bool,
     *,
     include_hidden: bool = False,
-    by_row: dict[int, list[dict]] | None = None,
-    header_rows: set[int] | None = None,
-    roles: dict[int, str | None] | None = None,
+    excluded_cols: set[int],
 ) -> tuple[str | None, int, dict | None, set[int]]:
     """Text left of the period axis when the label span is empty."""
     if not period_cols:
         return None, 0, None, set()
     left_edge = min(period_cols)
     columns = sorted(
-        {int(cell["col"]) for cell in row_cells if int(cell["col"]) < left_edge}
+        {int(cell["col"]) for cell in row_cells if int(cell["col"]) < left_edge} - excluded_cols
     )
-    if by_row is not None and header_rows:
-        known = roles if roles is not None else {}
-        columns = [
-            col
-            for col in columns
-            if _column_role(by_row, header_rows, col, date1904, known)
-            not in _NAME_COLUMN_SKIP
-        ]
     return _composed_label(
         row_cells,
         columns,
@@ -1150,7 +1152,7 @@ def _composed_label(
     not jump to a nearer column.
     """
     pieces: list[tuple[str, dict, int]] = []
-    seen: set[str] = set()
+    piece_cols: dict[str, list[int]] = {}
     for depth, col in enumerate(columns):
         cell = _cell_at(row_cells, col)
         if cell is None or (cell.get("hidden") and not include_hidden):
@@ -1159,9 +1161,10 @@ def _composed_label(
         if text is None:
             continue
         key = text.casefold()
-        if key in seen:
+        if key in piece_cols:
+            piece_cols[key].append(col)
             continue
-        seen.add(key)
+        piece_cols[key] = [col]
         pieces.append((text, cell, depth))
     if not pieces:
         return None, 0, None, set()
@@ -1180,7 +1183,7 @@ def _composed_label(
     anchor = int(cell["col"])
     if span and anchor in span:
         depth = span.index(anchor)
-    name_cols = {int(item[1]["col"]) for item in chosen}
+    name_cols = {col for text, _cell, _depth in chosen for col in piece_cols[text.casefold()]}
     return label, depth, cell, name_cols
 
 

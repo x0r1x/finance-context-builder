@@ -23,6 +23,7 @@ from finance_context.layout.periods import classify_header
 from finance_context.layout.resolve import project_axis
 from finance_context.layout.rows import (
     _band_title,
+    _column_headers,
     _data_rows,
     _is_banner_gap,
     _is_empty_row,
@@ -168,19 +169,23 @@ def _blocks_indexed(
     bodies = _assign_overlapping_rows(raw_bodies, groups, group_cols, by_row, date1904)
     for index, group in enumerate(groups):
         band_rows = group[0][0]
-        header_rows.update(band_rows)
         group_axes = [axis for _, axis in group]
         axes.extend(group_axes)
         body_rows = bodies[index]
         period_cols = group_cols[index]
+        reveal_rows = {row_n for row_n, owner in title_owner.items() if owner == index}
+        table_headers, column_roles = _column_headers(
+            by_row, band_rows, reveal_rows, period_cols, date1904
+        )
+        header_rows.update(table_headers)
         label_col, span = _label_span(
             by_row,
             body_rows,
-            set(band_rows),
+            table_headers,
             period_cols,
             date1904,
+            column_roles=column_roles,
         )
-        reveal_rows = {row_n for row_n, owner in title_owner.items() if owner == index}
         axis = group_axes[0]
         # Only the row whose year filled these quarter keys. Another 2024
         # below that banner is a value.
@@ -190,7 +195,7 @@ def _blocks_indexed(
         data_rows = _data_rows(
             by_row,
             body_rows,
-            set(band_rows),
+            table_headers,
             span,
             date1904,
             period_cols,
@@ -198,6 +203,7 @@ def _blocks_indexed(
             reveal_rows=reveal_rows,
             summary_below=summary_below,
             hidden_row_ids=hidden_row_ids,
+            column_roles=column_roles,
         )
         data_rows, carved = carve_params_regions(
             sheet, data_rows, by_row, date1904, period_cols, label_col
