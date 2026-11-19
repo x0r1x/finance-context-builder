@@ -622,6 +622,60 @@ def test_session_marker_failure_restores_the_shared_marker(
     ] == b"session:new\n"
 
 
+def test_unverified_rollback_stays_local_until_a_verified_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    book = tmp_path / "shared/books" / _JOB
+    dest = tmp_path / "sessions/local/jobs" / _JOB
+    _fill(book, dest)
+    settings, store = _minio(data_dir=tmp_path), _MemoryStore()
+    meta = dest / "meta/meta.json"
+    meta.write_text(json.dumps({"generation": 4, "status": "succeeded"}), encoding="utf-8")
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    record_published_generation(dest)
+    previous_session = store.get(_marker_url(session=True))
+    local = dest / "context/context.json"
+    local.write_bytes(b"current context")
+    (book / "source/source.xlsx").write_bytes(b"current source")
+    original_put = store.put
+
+    def lost_acknowledgement(path: Path, url: str) -> None:
+        if url == _marker_url(session=True):
+            if path.read_bytes() == previous_session:
+                raise OSError("rollback denied")
+            original_put(path, url)
+            raise TimeoutError("timeout after writing marker")
+        original_put(path, url)
+
+    monkeypatch.setattr(store, "put", lost_acknowledgement)
+    warning = export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
+    assert warning == "publication_uncertain"
+    assert store.get(_marker_url(session=True)) != previous_session
+    assert "publication_uncertain" in json.loads(meta.read_bytes())["warnings"]
+    assert publish_generation_pending(dest)
+    assert any(record.levelno >= logging.ERROR for record in caplog.records)
+    monkeypatch.setattr("finance_context.store.duckdb_io.read_blob_bytes", _memory_read(store))
+    _serve_memory(monkeypatch, store)
+    assert _body(read_published_file(settings, local, _JOB, "context/context.json")) == (
+        b"current context"
+    )
+
+    monkeypatch.setattr(store, "put", original_put)
+    store.fail_on = "source/source.xlsx"
+    warning = export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store)
+    assert warning == "publication_uncertain"
+    assert publish_generation_pending(dest)
+
+    store.fail_on = None
+    assert export_succeeded_book(settings, job_id=_JOB, book=book, dest=dest, store=store) is None
+    record_published_generation(dest)
+    assert not publish_generation_pending(dest)
+    session = _stored_marker(store, session=True)
+    assert session["shared"] == _stored_marker(store)
+    published_meta = json.loads(store.get(_bucket(_listed(session, "meta/meta.json"))))
+    assert "publication_uncertain" not in published_meta["warnings"]
+
+
 def test_first_session_marker_failure_removes_new_shared_marker(tmp_path: Path) -> None:
     book, dest = tmp_path / "book", tmp_path / "dest"
     _fill(book, dest)

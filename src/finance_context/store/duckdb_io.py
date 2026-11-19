@@ -51,6 +51,8 @@ _SESSION = (
     "meta/meta.json",
 )
 _EXPORT_WARNING = "minio export failed"
+_PUBLICATION_UNCERTAIN = "publication_uncertain"
+_EXPORT_WARNINGS = frozenset({_EXPORT_WARNING, _PUBLICATION_UNCERTAIN})
 # One part. A large context.json stays out of the buffer manager.
 _UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 _HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\b")
@@ -682,14 +684,25 @@ def _local_book_complete(settings: Settings, job_id: str, dest: Path) -> bool:
 
 def publish_generation_pending(dest: Path) -> bool:
     """True when this session's meta generation is not the one last published."""
-    meta_path = dest / "meta" / "meta.json"
+    stored = _export_meta(dest)
+    if _publication_uncertain(stored):
+        return True
+    return "generation" in stored and stored.get("minio_published_generation") != stored.get(
+        "generation"
+    )
+
+
+def _export_meta(dest: Path) -> dict:
     try:
-        stored = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(stored, dict) or "generation" not in stored:
-        return False
-    return stored.get("minio_published_generation") != stored.get("generation")
+        stored = json.loads((dest / "meta" / "meta.json").read_bytes())
+    except (OSError, ValueError):
+        return {}
+    return stored if isinstance(stored, dict) else {}
+
+
+def _publication_uncertain(stored: dict) -> bool:
+    warnings = stored.get("warnings")
+    return isinstance(warnings, list) and _PUBLICATION_UNCERTAIN in warnings
 
 
 def record_published_generation(dest: Path) -> None:
@@ -700,7 +713,7 @@ def record_published_generation(dest: Path) -> None:
         generation = stored.get("generation")
         warnings = stored.get("warnings")
         items = list(warnings) if isinstance(warnings, list) else []
-        cleaned = [item for item in items if item != _EXPORT_WARNING]
+        cleaned = [item for item in items if not _is_export_warning(item)]
         published = (
             generation is not None and stored.get("minio_published_generation") == generation
         )
@@ -817,7 +830,14 @@ def export_succeeded_book(
         return None
     with _publish_lock(book / ".minio-publish.lock"), tempfile.TemporaryDirectory() as temp:
         meta = _published_meta(dest, Path(temp))
-        return _export_body(settings, job_id=job_id, book=book, dest=dest, store=store, meta=meta)
+        warning = _export_body(
+            settings, job_id=job_id, book=book, dest=dest, store=store, meta=meta
+        )
+        if warning and _publication_uncertain(_export_meta(dest)):
+            warning = _PUBLICATION_UNCERTAIN
+        if warning == _PUBLICATION_UNCERTAIN:
+            _set_export_warning(dest, warning)
+        return warning
 
 
 def _published_meta(dest: Path, scratch: Path) -> Path:
@@ -830,12 +850,12 @@ def _published_meta(dest: Path, scratch: Path) -> Path:
         return path
     warning = payload.get("warnings")
     generation = payload.get("generation")
-    if generation is None and not (isinstance(warning, list) and _EXPORT_WARNING in warning):
+    if generation is None and not (isinstance(warning, list) and _has_export_warning(warning)):
         return path
     if generation is not None:
         payload["minio_published_generation"] = generation
     if isinstance(warning, list):
-        payload["warnings"] = [item for item in warning if item != _EXPORT_WARNING]
+        payload["warnings"] = [item for item in warning if not _is_export_warning(item)]
     prepared = scratch / "meta.json"
     prepared.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
     return prepared
@@ -880,7 +900,7 @@ def _export_body(
     warning: str | None = None
     failing: str | None = "_complete.json"
     ready = 0
-    replaced: list[tuple[str, bytes | None]] = []
+    replaced: list[tuple[str, bytes | None, str]] = []
     try:
         plans: dict[bool, _MarkerPlan] = {}
         for session in (False, True):
@@ -946,7 +966,7 @@ def _export_body(
                 and json.loads(previous).get("shared") == shared
             ):
                 continue
-            replaced.append((url, previous))
+            replaced.append((url, previous, "session" if session else "shared"))
 
             def publish(plan: _MarkerPlan = plan, session: bool = session) -> None:
                 _put_marker(
@@ -961,19 +981,18 @@ def _export_body(
             _call_with_retry(publish)
         failing = None
     except Exception as exc:
-        for url, previous in reversed(replaced):
-            try:
-                if previous is None:
-                    try:
-                        _call_with_retry(lambda url=url: target.delete(url))
-                    except FileNotFoundError:
-                        pass
-                else:
-                    _call_with_retry(
-                        lambda url=url, previous=previous: _put_bytes(target, url, previous)
-                    )
-            except Exception:
-                _LOGGER.warning("minio export failed to restore _complete.json")
+        rollback_failed = False
+        for url, previous, marker in reversed(replaced):
+            if not _restore_marker(target, url, previous):
+                rollback_failed = True
+                log_event(
+                    _LOGGER,
+                    logging.ERROR,
+                    "export_rollback_failed",
+                    "MinIO marker rollback could not be verified",
+                    job_id=job_id,
+                    marker=marker,
+                )
         detail = _s3_failure(exc)[1]
         local_bytes = 0
         if failing is not None and failing != "_complete.json":
@@ -994,7 +1013,7 @@ def _export_body(
         )
         # Restore mutable pointers where possible. Session readers can use the
         # shared snapshot embedded in their marker independently of that rollback.
-        warning = _EXPORT_WARNING
+        warning = _PUBLICATION_UNCERTAIN if rollback_failed else _EXPORT_WARNING
     log_event(
         _LOGGER,
         logging.INFO,
@@ -1128,13 +1147,16 @@ def _export_warning_recorded(local: Path, relative: str) -> bool:
     parts = Path(relative).parts
     if not parts:
         return False
-    meta_path = local.parents[len(parts) - 1] / "meta" / "meta.json"
-    try:
-        stored = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    warnings = stored.get("warnings") if isinstance(stored, dict) else None
-    return isinstance(warnings, list) and _EXPORT_WARNING in warnings
+    warnings = _export_meta(local.parents[len(parts) - 1]).get("warnings")
+    return isinstance(warnings, list) and _has_export_warning(warnings)
+
+
+def _has_export_warning(warnings: list) -> bool:
+    return any(_is_export_warning(item) for item in warnings)
+
+
+def _is_export_warning(item: object) -> bool:
+    return isinstance(item, str) and item in _EXPORT_WARNINGS
 
 
 class DuckDBObjectStore:
@@ -1331,6 +1353,34 @@ def _mark_published_key(
     return True
 
 
+def _restore_marker(store: ObjectStore, url: str, previous: bytes | None) -> bool:
+    def current() -> bytes | None:
+        try:
+            return _call_with_retry(lambda: store.get(url))
+        except Exception as exc:
+            if _is_missing_object(exc):
+                return None
+            raise
+
+    try:
+        if current() == previous:
+            return True
+    except Exception:
+        pass
+    try:
+        if previous is None:
+            _call_with_retry(lambda: store.delete(url))
+        else:
+            _call_with_retry(lambda: _put_bytes(store, url, previous))
+    except Exception:
+        # A write can succeed even if its acknowledgement is lost.
+        pass
+    try:
+        return current() == previous
+    except Exception:
+        return False
+
+
 def _put_bytes(store: ObjectStore, url: str, payload: bytes) -> None:
     with tempfile.NamedTemporaryFile(prefix=".complete.", suffix=".json") as handle:
         handle.write(payload)
@@ -1356,14 +1406,10 @@ def _put_marker(
     if shared is not None:
         body["shared"] = shared
     payload = (json.dumps(body, indent=2) + "\n").encode("utf-8")
-    with tempfile.NamedTemporaryFile(prefix=".complete.", suffix=".json") as handle:
-        handle.write(payload)
-        handle.flush()
-        path = Path(handle.name)
-        url = object_url(bucket, key)
-        store.put(path, url)
-        if store.size(url) != path.stat().st_size:
-            raise OSError(f"size mismatch for {url}")
+    url = object_url(bucket, key)
+    _put_bytes(store, url, payload)
+    if store.get(url) != payload:
+        raise OSError("MinIO marker read-back mismatch")
 
 
 # Image build installs httpfs here. The process only loads that file.
