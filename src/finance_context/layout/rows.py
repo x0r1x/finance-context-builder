@@ -69,6 +69,17 @@ _SCENARIO_LABEL = re.compile(
 _PLACEHOLDER_LABEL = re.compile(r"^(spare|none)$", re.IGNORECASE)
 # A dash typed in place of a value: `-`, `–`, `—`.
 _DASH = re.compile(r"\s*[-\u2013\u2014]\s*")
+# Cached formula errors are not names. The formula text itself never is.
+_EXCEL_ERROR = re.compile(
+    r"^#(?:NULL!|DIV/0!|VALUE!|REF!|NAME\?|NUM!|N/A|GETTING_DATA)$",
+    re.IGNORECASE,
+)
+# A marker beside a real name is not part of that name. Alone, it still is.
+_SERVICE_MARK = re.compile(
+    r"^(?:факт|план|budget|forecast|actual|base(?:\s+case)?)$",
+    re.IGNORECASE,
+)
+_TOTAL_LABEL = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
 
 
 _RELATIVE_LABEL = re.compile(
@@ -556,6 +567,9 @@ def _data_rows(
     hidden_row_ids: set[int] | None = None,
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
+    extra_names = _extra_name_columns(
+        by_row, band_rows, header_rows, label_span, period_cols, date1904
+    )
     out: list[LayoutRow] = []
     # Non-unit rows, indents strictly increasing. The nearest shallower row is
     # the top of this stack, so a flat table does not rescan every earlier row.
@@ -572,8 +586,12 @@ def _data_rows(
         reveal = row_n in revealed or _row_all_hidden(
             row_n, by_row[row_n], hidden_row_ids
         )
-        label, depth, label_cell = _row_span_label(
-            by_row[row_n], label_span, date1904, include_hidden=reveal
+        label, depth, label_cell = _composed_label(
+            by_row[row_n],
+            _name_columns(label_span, extra_names, by_row[row_n]),
+            date1904,
+            include_hidden=reveal,
+            span=label_span,
         )
         if label is None or label_cell is None:
             label, depth, label_cell = _left_of_axis_label(
@@ -625,8 +643,7 @@ def _data_rows(
         # statement (`Balance Sheet`) and gold cannot tell Current from Non-current.
         if (
             section_stack
-            and label.strip().casefold()
-            in {"total", "subtotal", "sub total", "sum", "итого", "всего"}
+            and label.strip().casefold() in _TOTAL_LABEL
             and (parent_row is None or parent_row in {item.row for item in section_stack})
         ):
             parent_row = section_stack[-1].row
@@ -658,9 +675,110 @@ def _data_rows(
             parent_stack.append(item)
         if kind == "abstract" and not is_unit_text(label):
             section_stack.append(item)
-    if any(level > 0 for level in outlines):
-        _apply_outline_parents(out, outlines, summary_below)
+    _rewire_parents(out, outlines, summary_below, seed)
     return out
+
+
+def _rewire_parents(
+    rows: list[LayoutRow],
+    outlines: list[int],
+    summary_below: bool,
+    seed: LayoutRow | None = None,
+) -> None:
+    """Parents are section headers. A valued row is not one, and neither is a bare «Прочие».
+
+    The first pass classifies rows and may name a fact as a parent. This pass
+    writes ``section_path`` and ``parent_row`` again from structural headers only.
+    """
+    deeper = _deeper_follower(rows, outlines)
+    structural = [
+        _is_structural_header(row, has_deeper=deeper[index])
+        for index, row in enumerate(rows)
+    ]
+    section_stack: list[int] = []
+    parent_stack: list[int] = []
+    seed_on = seed is not None
+    for index, row in enumerate(rows):
+        indent = row.indent
+        if is_unit_text(row.label):
+            row.section_path = [
+                *( [seed.label] if seed_on and seed is not None else [] ),
+                *[rows[item].label for item in section_stack],
+            ]
+            row.parent_row = None
+            continue
+        if seed_on and seed is not None:
+            drops = seed.indent >= indent if structural[index] else seed.indent > indent
+            if drops:
+                seed_on = False
+        if structural[index]:
+            while section_stack and rows[section_stack[-1]].indent >= indent:
+                section_stack.pop()
+        else:
+            while section_stack and rows[section_stack[-1]].indent > indent:
+                section_stack.pop()
+        row.section_path = [
+            *( [seed.label] if seed_on and seed is not None else [] ),
+            *[rows[item].label for item in section_stack],
+        ]
+        parent_row = _stack_parent(rows, parent_stack, indent)
+        if parent_row is None and row.kind != "abstract":
+            if section_stack:
+                parent_row = rows[section_stack[-1]].row
+            elif seed_on and seed is not None:
+                parent_row = seed.row
+        if (
+            (section_stack or (seed_on and seed is not None))
+            and row.label.strip().casefold() in _TOTAL_LABEL
+            and (
+                parent_row is None
+                or parent_row in {rows[item].row for item in section_stack}
+                or (seed is not None and parent_row == seed.row)
+            )
+        ):
+            if section_stack:
+                parent_row = rows[section_stack[-1]].row
+            elif seed is not None:
+                parent_row = seed.row
+        row.parent_row = parent_row
+        if not structural[index]:
+            continue
+        while parent_stack and rows[parent_stack[-1]].indent >= indent:
+            parent_stack.pop()
+        parent_stack.append(index)
+        section_stack.append(index)
+    if any(level > 0 for level in outlines):
+        _apply_outline_parents(rows, outlines, summary_below, structural)
+
+
+def _deeper_follower(rows: list[LayoutRow], outlines: list[int]) -> list[bool]:
+    """A later row nested by indent or by a deeper Excel outline."""
+    found: list[bool] = []
+    for index, row in enumerate(rows):
+        deeper = False
+        level = outlines[index] if index < len(outlines) else 0
+        for nxt, nxt_level in zip(rows[index + 1 :], outlines[index + 1 :], strict=False):
+            if nxt.indent <= row.indent and nxt_level <= level:
+                break
+            deeper = True
+            break
+        found.append(deeper)
+    return found
+
+
+def _is_structural_header(row: LayoutRow, *, has_deeper: bool) -> bool:
+    if row.kind != "abstract" or is_unit_text(row.label):
+        return False
+    if row.label.strip().casefold() == "прочие" and not has_deeper:
+        return False
+    return True
+
+
+def _stack_parent(rows: list[LayoutRow], stack: list[int], indent: int) -> int | None:
+    for index in reversed(stack):
+        if rows[index].indent < indent:
+            return rows[index].row
+    return None
 
 
 def _indent_parent(stack: list[LayoutRow], indent: int) -> int | None:
@@ -691,7 +809,10 @@ def _nonneg_int(value: object) -> int:
 
 
 def _apply_outline_parents(
-    rows: list[LayoutRow], levels: list[int], summary_below: bool
+    rows: list[LayoutRow],
+    levels: list[int],
+    summary_below: bool,
+    structural: list[bool] | None = None,
 ) -> None:
     """A nested outline level hangs off the summary row inside the group.
 
@@ -711,6 +832,8 @@ def _apply_outline_parents(
         parent = rows[parent_index]
         parent_level = levels[parent_index]
         if parent_level <= 0:
+            continue
+        if structural is not None and not structural[parent_index]:
             continue
         if row.parent_row is None:
             row.parent_row = parent.row
@@ -839,15 +962,71 @@ def _row_span_label(
     *,
     include_hidden: bool = False,
 ) -> tuple[str | None, int, dict | None]:
-    for depth, col in enumerate(label_span):
-        cell = _cell_at(row_cells, col)
-        if cell is None or (cell.get("hidden") and not include_hidden):
+    return _composed_label(
+        row_cells,
+        list(label_span),
+        date1904,
+        include_hidden=include_hidden,
+        span=label_span,
+    )
+
+
+def _name_columns(
+    label_span: list[int], extra: set[int], row_cells: list[dict]
+) -> list[int]:
+    """Span columns, plus a nearby per-row name that the span itself does not hold."""
+    present = {int(cell["col"]) for cell in row_cells}
+    return sorted(col for col in [*label_span, *extra] if col in present)
+
+
+def _extra_name_columns(
+    by_row: dict[int, list[dict]],
+    band_rows: list[int],
+    header_rows: set[int],
+    label_span: list[int],
+    period_cols: set[int],
+    date1904: bool,
+) -> set[int]:
+    """A name just to the right of the label span, when it is not one repeated note.
+
+    ``Коэффициент`` plus the indicator, and ``Приход`` beside a long banner, sit
+    here. A comment typed in every row, a year caption, and a far scenario
+    column do not.
+    """
+    if not period_cols or not label_span:
+        return set()
+    left = min(period_cols)
+    start = max(label_span) + 1
+    limit = max(label_span) + 4
+    body = 0
+    found: dict[int, list[str]] = defaultdict(list)
+    for row_n in band_rows:
+        if row_n in header_rows:
             continue
-        text = _text(cell, date1904)
-        if not text or _is_number(text) or _is_column_header_text(text):
-            continue
-        return text, depth, cell
-    return None, 0, None
+        body += 1
+        seen: set[int] = set()
+        for cell in by_row[row_n]:
+            col = int(cell["col"])
+            if col < start or col > limit or col >= left or col in period_cols or col in seen:
+                continue
+            if cell.get("hidden"):
+                continue
+            text = _label_piece(cell, date1904)
+            if text is None or _calendar_caption(text):
+                continue
+            seen.add(col)
+            found[col].append(text.strip().casefold())
+    extra: set[int] = set()
+    for col, values in found.items():
+        distinct = set(values)
+        if len(distinct) >= 2 or (len(distinct) == 1 and body <= 3 and len(values) == 1):
+            extra.add(col)
+    return extra
+
+
+def _calendar_caption(text: str) -> bool:
+    hit = classify_header(text)
+    return is_calendar_hit(hit)
 
 
 def _left_of_axis_label(
@@ -857,20 +1036,88 @@ def _left_of_axis_label(
     *,
     include_hidden: bool = False,
 ) -> tuple[str | None, int, dict | None]:
-    """First text left of the period axis when the label span is empty."""
+    """Text left of the period axis when the label span is empty."""
     if not period_cols:
         return None, 0, None
     left_edge = min(period_cols)
-    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
-        if cell.get("hidden") and not include_hidden:
+    columns = sorted(
+        {int(cell["col"]) for cell in row_cells if int(cell["col"]) < left_edge}
+    )
+    return _composed_label(
+        row_cells,
+        columns,
+        date1904,
+        include_hidden=include_hidden,
+        span=None,
+    )
+
+
+def _composed_label(
+    row_cells: list[dict],
+    columns: list[int],
+    date1904: bool,
+    *,
+    include_hidden: bool,
+    span: list[int] | None,
+) -> tuple[str | None, int, dict | None]:
+    """Join the useful name cells in ``columns``, left to right.
+
+    A formula contributes its cached text. An empty cache, an Excel error and a
+    numeric cache contribute nothing, and the formula string is never used.
+    Units, periods and a service mark beside a real name stay out. Repeated
+    text is kept once. The anchor cell is the leftmost piece, so indent does
+    not jump to a nearer column.
+    """
+    pieces: list[tuple[str, dict, int]] = []
+    seen: set[str] = set()
+    for depth, col in enumerate(columns):
+        cell = _cell_at(row_cells, col)
+        if cell is None or (cell.get("hidden") and not include_hidden):
             continue
-        if int(cell["col"]) >= left_edge:
-            break
+        text = _label_piece(cell, date1904)
+        if text is None:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        pieces.append((text, cell, depth))
+    if not pieces:
+        return None, 0, None
+    content = [
+        item
+        for item in pieces
+        if not is_unit_text(item[0]) and not _SERVICE_MARK.fullmatch(item[0].strip())
+    ]
+    units = [item for item in pieces if is_unit_text(item[0])]
+    chosen = content or units or pieces
+    anchor_text = chosen[0][0]
+    lead = anchor_text[: len(anchor_text) - len(anchor_text.lstrip(" \t"))]
+    body = " ".join(text.strip() for text, _cell, _depth in chosen)
+    label = f"{lead}{body}"
+    _text0, cell, depth = chosen[0]
+    anchor = int(cell["col"])
+    if span and anchor in span:
+        depth = span.index(anchor)
+    return label, depth, cell
+
+
+def _label_piece(cell: dict, date1904: bool) -> str | None:
+    formula = cell.get("formula_raw") or cell.get("formula_template")
+    cached = cell.get("cached_value")
+    if formula:
+        if cached is None or str(cached).strip() == "":
+            return None
         text = _text(cell, date1904)
-        if not text or _is_number(text) or _is_column_header_text(text):
-            continue
-        return text, 0, cell
-    return None, 0, None
+        if text is None or _EXCEL_ERROR.fullmatch(text.strip()):
+            return None
+        if _is_number(text):
+            return None
+    else:
+        text = _text(cell, date1904)
+    if not text or _is_number(text) or _is_column_header_text(text):
+        return None
+    return text
 
 
 def _is_column_header_text(text: str) -> bool:

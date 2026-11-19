@@ -203,10 +203,10 @@ def test_outline_indent_and_rurm_survive_parse_and_context(tmp_path: Path, dest:
     assert "style_indent" not in ir[0]
     layout = layout_workbook(dest)
     output = _parents(layout, "Output")
-    # Two spaces make CAPEX indent 2; IaaS has only alignment indent 1.
-    # Outline level 2 under level 1 still hangs IaaS off CAPEX.
-    assert output["IaaS CAPEX"] == "CAPEX"
-    assert output["DC CAPEX"] == "CAPEX"
+    # CAPEX carries period values, so it stays a line and does not parent the
+    # outline children. They hang off the section above it.
+    assert output["IaaS CAPEX"] == "CF from Investing Activities"
+    assert output["DC CAPEX"] == "CF from Investing Activities"
     assert output["CAPEX"] == "CF from Investing Activities"
     assert output["Sale / (Purchase) of assets (ex. VAT)"] == "CF from Investing Activities"
     rows = {
@@ -219,10 +219,11 @@ def test_outline_indent_and_rurm_survive_parse_and_context(tmp_path: Path, dest:
     assert rows["CAPEX"].indent == 2
     assert rows["IaaS CAPEX"].indent == 1
 
-    assert _parents(layout, "Style")["IaaS CAPEX"] == "CAPEX"
-    assert _parents(layout, "Below")["IaaS CAPEX"] == "CAPEX"
-    assert _parents(layout, "Below")["DC CAPEX"] == "CAPEX"
-    assert _parents(layout, "FormatPr")["IaaS CAPEX"] == "CAPEX"
+    # A numbered CAPEX line is not a section, on an indent or on an outline.
+    assert _parents(layout, "Style")["IaaS CAPEX"] == "CF from Investing Activities"
+    assert _parents(layout, "Below")["IaaS CAPEX"] is None
+    assert _parents(layout, "Below")["DC CAPEX"] is None
+    assert _parents(layout, "FormatPr")["IaaS CAPEX"] is None
     assert _parents(layout, "Cols")["Article"] == "Section"
     flat_parents = _parents(layout, "Flat")
     assert flat_parents["Uses of funds"] == "Cashflow Statement"
@@ -252,7 +253,7 @@ def test_outline_indent_and_rurm_survive_parse_and_context(tmp_path: Path, dest:
     assert "5000" in local.normalized_values
 
     iaas_row = lines[("Output", "IaaS CAPEX")]
-    assert iaas_row.parent_label == "CAPEX"
+    assert iaas_row.parent_label == "CF from Investing Activities"
     assert iaas_row.hints.scale == "m"
     assert iaas_row.scale_factor == 1_000_000
     assert "1817000000" in iaas_row.normalized_values
