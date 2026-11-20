@@ -89,13 +89,17 @@ def attach_stub_cells(
     tagged: list[RowCell] = []
     for cell in row_cells:
         col = int(cell["col"])
-        if col in named or col <= span_max or col >= left_edge or col in period_cols:
+        if col in named or col >= left_edge:
+            continue
+        if col in notes:
+            if _text(cell, date1904) or cell.get("formula_raw") or cell.get("formula_template"):
+                tagged.append(RowCell(col=col, role="note"))
+            continue
+        if col <= span_max:
             continue
         role = _stub_role(cell, row.row, date1904)
         if role is None:
             continue
-        if col in notes:
-            role = "note"
         header = None
         if role == "value" and by_row is not None and floor_row is not None:
             header = column_header_text(

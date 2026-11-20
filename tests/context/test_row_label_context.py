@@ -42,7 +42,9 @@ def test_prihod_keeps_its_name_and_its_period_values() -> None:
     assert rows[28].values == ["10", "11"]
 
 
-@pytest.mark.parametrize("caption", ["ОКОФ", "Код ОКОФ", "ОКОФ (код)"])
+@pytest.mark.parametrize(
+    "caption", ["ОКОФ", "Код ОКОФ", "ОКОФ (код)", "Основное средство.Код по ОКОФ"]
+)
 def test_okof_is_excluded_by_column_role_and_preserved_in_real_names(caption: str) -> None:
     sheet = "ОС_БГИ"
     cells = [
@@ -57,15 +59,66 @@ def test_okof_is_excluded_by_column_role_and_preserved_in_real_names(caption: st
         _c(sheet, "F10", "4"),
         _c(sheet, "G10", "5"),
         _c(sheet, "C11", "Насос ОКОФ 330.28.13"),
-        _c(sheet, "D11", "330.28.13.11"),
+        _c(sheet, "D11", "0330.28.13.11"),
         _c(sheet, "F11", "10"),
         _c(sheet, "G11", "12"),
     ]
     rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
     assert rows[10].label == "Генератор"
+    assert rows[10].values == ["4", "5"]
+    assert [(c.addr, c.role, c.cached_value) for c in rows[10].cells] == [
+        ("D10", "note", "330.28.29")
+    ]
     assert rows[11].label == "Насос ОКОФ 330.28.13"
     assert rows[11].label_path == ["Основное средство"]
     assert rows[11].values == ["10", "12"]
+    assert [(c.addr, c.role, c.cached_value) for c in rows[11].cells] == [
+        ("D11", "note", "0330.28.13.11")
+    ]
+
+
+def test_a_shallower_fact_closes_the_section_for_later_deeper_rows() -> None:
+    sheet = "CF"
+    cells = [
+        _c(sheet, "A1", "Статья"),
+        _c(sheet, "B1", "2024"),
+        _c(sheet, "C1", "2025"),
+        _c(sheet, "A2", "  Капитал"),
+        _c(sheet, "A3", "Итого"),
+        _c(sheet, "B3", "70"),
+        _c(sheet, "C3", "80"),
+        _c(sheet, "A4", "   Деталь"),
+        _c(sheet, "B4", "9"),
+        _c(sheet, "C4", "14"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[2].kind == "abstract"
+    assert rows[4].kind == "fact"
+    assert rows[4].parent_label is None
+    assert rows[4].label_path == []
+
+
+def test_a_blank_formula_in_a_label_column_preserves_the_section() -> None:
+    sheet = "CF"
+    cells = [
+        _c(sheet, "A1", "Статья"),
+        _c(sheet, "B1", "Показатель"),
+        _c(sheet, "C1", "2024"),
+        _c(sheet, "D1", "2025"),
+        _c(sheet, "A2", "Операционные"),
+        _c(sheet, "B2", None, formula="=A20"),
+        _c(sheet, "A3", "Выручка"),
+        _c(sheet, "C3", "10"),
+        _c(sheet, "D3", "12"),
+        _c(sheet, "A4", "Будущая выручка"),
+        _c(sheet, "C4", None, formula="=C3"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[2].kind == "abstract"
+    assert not rows[2].cells
+    assert rows[3].label_path == ["Операционные"]
+    assert rows[4].kind == "fact"
+    assert rows[4].value_statuses == ["empty", "empty"]
 
 
 def test_a_valued_profit_line_is_absent_from_the_following_label_path() -> None:

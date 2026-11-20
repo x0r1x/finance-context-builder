@@ -84,6 +84,7 @@ _EXCEL_ERROR = re.compile(
     re.IGNORECASE,
 )
 _NAME_COLUMN_SKIP = {"note", "unit", "value"}
+_OKOF_CODE_QUALIFIER = re.compile(r"(?:^|[.:;\n])\s*код\s+по\s+окоф\s*\.?\s*$", re.IGNORECASE)
 # A marker beside a real name is not part of that name. Alone, it still is.
 _SERVICE_MARK = re.compile(
     r"^(?:факт|план|budget|forecast|actual|base(?:\s+case)?)$",
@@ -587,6 +588,7 @@ def _data_rows(
     excluded_names = {col for col, role in roles.items() if role in _NAME_COLUMN_SKIP}
     unit_cols = {col for col, role in roles.items() if role == "unit"}
     note_cols = {col for col, role in roles.items() if role == "note"}
+    label_cols = {col for col, role in roles.items() if role == "label"}
     extra_names = _extra_name_columns(
         by_row, band_rows, header_rows, label_span, period_cols, date1904, roles
     )
@@ -627,6 +629,13 @@ def _data_rows(
                 label, depth, label_cell, name_cols = fallback
         if label is None or label_cell is None:
             continue
+        name_cols.update(
+            int(cell["col"])
+            for cell in by_row[row_n]
+            if int(cell["col"]) in label_cols
+            and (cell.get("formula_raw") or cell.get("formula_template"))
+            and (cell.get("cached_value") is None or not str(cell["cached_value"]).strip())
+        )
         indent = depth + _indent(label) + _style_indent(label_cell)
         outline = _outline_level(label_cell)
         check_row = bool(_CHECK.search(label))
@@ -734,7 +743,6 @@ def _rewire_parents(
         for index, row in enumerate(rows)
     ]
     section_stack: list[int] = []
-    parent_stack: list[int] = []
     seed_on = seed is not None
     for index, row in enumerate(rows):
         indent = row.indent
@@ -759,7 +767,7 @@ def _rewire_parents(
             *( [seed.label] if seed_on and seed is not None else [] ),
             *[rows[item].label for item in section_stack],
         ]
-        parent_row = _stack_parent(rows, parent_stack, indent)
+        parent_row = _stack_parent(rows, section_stack, indent)
         if parent_row is None and row.kind != "abstract":
             if section_stack:
                 parent_row = rows[section_stack[-1]].row
@@ -779,12 +787,8 @@ def _rewire_parents(
             elif seed is not None:
                 parent_row = seed.row
         row.parent_row = parent_row
-        if not structural[index]:
-            continue
-        while parent_stack and rows[parent_stack[-1]].indent >= indent:
-            parent_stack.pop()
-        parent_stack.append(index)
-        section_stack.append(index)
+        if structural[index]:
+            section_stack.append(index)
     if any(level > 0 for level in outlines):
         _apply_outline_parents(rows, outlines, summary_below, structural)
 
@@ -1117,6 +1121,8 @@ def _column_headers(
 
 
 def _caption_role(text: str) -> str | None:
+    if _OKOF_CODE_QUALIFIER.search(text):
+        return "note"
     caption = re.sub(r"[\W_]+", " ", text).strip()
     for role, words in (
         ("note", (*NOTE_WORDS, "прим", "окоф", "код окоф", "окоф код")),
