@@ -89,6 +89,7 @@ _SERVICE_MARK = re.compile(
     r"^(?:факт|план|budget|forecast|actual|base(?:\s+case)?)$",
     re.IGNORECASE,
 )
+_PER_BASIS_CAPTION = re.compile(r"\bв\s+пересч[её]те\s+на\s+\S.*:\s*$", re.IGNORECASE)
 _TOTAL_LABEL = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
 
 
@@ -612,8 +613,8 @@ def _data_rows(
             include_hidden=reveal,
             span=label_span,
         )
-        if label is None or label_cell is None:
-            label, depth, label_cell, name_cols = _left_of_axis_label(
+        if label is None or _PER_BASIS_CAPTION.search(label):
+            fallback = _left_of_axis_label(
                 by_row[row_n],
                 period_cols,
                 date1904,
@@ -621,6 +622,9 @@ def _data_rows(
                 excluded_cols=excluded_names,
                 unit_cols=unit_cols,
             )
+            fallback_label = fallback[0]
+            if label is None or (fallback_label and not _PER_BASIS_CAPTION.search(fallback_label)):
+                label, depth, label_cell, name_cols = fallback
         if label is None or label_cell is None:
             continue
         indent = depth + _indent(label) + _style_indent(label_cell)
@@ -1115,7 +1119,7 @@ def _column_headers(
 def _caption_role(text: str) -> str | None:
     caption = re.sub(r"[\W_]+", " ", text).strip()
     for role, words in (
-        ("note", (*NOTE_WORDS, "прим")),
+        ("note", (*NOTE_WORDS, "прим", "окоф", "код окоф", "окоф код")),
         ("unit", UNIT_WORDS),
         ("value", VALUE_WORDS),
         ("label", LABEL_WORDS),
@@ -1216,6 +1220,10 @@ def _composed_label(
         if not is_unit_text(item[0]) and not _SERVICE_MARK.fullmatch(item[0].strip())
     ]
     names = [item for item in content if not is_entry_instruction(item[0])]
+    if len(names) > 1 and not _PER_BASIS_CAPTION.search(names[-1][0]):
+        # A basis caption can introduce several lines or sit beside one of
+        # them. When the same row has a name to its right, use that name.
+        names = [item for item in names if not _PER_BASIS_CAPTION.search(item[0])]
     units = [item for item in pieces if is_unit_text(item[0])]
     chosen = names or content or units or pieces
     anchor_text = chosen[0][0]

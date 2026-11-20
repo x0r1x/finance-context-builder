@@ -20,8 +20,10 @@ def _publish(sheet: str, cells: list[dict]):
 
 def test_prihod_keeps_its_name_and_its_period_values() -> None:
     banner = "Затраты в пересчете на 1 кв. м общей пл.:"
+    section = "Планируемые затраты по проекту"
     cells = [_c("Затраты", "H4", "2020-06"), _c("Затраты", "I4", "2020-07")]
     cells += [
+        _c("Затраты", "A6", section),
         _c("Затраты", "F28", "Расход"),
         _c("Затраты", "H28", "10"),
         _c("Затраты", "I28", "11"),
@@ -32,11 +34,38 @@ def test_prihod_keeps_its_name_and_its_period_values() -> None:
     ]
     doc = _publish("Затраты", cells)
     rows = {row.row: row for block in doc.blocks for row in block.rows}
-    assert rows[29].label == f"{banner} Приход"
-    assert rows[29].label_path == []
+    assert rows[29].label == "Приход"
+    assert rows[29].label_path == [section]
+    assert rows[29].parent_label == section
     assert rows[29].values == ["12", "13"]
     assert rows[28].label == "Расход"
     assert rows[28].values == ["10", "11"]
+
+
+@pytest.mark.parametrize("caption", ["ОКОФ", "Код ОКОФ", "ОКОФ (код)"])
+def test_okof_is_excluded_by_column_role_and_preserved_in_real_names(caption: str) -> None:
+    sheet = "ОС_БГИ"
+    cells = [
+        _c(sheet, "A6", "Подразделение"),
+        _c(sheet, "C6", "Наименование"),
+        _c(sheet, "D6", caption),
+        _c(sheet, "F7", "2024"),
+        _c(sheet, "G7", "2025"),
+        _c(sheet, "A8", "Основное средство"),
+        _c(sheet, "C10", "Генератор"),
+        _c(sheet, "D10", "330.28.29"),
+        _c(sheet, "F10", "4"),
+        _c(sheet, "G10", "5"),
+        _c(sheet, "C11", "Насос ОКОФ 330.28.13"),
+        _c(sheet, "D11", "330.28.13.11"),
+        _c(sheet, "F11", "10"),
+        _c(sheet, "G11", "12"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[10].label == "Генератор"
+    assert rows[11].label == "Насос ОКОФ 330.28.13"
+    assert rows[11].label_path == ["Основное средство"]
+    assert rows[11].values == ["10", "12"]
 
 
 def test_a_valued_profit_line_is_absent_from_the_following_label_path() -> None:

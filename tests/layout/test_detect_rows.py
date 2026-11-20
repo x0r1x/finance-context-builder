@@ -836,10 +836,13 @@ def test_far_left_caption_does_not_hide_the_name_beside_the_values() -> None:
         _c("Затраты", "F29", "Приход"),
         _c("Затраты", "H29", "12"),
         _c("Затраты", "I29", "13"),
+        _c("Затраты", "B31", banner),
+        _c("Затраты", "H31", "14"),
     ]
     rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
     assert rows[28].label == "Расход"
-    assert rows[29].label == f"{banner} Приход"
+    assert rows[29].label == "Приход"
+    assert rows[31].label == banner
 
 
 def test_formula_cache_text_is_the_label_and_other_caches_are_not() -> None:
