@@ -670,6 +670,9 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
         j = i + 1
         band_quarters = _is_quarter_token_row(by_row[row_n], date1904)
         band_years = _distinct_year_ruler(by_row[row_n], date1904)
+        # Period columns of the rows already in the band. Later rows are not
+        # scanned again to rediscover them.
+        calendar_cols = _band_calendar_cols(band, by_row, date1904)
         while j < len(rows):
             nxt = rows[j]
             cells = by_row[nxt]
@@ -684,7 +687,12 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
             year_ruler = _distinct_year_ruler(cells, date1904)
             if (band_quarters and year_ruler) or (band_years and quarter_tokens):
                 break
-            if _is_flag_bits_row(cells, _band_calendar_cols(band, by_row, date1904), date1904):
+            if _is_flag_bits_row(cells, calendar_cols, date1904):
+                break
+            # ``Остаток на начало периода`` is a bounds layer, so ``_is_data_row``
+            # is false, but numeric caches in the axis columns are values.
+            # A formula cache of quarter text has no number and can still join.
+            if _labeled_numeric_under_axis(cells, calendar_cols, date1904):
                 break
             new_layers = _row_layers(cells, date1904)
             if not new_layers:
@@ -698,6 +706,7 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
                 break
             layers |= new_layers
             band.append(nxt)
+            calendar_cols.update(_period_columns(cells, date1904))
             j += 1
         bands.append(band)
         i = j if j > i else i + 1
@@ -719,6 +728,55 @@ def _band_covers_years(
         return False
     covered = {int(cell["col"]) for row in band for cell in by_row.get(row, [])}
     return bool(years & covered)
+
+
+def _labeled_numeric_under_axis(
+    row_cells: list[dict], calendar_cols: set[int], date1904: bool
+) -> bool:
+    """A line name left of this axis and ordinary numbers in its columns.
+
+    The number may be a formula cache. A cache that reads as a period label
+    is a header cell, so a formula quarter row still extends the band. ``3``
+    under a ``Квартал`` label is that kind of header, as is ``1``–``12`` under
+    a month label. A bare year next to a line name is a value; the same years
+    with no name stay a header. A date-formatted serial displays as a date,
+    not as one of these numbers.
+    """
+    if not calendar_cols:
+        return False
+    label = _row_label(row_cells, date1904)
+    allow_q = is_quarter_label(label)
+    allow_m = is_month_label(label)
+    left = min(calendar_cols)
+    has_label = False
+    ordinary = 0
+    period_text = 0
+    for cell in row_cells:
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        col = int(cell["col"])
+        if col < left:
+            if _is_number(text):
+                continue
+            atom = classify_atom(text)
+            if atom is None or atom.kind in {"marker", "noise"}:
+                has_label = True
+            continue
+        if col not in calendar_cols:
+            continue
+        atom = classify_atom(
+            text, allow_quarter_num=allow_q, allow_month_num=allow_m
+        )
+        if atom is not None and atom.kind in {"quarter_token", "month_num"}:
+            period_text += 1
+            continue
+        if _is_number(text):
+            ordinary += 1
+            continue
+        if atom is not None and atom.kind not in {"marker", "noise"}:
+            period_text += 1
+    return has_label and ordinary > 0 and period_text == 0
 
 
 def _is_flag_bits_row(
@@ -760,6 +818,17 @@ def _cell_iso_date(cell: dict | None, date1904: bool) -> str | None:
     return "-".join(match.groups()) if match else None
 
 
+def _period_columns(row_cells: list[dict], date1904: bool) -> set[int]:
+    cols: set[int] = set()
+    for cell in row_cells:
+        atom = classify_atom(_text(cell, date1904))
+        if atom is None or atom.kind in {"marker", "noise"}:
+            continue
+        if atom.kind == "full" or atom.year or atom.quarter or atom.half or atom.month:
+            cols.add(int(cell["col"]))
+    return cols
+
+
 def _band_calendar_cols(
     band_rows: list[int],
     by_row: dict[int, list[dict]],
@@ -767,12 +836,7 @@ def _band_calendar_cols(
 ) -> set[int]:
     cols: set[int] = set()
     for row_n in band_rows:
-        for cell in by_row[row_n]:
-            atom = classify_atom(_text(cell, date1904))
-            if atom is None or atom.kind in {"marker", "noise"}:
-                continue
-            if atom.kind == "full" or atom.year or atom.quarter or atom.half or atom.month:
-                cols.add(int(cell["col"]))
+        cols.update(_period_columns(by_row[row_n], date1904))
     return cols
 
 
