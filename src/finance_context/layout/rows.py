@@ -17,6 +17,7 @@ from finance_context.layout.format_words import (
     UNIT_WORDS,
     VALUE_WORDS,
     accepts,
+    is_entry_instruction,
 )
 from finance_context.layout.models import LayoutRow
 from finance_context.layout.params import attach_stub_cells
@@ -37,7 +38,7 @@ from finance_context.layout.periods import (
     is_start_period_label,
     normalize_header,
 )
-from finance_context.layout.units import is_unit_text
+from finance_context.layout.units import annotated_unit_caption, is_unit_text
 
 # `должен` is a whole word: the bare stem also hits `задолженность`.
 # `проверк` is a substring (`Перепроверка` has no such collision).
@@ -545,8 +546,7 @@ def _label_span(
             col = int(cell["col"])
             if col <= col_floor or col >= left_edge or col in period_cols:
                 continue
-            text = _text(cell, date1904)
-            if not text or _is_number(text) or _is_column_header_text(text):
+            if _label_piece(cell, date1904) is None:
                 continue
             if roles.get(col) in _NAME_COLUMN_SKIP:
                 continue
@@ -584,6 +584,7 @@ def _data_rows(
     revealed = reveal_rows or set()
     roles = column_roles or {}
     excluded_names = {col for col, role in roles.items() if role in _NAME_COLUMN_SKIP}
+    unit_cols = {col for col, role in roles.items() if role == "unit"}
     note_cols = {col for col, role in roles.items() if role == "note"}
     extra_names = _extra_name_columns(
         by_row, band_rows, header_rows, label_span, period_cols, date1904, roles
@@ -618,6 +619,7 @@ def _data_rows(
                 date1904,
                 include_hidden=reveal,
                 excluded_cols=excluded_names,
+                unit_cols=unit_cols,
             )
         if label is None or label_cell is None:
             continue
@@ -642,7 +644,13 @@ def _data_rows(
         )
         if kind == "abstract" and (
             _has_scalar_value(probe, by_row[row_n], date1904)
-            or _is_blank_data_row(by_row[row_n], name_cols | note_cols, period_cols, date1904)
+            or _is_blank_data_row(
+                by_row[row_n],
+                name_cols | note_cols,
+                period_cols,
+                date1904,
+                has_unit=any(cell.role == "unit" for cell in probe.cells),
+            )
         ):
             in_check = any(_CHECK.search(item.label) for item in section_stack) or any(
                 prev.check_row for prev in _ancestors(out, indent)
@@ -967,6 +975,8 @@ def _is_blank_data_row(
     non_value_cols: set[int],
     period_cols: set[int],
     date1904: bool,
+    *,
+    has_unit: bool = False,
 ) -> bool:
     """A data line with nothing to show, not a section title.
 
@@ -980,6 +990,10 @@ def _is_blank_data_row(
         if col in non_value_cols:
             continue
         text = _text(cell, date1904) or ""
+        if is_entry_instruction(text):
+            if has_unit:
+                return True
+            continue
         if cell.get("formula_raw") and classify_atom(text) is None:
             return True
         if col in period_cols and _DASH.fullmatch(text):
@@ -1045,7 +1059,7 @@ def _extra_name_columns(
             if cell.get("hidden") or column_roles.get(col) in _NAME_COLUMN_SKIP:
                 continue
             text = _label_piece(cell, date1904)
-            if text is None or _calendar_caption(text):
+            if text is None or is_entry_instruction(text) or _calendar_caption(text):
                 continue
             seen.add(col)
             found[col].append(text.strip().casefold())
@@ -1118,6 +1132,7 @@ def _left_of_axis_label(
     *,
     include_hidden: bool = False,
     excluded_cols: set[int],
+    unit_cols: set[int],
 ) -> tuple[str | None, int, dict | None, set[int]]:
     """Text left of the period axis when the label span is empty."""
     if not period_cols:
@@ -1126,13 +1141,40 @@ def _left_of_axis_label(
     columns = sorted(
         {int(cell["col"]) for cell in row_cells if int(cell["col"]) < left_edge} - excluded_cols
     )
-    return _composed_label(
+    label = _composed_label(
         row_cells,
         columns,
         date1904,
         include_hidden=include_hidden,
         span=None,
     )
+    if label[0] is not None or not unit_cols:
+        return label
+
+    # A short continuation can put its names in the former unit column.
+    # Require a period value and a single name candidate in those columns.
+    candidates = [
+        (cell, text)
+        for cell in row_cells
+        if int(cell["col"]) in unit_cols
+        and (include_hidden or not cell.get("hidden"))
+        and (text := _label_piece(cell, date1904)) is not None
+        and not is_unit_text(text)
+        and not is_entry_instruction(text)
+        and not _SERVICE_MARK.fullmatch(text.strip())
+    ]
+    if len(candidates) == 1 and any(
+        int(cell["col"]) in period_cols
+        and (
+            cell.get("formula_raw")
+            or cell.get("formula_template")
+            or _is_number(_text(cell, date1904) or "")
+        )
+        for cell in row_cells
+    ):
+        cell, text = candidates[0]
+        return text, 0, cell, {int(cell["col"])}
+    return label
 
 
 def _composed_label(
@@ -1173,8 +1215,9 @@ def _composed_label(
         for item in pieces
         if not is_unit_text(item[0]) and not _SERVICE_MARK.fullmatch(item[0].strip())
     ]
+    names = [item for item in content if not is_entry_instruction(item[0])]
     units = [item for item in pieces if is_unit_text(item[0])]
-    chosen = content or units or pieces
+    chosen = names or content or units or pieces
     anchor_text = chosen[0][0]
     lead = anchor_text[: len(anchor_text) - len(anchor_text.lstrip(" \t"))]
     body = " ".join(text.strip() for text, _cell, _depth in chosen)
@@ -1200,7 +1243,12 @@ def _label_piece(cell: dict, date1904: bool) -> str | None:
             return None
     else:
         text = _text(cell, date1904)
-    if not text or _is_number(text) or _is_column_header_text(text):
+    if (
+        not text
+        or _is_number(text)
+        or annotated_unit_caption(text)
+        or _is_column_header_text(text)
+    ):
         return None
     return text
 

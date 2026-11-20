@@ -6,10 +6,10 @@ from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, in_grid, index_to_col, parse_addr
 from finance_context.layout.cells import LayoutCell, parse_number
-from finance_context.layout.format_words import header_role_map
+from finance_context.layout.format_words import header_role_map, is_entry_instruction
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text, period_like_header
-from finance_context.layout.units import is_unit_text
+from finance_context.layout.units import annotated_unit_caption, is_unit_text
 from finance_context.layout.units import unit_kind_from_text as unit_kind_from_text
 
 # "Parameter / Value / Units / Notes" and "Параметр / Значение / Ед. изм. / Примечание".
@@ -1160,8 +1160,10 @@ def _stub_role(cell: dict, row: int, date1904: bool) -> str | None:
     template = str(cell.get("formula_template") or "")
     if _is_same_row_total(formula, template, row):
         return "total"
-    if text and is_unit_text(text):
+    if text and (is_unit_text(text) or annotated_unit_caption(text)):
         return "unit"
+    if text and is_entry_instruction(text):
+        return "note"
     if text and len(text) <= 8 and not _is_number(text) and not formula:
         if any(ch in text for ch in "%£$€₽/"):
             return "unit"

@@ -129,6 +129,16 @@ _HEADER_ROLES: dict[str, tuple[str, ...]] = {
     "note": NOTE_WORDS,
 }
 
+_ENTRY_INSTRUCTION = re.compile(
+    r"^\s*(?:укажите|введите|заполните|скопируйте|скопировать)\s+", re.IGNORECASE
+)
+
+
+def is_entry_instruction(text: str) -> bool:
+    """Recognize directions for filling an input cell."""
+    return _ENTRY_INSTRUCTION.match(text) is not None
+
+
 QUARTER_WORDS = ("кв", "квартал", "quarter")
 HALF_WORDS = ("полугодие", "half", "пол")
 YEAR_WORDS = ("г", "гг", "год", "года", "году")

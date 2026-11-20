@@ -66,6 +66,15 @@ def is_unit_text(text: str | None) -> bool:
     return is_iso_unit_caption(caption)
 
 
+def annotated_unit_caption(text: str | None) -> str | None:
+    """Return the unit in a cell such as `тыс. руб. (указывается со знаком '+')`."""
+    prefix, marker, annotation = (text or "").strip().partition("(")
+    caption = prefix.strip()
+    if marker and annotation.endswith(")") and is_unit_text(caption):
+        return caption
+    return None
+
+
 def unit_kind_from_text(text: str | None) -> str | None:
     from finance_context.context.measure import currency_code_from_text, unit_caption
 
