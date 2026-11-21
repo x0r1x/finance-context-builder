@@ -228,3 +228,6 @@ out/
 resources/corpus/
 
 .grok
+
+# Supermemory project config (may hold an API key)
+.cursor/.supermemory/
