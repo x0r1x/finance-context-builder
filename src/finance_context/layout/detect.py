@@ -43,6 +43,7 @@ def detect_layout(
     hidden_rows: dict[str, set[int]] | None = None,
     summary_below: dict[str, bool] | None = None,
     defined_names: list | None = None,
+    name_headers: tuple[str, ...] | None = None,
 ) -> Layout:
     hidden = hidden_sheets or set()
     columns = hidden_columns or {}
@@ -70,6 +71,7 @@ def detect_layout(
             hidden_rows=hidden_rows,
             summary_below=below,
             defined_names=defined_names,
+            name_headers=name_headers,
         )
         for name in order
     ]
@@ -89,6 +91,7 @@ def _sheet_layout(
     hidden_rows: dict[str, set[int]] | None,
     summary_below: dict[str, bool],
     defined_names: list | None,
+    name_headers: tuple[str, ...] | None = None,
 ) -> SheetLayout:
     """Blocks for one sheet. The caller drops ``sheet_cells`` before the next sheet."""
     row_ids = None if hidden_rows is None else set(hidden_rows.get(name, ()))
@@ -101,6 +104,7 @@ def _sheet_layout(
         hidden_row_ids=row_ids,
         summary_below=summary_below.get(name, True),
         defined_names=defined_names,
+        name_headers=name_headers,
     )
     chart = chart_note(name)
     if chart:
@@ -119,6 +123,7 @@ def _blocks_for_sheet(
     hidden_row_ids: set[int] | None = None,
     summary_below: bool = True,
     defined_names: list | None = None,
+    name_headers: tuple[str, ...] | None = None,
 ) -> tuple[list[Block], list[TimeAxis], list[str]]:
     by_row: dict[int, list[dict]] = defaultdict(list)
     for cell in cells:
@@ -134,6 +139,7 @@ def _blocks_for_sheet(
             hidden_row_ids,
             summary_below,
             defined_names,
+            name_headers,
         )
     finally:
         clear_row_index()
@@ -148,6 +154,7 @@ def _blocks_indexed(
     hidden_row_ids: set[int] | None,
     summary_below: bool,
     defined_names: list | None,
+    name_headers: tuple[str, ...] | None = None,
 ) -> tuple[list[Block], list[TimeAxis], list[str]]:
     row_ids = sorted(by_row)
     found, axis_notes = _axis_candidates(sheet, by_row, date1904, hidden_cols)
@@ -179,6 +186,7 @@ def _blocks_indexed(
             set(band_rows),
             period_cols,
             date1904,
+            name_headers=name_headers,
         )
         reveal_rows = {row_n for row_n, owner in title_owner.items() if owner == index}
         axis = group_axes[0]
@@ -198,6 +206,7 @@ def _blocks_indexed(
             reveal_rows=reveal_rows,
             summary_below=summary_below,
             hidden_row_ids=hidden_row_ids,
+            name_headers=name_headers,
         )
         data_rows, carved = carve_params_regions(
             sheet, data_rows, by_row, date1904, period_cols, label_col
