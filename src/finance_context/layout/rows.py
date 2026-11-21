@@ -532,7 +532,10 @@ def _name_header_column(
     col_floor: int = 0,
     name_headers: tuple[str, ...] | None = None,
 ) -> int | None:
-    """Rightmost header left of the periods that names the row.
+    """Leftmost header left of the periods that names the row.
+
+    A translation column («Наименование по-англ.») matches the same prefix and
+    sits to the right. The row name is the first of those headers.
 
     ``name_headers`` replaces the default list. ``None`` keeps it. An empty
     tuple selects nothing, so the leftmost text column stays the label.
@@ -552,7 +555,7 @@ def _name_header_column(
             text = _text(cell, date1904)
             if text and _is_name_header(text, headers):
                 found.append(col)
-    return max(found) if found else None
+    return min(found) if found else None
 
 
 def _label_span(

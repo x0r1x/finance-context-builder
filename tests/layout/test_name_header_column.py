@@ -86,3 +86,27 @@ def test_profile_name_header_selects_that_column() -> None:
         "Debt Service",
     ]
     assert block.label_col == 2
+
+
+def test_a_translation_header_does_not_steal_the_name() -> None:
+    """«Наименование по-англ.» is also a name header. The row name is the left one."""
+    cells = [
+        _c("IS", "A1", "Наименование показателя"),
+        _c("IS", "B1", "Наименование по-англ."),
+        _c("IS", "C1", "2016"),
+        _c("IS", "D1", "2017"),
+        _c("IS", "A2", "Чистая прибыль"),
+        _c("IS", "B2", "Net income"),
+        _c("IS", "C2", "10"),
+        _c("IS", "D2", "11"),
+        _c("IS", "A3", "Операционная прибыль (убыток)"),
+        _c("IS", "B3", "Operating profit (loss)"),
+        _c("IS", "C3", "4"),
+        _c("IS", "D3", "5"),
+    ]
+    block = detect_layout(cells).sheets[0].blocks[0]
+    assert [row.label for row in block.rows] == [
+        "Чистая прибыль",
+        "Операционная прибыль (убыток)",
+    ]
+    assert block.label_col == 1
