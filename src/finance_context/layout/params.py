@@ -17,8 +17,17 @@ _PROSE_MIN = 80
 _MIN_VALUE_ROWS = 3
 _VALUE_SHARE = 0.6
 _NOTE_TEXT_MIN = 24
+# The whole caption must be one of these. "code" inside another phrase is not an index.
 _INDEX_HEADER = re.compile(
-    r"^(?:№(?:\s*п\s*/\s*п)?|#|no\.?|код|code)$", re.IGNORECASE
+    r"^(?:"
+    r"№(?:\s*п\s*/\s*п)?"
+    r"|#"
+    r"|no\.?"
+    r"|код(?:\s+(?:показателя|строки|статьи))?"
+    r"|code"
+    r"|(?:indicator|line\s+item)\s+code"
+    r")$",
+    re.IGNORECASE,
 )
 # A trailing index marker on a 1..n run's label. Same closed class as an index column.
 _TRAILING_INDEX = re.compile(r"\s*(?:number|no\.?|#|№)\s*$", re.IGNORECASE)

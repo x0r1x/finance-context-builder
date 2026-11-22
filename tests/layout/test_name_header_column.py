@@ -207,3 +207,50 @@ def test_section_filled_only_in_the_left_column_parents_the_name() -> None:
     assert fact.section_path == ["Денежный поток"]
     assert fact.kind == "fact"
     assert fact.cells == []
+
+
+def _code_table(caption: str) -> list[dict]:
+    cells = [
+        _c("Out", "A1", "Тип"),
+        _c("Out", "B1", caption),
+        _c("Out", "C1", "Наименование"),
+        _c("Out", "D1", "2024"),
+        _c("Out", "A2", "Коэффициент"),
+        _c("Out", "B2", "001"),
+        _c("Out", "C2", "DSCR"),
+        _c("Out", "D2", "1.4"),
+        _c("Out", "A3", "Коэффициент"),
+        _c("Out", "B3", "002"),
+        _c("Out", "C3", "ICR"),
+        _c("Out", "D3", "2.1"),
+    ]
+    return cells
+
+
+def _code_roles(caption: str) -> list[str]:
+    """Roles of 001 and 002, the column between the type and the name."""
+    return [
+        cell.role
+        for block in detect_layout(_code_table(caption)).sheets[0].blocks
+        for row in block.rows
+        for cell in row.cells
+        if cell.col == 2
+    ]
+
+
+def test_code_phrase_headers_are_index_not_value() -> None:
+    """001 and 002 under a listed code caption are an index, not a value."""
+    for caption in (
+        "Код показателя",
+        "Код строки",
+        "Код статьи",
+        "Indicator code",
+        "Line item code",
+    ):
+        assert _code_roles(caption) == ["index", "index"], caption
+
+
+def test_an_unlisted_header_containing_code_is_not_index() -> None:
+    """A closed list. The word code inside another caption stays a value."""
+    for caption in ("Currency code", "Postal code", "Code of conduct"):
+        assert _code_roles(caption) == ["value", "value"], caption
