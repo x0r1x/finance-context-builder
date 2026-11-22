@@ -110,3 +110,100 @@ def test_a_translation_header_does_not_steal_the_name() -> None:
         "Операционная прибыль (убыток)",
     ]
     assert block.label_col == 1
+
+
+def test_code_column_between_type_and_name_reaches_role_cells() -> None:
+    """B sits between the type and the name. It stays a row cell and a role cell."""
+    from tests.helpers.published import published_context as build_context
+
+    cells = [
+        _c("Out", "A1", "Тип показателя"),
+        _c("Out", "B1", "Код"),
+        _c("Out", "C1", "Наименование"),
+        _c("Out", "D1", "2023"),
+        _c("Out", "E1", "2024"),
+    ]
+    for row, kind, code, name, left, right in (
+        (2, "Коэффициент", "001", "DSCR", "1.4", "1.5"),
+        (3, "Коэффициент", "002", "ICR", "2", "3"),
+        (4, "Общий", "003", "CFADS", "10", "11"),
+    ):
+        cells += [
+            _c("Out", f"A{row}", kind),
+            _c("Out", f"B{row}", code),
+            _c("Out", f"C{row}", name),
+            _c("Out", f"D{row}", left),
+            _c("Out", f"E{row}", right),
+        ]
+    layout = detect_layout(cells)
+    block = layout.sheets[0].blocks[0]
+    by_label = {row.label: row for row in block.rows}
+    dscr = by_label["DSCR"]
+    assert dscr.label_col == 3
+    assert [(cell.col, cell.role) for cell in dscr.cells if cell.col == 2] == [(2, "index")]
+    doc = build_context(
+        job_id="code-col",
+        workbook_meta={"sheets": [{"name": "Out"}]},
+        cells=cells,
+        layout=layout,
+    )
+    published = next(row for item in doc.blocks for row in item.rows if row.label == "DSCR")
+    assert [(cell.col, cell.role) for cell in published.cells if cell.col == 2] == [(2, "index")]
+
+
+def test_flat_type_and_name_columns_stay_one_level() -> None:
+    cells = [
+        _c("Out", "A1", "Тип показателя"),
+        _c("Out", "B1", "Наименование"),
+        _c("Out", "C1", "2023"),
+        _c("Out", "D1", "2024"),
+        _c("Out", "A2", "Коэффициент"),
+        _c("Out", "B2", "DSCR"),
+        _c("Out", "C2", "1.4"),
+        _c("Out", "D2", "1.5"),
+        _c("Out", "A3", "Общий"),
+        _c("Out", "B3", "CFADS"),
+        _c("Out", "C3", "10"),
+        _c("Out", "D3", "11"),
+    ]
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    for label in ("DSCR", "CFADS"):
+        row = rows[label]
+        assert row.label == label
+        assert row.label_col == 2
+        assert row.indent == 0
+        assert row.parent_row is None
+        assert row.section_path == []
+        assert row.kind == "fact"
+        assert row.cells == []
+
+
+def test_section_filled_only_in_the_left_column_parents_the_name() -> None:
+    cells = [
+        _c("Out", "A1", "Раздел"),
+        _c("Out", "B1", "Наименование"),
+        _c("Out", "C1", "2023"),
+        _c("Out", "D1", "2024"),
+        _c("Out", "A2", "Денежный поток"),
+        _c("Out", "B3", "CFADS"),
+        _c("Out", "C3", "10"),
+        _c("Out", "D3", "11"),
+        _c("Out", "B4", "DSCR"),
+        _c("Out", "C4", "1.4"),
+        _c("Out", "D4", "1.5"),
+    ]
+    rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    section = rows["Денежный поток"]
+    assert section.label_col == 1
+    assert section.indent == 0
+    assert section.parent_row is None
+    assert section.section_path == []
+    assert section.kind == "abstract"
+    assert section.cells == []
+    fact = rows["CFADS"]
+    assert fact.label_col == 2
+    assert fact.indent == 1
+    assert fact.parent_row == section.row
+    assert fact.section_path == ["Денежный поток"]
+    assert fact.kind == "fact"
+    assert fact.cells == []

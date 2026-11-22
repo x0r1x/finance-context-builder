@@ -684,6 +684,8 @@ def _data_rows(
             label_span=label_span,
             period_cols=period_cols,
             date1904=date1904,
+            by_row=by_row,
+            floor_row=band_rows[0] if band_rows else None,
         )
         if kind == "abstract" and (
             _has_scalar_value(probe, by_row[row_n], date1904)
@@ -930,7 +932,15 @@ def _row_span_label(
     if prefer_col is not None and prefer_col in label_span:
         preferred = _span_label_at(row_cells, prefer_col, date1904, include_hidden=include_hidden)
         if preferred is not None:
-            return preferred[0], label_span.index(prefer_col), preferred[1]
+            # A type filled on this row is not an outline level. An empty
+            # column to the left is: the section that lives only there.
+            depth = 0
+            for col in label_span:
+                if col >= prefer_col:
+                    break
+                if _span_label_at(row_cells, col, date1904, include_hidden=include_hidden) is None:
+                    depth += 1
+            return preferred[0], depth, preferred[1]
     for depth, col in enumerate(label_span):
         cell = _cell_at(row_cells, col)
         if cell is None or (cell.get("hidden") and not include_hidden):

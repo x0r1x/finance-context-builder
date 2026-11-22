@@ -17,7 +17,9 @@ _PROSE_MIN = 80
 _MIN_VALUE_ROWS = 3
 _VALUE_SHARE = 0.6
 _NOTE_TEXT_MIN = 24
-_INDEX_HEADER = re.compile(r"^(?:№(?:\s*п\s*/\s*п)?|#|no\.?)$", re.IGNORECASE)
+_INDEX_HEADER = re.compile(
+    r"^(?:№(?:\s*п\s*/\s*п)?|#|no\.?|код|code)$", re.IGNORECASE
+)
 # A trailing index marker on a 1..n run's label. Same closed class as an index column.
 _TRAILING_INDEX = re.compile(r"\s*(?:number|no\.?|#|№)\s*$", re.IGNORECASE)
 _CHECK = re.compile(r"check|проверк|контроль|tie[- ]?out", re.IGNORECASE)
@@ -81,20 +83,24 @@ def attach_stub_cells(
     if not period_cols:
         return row
     left_edge = min(period_cols)
-    span_max = max(label_span) if label_span else 0
+    # The span is the name hierarchy, which can skip a column. That column
+    # stays a cell. max(label_span) would drop it with the label.
+    hierarchy = set(label_span)
     tagged: list[RowCell] = []
     for cell in row_cells:
         col = int(cell["col"])
-        if col <= span_max or col >= left_edge or col in period_cols:
+        if col in hierarchy or col >= left_edge or col in period_cols:
             continue
         role = _stub_role(cell, row.row, date1904)
-        if role is None:
-            continue
         header = None
-        if role == "value" and by_row is not None and floor_row is not None:
+        if by_row is not None and floor_row is not None:
             header = column_header_text(
                 by_row, col, row.row, floor_row, date1904, label_col=row.label_col
             )
+        if header and _is_index_header(header):
+            role = "index"
+        if role is None:
+            continue
         tagged.append(RowCell(col=col, role=role, header=header))  # type: ignore[arg-type]
     if tagged:
         row.cells = tagged
