@@ -503,6 +503,61 @@ def _row_label(row_cells: list[dict], date1904: bool) -> str | None:
     return None
 
 
+# A header that names the row. A longer heading ("Наименование показателя")
+# still matches. "Name" alone does not: it collides with ordinary words.
+_DEFAULT_NAME_HEADERS = ("наименование", "line item", "row name")
+
+
+def _header_key(text: str) -> str:
+    return " ".join(text.casefold().replace("ё", "е").split()).strip(" .:")
+
+
+def _is_name_header(text: str, headers: tuple[str, ...]) -> bool:
+    folded = _header_key(text)
+    if not folded:
+        return False
+    for raw in headers:
+        phrase = _header_key(raw)
+        if phrase and (folded == phrase or folded.startswith(phrase + " ")):
+            return True
+    return False
+
+
+def _name_header_column(
+    by_row: dict[int, list[dict]],
+    header_rows: set[int],
+    period_cols: set[int],
+    date1904: bool,
+    *,
+    col_floor: int = 0,
+    name_headers: tuple[str, ...] | None = None,
+) -> int | None:
+    """Leftmost header left of the periods that names the row.
+
+    A translation column («Наименование по-англ.») matches the same prefix and
+    sits to the right. The row name is the first of those headers.
+
+    ``name_headers`` replaces the default list. ``None`` keeps it. An empty
+    tuple selects nothing, so the leftmost text column stays the label.
+    """
+    headers = _DEFAULT_NAME_HEADERS if name_headers is None else name_headers
+    if not headers or not header_rows:
+        return None
+    left_edge = min(period_cols) if period_cols else 10**6
+    found: list[int] = []
+    for row_n in header_rows:
+        for cell in by_row.get(row_n, ()):
+            if cell.get("hidden"):
+                continue
+            col = int(cell["col"])
+            if col <= col_floor or col >= left_edge or col in period_cols:
+                continue
+            text = _text(cell, date1904)
+            if text and _is_name_header(text, headers):
+                found.append(col)
+    return min(found) if found else None
+
+
 def _label_span(
     by_row: dict[int, list[dict]],
     body_rows: list[int],
@@ -511,6 +566,7 @@ def _label_span(
     date1904: bool,
     *,
     col_floor: int = 0,
+    name_headers: tuple[str, ...] | None = None,
 ) -> tuple[int, list[int]]:
     left_edge = min(period_cols) if period_cols else 10**6
     leftmost: dict[int, int] = defaultdict(int)
@@ -540,6 +596,25 @@ def _label_span(
     primary = max(leftmost.items(), key=lambda item: (item[1], -item[0]))[0]
     span = sorted(col for col in leftmost if col < primary)
     span.append(primary)
+    # The leftmost text is often a type ("Коэффициент") filled on every row.
+    # A header "Наименование" names the row; columns left of it stay in the
+    # span so a section that only fills those columns still has a label.
+    name_col = _name_header_column(
+        by_row,
+        header_rows,
+        period_cols,
+        date1904,
+        col_floor=col_floor,
+        name_headers=name_headers,
+    )
+    if name_col is None:
+        return primary, span
+    if name_col not in span:
+        span = sorted([*span, name_col])
+    # Only a name header to the right of the filled type column takes over.
+    # One to the left stays a section column; the frequency column is the label.
+    if name_col > primary:
+        return name_col, span
     return primary, span
 
 
@@ -554,8 +629,16 @@ def _data_rows(
     reveal_rows: set[int] | None = None,
     summary_below: bool = True,
     hidden_row_ids: set[int] | None = None,
+    name_headers: tuple[str, ...] | None = None,
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
+    name_col = _name_header_column(
+        by_row,
+        header_rows,
+        period_cols,
+        date1904,
+        name_headers=name_headers,
+    )
     out: list[LayoutRow] = []
     # Non-unit rows, indents strictly increasing. The nearest shallower row is
     # the top of this stack, so a flat table does not rescan every earlier row.
@@ -573,7 +656,11 @@ def _data_rows(
             row_n, by_row[row_n], hidden_row_ids
         )
         label, depth, label_cell = _row_span_label(
-            by_row[row_n], label_span, date1904, include_hidden=reveal
+            by_row[row_n],
+            label_span,
+            date1904,
+            include_hidden=reveal,
+            prefer_col=name_col,
         )
         if label is None or label_cell is None:
             label, depth, label_cell = _left_of_axis_label(
@@ -597,6 +684,8 @@ def _data_rows(
             label_span=label_span,
             period_cols=period_cols,
             date1904=date1904,
+            by_row=by_row,
+            floor_row=band_rows[0] if band_rows else None,
         )
         if kind == "abstract" and (
             _has_scalar_value(probe, by_row[row_n], date1904)
@@ -838,7 +927,20 @@ def _row_span_label(
     date1904: bool,
     *,
     include_hidden: bool = False,
+    prefer_col: int | None = None,
 ) -> tuple[str | None, int, dict | None]:
+    if prefer_col is not None and prefer_col in label_span:
+        preferred = _span_label_at(row_cells, prefer_col, date1904, include_hidden=include_hidden)
+        if preferred is not None:
+            # A type filled on this row is not an outline level. An empty
+            # column to the left is: the section that lives only there.
+            depth = 0
+            for col in label_span:
+                if col >= prefer_col:
+                    break
+                if _span_label_at(row_cells, col, date1904, include_hidden=include_hidden) is None:
+                    depth += 1
+            return preferred[0], depth, preferred[1]
     for depth, col in enumerate(label_span):
         cell = _cell_at(row_cells, col)
         if cell is None or (cell.get("hidden") and not include_hidden):
@@ -848,6 +950,22 @@ def _row_span_label(
             continue
         return text, depth, cell
     return None, 0, None
+
+
+def _span_label_at(
+    row_cells: list[dict],
+    col: int,
+    date1904: bool,
+    *,
+    include_hidden: bool,
+) -> tuple[str, dict] | None:
+    cell = _cell_at(row_cells, col)
+    if cell is None or (cell.get("hidden") and not include_hidden):
+        return None
+    text = _text(cell, date1904)
+    if not text or _is_number(text) or _is_column_header_text(text):
+        return None
+    return text, cell
 
 
 def _left_of_axis_label(
