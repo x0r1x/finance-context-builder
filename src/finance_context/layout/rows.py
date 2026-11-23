@@ -20,7 +20,7 @@ from finance_context.layout.format_words import (
     is_entry_instruction,
 )
 from finance_context.layout.models import LayoutRow
-from finance_context.layout.params import attach_stub_cells
+from finance_context.layout.params import _is_index_header, attach_stub_cells
 from finance_context.layout.periods import (
     _YEAR_KEY,
     LAYER_BOUNDS,
@@ -83,7 +83,7 @@ _EXCEL_ERROR = re.compile(
     r"SPILL!|CALC!|FIELD!|BLOCKED!|CONNECT!|UNKNOWN!|BUSY!)$",
     re.IGNORECASE,
 )
-_NAME_COLUMN_SKIP = {"note", "unit", "value"}
+_NAME_COLUMN_SKIP = {"index", "note", "unit", "value"}
 _OKOF_CODE_QUALIFIER = re.compile(r"(?:^|[.:;\n])\s*код\s+по\s+окоф\s*\.?\s*$", re.IGNORECASE)
 # A marker beside a real name is not part of that name. Alone, it still is.
 _SERVICE_MARK = re.compile(
@@ -526,6 +526,61 @@ def _row_label(row_cells: list[dict], date1904: bool) -> str | None:
     return None
 
 
+# A header that names the row. A longer heading ("Наименование показателя")
+# still matches. "Name" alone does not: it collides with ordinary words.
+_DEFAULT_NAME_HEADERS = ("наименование", "line item", "row name")
+
+
+def _header_key(text: str) -> str:
+    return " ".join(text.casefold().replace("ё", "е").split()).strip(" .:")
+
+
+def _is_name_header(text: str, headers: tuple[str, ...]) -> bool:
+    folded = _header_key(text)
+    if not folded:
+        return False
+    for raw in headers:
+        phrase = _header_key(raw)
+        if phrase and (folded == phrase or folded.startswith(phrase + " ")):
+            return True
+    return False
+
+
+def _name_header_column(
+    by_row: dict[int, list[dict]],
+    header_rows: set[int],
+    period_cols: set[int],
+    date1904: bool,
+    *,
+    col_floor: int = 0,
+    name_headers: tuple[str, ...] | None = None,
+) -> int | None:
+    """Leftmost header left of the periods that names the row.
+
+    A translation column («Наименование по-англ.») matches the same prefix and
+    sits to the right. The row name is the first of those headers.
+
+    ``name_headers`` replaces the default list. ``None`` keeps it. An empty
+    tuple selects nothing, so the leftmost text column stays the label.
+    """
+    headers = _DEFAULT_NAME_HEADERS if name_headers is None else name_headers
+    if not headers or not header_rows:
+        return None
+    left_edge = min(period_cols) if period_cols else 10**6
+    found: list[int] = []
+    for row_n in header_rows:
+        for cell in by_row.get(row_n, ()):
+            if cell.get("hidden"):
+                continue
+            col = int(cell["col"])
+            if col <= col_floor or col >= left_edge or col in period_cols:
+                continue
+            text = _text(cell, date1904)
+            if text and _is_name_header(text, headers):
+                found.append(col)
+    return min(found) if found else None
+
+
 def _label_span(
     by_row: dict[int, list[dict]],
     body_rows: list[int],
@@ -535,6 +590,7 @@ def _label_span(
     *,
     col_floor: int = 0,
     column_roles: dict[int, str] | None = None,
+    name_headers: tuple[str, ...] | None = None,
 ) -> tuple[int, list[int]]:
     left_edge = min(period_cols) if period_cols else 10**6
     leftmost: dict[int, int] = defaultdict(int)
@@ -567,6 +623,25 @@ def _label_span(
     primary = max(leftmost.items(), key=lambda item: (item[1], -item[0]))[0]
     span = sorted(col for col in leftmost if col < primary)
     span.append(primary)
+    # The leftmost text is often a type ("Коэффициент") filled on every row.
+    # A header "Наименование" names the row; columns left of it stay in the
+    # span so a section that only fills those columns still has a label.
+    name_col = _name_header_column(
+        by_row,
+        header_rows,
+        period_cols,
+        date1904,
+        col_floor=col_floor,
+        name_headers=name_headers,
+    )
+    if name_col is None or roles.get(name_col) in _NAME_COLUMN_SKIP:
+        return primary, span
+    if name_col not in span:
+        span = sorted([*span, name_col])
+    # Only a name header to the right of the filled type column takes over.
+    # One to the left stays a section column; the frequency column is the label.
+    if name_col > primary:
+        return name_col, span
     return primary, span
 
 
@@ -582,15 +657,24 @@ def _data_rows(
     summary_below: bool = True,
     hidden_row_ids: set[int] | None = None,
     column_roles: dict[int, str] | None = None,
+    name_headers: tuple[str, ...] | None = None,
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
     roles = column_roles or {}
     excluded_names = {col for col, role in roles.items() if role in _NAME_COLUMN_SKIP}
     unit_cols = {col for col, role in roles.items() if role == "unit"}
     note_cols = {col for col, role in roles.items() if role == "note"}
+    index_cols = {col for col, role in roles.items() if role == "index"}
     label_cols = {col for col, role in roles.items() if role == "label"}
     extra_names = _extra_name_columns(
         by_row, band_rows, header_rows, label_span, period_cols, date1904, roles
+    )
+    name_col = _name_header_column(
+        by_row,
+        header_rows,
+        period_cols,
+        date1904,
+        name_headers=name_headers,
     )
     out: list[LayoutRow] = []
     # Non-unit rows, indents strictly increasing. The nearest shallower row is
@@ -614,6 +698,7 @@ def _data_rows(
             date1904,
             include_hidden=reveal,
             span=label_span,
+            prefer_col=name_col,
         )
         if label is None or _PER_BASIS_CAPTION.search(label):
             fallback = _left_of_axis_label(
@@ -632,7 +717,7 @@ def _data_rows(
         name_cols.update(
             int(cell["col"])
             for cell in by_row[row_n]
-            if int(cell["col"]) in label_cols
+            if (int(cell["col"]) in label_cols or int(cell["col"]) == name_col)
             and (cell.get("formula_raw") or cell.get("formula_template"))
             and (cell.get("cached_value") is None or not str(cell["cached_value"]).strip())
         )
@@ -654,12 +739,15 @@ def _data_rows(
             date1904=date1904,
             name_cols=name_cols,
             note_cols=note_cols,
+            index_cols=index_cols,
+            by_row=by_row,
+            floor_row=band_rows[0] if band_rows else None,
         )
         if kind == "abstract" and (
-            _has_scalar_value(probe, by_row[row_n], date1904)
+            _has_data_stub(probe, by_row[row_n], date1904)
             or _is_blank_data_row(
                 by_row[row_n],
-                name_cols | note_cols,
+                name_cols | note_cols | index_cols,
                 period_cols,
                 date1904,
                 has_unit=any(cell.role == "unit" for cell in probe.cells),
@@ -713,6 +801,7 @@ def _data_rows(
             floor_row=band_rows[0] if band_rows else None,
             name_cols=name_cols,
             note_cols=note_cols,
+            index_cols=index_cols,
         )
         out.append(item)
         outlines.append(outline)
@@ -967,13 +1056,13 @@ def _band_title(
     )
 
 
-def _has_scalar_value(probe: LayoutRow, row_cells: list[dict], date1904: bool) -> bool:
-    """A number left of the ruler (`G563 = XIRR(...)`) is a point fact, not a section title."""
+def _has_data_stub(probe: LayoutRow, row_cells: list[dict], date1904: bool) -> bool:
+    """A scalar value or a line item's code can identify a fact with empty periods."""
     for item in probe.cells:
-        if item.role != "value":
+        if item.role not in {"value", "index"}:
             continue
         text = _text(_cell_at(row_cells, item.col) or {}, date1904)
-        if text and _is_number(text):
+        if text and (item.role == "index" or _is_number(text)):
             return True
     return False
 
@@ -1123,6 +1212,8 @@ def _column_headers(
 def _caption_role(text: str) -> str | None:
     if _OKOF_CODE_QUALIFIER.search(text):
         return "note"
+    if _is_index_header(text):
+        return "index"
     caption = re.sub(r"[\W_]+", " ", text).strip()
     for role, words in (
         ("note", (*NOTE_WORDS, "прим", "окоф", "код окоф", "окоф код")),
@@ -1194,6 +1285,7 @@ def _composed_label(
     *,
     include_hidden: bool,
     span: list[int] | None,
+    prefer_col: int | None = None,
 ) -> tuple[str | None, int, dict | None, set[int]]:
     """Join the useful name cells in ``columns``, left to right.
 
@@ -1205,6 +1297,7 @@ def _composed_label(
     """
     pieces: list[tuple[str, dict, int]] = []
     piece_cols: dict[str, list[int]] = {}
+    preceding = set()
     for depth, col in enumerate(columns):
         cell = _cell_at(row_cells, col)
         if cell is None or (cell.get("hidden") and not include_hidden):
@@ -1212,6 +1305,12 @@ def _composed_label(
         text = _label_piece(cell, date1904)
         if text is None:
             continue
+        if span and prefer_col == col and col in span and not is_entry_instruction(text):
+            # Filled type cells stay at the same level. An empty hierarchy
+            # column leaves room for a section header on another row.
+            indent = sum(c < col and c not in preceding for c in span)
+            return text, indent, cell, {col}
+        preceding.add(col)
         key = text.casefold()
         if key in piece_cols:
             piece_cols[key].append(col)

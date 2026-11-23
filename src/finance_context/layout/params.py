@@ -17,7 +17,18 @@ _PROSE_MIN = 80
 _MIN_VALUE_ROWS = 3
 _VALUE_SHARE = 0.6
 _NOTE_TEXT_MIN = 24
-_INDEX_HEADER = re.compile(r"^(?:№(?:\s*п\s*/\s*п)?|#|no\.?)$", re.IGNORECASE)
+# The whole caption must be one of these. "code" inside another phrase is not an index.
+_INDEX_HEADER = re.compile(
+    r"^(?:"
+    r"№(?:\s*п\s*/\s*п)?"
+    r"|#"
+    r"|no\.?"
+    r"|код(?:\s+(?:показателя|строки|статьи))?"
+    r"|code"
+    r"|(?:indicator|line\s+item)\s+code"
+    r")$",
+    re.IGNORECASE,
+)
 # A trailing index marker on a 1..n run's label. Same closed class as an index column.
 _TRAILING_INDEX = re.compile(r"\s*(?:number|no\.?|#|№)\s*$", re.IGNORECASE)
 _CHECK = re.compile(r"check|проверк|контроль|tie[- ]?out", re.IGNORECASE)
@@ -79,13 +90,16 @@ def attach_stub_cells(
     floor_row: int | None = None,
     name_cols: set[int] | None = None,
     note_cols: set[int] | None = None,
+    index_cols: set[int] | None = None,
 ) -> LayoutRow:
     if not period_cols:
         return row
     left_edge = min(period_cols)
-    span_max = max(label_span) if label_span else 0
     named = name_cols or set()
     notes = note_cols or set()
+    indexes = index_cols or set()
+    # Hierarchy columns may straddle a code or a note.
+    hierarchy = set(label_span)
     tagged: list[RowCell] = []
     for cell in row_cells:
         col = int(cell["col"])
@@ -95,16 +109,20 @@ def attach_stub_cells(
             if _text(cell, date1904) or cell.get("formula_raw") or cell.get("formula_template"):
                 tagged.append(RowCell(col=col, role="note"))
             continue
-        if col <= span_max:
+        if col in hierarchy:
             continue
         role = _stub_role(cell, row.row, date1904)
-        if role is None:
-            continue
         header = None
-        if role == "value" and by_row is not None and floor_row is not None:
+        if by_row is not None and floor_row is not None:
             header = column_header_text(
                 by_row, col, row.row, floor_row, date1904, label_col=row.label_col
             )
+        if col in indexes or (header and _is_index_header(header)):
+            if role is None and not _text(cell, date1904) and not cell.get("formula_template"):
+                continue
+            role = "index"
+        if role is None:
+            continue
         tagged.append(RowCell(col=col, role=role, header=header))  # type: ignore[arg-type]
     if tagged:
         row.cells = tagged

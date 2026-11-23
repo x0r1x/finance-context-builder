@@ -13,6 +13,7 @@ import re
 from finance_context.excel.a1 import index_to_col
 from finance_context.layout.cells import _is_number, _text
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
+from finance_context.layout.params import _is_index_header
 
 # One labelled number is a sheet parameter, not a table. Two such rows are a list.
 _PARAMETER_VALUES = 2
@@ -254,6 +255,25 @@ def _band_blocks(
     return found, []
 
 
+
+def _value_role(caption: str | None) -> str:
+    """A listed code caption is an index. Any other number column stays a value."""
+    if caption and _is_index_header(caption):
+        return "index"
+    return "value"
+
+
+def _header_role(
+    by_row: dict[int, list[dict]], titles: set[int], col: int, date1904: bool
+) -> str:
+    caption = _caption(by_row, titles, col, date1904)
+    if caption and _is_index_header(caption):
+        return "index"
+    if _period_caption(by_row, titles, col, date1904):
+        return "unknown"
+    return "value"
+
+
 def _cluster_block(
     sheet: str,
     band: list[int],
@@ -282,7 +302,11 @@ def _cluster_block(
                 label_col=label_col,
                 kind="fact",
                 cells=[
-                    RowCell(col=col, role="value", header=_caption(by_row, titles, col, date1904))
+                    RowCell(
+                        col=col,
+                        role=_value_role(_caption(by_row, titles, col, date1904)),
+                        header=_caption(by_row, titles, col, date1904),
+                    )
                     for col in value_cols
                     if _is_value(_cell(by_row[row_n], col) or {}, date1904)
                 ],
@@ -306,7 +330,7 @@ def _cluster_block(
         AxisHeader(
             col=col,
             text=_caption(by_row, titles, col, date1904) or index_to_col(col),
-            role="unknown" if _period_caption(by_row, titles, col, date1904) else "value",
+            role=_header_role(by_row, titles, col, date1904),
             period_key=f"c{col}",
         )
         for col in value_cols
