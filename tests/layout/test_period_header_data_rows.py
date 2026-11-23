@@ -328,6 +328,18 @@ def test_one_calendar_cell_among_sums_keeps_the_year_axis(
     assert list(rows[3].values) == ["110", "120", "130", "140", "150", "160", "170", "180", "190"]
 
 
+def test_underscore_serial_with_date_format_does_not_move_the_axis() -> None:
+    cells = _year_axis_with_tail("4_2025", number_format="DD.MM.YYYY")
+    doc, rows = _published_rows(cells, "underscore-serial")
+    assert len(doc.axes) == 1
+    assert [period.period_key for period in doc.axes[0].periods] == [
+        str(year) for year in range(2018, 2027)
+    ]
+    assert rows[2].values[-1] == "4_2025"
+    assert format_addr(doc.axes[0].periods[-1].col, 2) == "J2"
+    assert list(rows[3].values) == ["110", "120", "130", "140", "150", "160", "170", "180", "190"]
+
+
 def test_one_quarter_token_among_sums_keeps_the_quarter_axis() -> None:
     sheet = "CF"
     labels = ["4 кв. 2015", "1 кв. 2016", "2 кв. 2016", "3 кв. 2016"]
