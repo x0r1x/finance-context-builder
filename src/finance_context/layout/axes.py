@@ -810,9 +810,10 @@ def _labeled_numeric_under_axis(
     The number may be a formula cache. A cache that reads as a period label
     is a header cell, so a formula quarter row still extends the band. ``3``
     under a ``Квартал`` label is that kind of header, as is ``1``–``12`` under
-    a month label. A bare year next to a line name is a value; the same years
-    with no name stay a header. A date-formatted serial displays as a date,
-    not as one of these numbers.
+    a month label. A bare year next to a line name is a value unless it fills
+    quarters that do not name a year yet. One calendar cell among ordinary
+    amounts is a value, not a new header layer. A date-formatted serial
+    displays as a date, not as one of these numbers.
     """
     if not calendar_cols:
         return False
@@ -848,7 +849,10 @@ def _labeled_numeric_under_axis(
             continue
         if atom is not None and atom.kind not in {"marker", "noise"}:
             period_text += 1
-    return has_label and ordinary > 0 and period_text == 0
+    if not has_label or ordinary <= 0:
+        return False
+    # One date or quarter token among sums does not make another header layer.
+    return period_text <= 1
 
 
 def _is_flag_bits_row(

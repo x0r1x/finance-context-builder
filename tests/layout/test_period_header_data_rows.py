@@ -23,6 +23,7 @@ def _c(
     value: str | None,
     *,
     formula: str | None = None,
+    number_format: str | None = None,
 ) -> dict:
     col, row = parse_addr(addr)
     return {
@@ -35,7 +36,7 @@ def _c(
         "formula_raw": formula,
         "formula_template": None,
         "unparsed": False,
-        "number_format": None,
+        "number_format": number_format,
         "comment": None,
     }
 
@@ -274,3 +275,111 @@ def test_unlabeled_year_layer_above_quarters_stays_one_axis() -> None:
     assert len(layout.axes) == 1
     assert [period.period_key for period in layout.axes[0].periods] == _QUARTER_KEYS
     assert [row.row for row in layout.blocks[0].rows] == [3]
+
+
+def _year_axis_with_tail(tail: str, *, number_format: str | None = None) -> list[dict]:
+    """Years 2018–2026, a bounds row whose last cell is unusual, then another fact."""
+    sheet = "Debt"
+    cells = [_c(sheet, "A1", "Показатель")]
+    for index, year in enumerate(range(2018, 2027)):
+        cells.append(_c(sheet, f"{chr(ord('B') + index)}1", str(year)))
+    cells.append(_c(sheet, "A2", "Остаток на начало периода"))
+    for index, value in enumerate(["10", "20", "30", "40", "50", "60", "70", "80"]):
+        cells.append(_c(sheet, f"{chr(ord('B') + index)}2", value))
+    cells.append(_c(sheet, "J2", tail, number_format=number_format))
+    cells.append(_c(sheet, "A3", "Следующая"))
+    for index, value in enumerate(["110", "120", "130", "140", "150", "160", "170", "180", "190"]):
+        cells.append(_c(sheet, f"{chr(ord('B') + index)}3", value))
+    return cells
+
+
+def _published_rows(cells: list[dict], job_id: str) -> tuple[object, dict[int, object]]:
+    doc = build_context(
+        job_id=job_id,
+        workbook_meta={"sheets": [{"name": cells[0]["sheet"]}]},
+        cells=cells,
+        layout=detect_layout(cells),
+    )
+    rows = {row.row: row for block in doc.blocks for row in block.rows}
+    return doc, rows
+
+
+@pytest.mark.parametrize(
+    ("tail", "number_format", "published"),
+    [
+        ("31.03.2026", None, "31.03.2026"),
+        ("45747", "DD.MM.YYYY", "31.03.2025"),
+        ("4 кв. 2026", None, "4 кв. 2026"),
+    ],
+)
+def test_one_calendar_cell_among_sums_keeps_the_year_axis(
+    tail: str, number_format: str | None, published: str
+) -> None:
+    cells = _year_axis_with_tail(tail, number_format=number_format)
+    doc, rows = _published_rows(cells, "mixed-year")
+    assert len(doc.axes) == 1
+    axis = doc.axes[0]
+    assert [period.period_key for period in axis.periods] == [
+        str(year) for year in range(2018, 2027)
+    ]
+    assert rows[2].kind == "fact"
+    assert rows[2].values[-1] == published
+    assert format_addr(axis.periods[-1].col, rows[2].row) == "J2"
+    assert list(rows[3].values) == ["110", "120", "130", "140", "150", "160", "170", "180", "190"]
+
+
+def test_one_quarter_token_among_sums_keeps_the_quarter_axis() -> None:
+    sheet = "CF"
+    labels = ["4 кв. 2015", "1 кв. 2016", "2 кв. 2016", "3 кв. 2016"]
+    cells = [_c(sheet, "A1", "Статья")]
+    for col, label in zip("BCDE", labels, strict=True):
+        cells.append(_c(sheet, f"{col}1", label))
+    cells.append(_c(sheet, "A2", "Остаток на начало периода"))
+    for col, value in zip("BCD", ["10", "20", "30"], strict=True):
+        cells.append(_c(sheet, f"{col}2", value))
+    cells.append(_c(sheet, "E2", "4 кв. 2026"))
+    cells.append(_c(sheet, "A3", "Следующая"))
+    for col, value in zip("BCDE", ["15", "25", "35", "45"], strict=True):
+        cells.append(_c(sheet, f"{col}3", value))
+
+    doc, rows = _published_rows(cells, "mixed-quarter")
+    assert len(doc.axes) == 1
+    axis = doc.axes[0]
+    assert [period.period_key for period in axis.periods] == [
+        "2015Q4",
+        "2016Q1",
+        "2016Q2",
+        "2016Q3",
+    ]
+    assert rows[2].kind == "fact"
+    assert rows[2].values[-1] == "4 кв. 2026"
+    assert format_addr(axis.periods[-1].col, 2) == "E2"
+    assert list(rows[3].values) == ["15", "25", "35", "45"]
+
+
+def test_date_bounds_stay_header_and_the_neighbor_table_keeps_its_years() -> None:
+    sheet = "CF"
+    cells = [_c(sheet, "A1", "Показатель")]
+    for col, year in zip("BCD", ["2018", "2019", "2020"], strict=True):
+        cells.append(_c(sheet, f"{col}1", year))
+    cells.append(_c(sheet, "A2", "Начало периода"))
+    for col, text in zip("BCD", ["01.01.2018", "01.01.2019", "01.01.2020"], strict=True):
+        cells.append(_c(sheet, f"{col}2", text))
+    cells.append(_c(sheet, "A3", "Остаток на начало периода"))
+    for col, value in zip("BCD", ["10", "20", "30"], strict=True):
+        cells.append(_c(sheet, f"{col}3", value))
+    for col, year in zip("BCD", ["2021", "2022", "2023"], strict=True):
+        cells.append(_c(sheet, f"{col}5", year))
+    cells.append(_c(sheet, "A6", "Выручка"))
+    for col, value in zip("BCD", ["7", "8", "9"], strict=True):
+        cells.append(_c(sheet, f"{col}6", value))
+
+    doc, rows = _published_rows(cells, "bounds-neighbor")
+    assert 2 not in rows
+    opening = rows[3]
+    assert opening.kind == "fact"
+    assert list(opening.values) == ["10", "20", "30"]
+    keys = [[period.period_key for period in axis.periods] for axis in doc.axes]
+    assert ["2018", "2019", "2020"] in keys
+    assert ["2021", "2022", "2023"] in keys
+    assert list(rows[6].values) == ["7", "8", "9"]
