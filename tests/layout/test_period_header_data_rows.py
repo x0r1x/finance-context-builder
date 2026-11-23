@@ -181,3 +181,96 @@ def test_first_debt_row_keeps_the_year_axis_and_drops_the_stub() -> None:
     ]
     assert "999" not in row.values
     assert all(period.text != "ХХХХ" for period in axis.periods)
+
+
+_QUARTER_KEYS = ["2024Q1", "2024Q2", "2025Q3", "2025Q4"]
+_FULL_QUARTERS = ["1 кв. 2024", "2 кв. 2024", "3 кв. 2025", "4 кв. 2025"]
+
+
+def _labeled_year_sheet(label: str, quarters: list[str]) -> list[dict]:
+    """Quarters, a labelled year row, then revenue 10, 20, 30, 40."""
+    sheet = "CF"
+    cells = [_c(sheet, "A1", "Статья")]
+    for col, quarter in zip("BCDE", quarters, strict=True):
+        cells.append(_c(sheet, f"{col}1", quarter))
+    cells.append(_c(sheet, "A2", label))
+    for col, year in zip("BCDE", ["2024", "2024", "2025", "2025"], strict=True):
+        cells.append(_c(sheet, f"{col}2", year))
+    cells.append(_c(sheet, "A3", "Выручка"))
+    for col, value in zip("BCDE", ["10", "20", "30", "40"], strict=True):
+        cells.append(_c(sheet, f"{col}3", value))
+    return cells
+
+
+def test_labeled_year_under_bare_quarters_completes_one_axis() -> None:
+    cells = _labeled_year_sheet("Год", ["1 кв.", "2 кв.", "3 кв.", "4 кв."])
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert sheet.axes[0].header_row == 2
+    assert [period.period_key for period in sheet.axes[0].periods] == _QUARTER_KEYS
+    assert [row.row for row in sheet.blocks[0].rows] == [3]
+
+    doc = build_context(
+        job_id="god",
+        workbook_meta={"sheets": [{"name": "CF"}]},
+        cells=cells,
+        layout=detect_layout(cells),
+    )
+    assert len(doc.axes) == 1
+    axis = doc.axes[0]
+    assert [period.period_key for period in axis.periods] == _QUARTER_KEYS
+    assert all(row.row != 2 for block in doc.blocks for row in block.rows)
+    revenue = next(row for block in doc.blocks for row in block.rows if row.row == 3)
+    assert list(revenue.values) == ["10", "20", "30", "40"]
+    assert [
+        format_addr(period.col, revenue.row) for period in axis.periods
+    ] == ["B3", "C3", "D3", "E3"]
+
+
+def test_year_entry_under_complete_quarters_stays_one_fact() -> None:
+    cells = _labeled_year_sheet("Год ввода", _FULL_QUARTERS)
+    sheet = detect_layout(cells).sheets[0]
+    assert len(sheet.axes) == 1
+    assert sheet.axes[0].header_row == 1
+    assert [period.period_key for period in sheet.axes[0].periods] == _QUARTER_KEYS
+    assert [period.text for period in sheet.axes[0].periods] == _FULL_QUARTERS
+    assert [(row.row, row.kind) for row in sheet.blocks[0].rows] == [
+        (2, "fact"),
+        (3, "fact"),
+    ]
+
+    doc = build_context(
+        job_id="vvod",
+        workbook_meta={"sheets": [{"name": "CF"}]},
+        cells=cells,
+        layout=detect_layout(cells),
+    )
+    assert len(doc.axes) == 1
+    axis = doc.axes[0]
+    assert axis.header_row == 1
+    assert [period.period_key for period in axis.periods] == _QUARTER_KEYS
+    assert [period.text for period in axis.periods] == _FULL_QUARTERS
+    by_row = {row.row: row for block in doc.blocks for row in block.rows}
+    assert by_row[2].kind == "fact"
+    assert list(by_row[2].values) == ["2024", "2024", "2025", "2025"]
+    assert list(by_row[3].values) == ["10", "20", "30", "40"]
+    assert [
+        format_addr(period.col, 3) for period in axis.periods
+    ] == ["B3", "C3", "D3", "E3"]
+
+
+def test_unlabeled_year_layer_above_quarters_stays_one_axis() -> None:
+    sheet = "CF"
+    cells = []
+    for col, year in zip("BCDE", ["2024", "2024", "2025", "2025"], strict=True):
+        cells.append(_c(sheet, f"{col}1", year))
+    for col, quarter in zip("BCDE", ["1 кв.", "2 кв.", "3 кв.", "4 кв."], strict=True):
+        cells.append(_c(sheet, f"{col}2", quarter))
+    cells.append(_c(sheet, "A3", "Выручка"))
+    for col, value in zip("BCDE", ["10", "20", "30", "40"], strict=True):
+        cells.append(_c(sheet, f"{col}3", value))
+
+    layout = detect_layout(cells).sheets[0]
+    assert len(layout.axes) == 1
+    assert [period.period_key for period in layout.axes[0].periods] == _QUARTER_KEYS
+    assert [row.row for row in layout.blocks[0].rows] == [3]
