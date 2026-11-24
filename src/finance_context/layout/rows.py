@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from collections import defaultdict
+from itertools import pairwise
 
+from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import (
     _cell_at,
     _is_int_text,
@@ -92,6 +95,12 @@ _SERVICE_MARK = re.compile(
 )
 _PER_BASIS_CAPTION = re.compile(r"\bв\s+пересч[её]те\s+на\s+\S.*:\s*$", re.IGNORECASE)
 _TOTAL_LABEL = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
+# Parents come from the parsed formula, not from the letters SUM in its text.
+_AGG_ENGINES = (FormulaEngine(locale_hint="en"), FormulaEngine(locale_hint="ru"))
+_SUM_FUNCS = {"sum", "сумм"}
+_IF_FUNCS = {"if", "если"}
+_AggregateSpans = tuple[tuple[int, int], ...]
+_FORMULA_STRING_LITERAL = re.compile(r'"(?:[^"]|"")*"')
 
 
 _RELATIVE_LABEL = re.compile(
@@ -658,6 +667,7 @@ def _data_rows(
     hidden_row_ids: set[int] | None = None,
     column_roles: dict[int, str] | None = None,
     name_headers: tuple[str, ...] | None = None,
+    intervening_rulers: list[int] | None = None,
 ) -> list[LayoutRow]:
     revealed = reveal_rows or set()
     roles = column_roles or {}
@@ -681,7 +691,12 @@ def _data_rows(
     # the top of this stack, so a flat table does not rescan every earlier row.
     parent_stack: list[LayoutRow] = []
     outlines: list[int] = []
+    aggregated: list[_AggregateSpans] = []
+    units: list[bool] = []
     section_stack: list[LayoutRow] = [seed] if seed is not None else []
+    previous_name_template: str | None = None
+    trailing_col = max(period_cols) + 1 if period_cols else None
+    segment_starts = [0]
     for row_n in band_rows:
         if row_n in header_rows:
             continue
@@ -714,6 +729,14 @@ def _data_rows(
                 label, depth, label_cell, name_cols = fallback
         if label is None or label_cell is None:
             continue
+        if out and intervening_rulers and out[-1].row + 1 < row_n:
+            ruler = bisect_left(intervening_rulers, row_n)
+            if ruler and out[-1].row < intervening_rulers[ruler - 1]:
+                # A later ruler on the same columns interrupts this table.
+                segment_starts.append(len(out))
+                parent_stack.clear()
+                section_stack.clear()
+                previous_name_template = None
         name_cols.update(
             int(cell["col"])
             for cell in by_row[row_n]
@@ -722,6 +745,8 @@ def _data_rows(
             and (cell.get("cached_value") is None or not str(cell["cached_value"]).strip())
         )
         indent = depth + _indent(label) + _style_indent(label_cell)
+        raw_template = label_cell.get("formula_template")
+        name_template = _FORMULA_STRING_LITERAL.sub('""', raw_template) if raw_template else None
         outline = _outline_level(label_cell)
         check_row = bool(_CHECK.search(label))
         kind = _row_kind(
@@ -743,18 +768,30 @@ def _data_rows(
             by_row=by_row,
             floor_row=band_rows[0] if band_rows else None,
         )
+        # Repeated label formulas also name unfilled inputs in the same list.
+        # Use the preceding fact at this level as evidence for that run.
         if kind == "abstract" and (
             _has_data_stub(probe, by_row[row_n], date1904)
+            or (
+                out
+                and name_template
+                and name_template == previous_name_template
+                and out[-1].kind == "fact"
+                and out[-1].row + 1 == row_n
+                and out[-1].label_col == int(label_cell["col"])
+                and out[-1].indent == indent
+            )
             or _is_blank_data_row(
                 by_row[row_n],
-                name_cols | note_cols | index_cols,
+                name_cols | note_cols | index_cols | unit_cols | _unit_stub_cols(probe),
                 period_cols,
                 date1904,
                 has_unit=any(cell.role == "unit" for cell in probe.cells),
+                trailing_col=trailing_col,
             )
         ):
             in_check = any(_CHECK.search(item.label) for item in section_stack) or any(
-                prev.check_row for prev in _ancestors(out, indent)
+                prev.check_row for prev in _ancestors(out, indent, segment_starts[-1])
             )
             kind = "helper" if in_check else "fact"
         unit_caption = is_unit_text(label)
@@ -804,14 +841,26 @@ def _data_rows(
             index_cols=index_cols,
         )
         out.append(item)
+        previous_name_template = name_template
         outlines.append(outline)
+        aggregated.append(_aggregated_child_rows(by_row[row_n], period_cols, row_n))
+        units.append(unit_caption)
         if not unit_caption:
             while parent_stack and parent_stack[-1].indent >= indent:
                 parent_stack.pop()
             parent_stack.append(item)
         if kind == "abstract" and not is_unit_text(label):
             section_stack.append(item)
-    _rewire_parents(out, outlines, summary_below, seed)
+    segment_starts.append(len(out))
+    for lo, hi in pairwise(segment_starts):
+        _rewire_parents(
+            out[lo:hi],
+            outlines[lo:hi],
+            summary_below,
+            seed if lo == 0 else None,
+            aggregated[lo:hi],
+            units[lo:hi],
+        )
     return out
 
 
@@ -820,11 +869,14 @@ def _rewire_parents(
     outlines: list[int],
     summary_below: bool,
     seed: LayoutRow | None = None,
+    aggregated: list[_AggregateSpans] | None = None,
+    units: list[bool] | None = None,
 ) -> None:
-    """Parents are section headers. A valued row is not one, and neither is a bare «Прочие».
+    """Section paths come from abstract headers. ``kind`` does not decide parentage.
 
-    The first pass classifies rows and may name a fact as a parent. This pass
-    writes ``section_path`` and ``parent_row`` again from structural headers only.
+    A valued row stays a fact and can still own an explicit Excel group. One
+    deeper indent is not enough: the formula has to aggregate that child. A
+    bare «Прочие» is not a section.
     """
     deeper = _deeper_follower(rows, outlines)
     structural = [
@@ -878,8 +930,11 @@ def _rewire_parents(
         row.parent_row = parent_row
         if structural[index]:
             section_stack.append(index)
+    _apply_indent_aggregate_parents(
+        rows, aggregated or [() for _ in rows], units or [False for _ in rows]
+    )
     if any(level > 0 for level in outlines):
-        _apply_outline_parents(rows, outlines, summary_below, structural)
+        _apply_outline_parents(rows, outlines, summary_below)
 
 
 def _deeper_follower(rows: list[LayoutRow], outlines: list[int]) -> list[bool]:
@@ -901,6 +956,7 @@ def _deeper_follower(rows: list[LayoutRow], outlines: list[int]) -> list[bool]:
 
 
 def _is_structural_header(row: LayoutRow, *, has_deeper: bool) -> bool:
+    """Abstract section titles. A fact can still be a parent by outline or aggregate."""
     if row.kind != "abstract" or is_unit_text(row.label):
         return False
     if row.label.strip().casefold() == "прочие" and not has_deeper:
@@ -942,17 +998,171 @@ def _nonneg_int(value: object) -> int:
     return number if number > 0 else 0
 
 
+def _aggregated_child_rows(
+    row_cells: list[dict], period_cols: set[int], row_n: int
+) -> _AggregateSpans:
+    """Spans named by a vertical sum in a period column. A same-row total is not one."""
+    sheet = str(next((cell.get("sheet") for cell in row_cells if cell.get("sheet")), ""))
+    spans: list[tuple[int, int]] = []
+    for cell in row_cells:
+        if int(cell["col"]) not in period_cols:
+            continue
+        formula = cell.get("formula_raw") or cell.get("formula_template")
+        if not formula:
+            continue
+        spans.extend(_vertical_aggregate_rows(str(formula), row_n, sheet))
+    return tuple(spans)
+
+
+def _vertical_aggregate_rows(formula: str, row_n: int, sheet: str) -> _AggregateSpans:
+    """Local rows a total owns, from the parsed formula.
+
+    ``SUM`` inside an ``IF`` test is not the value. Every ``SUM`` argument is,
+    including a list of refs and a range beside a cell on another sheet. A
+    range stays a pair of bounds.
+    """
+    ast = _aggregate_ast(formula, sheet)
+    if ast is None:
+        return ()
+    spans: list[tuple[int, int]] = []
+    _collect_aggregate_spans(ast, sheet, row_n, spans, plus=False)
+    return tuple(spans) if _combines_rows(spans) else ()
+
+
+def _combines_rows(spans: list[tuple[int, int]]) -> bool:
+    """An aggregate combines distinct local rows, even with scalar adjustments."""
+    return bool(spans) and min(lo for lo, _ in spans) < max(hi for _, hi in spans)
+
+
+def _aggregate_ast(formula: str, sheet: str) -> dict | None:
+    for engine in _AGG_ENGINES:
+        parsed = engine.parse(formula, sheet=sheet, addr="A1")
+        if parsed.ast is not None:
+            return parsed.ast
+    return None
+
+
+def _collect_aggregate_spans(
+    node: object, sheet: str, row_n: int, spans: list[tuple[int, int]], *, plus: bool
+) -> None:
+    """Value structure only. An ``IF`` condition is not part of the value."""
+    if not isinstance(node, dict):
+        return
+    op = node.get("op")
+    if op == "func":
+        name = str(node.get("name") or "").casefold()
+        args = node.get("args") or []
+        if name in _IF_FUNCS:
+            for arg in args[1:]:
+                branch: list[tuple[int, int]] = []
+                _collect_aggregate_spans(arg, sheet, row_n, branch, plus=False)
+                if _combines_rows(branch):
+                    spans.extend(branch)
+            return
+        if name in _SUM_FUNCS:
+            for arg in args:
+                _collect_sum_argument(arg, sheet, row_n, spans)
+            return
+        return
+    if op == "bin" and node.get("kind") == "+":
+        _collect_aggregate_spans(node.get("left"), sheet, row_n, spans, plus=True)
+        _collect_aggregate_spans(node.get("right"), sheet, row_n, spans, plus=True)
+        return
+    if op == "unary":
+        _collect_aggregate_spans(node.get("expr"), sheet, row_n, spans, plus=False)
+        return
+    if plus:
+        _append_local_span(node, sheet, row_n, spans)
+
+
+def _collect_sum_argument(
+    node: object, sheet: str, row_n: int, spans: list[tuple[int, int]]
+) -> None:
+    if not isinstance(node, dict):
+        return
+    if node.get("op") in {"ref", "range"}:
+        _append_local_span(node, sheet, row_n, spans)
+        return
+    _collect_aggregate_spans(node, sheet, row_n, spans, plus=False)
+
+
+def _append_local_span(
+    node: dict, sheet: str, row_n: int, spans: list[tuple[int, int]]
+) -> None:
+    if node.get("external"):
+        return
+    target = str(node.get("sheet") or sheet)
+    if target.casefold() != sheet.casefold():
+        return
+    op = node.get("op")
+    if op == "ref":
+        child = node.get("row")
+        if isinstance(child, int) and child != row_n:
+            spans.append((child, child))
+        return
+    if op != "range" or node.get("col_only"):
+        return
+    start = node.get("start") or {}
+    end = node.get("end") or {}
+    if not isinstance(start, dict) or not isinstance(end, dict):
+        return
+    if "row" not in start or "row" not in end:
+        return
+    lo = int(start["row"])
+    hi = int(end["row"])
+    if lo > hi:
+        lo, hi = hi, lo
+    if lo == hi == row_n:
+        return
+    spans.append((lo, hi))
+
+
+def _span_contains(spans: _AggregateSpans, row_n: int) -> bool:
+    return any(lo <= row_n <= hi for lo, hi in spans)
+
+
+def _unit_stub_cols(row: LayoutRow) -> set[int]:
+    """Unit columns already recognised on the row, including a formula stub."""
+    return {cell.col for cell in row.cells if cell.role == "unit"}
+
+
+def _apply_indent_aggregate_parents(
+    rows: list[LayoutRow], aggregated: list[_AggregateSpans], units: list[bool]
+) -> None:
+    """A fact parents a deeper row only when its formula aggregates that row.
+
+    The nearest shallower row has to name the child. A single indent step, or a
+    sum of some other rows, leaves the section parent in place. The stack is
+    popped and pushed once per row. ``units`` is the caption check already made
+    while the rows were built.
+    """
+    stack: list[int] = []
+    for index, row in enumerate(rows):
+        if units[index]:
+            continue
+        while stack and rows[stack[-1]].indent >= row.indent:
+            stack.pop()
+        if stack:
+            prev = stack[-1]
+            earlier = rows[prev]
+            if _span_contains(aggregated[prev], row.row) and (
+                row.parent_row is None or earlier.row > row.parent_row
+            ):
+                row.parent_row = earlier.row
+        stack.append(index)
+
+
 def _apply_outline_parents(
     rows: list[LayoutRow],
     levels: list[int],
     summary_below: bool,
-    structural: list[bool] | None = None,
 ) -> None:
     """A nested outline level hangs off the summary row inside the group.
 
     Level 1 under a level 0 section is the collapsible band indent already
     models, so that parent stays. Level 2 under level 1 (IaaS under CAPEX)
-    replaces the indent parent when the summary sits closer.
+    replaces the indent parent when the summary sits closer. The summary keeps
+    its own ``kind``: a CAPEX fact remains a fact and still owns the group.
     ``summaryBelow`` false looks upward; true looks downward.
     """
     unit = [is_unit_text(row.label) for row in rows]
@@ -966,8 +1176,6 @@ def _apply_outline_parents(
         parent = rows[parent_index]
         parent_level = levels[parent_index]
         if parent_level <= 0:
-            continue
-        if structural is not None and not structural[parent_index]:
             continue
         if row.parent_row is None:
             row.parent_row = parent.row
@@ -1016,11 +1224,14 @@ def _row_all_hidden(
     return bool(row_cells) and all(cell.get("hidden") for cell in row_cells)
 
 
-def _ancestors(rows: list[LayoutRow], indent: int) -> list[LayoutRow]:
+def _ancestors(rows: list[LayoutRow], indent: int, start: int) -> list[LayoutRow]:
     """Nearest preceding row at each shallower indent: the row's outline parents."""
     found: list[LayoutRow] = []
+    if indent == 0:
+        return found
     level = indent
-    for prev in reversed(rows):
+    for index in range(len(rows) - 1, start - 1, -1):
+        prev = rows[index]
         if prev.indent < level:
             found.append(prev)
             level = prev.indent
@@ -1074,13 +1285,15 @@ def _is_blank_data_row(
     date1904: bool,
     *,
     has_unit: bool = False,
+    trailing_col: int | None = None,
 ) -> bool:
     """A data line with nothing to show, not a section title.
 
     A formula beside the label (`=IF(ISERROR(E9),"",E9)` returning blank) or a dash
     placeholder (`-`) in a period column marks a list item whose values are empty.
-    Name and note columns cannot supply evidence of data. A section title can
-    also carry formulas that print period captions.
+    Name, note, index and unit columns cannot supply that evidence. A unit formula
+    such as ``="тыс. руб."`` stays on the section. A numeric formula immediately
+    after the axis can be a terminal result even when the series is empty.
     """
     for cell in row_cells:
         col = int(cell["col"])
@@ -1091,7 +1304,7 @@ def _is_blank_data_row(
             if has_unit:
                 return True
             continue
-        if cell.get("formula_raw") and classify_atom(text) is None:
+        if cell.get("formula_raw") and (not text or (col == trailing_col and _is_number(text))):
             return True
         if col in period_cols and _DASH.fullmatch(text):
             return True
@@ -1131,23 +1344,21 @@ def _extra_name_columns(
     date1904: bool,
     column_roles: dict[int, str],
 ) -> set[int]:
-    """A name just to the right of the label span, when it is not one repeated note.
+    """A confirmed ``label`` column just to the right of the label span.
 
-    ``Коэффициент`` plus the indicator, and ``Приход`` beside a long banner, sit
-    here. A comment typed in every row, a year caption, and a far scenario
-    column do not.
+    ``Коэффициент`` plus the indicator sits under a ``Показатель`` header.
+    A neighbour is not a name, including one note on a single row of a short
+    table. A comment, a year caption and a far scenario column do not.
     """
     if not period_cols or not label_span:
         return set()
     left = min(period_cols)
     start = max(label_span) + 1
     limit = max(label_span) + 4
-    body = 0
     found: dict[int, list[str]] = defaultdict(list)
     for row_n in band_rows:
         if row_n in header_rows:
             continue
-        body += 1
         seen: set[int] = set()
         for cell in by_row[row_n]:
             col = int(cell["col"])
@@ -1160,15 +1371,7 @@ def _extra_name_columns(
                 continue
             seen.add(col)
             found[col].append(text.strip().casefold())
-    extra: set[int] = set()
-    for col, values in found.items():
-        distinct = set(values)
-        named = column_roles.get(col) == "label"
-        if named or len(distinct) >= 2 or (
-            len(distinct) == 1 and body <= 3 and len(values) == 1
-        ):
-            extra.add(col)
-    return extra
+    return {col for col in found if column_roles.get(col) == "label"}
 
 
 def _calendar_caption(text: str) -> bool:

@@ -115,11 +115,19 @@ def test_outline_summary_ignores_unit_text_and_resets_at_the_next_section() -> N
     ):
         below.extend(_line("O", row, label, value, outline=outline))
     parents = _parents(below, {"O": True})
-    # CAPEX carries numbers, so the outline summary is not a section parent.
-    assert parents["IaaS"] is None
-    assert parents["DC"] is None
+    # CAPEX keeps its numbers. The Excel group still owns IaaS and DC.
+    assert parents["IaaS"] == "CAPEX"
+    assert parents["DC"] == "CAPEX"
     assert parents["k£"] is None
     assert parents["Revenue"] == "Income"
+    kinds = {
+        row.label: row.kind
+        for sheet in detect_layout(below, summary_below={"O": True}).sheets
+        for block in sheet.blocks
+        for row in block.rows
+    }
+    assert kinds["CAPEX"] == "fact"
+    assert kinds["IaaS"] == "fact"
 
     above = [_c("A", "A1", "Item"), *_years("A")]
     for row, label, value, outline in (
@@ -132,10 +140,31 @@ def test_outline_summary_ignores_unit_text_and_resets_at_the_next_section() -> N
     ):
         above.extend(_line("A", row, label, value, outline=outline))
     parents = _parents(above, {"A": False})
-    assert parents["IaaS"] is None
-    assert parents["DC"] is None
+    assert parents["IaaS"] == "CAPEX"
+    assert parents["DC"] == "CAPEX"
     assert parents["k£"] is None
     assert parents["Revenue"] == "Income"
+    kinds = {
+        row.label: row.kind
+        for sheet in detect_layout(above, summary_below={"A": False}).sheets
+        for block in sheet.blocks
+        for row in block.rows
+    }
+    assert kinds["CAPEX"] == "fact"
+
+
+def test_resuming_a_table_after_another_ruler_does_not_reuse_its_old_section() -> None:
+    sheet = "CF"
+    by_row = {
+        2: [_c(sheet, "A2", "Sales")],
+        3: [_c(sheet, "A3", "Volume"), _c(sheet, "B3", "10")],
+        8: [_c(sheet, "A8", "Bank debt"), _c(sheet, "B8", "12")],
+    }
+    rows = _data_rows(by_row, [2, 3, 8], set(), [1], False, {2}, intervening_rulers=[5])
+    assert rows[1].parent_row == 2
+    assert rows[1].section_path == ["Sales"]
+    assert rows[2].parent_row is None
+    assert rows[2].section_path == []
 
 
 def _flat_facts(n: int) -> None:

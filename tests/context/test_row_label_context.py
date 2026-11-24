@@ -121,6 +121,279 @@ def test_a_blank_formula_in_a_label_column_preserves_the_section() -> None:
     assert rows[4].value_statuses == ["empty", "empty"]
 
 
+def test_an_aggregate_fact_enters_the_child_label_path_and_keeps_its_kind() -> None:
+    sheet = "ОПиУ"
+    cells = [_c(sheet, "C1", "2024"), _c(sheet, "D1", "2025")]
+    cells += [
+        _c(sheet, "A2", "Инвестиции"),
+        _c(sheet, "A3", "CAPEX"),
+        _c(sheet, "C3", "30", formula="=C4+C5"),
+        _c(sheet, "D3", "40", formula="=D4+D5"),
+        _c(sheet, "A4", "  IaaS CAPEX"),
+        _c(sheet, "C4", "18"),
+        _c(sheet, "D4", "20"),
+        _c(sheet, "A5", "  DC CAPEX"),
+        _c(sheet, "C5", "12"),
+        _c(sheet, "D5", "20"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[3].kind == "fact"
+    assert rows[3].values == ["30", "40"]
+    assert rows[4].parent_label == "CAPEX"
+    assert rows[4].label_path == ["Инвестиции", "CAPEX"]
+    assert rows[4].values == ["18", "20"]
+    assert rows[5].label_path == ["Инвестиции", "CAPEX"]
+
+
+def test_a_sum_on_another_sheet_leaves_the_section_label_path() -> None:
+    sheet = "ОПиУ"
+    cells = [_c(sheet, "C1", "2024"), _c(sheet, "D1", "2025")]
+    cells += [
+        _c(sheet, "A2", "Investments"),
+        _c(sheet, "A3", "CAPEX"),
+        _c(sheet, "C3", "30", formula="=SUM(Inputs!C4:C5)"),
+        _c(sheet, "D3", "40", formula="=SUM(Inputs!D4:D5)"),
+        _c(sheet, "A4", "  IaaS CAPEX"),
+        _c(sheet, "C4", "18"),
+        _c(sheet, "D4", "20"),
+        _c(sheet, "A5", "  DC CAPEX"),
+        _c(sheet, "C5", "12"),
+        _c(sheet, "D5", "14"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[3].kind == "fact"
+    assert rows[3].values == ["30", "40"]
+    assert rows[4].parent_label == "Investments"
+    assert rows[4].label_path == ["Investments"]
+    assert rows[4].values == ["18", "20"]
+    assert rows[5].label_path == ["Investments"]
+
+
+def test_a_sum_quoted_as_a_criterion_does_not_enter_the_label_path() -> None:
+    sheet = "ОПиУ"
+    cells = [_c(sheet, "C1", "2024"), _c(sheet, "D1", "2025")]
+    cells += [
+        _c(sheet, "A2", "Investments"),
+        _c(sheet, "A3", "CAPEX"),
+        _c(sheet, "C3", "30", formula='=COUNTIF(Inputs!C4:C5,"SUM(C4:C5)")'),
+        _c(sheet, "D3", "40", formula='=COUNTIF(Inputs!D4:D5,"SUM(D4:D5)")'),
+        _c(sheet, "A4", "  IaaS CAPEX"),
+        _c(sheet, "C4", "18"),
+        _c(sheet, "D4", "20"),
+        _c(sheet, "A5", "  DC CAPEX"),
+        _c(sheet, "C5", "12"),
+        _c(sheet, "D5", "14"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[3].kind == "fact"
+    assert rows[4].parent_label == "Investments"
+    assert rows[4].label_path == ["Investments"]
+    assert rows[4].values == ["18", "20"]
+    assert rows[5].label_path == ["Investments"]
+
+
+def test_a_local_sum_keeps_its_children_beside_another_sheet() -> None:
+    sheet = "ОПиУ"
+    cells = [_c(sheet, "C1", "2024"), _c(sheet, "D1", "2025")]
+    cells += [
+        _c(sheet, "A2", "Investments"),
+        _c(sheet, "A3", "CAPEX"),
+        _c(sheet, "C3", "30", formula="=SUM(C4:C5)+Inputs!C8"),
+        _c(sheet, "D3", "40", formula="=SUM(D4:D5)+Inputs!D8"),
+        _c(sheet, "A4", "  IaaS CAPEX"),
+        _c(sheet, "C4", "18"),
+        _c(sheet, "D4", "20"),
+        _c(sheet, "A5", "  DC CAPEX"),
+        _c(sheet, "C5", "12"),
+        _c(sheet, "D5", "14"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[3].kind == "fact"
+    assert rows[3].values == ["30", "40"]
+    assert rows[4].parent_label == "CAPEX"
+    assert rows[4].label_path == ["Investments", "CAPEX"]
+    assert rows[4].values == ["18", "20"]
+    assert rows[5].label_path == ["Investments", "CAPEX"]
+
+
+def _capex_children(formula_c: str, formula_d: str):
+    sheet = "ОПиУ"
+    cells = [_c(sheet, "C1", "2024"), _c(sheet, "D1", "2025")]
+    cells += [
+        _c(sheet, "A2", "Investments"),
+        _c(sheet, "A3", "CAPEX"),
+        _c(sheet, "C3", "30", formula=formula_c),
+        _c(sheet, "D3", "40", formula=formula_d),
+        _c(sheet, "A4", "  IaaS CAPEX"),
+        _c(sheet, "C4", "18"),
+        _c(sheet, "D4", "20"),
+        _c(sheet, "A5", "  DC CAPEX"),
+        _c(sheet, "C5", "12"),
+        _c(sheet, "D5", "14"),
+    ]
+    return {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+
+
+def test_a_sum_inside_an_if_test_does_not_enter_the_label_path() -> None:
+    rows = _capex_children("=IF(SUM(C4:C5)>0,C10,C11)", "=IF(SUM(D4:D5)>0,D10,D11)")
+    assert rows[3].kind == "fact"
+    assert rows[3].values == ["30", "40"]
+    assert rows[4].parent_label == "Investments"
+    assert rows[4].label_path == ["Investments"]
+    assert rows[4].values == ["18", "20"]
+    assert rows[5].label_path == ["Investments"]
+
+
+def test_a_sum_of_separate_refs_enters_the_label_path() -> None:
+    rows = _capex_children("=SUM(C4,C5)", "=SUM(D4,D5)")
+    assert rows[3].kind == "fact"
+    assert rows[4].parent_label == "CAPEX"
+    assert rows[4].label_path == ["Investments", "CAPEX"]
+    assert rows[5].label_path == ["Investments", "CAPEX"]
+    assert rows[4].values == ["18", "20"]
+
+
+def test_a_sum_keeps_a_local_range_beside_another_sheet() -> None:
+    rows = _capex_children("=SUM(Inputs!C8,C4:C5)", "=SUM(Inputs!D8,D4:D5)")
+    assert rows[4].parent_label == "CAPEX"
+    assert rows[4].label_path == ["Investments", "CAPEX"]
+    assert rows[5].label_path == ["Investments", "CAPEX"]
+    assert rows[4].values == ["18", "20"]
+
+
+@pytest.mark.parametrize(
+    ("formula_c", "formula_d"),
+    [
+        ("=C4+1", "=D4+1"),
+        ("=C4+C4", "=D4+D4"),
+        ("=IF(C10>0,C4+1,C5+1)", "=IF(D10>0,D4+1,D5+1)"),
+    ],
+)
+def test_only_a_formula_combining_distinct_rows_supplies_a_parent(
+    formula_c: str, formula_d: str
+) -> None:
+    rows = _capex_children(formula_c, formula_d)
+    assert rows[4].label_path == ["Investments"]
+    assert rows[5].label_path == ["Investments"]
+
+
+@pytest.mark.parametrize(
+    ("unit", "scale", "normalized"),
+    [
+        ("млн единиц", 1_000_000, ["2000000000", "3000000000"]),
+        ("млн долл.", 1_000_000, ["2000000000", "3000000000"]),
+        ("руб. / ед. продукции", 1, ["2000", "3000"]),
+        ("руб. / куб. м", 1, ["2000", "3000"]),
+        ("руб. / кВт*ч", 1, ["2000", "3000"]),
+    ],
+)
+def test_unit_beside_name_keeps_scale_without_joining_the_name(
+    unit: str, scale: int, normalized: list[str]
+) -> None:
+    sheet = "CF"
+    cells = [
+        _c(sheet, "A1", "Статья"),
+        _c(sheet, "C1", "2024"),
+        _c(sheet, "D1", "2025"),
+        _c(sheet, "A2", "Продукция"),
+        _c(sheet, "B2", unit),
+        _c(sheet, "C2", "2000"),
+        _c(sheet, "D2", "3000"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[2].label == "Продукция"
+    assert [(cell.addr, cell.role) for cell in rows[2].cells] == [("B2", "unit")]
+    assert rows[2].scale_factor == scale
+    assert rows[2].normalized_values == normalized
+
+
+def test_terminal_formula_keeps_the_row_a_fact_without_a_dated_value() -> None:
+    sheet = "DCF"
+    cells = [
+        _c(sheet, "A1", "Item"),
+        _c(sheet, "C1", "2024"),
+        _c(sheet, "D1", "2025"),
+        _c(sheet, "E1", "Terminal"),
+        _c(sheet, "A2", "DCF"),
+        _c(sheet, "A3", "Terminal value"),
+        _c(sheet, "B3", "млн руб."),
+        _c(sheet, "E3", "120", formula="=E10/(E11-E12)"),
+        _c(sheet, "A4", "Period length"),
+        _c(sheet, "C4", "1"),
+        _c(sheet, "D4", "1"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[3].kind == "fact"
+    assert rows[3].value_statuses == ["empty", "empty"]
+    assert rows[4].label_path == ["DCF"]
+
+
+def test_empty_inputs_continue_a_run_of_formula_generated_names() -> None:
+    sheet = "Sales"
+    cells = [
+        _c(sheet, "C1", "2024"),
+        _c(sheet, "D1", "2025"),
+        _c(sheet, "A2", "Revenue"),
+        _c(
+            sheet,
+            "A3",
+            "Sales 1",
+            formula='=I3&"Product 1"',
+            formula_template='=R[0]C[8]&"Product 1"',
+        ),
+        _c(sheet, "C3", "10"),
+        _c(sheet, "D3", "12"),
+        _c(
+            sheet,
+            "A4",
+            "Sales 2",
+            formula='=I4&"Product 2"',
+            formula_template='=R[0]C[8]&"Product 2"',
+        ),
+        _c(
+            sheet,
+            "A5",
+            "Sales 3",
+            formula='=I5&"Product 3"',
+            formula_template='=R[0]C[8]&"Product 3"',
+        ),
+        _c(sheet, "A6", "Costs"),
+        _c(sheet, "A7", "Materials"),
+        _c(sheet, "C7", "4"),
+        _c(sheet, "D7", "5"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    for n in (4, 5):
+        assert rows[n].kind == "fact"
+        assert rows[n].label_path == ["Revenue"]
+        assert rows[n].value_statuses == ["empty", "empty"]
+    assert rows[6].kind == "abstract"
+    assert rows[7].label_path == ["Costs"]
+
+
+def test_a_unit_formula_section_parents_the_next_indicator() -> None:
+    sheet = "ОПиУ"
+    cells = [
+        _c(sheet, "A1", "Показатель"),
+        _c(sheet, "B1", "Ед. изм."),
+        _c(sheet, "C1", "2024"),
+        _c(sheet, "D1", "2025"),
+        _c(sheet, "A2", "Раздел"),
+        _c(sheet, "B2", "тыс. руб.", formula='="тыс. руб."'),
+        _c(sheet, "A3", "Выручка"),
+        _c(sheet, "C3", "10"),
+        _c(sheet, "D3", "12"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[2].kind == "abstract"
+    assert rows[2].label == "Раздел"
+    assert rows[3].kind == "fact"
+    assert rows[3].label == "Выручка"
+    assert rows[3].label_path == ["Раздел"]
+    assert rows[3].parent_label == "Раздел"
+    assert rows[3].values == ["10", "12"]
+
+
 def test_a_valued_profit_line_is_absent_from_the_following_label_path() -> None:
     cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
     cells += [

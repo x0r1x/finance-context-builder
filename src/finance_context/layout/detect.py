@@ -170,6 +170,7 @@ def _blocks_indexed(
     group_cols = [
         {period.col for _band, axis in group for period in axis.periods} for group in groups
     ]
+    group_headers = [{axis.header_row for _band, axis in group} for group in groups]
     raw_bodies = [
         _group_body(index, groups, group_cols, row_ids, title_owner) for index in range(len(groups))
     ]
@@ -213,6 +214,12 @@ def _blocks_indexed(
             hidden_row_ids=hidden_row_ids,
             column_roles=column_roles,
             name_headers=name_headers,
+            intervening_rulers=sorted({
+                header
+                for other, columns in enumerate(group_cols)
+                if other != index and period_cols & columns
+                for header in group_headers[other]
+            }),
         )
         data_rows, carved = carve_params_regions(
             sheet, data_rows, by_row, date1904, period_cols, label_col
