@@ -802,3 +802,478 @@ def test_a_formula_that_prints_period_captions_keeps_a_section_title() -> None:
     rows = {row.label: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
     assert rows["Widgets owed"].kind == "abstract"
     assert rows["Gadgets owed"].parent_row == rows["Widgets owed"].row
+
+
+def _years(sheet: str, row: int, cols: str) -> list[dict]:
+    years = ["2024", "2025"]
+    return [
+        _c(sheet, f"{col}{row}", year) for col, year in zip(cols, years, strict=True)
+    ]
+
+
+def test_label_joins_a_coefficient_and_the_indicator_name() -> None:
+    cells = [_c("ОПиУ", "A1", "Группа"), _c("ОПиУ", "B1", "Показатель")]
+    cells += _years("ОПиУ", 1, "DE")
+    cells += [
+        _c("ОПиУ", "A2", "Коэффициент"),
+        _c("ОПиУ", "B2", "Текущая ликвидность"),
+        _c("ОПиУ", "D2", "1.2"),
+        _c("ОПиУ", "E2", "1.4"),
+    ]
+    rows = detect_layout(cells).sheets[0].blocks[0].rows
+    assert rows[0].label == "Коэффициент Текущая ликвидность"
+
+
+def test_far_left_caption_does_not_hide_the_name_beside_the_values() -> None:
+    """Hugenson «Затраты»: B29 is a banner and F29 is the line name «Приход»."""
+    banner = "Затраты в пересчете на 1 кв. м общей пл.:"
+    cells = [_c("Затраты", "H4", "2020-06"), _c("Затраты", "I4", "2020-07")]
+    cells += [
+        _c("Затраты", "F28", "Расход"),
+        _c("Затраты", "H28", "10"),
+        _c("Затраты", "I28", "11"),
+        _c("Затраты", "B29", banner),
+        _c("Затраты", "F29", "Приход"),
+        _c("Затраты", "H29", "12"),
+        _c("Затраты", "I29", "13"),
+        _c("Затраты", "B31", banner),
+        _c("Затраты", "H31", "14"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[28].label == "Расход"
+    assert rows[29].label == "Приход"
+    assert rows[31].label == banner
+
+
+def test_formula_cache_text_is_the_label_and_other_caches_are_not() -> None:
+    cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
+    cells += [
+        _c("ОПиУ", "A2", None, formula='=B10'),
+        _c("ОПиУ", "B2", "Проценты к получению", formula="=B10"),
+        _c("ОПиУ", "C2", "5"),
+        _c("ОПиУ", "D2", "6"),
+        _c("ОПиУ", "B3", None, formula="=B11"),
+        _c("ОПиУ", "C3", "1"),
+        _c("ОПиУ", "A4", "Статья"),
+        _c("ОПиУ", "B4", "#N/A", formula="=B12"),
+        _c("ОПиУ", "C4", "2"),
+        _c("ОПиУ", "A5", "Сумма"),
+        _c("ОПиУ", "B5", "3000", formula="=B13"),
+        _c("ОПиУ", "C5", "3"),
+        _c("ОПиУ", "A6", "Выручка"),
+        _c("ОПиУ", "B6", "Выручка"),
+        _c("ОПиУ", "C6", "тыс. руб."),
+        _c("ОПиУ", "D6", "4"),
+        _c("ОПиУ", "A7", "Выручка"),
+        _c("ОПиУ", "B7", "Факт"),
+        _c("ОПиУ", "C7", "8"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Проценты к получению"
+    assert 3 not in rows
+    assert rows[4].label == "Статья"
+    assert rows[5].label == "Сумма"
+    assert "3000" not in rows[5].label
+    assert rows[6].label == "Выручка"
+    assert "тыс. руб." not in rows[6].label
+    assert rows[7].label == "Выручка"
+
+
+def test_a_note_column_stays_out_of_the_name_and_the_row_stays_fact() -> None:
+    cells = [
+        _c("P&L", "A1", "Item"),
+        _c("P&L", "B1", "Notes"),
+        _c("P&L", "C1", "2024"),
+        _c("P&L", "D1", "2025"),
+        _c("P&L", "A2", "Revenue"),
+        _c("P&L", "B2", "Check"),
+        _c("P&L", "C2", "10"),
+        _c("P&L", "D2", "11"),
+    ]
+    row = detect_layout(cells).sheets[0].blocks[0].rows[0]
+    assert row.label == "Revenue"
+    assert row.kind == "fact"
+
+
+def test_a_named_second_column_survives_extra_rows() -> None:
+    cells = [_c("ОПиУ", "A1", "Группа"), _c("ОПиУ", "B1", "Показатель")]
+    cells += _years("ОПиУ", 1, "DE")
+    cells += [
+        _c("ОПиУ", "A2", "Коэффициент"),
+        _c("ОПиУ", "B2", "Текущая ликвидность"),
+        _c("ОПиУ", "D2", "1.2"),
+        _c("ОПиУ", "E2", "1.4"),
+        _c("ОПиУ", "A3", "Выручка"),
+        _c("ОПиУ", "D3", "10"),
+        _c("ОПиУ", "E3", "11"),
+        _c("ОПиУ", "A4", "Себестоимость"),
+        _c("ОПиУ", "D4", "4"),
+        _c("ОПиУ", "E4", "5"),
+        _c("ОПиУ", "A5", "Прибыль"),
+        _c("ОПиУ", "D5", "6"),
+        _c("ОПиУ", "E5", "7"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Коэффициент Текущая ликвидность"
+
+
+def test_a_formula_cache_beside_the_title_is_not_a_second_name() -> None:
+    """A text cache in the next column is a note, not part of the section name."""
+    cells = [_c("CF", "C1", "2024"), _c("CF", "D1", "2025")]
+    cells += [
+        _c("CF", "A2", "Section"),
+        _c("CF", "B2", "Operating Activities", formula="=A10"),
+        _c("CF", "A3", "Revenue"),
+        _c("CF", "C3", "10"),
+        _c("CF", "D3", "11"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Section"
+    assert rows[2].kind == "abstract"
+    assert rows[3].section_path == ["Section"]
+
+
+def test_modern_formula_errors_stay_out_of_the_label() -> None:
+    cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
+    cells += [
+        _c("ОПиУ", "A2", "Revenue"),
+        _c("ОПиУ", "B2", "#SPILL!", formula="=B10"),
+        _c("ОПиУ", "C2", "5"),
+        _c("ОПиУ", "A3", "Costs"),
+        _c("ОПиУ", "B3", "#CALC!", formula="=B11"),
+        _c("ОПиУ", "C3", "1"),
+        _c("ОПиУ", "A4", "Tax"),
+        _c("ОПиУ", "B4", "#N/A", formula="=B12"),
+        _c("ОПиУ", "C4", "2"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Revenue"
+    assert rows[3].label == "Costs"
+    assert rows[4].label == "Tax"
+    from finance_context.layout.rows import _name_columns
+
+    row = [
+        _c("Sheet", "A2", "Выручка"),
+        _c("Sheet", "C2", "1"),
+        _c("Sheet", "F2", "Себестоимость"),
+        _c("Sheet", "H2", "3"),
+    ]
+    assert _name_columns([1], set(), row) == [1]
+    assert _name_columns([6], set(), row) == [6]
+
+
+def test_one_note_in_a_short_table_stays_out_of_the_name() -> None:
+    cells = [
+        _c("ОПиУ", "A1", "Показатель"),
+        _c("ОПиУ", "C1", "2024"),
+        _c("ОПиУ", "D1", "2025"),
+        _c("ОПиУ", "A2", "Revenue"),
+        _c("ОПиУ", "B2", "See agreement"),
+        _c("ОПиУ", "C2", "10"),
+        _c("ОПиУ", "D2", "11"),
+        _c("ОПиУ", "A3", "Costs"),
+        _c("ОПиУ", "C3", "4"),
+        _c("ОПиУ", "D3", "5"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Revenue"
+    assert rows[3].label == "Costs"
+
+
+def test_one_formula_note_in_a_short_table_stays_out_of_the_name() -> None:
+    cells = [
+        _c("ОПиУ", "A1", "Показатель"),
+        _c("ОПиУ", "C1", "2024"),
+        _c("ОПиУ", "D1", "2025"),
+        _c("ОПиУ", "A2", "Revenue"),
+        _c("ОПиУ", "B2", "See agreement", formula="=Z2"),
+        _c("ОПиУ", "C2", "10"),
+        _c("ОПиУ", "D2", "11"),
+        _c("ОПиУ", "A3", "Costs"),
+        _c("ОПиУ", "C3", "4"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Revenue"
+    assert rows[2].kind == "fact"
+
+
+def test_distinct_notes_without_a_header_stay_out_of_the_name() -> None:
+    cells = [
+        _c("ОПиУ", "A1", "Показатель"),
+        _c("ОПиУ", "C1", "2024"),
+        _c("ОПиУ", "D1", "2025"),
+        _c("ОПиУ", "A2", "Выручка"),
+        _c("ОПиУ", "B2", "см. договор"),
+        _c("ОПиУ", "C2", "10"),
+        _c("ОПиУ", "D2", "11"),
+        _c("ОПиУ", "A3", "Себестоимость"),
+        _c("ОПиУ", "B3", "без НДС"),
+        _c("ОПиУ", "C3", "4"),
+        _c("ОПиУ", "D3", "5"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Выручка"
+    assert rows[3].label == "Себестоимость"
+    assert rows[2].kind == "fact"
+    assert rows[3].kind == "fact"
+
+
+def test_an_aggregate_formula_parents_only_the_rows_it_sums() -> None:
+    cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
+    cells += [
+        _c("ОПиУ", "A2", "Инвестиции"),
+        _c("ОПиУ", "A3", "CAPEX"),
+        _c("ОПиУ", "C3", "30", formula="=C4+C5"),
+        _c("ОПиУ", "D3", "40", formula="=D4+D5"),
+        _c("ОПиУ", "A4", "  IaaS CAPEX"),
+        _c("ОПиУ", "C4", "18"),
+        _c("ОПиУ", "D4", "20"),
+        _c("ОПиУ", "A5", "  DC CAPEX"),
+        _c("ОПиУ", "C5", "12"),
+        _c("ОПиУ", "D5", "20"),
+        _c("ОПиУ", "A6", "  Прочее"),
+        _c("ОПиУ", "C6", "1"),
+        _c("ОПиУ", "D6", "1"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[3].kind == "fact"
+    assert rows[4].parent_row == 3
+    assert rows[5].parent_row == 3
+    assert rows[4].section_path == ["Инвестиции"]
+    assert rows[5].section_path == ["Инвестиции"]
+    assert rows[6].parent_row == 2
+    assert rows[6].section_path == ["Инвестиции"]
+
+
+def test_a_repayment_subtotal_without_an_outline_parents_its_lines() -> None:
+    """Auchan «Денежные потоки»!54 sums !55+!56 in the same period column, with no group."""
+    cells = [_c("Денежные потоки", "C1", "2024"), _c("Денежные потоки", "D1", "2025")]
+    cells += [
+        _c("Денежные потоки", "A2", "Финансовый денежный поток"),
+        _c("Денежные потоки", "A3", "Погашение обязательств, за кв."),
+        _c("Денежные потоки", "C3", "0", formula="=C4+C5"),
+        _c("Денежные потоки", "D3", "0", formula="=D4+D5"),
+        _c("Денежные потоки", "A4", "  Текущих обязательств в Сбербанке"),
+        _c("Денежные потоки", "C4", "1"),
+        _c("Денежные потоки", "D4", "2"),
+        _c("Денежные потоки", "A5", "  Текущих обязательств в других банках"),
+        _c("Денежные потоки", "C5", "3"),
+        _c("Денежные потоки", "D5", "4"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[3].kind == "fact"
+    assert rows[4].parent_row == 3
+    assert rows[5].parent_row == 3
+    assert rows[4].section_path == ["Финансовый денежный поток"]
+    assert rows[5].section_path == ["Финансовый денежный поток"]
+
+
+def test_a_balance_subtotal_without_an_outline_parents_its_lines() -> None:
+    """VEB BS_PL_DCF!4 is SUM of !5:!6. Outline level is 0; the subtotal still parents."""
+    cells = [_c("BS_PL_DCF", "C1", "2018"), _c("BS_PL_DCF", "D1", "2019")]
+    cells += [
+        _c("BS_PL_DCF", "A2", "Бухгалтерский баланс"),
+        _c("BS_PL_DCF", "A3", "Необоротные активы"),
+        _c("BS_PL_DCF", "C3", "260000", formula="=SUM(C4:C5)"),
+        _c("BS_PL_DCF", "D3", "252866", formula="=SUM(D4:D5)"),
+        _c("BS_PL_DCF", "A4", "  Основные средства"),
+        _c("BS_PL_DCF", "C4", "250000"),
+        _c("BS_PL_DCF", "D4", "242866"),
+        _c("BS_PL_DCF", "A5", "  Прочее"),
+        _c("BS_PL_DCF", "C5", "10000"),
+        _c("BS_PL_DCF", "D5", "10000"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[3].kind == "fact"
+    assert rows[4].parent_row == 3
+    assert rows[5].parent_row == 3
+    assert rows[4].section_path == ["Бухгалтерский баланс"]
+    assert rows[5].section_path == ["Бухгалтерский баланс"]
+
+
+def test_a_sum_down_a_parallel_column_does_not_parent_local_rows() -> None:
+    """Same physical rows, another column: the sum is not this table's parent."""
+    cells = [_c("BS", "C1", "2018"), _c("BS", "D1", "2019")]
+    cells += [
+        _c("BS", "A2", "Бухгалтерский баланс"),
+        _c("BS", "A3", "Необоротные активы"),
+        _c("BS", "C3", "1", formula="=SUM(H4:H5)"),
+        _c("BS", "D3", "2", formula="=SUM(I4:I5)"),
+        _c("BS", "A4", "  Основные средства"),
+        _c("BS", "C4", "10"),
+        _c("BS", "D4", "11"),
+        _c("BS", "A5", "  Прочее"),
+        _c("BS", "C5", "3"),
+        _c("BS", "D5", "4"),
+        _c("BS", "H4", "250000"),
+        _c("BS", "H5", "10000"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[4].parent_row == 2
+    assert rows[5].parent_row == 2
+    assert rows[4].section_path == ["Бухгалтерский баланс"]
+
+
+def test_a_sum_on_another_sheet_does_not_parent_local_rows() -> None:
+    cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
+    cells += [
+        _c("ОПиУ", "A2", "Investments"),
+        _c("ОПиУ", "A3", "CAPEX"),
+        _c("ОПиУ", "C3", "30", formula="=SUM(Inputs!C4:C5)"),
+        _c("ОПиУ", "D3", "40", formula="=SUM(Inputs!D4:D5)"),
+        _c("ОПиУ", "A4", "  IaaS CAPEX"),
+        _c("ОПиУ", "C4", "18"),
+        _c("ОПиУ", "D4", "20"),
+        _c("ОПиУ", "A5", "  DC CAPEX"),
+        _c("ОПиУ", "C5", "12"),
+        _c("ОПиУ", "D5", "14"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[3].kind == "fact"
+    assert rows[4].parent_row == 2
+    assert rows[5].parent_row == 2
+    assert rows[4].section_path == ["Investments"]
+    assert rows[5].section_path == ["Investments"]
+
+
+def test_a_local_sum_range_parents_only_its_rows() -> None:
+    cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
+    cells += [
+        _c("ОПиУ", "A2", "Investments"),
+        _c("ОПиУ", "A3", "CAPEX"),
+        _c("ОПиУ", "C3", "30", formula="=SUM(C4:C5)"),
+        _c("ОПиУ", "D3", "40", formula="=SUM(ОПиУ!D4:D5)"),
+        _c("ОПиУ", "A4", "  IaaS CAPEX"),
+        _c("ОПиУ", "C4", "18"),
+        _c("ОПиУ", "D4", "20"),
+        _c("ОПиУ", "A5", "  DC CAPEX"),
+        _c("ОПиУ", "C5", "12"),
+        _c("ОПиУ", "D5", "14"),
+        _c("ОПиУ", "A6", "  Прочее"),
+        _c("ОПиУ", "C6", "1"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[4].parent_row == 3
+    assert rows[5].parent_row == 3
+    assert rows[6].parent_row == 2
+
+
+def test_a_full_column_sum_keeps_its_bounds() -> None:
+    from finance_context.layout.rows import _vertical_aggregate_rows
+
+    spans = _vertical_aggregate_rows("=SUM(C1:C1048576)", 6, "ОПиУ", 3).spans
+    assert spans == ((1, 1048576),)
+    assert _vertical_aggregate_rows("=SUM(Inputs!C4:C5)", 3, "ОПиУ", 3).spans == ()
+    assert _vertical_aggregate_rows("=SUM('ОПиУ'!C4:C5)", 3, "ОПиУ", 3).spans == ((4, 5),)
+    assert (
+        _vertical_aggregate_rows('=COUNTIF(Inputs!C4:C5,"SUM(C4:C5)")', 3, "ОПиУ", 3).spans == ()
+    )
+    assert _vertical_aggregate_rows("=SUM(C4:C5)+Inputs!C8", 3, "ОПиУ", 3).spans == ((4, 5),)
+    assert _vertical_aggregate_rows("=IF(SUM(C4:C5)>0,C10,C11)", 3, "ОПиУ", 3).spans == ()
+    assert _vertical_aggregate_rows("=SUM(C4,C5)", 3, "ОПиУ", 3).spans == ((4, 4), (5, 5))
+    assert _vertical_aggregate_rows("=SUM(Inputs!C8,C4:C5)", 3, "ОПиУ", 3).spans == ((4, 5),)
+    assert _vertical_aggregate_rows("=SUM(H4:H5)", 3, "ОПиУ", 3).spans == ()
+
+
+def test_a_unit_formula_keeps_a_section_and_parents_the_next_line() -> None:
+    cells = [
+        _c("ОПиУ", "A1", "Показатель"),
+        _c("ОПиУ", "B1", "Ед. изм."),
+        _c("ОПиУ", "C1", "2024"),
+        _c("ОПиУ", "D1", "2025"),
+        _c("ОПиУ", "A2", "Раздел"),
+        _c("ОПиУ", "B2", "тыс. руб.", formula='="тыс. руб."'),
+        _c("ОПиУ", "A3", "Выручка"),
+        _c("ОПиУ", "C3", "10"),
+        _c("ОПиУ", "D3", "12"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].label == "Раздел"
+    assert rows[2].kind == "abstract"
+    assert rows[3].parent_row == 2
+    assert rows[3].section_path == ["Раздел"]
+    assert rows[3].kind == "fact"
+
+
+def test_a_unit_formula_without_a_header_stays_a_section_via_the_stub() -> None:
+    cells = [
+        _c("ОПиУ", "A1", "Показатель"),
+        _c("ОПиУ", "C1", "2024"),
+        _c("ОПиУ", "D1", "2025"),
+        _c("ОПиУ", "A2", "Раздел"),
+        _c("ОПиУ", "B2", "тыс. руб.", formula='="тыс. руб."'),
+        _c("ОПиУ", "A3", "Выручка"),
+        _c("ОПиУ", "C3", "10"),
+        _c("ОПиУ", "D3", "12"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[2].kind == "abstract"
+    assert any(cell.role == "unit" for cell in rows[2].cells)
+    assert rows[3].parent_row == 2
+    assert rows[3].section_path == ["Раздел"]
+
+
+def test_an_empty_period_formula_still_marks_a_data_row() -> None:
+    cells = [
+        _c("ОПиУ", "A1", "Показатель"),
+        _c("ОПиУ", "B1", "Ед. изм."),
+        _c("ОПиУ", "C1", "2024"),
+        _c("ОПиУ", "D1", "2025"),
+        _c("ОПиУ", "A2", "Выручка"),
+        _c("ОПиУ", "B2", "тыс. руб.", formula='="тыс. руб."'),
+        _c("ОПиУ", "C2", None, formula="=C9"),
+        _c("ОПиУ", "D2", None, formula="=D9"),
+    ]
+    row = detect_layout(cells).sheets[0].blocks[0].rows[0]
+    assert row.label == "Выручка"
+    assert row.kind == "fact"
+
+
+def test_a_valued_total_is_not_the_parent_of_the_next_lines() -> None:
+    cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
+    cells += [
+        _c("ОПиУ", "A12", "Валовая прибыль"),
+        _c("ОПиУ", "C12", "100"),
+        _c("ОПиУ", "D12", "110"),
+        _c("ОПиУ", "A13", "  Коммерческие расходы"),
+        _c("ОПиУ", "C13", "10"),
+        _c("ОПиУ", "A14", "  Управленческие расходы"),
+        _c("ОПиУ", "C14", "20"),
+        _c("ОПиУ", "A15", "Прибыль (убыток) от реализации"),
+        _c("ОПиУ", "C15", "70"),
+        _c("ОПиУ", "D15", "80"),
+        _c("ОПиУ", "A16", "  Проценты к получению", formula=None),
+        _c("ОПиУ", "C16", "5"),
+        _c("ОПиУ", "A20", "Прибыль до налогообложения"),
+        _c("ОПиУ", "C20", None, formula="=C15+C16"),
+        _c("ОПиУ", "A21", "  Налог"),
+        _c("ОПиУ", "C21", "2"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[15].kind == "fact"
+    assert rows[16].section_path == []
+    assert rows[16].parent_row is None
+    assert rows[13].parent_row is None
+    assert rows[20].kind == "fact"
+    assert rows[21].parent_row is None
+    assert rows[21].section_path == []
+
+
+def test_blank_prochie_is_not_a_section_and_a_real_one_is() -> None:
+    cells = [_c("BS", "C1", "2024"), _c("BS", "D1", "2025")]
+    cells += [
+        _c("BS", "A2", "Прочие"),
+        _c("BS", "A3", "Капитал"),
+        _c("BS", "C3", "10"),
+        _c("BS", "A4", "Займы"),
+        _c("BS", "C4", "20"),
+        _c("BS", "A6", "Прочие"),
+        _c("BS", "A7", "  Прочие доходы"),
+        _c("BS", "C7", "3"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[3].section_path == []
+    assert rows[3].parent_row is None
+    assert rows[4].section_path == []
+    assert rows[7].section_path == ["Прочие"]
+    assert rows[7].parent_row == 6

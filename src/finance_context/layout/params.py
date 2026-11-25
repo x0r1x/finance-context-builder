@@ -6,10 +6,10 @@ from pathlib import Path
 
 from finance_context.excel.a1 import format_addr, in_grid, index_to_col, parse_addr
 from finance_context.layout.cells import LayoutCell, parse_number
-from finance_context.layout.format_words import header_role_map
+from finance_context.layout.format_words import header_role_map, is_entry_instruction
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 from finance_context.layout.periods import display_cell_text, period_like_header
-from finance_context.layout.units import is_unit_text
+from finance_context.layout.units import annotated_unit_caption, is_unit_text
 from finance_context.layout.units import unit_kind_from_text as unit_kind_from_text
 
 # "Parameter / Value / Units / Notes" and "Параметр / Значение / Ед. изм. / Примечание".
@@ -88,17 +88,28 @@ def attach_stub_cells(
     date1904: bool,
     by_row: dict[int, list[dict]] | None = None,
     floor_row: int | None = None,
+    name_cols: set[int] | None = None,
+    note_cols: set[int] | None = None,
+    index_cols: set[int] | None = None,
 ) -> LayoutRow:
     if not period_cols:
         return row
     left_edge = min(period_cols)
-    # The span is the name hierarchy, which can skip a column. That column
-    # stays a cell. max(label_span) would drop it with the label.
+    named = name_cols or set()
+    notes = note_cols or set()
+    indexes = index_cols or set()
+    # Hierarchy columns may straddle a code or a note.
     hierarchy = set(label_span)
     tagged: list[RowCell] = []
     for cell in row_cells:
         col = int(cell["col"])
-        if col in hierarchy or col >= left_edge or col in period_cols:
+        if col in named or col >= left_edge:
+            continue
+        if col in notes:
+            if _text(cell, date1904) or cell.get("formula_raw") or cell.get("formula_template"):
+                tagged.append(RowCell(col=col, role="note"))
+            continue
+        if col in hierarchy:
             continue
         role = _stub_role(cell, row.row, date1904)
         header = None
@@ -106,7 +117,9 @@ def attach_stub_cells(
             header = column_header_text(
                 by_row, col, row.row, floor_row, date1904, label_col=row.label_col
             )
-        if header and _is_index_header(header):
+        if col in indexes or (header and _is_index_header(header)):
+            if role is None and not _text(cell, date1904) and not cell.get("formula_template"):
+                continue
             role = "index"
         if role is None:
             continue
@@ -1169,8 +1182,10 @@ def _stub_role(cell: dict, row: int, date1904: bool) -> str | None:
     template = str(cell.get("formula_template") or "")
     if _is_same_row_total(formula, template, row):
         return "total"
-    if text and is_unit_text(text):
+    if text and (is_unit_text(text) or annotated_unit_caption(text)):
         return "unit"
+    if text and is_entry_instruction(text):
+        return "note"
     if text and len(text) <= 8 and not _is_number(text) and not formula:
         if any(ch in text for ch in "%£$€₽/"):
             return "unit"

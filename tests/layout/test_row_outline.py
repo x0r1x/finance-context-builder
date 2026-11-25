@@ -203,8 +203,7 @@ def test_outline_indent_and_rurm_survive_parse_and_context(tmp_path: Path, dest:
     assert "style_indent" not in ir[0]
     layout = layout_workbook(dest)
     output = _parents(layout, "Output")
-    # Two spaces make CAPEX indent 2; IaaS has only alignment indent 1.
-    # Outline level 2 under level 1 still hangs IaaS off CAPEX.
+    # CAPEX stays a fact. Its Excel group still owns IaaS and DC.
     assert output["IaaS CAPEX"] == "CAPEX"
     assert output["DC CAPEX"] == "CAPEX"
     assert output["CAPEX"] == "CF from Investing Activities"
@@ -217,9 +216,11 @@ def test_outline_indent_and_rurm_survive_parse_and_context(tmp_path: Path, dest:
         for row in block.rows
     }
     assert rows["CAPEX"].indent == 2
+    assert rows["CAPEX"].kind == "fact"
     assert rows["IaaS CAPEX"].indent == 1
 
-    assert _parents(layout, "Style")["IaaS CAPEX"] == "CAPEX"
+    # Indent alone does not make a numbered line a parent. The Excel group does.
+    assert _parents(layout, "Style")["IaaS CAPEX"] == "CF from Investing Activities"
     assert _parents(layout, "Below")["IaaS CAPEX"] == "CAPEX"
     assert _parents(layout, "Below")["DC CAPEX"] == "CAPEX"
     assert _parents(layout, "FormatPr")["IaaS CAPEX"] == "CAPEX"
@@ -253,6 +254,8 @@ def test_outline_indent_and_rurm_survive_parse_and_context(tmp_path: Path, dest:
 
     iaas_row = lines[("Output", "IaaS CAPEX")]
     assert iaas_row.parent_label == "CAPEX"
+    assert iaas_row.label_path == ["CF from Investing Activities", "CAPEX"]
+    assert lines[("Output", "CAPEX")].kind == "fact"
     assert iaas_row.hints.scale == "m"
     assert iaas_row.scale_factor == 1_000_000
     assert "1817000000" in iaas_row.normalized_values

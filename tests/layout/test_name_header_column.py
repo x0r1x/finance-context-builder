@@ -61,16 +61,17 @@ def test_name_header_is_the_row_label_not_the_type_column() -> None:
     assert {row.label_col for row in block.rows} == {2}
 
 
-def test_two_text_columns_without_a_name_header_keep_the_left_label() -> None:
+def test_without_a_name_header_composition_keeps_the_left_anchor() -> None:
     block = detect_layout(_typed_table("Статья")).sheets[0].blocks[0]
     assert [row.label for row in block.rows] == [
-        "Общий (не УФН)",
-        "Коэффициент",
-        "Расчетный показатель",
-        "Общий (не УФН)",
-        "Общий (не УФН)",
+        "Общий (не УФН) CFADS",
+        "Коэффициент DSCR",
+        "Расчетный показатель FCF",
+        "Общий (не УФН) NCF",
+        "Общий (не УФН) Debt Service",
     ]
     assert block.label_col == 1
+    assert {row.label_col for row in block.rows} == {1}
 
 
 def test_profile_name_header_selects_that_column() -> None:
@@ -149,6 +150,36 @@ def test_code_column_between_type_and_name_reaches_role_cells() -> None:
     )
     published = next(row for item in doc.blocks for row in item.rows if row.label == "DSCR")
     assert [(cell.col, cell.role) for cell in published.cells if cell.col == 2] == [(2, "index")]
+
+
+def test_coded_item_with_empty_periods_stays_a_fact() -> None:
+    from tests.helpers.published import published_context
+
+    cells = [
+        _c("Out", "A1", "Наименование"),
+        _c("Out", "B1", "Код строки"),
+        _c("Out", "C1", "2023"),
+        _c("Out", "D1", "2024"),
+        _c("Out", "A2", "Операционные расходы"),
+        _c("Out", "B2", "001"),
+        _c("Out", "A3", "Выручка"),
+        _c("Out", "B3", "002"),
+        _c("Out", "C3", "10"),
+        _c("Out", "D3", "11"),
+    ]
+    doc = published_context(
+        job_id="coded-empty-item",
+        workbook_meta={"sheets": [{"name": "Out"}]},
+        cells=cells,
+        layout=detect_layout(cells),
+    )
+    rows = {row.label: row for block in doc.blocks for row in block.rows}
+    assert rows["Операционные расходы"].kind == "fact"
+    assert rows["Операционные расходы"].value_statuses == ["empty", "empty"]
+    assert [(cell.role, cell.cached_value) for cell in rows["Операционные расходы"].cells] == [
+        ("index", "001")
+    ]
+    assert rows["Выручка"].label_path == []
 
 
 def test_flat_type_and_name_columns_stay_one_level() -> None:
