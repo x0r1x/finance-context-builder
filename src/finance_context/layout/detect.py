@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import defaultdict
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from finance_context.formulas.models import as_edge
 from finance_context.layout.axes import _axis_candidates, _series_row_above, _table_groups
 from finance_context.layout.cells import _is_number, _text, bind_row_index, clear_row_index
 from finance_context.layout.coverage import chart_note, coverage_blocks
+from finance_context.layout.format_words import is_entry_instruction
 from finance_context.layout.models import (
     Block,
     Layout,
@@ -22,11 +24,14 @@ from finance_context.layout.params import (
 from finance_context.layout.periods import classify_header
 from finance_context.layout.resolve import project_axis
 from finance_context.layout.rows import (
+    _NAME_COLUMN_SKIP,
+    _SERVICE_MARK,
     _band_title,
     _column_headers,
     _data_rows,
     _is_banner_gap,
     _is_empty_row,
+    _label_piece,
     _label_span,
     _year_label_section,
 )
@@ -161,55 +166,70 @@ def _blocks_indexed(
     found, axis_notes = _axis_candidates(sheet, by_row, date1904, hidden_cols)
     vertical = [item for item in found if item[1].transposed]
     candidates = [item for item in found if not item[1].transposed]
-    groups = _table_groups(candidates)
+    groups = _split_side_tables(_table_groups(candidates), by_row, row_ids, date1904)
     blocks: list[Block] = []
     params_blocks: list[Block] = []
     axes: list[TimeAxis] = []
     header_rows: set[int] = set()
-    title_owner = _section_title_owners(groups, by_row, date1904)
-    group_cols = [
-        {period.col for _band, axis in group for period in axis.periods} for group in groups
-    ]
+    group_cols = [_group_columns(group) for group in groups]
+    starts, ends = _group_bounds(groups, group_cols, row_ids)
+    limits = _side_limits(groups, group_cols, starts, ends, by_row, row_ids, date1904)
+    local_rows = [_table_cells(by_row, low, high) for low, high in limits]
+    title_owners = _section_title_owners(groups, group_cols, local_rows, starts, date1904)
     group_headers = [{axis.header_row for _band, axis in group} for group in groups]
     raw_bodies = [
-        _group_body(index, groups, group_cols, row_ids, title_owner) for index in range(len(groups))
+        _group_body(index, group_cols, row_ids, starts, ends, title_owners)
+        for index in range(len(groups))
     ]
-    bodies = _assign_overlapping_rows(raw_bodies, groups, group_cols, by_row, date1904)
+    reveal_rows = [
+        {row for row, owners in title_owners.items() if index in owners}
+        for index in range(len(groups))
+    ]
+    captions = [
+        _column_headers(local, group[0][0], reveal, columns, date1904)
+        for local, group, reveal, columns in zip(
+            local_rows, groups, reveal_rows, group_cols, strict=True
+        )
+    ]
+    bodies = _assign_overlapping_rows(
+        raw_bodies, groups, group_cols, by_row, local_rows, limits, captions, date1904
+    )
     for index, group in enumerate(groups):
-        band_rows = group[0][0]
         group_axes = [axis for _, axis in group]
         axes.extend(group_axes)
         body_rows = bodies[index]
         period_cols = group_cols[index]
-        reveal_rows = {row_n for row_n, owner in title_owner.items() if owner == index}
-        table_headers, column_roles = _column_headers(
-            by_row, band_rows, reveal_rows, period_cols, date1904
-        )
+        local = local_rows[index]
+        table_headers, column_roles = captions[index]
         header_rows.update(table_headers)
         label_col, span = _label_span(
-            by_row,
+            local,
             body_rows,
             table_headers,
             period_cols,
             date1904,
+            col_floor=limits[index][0],
             column_roles=column_roles,
             name_headers=name_headers,
         )
         axis = group_axes[0]
         # Only the row whose year filled these quarter keys. Another 2024
         # below that banner is a value.
-        section = _quarter_year_row(by_row, axis, period_cols, date1904)
+        section = _quarter_year_row(local, axis, period_cols, date1904)
         if section is not None:
             body_rows = [row_n for row_n in body_rows if row_n != section.row]
+        seed = _section_seed(local, axis, span, period_cols, date1904)
+        if seed is None and limits[index][0]:
+            seed = _side_title(local, starts[index], period_cols, date1904)
         data_rows = _data_rows(
-            by_row,
+            local,
             body_rows,
             table_headers,
             span,
             date1904,
             period_cols,
-            seed=_section_seed(by_row, axis, span, period_cols, date1904),
-            reveal_rows=reveal_rows,
+            seed=seed,
+            reveal_rows=reveal_rows[index],
             summary_below=summary_below,
             hidden_row_ids=hidden_row_ids,
             column_roles=column_roles,
@@ -222,7 +242,7 @@ def _blocks_indexed(
             }),
         )
         data_rows, carved = carve_params_regions(
-            sheet, data_rows, by_row, date1904, period_cols, label_col
+            sheet, data_rows, local, date1904, period_cols, label_col
         )
         params_blocks.extend(carved)
         if len(group_axes) == 1:
@@ -287,32 +307,111 @@ def _vertical_period_cells(axes: list[TimeAxis]) -> set[tuple[int, int]]:
     return taken
 
 
-def _group_body(
-    index: int,
+def _group_columns(group: list[tuple[list[int], TimeAxis]]) -> set[int]:
+    return {period.col for _band, axis in group for period in axis.periods}
+
+
+def _group_bounds(
     groups: list[list[tuple[list[int], TimeAxis]]],
     group_cols: list[set[int]],
     row_ids: list[int],
-    title_owner: dict[int, int],
-) -> list[int]:
-    """Rows from this header until the next axis that replaces it.
+) -> tuple[list[int], list[int]]:
+    """An axis ends at the next ruler that replaces its columns."""
+    starts = [min(group[0][0]) for group in groups]
+    ends = [
+        min(
+            (
+                later for later, columns in zip(starts, group_cols, strict=True)
+                if later > start and _axis_replaces(current, columns)
+            ),
+            default=row_ids[-1] + 1 if row_ids else start + 1,
+        )
+        for start, current in zip(starts, group_cols, strict=True)
+    ]
+    return starts, ends
 
-    A later axis replaces this one only when it covers the same columns and is
-    not narrower. A monthly chart inside a yearly table does not end the yearly
-    table.
-    """
-    start = min(groups[index][0][0])
-    current = group_cols[index]
-    later: list[int] = []
-    for other, other_group in enumerate(groups):
-        other_start = min(other_group[0][0])
-        if other == index or other_start <= start:
+
+def _split_side_tables(groups, by_row, row_ids, date1904):
+    """Keep common-name series together and split runs with their own row names."""
+    if all(len(group) == 1 for group in groups):
+        return groups
+    separate = [[item] for group in groups for item in group]
+    _starts, ends = _group_bounds(separate, [_group_columns(g) for g in separate], row_ids)
+    result = []
+    slot = 0
+    for group in groups:
+        part = [group[0]]
+        for left, right in zip(group, group[1:], strict=False):
+            floor = max(_group_columns([left]))
+            cols = _group_columns([right])
+            slot += 1
+            if _side_label_col(by_row, row_ids, right[0], ends[slot], cols, floor, date1904):
+                result.append(part)
+                part = []
+            part.append(right)
+        result.append(part)
+        slot += 1
+    return result
+
+
+def _side_label_col(by_row, row_ids, band, end, cols, floor, date1904):
+    if floor >= min(cols) - 1:
+        return None
+    _, roles = _column_headers(by_row, band, set(), cols, date1904)
+    found = []
+    for row in row_ids[bisect_left(row_ids, max(band) + 1):bisect_left(row_ids, end)]:
+        cells = by_row[row]
+        names = _local_names(cells, cols, floor, roles, date1904)
+        if names and any(
+            int(cell["col"]) in cols and _value_cell(cell, date1904) for cell in cells
+        ):
+            found.append(min(int(cell["col"]) for cell in names))
+    return min(found, default=None)
+
+
+def _side_limits(groups, group_cols, starts, ends, by_row, row_ids, date1904):
+    """Bound an independent table by the preceding ruler and its neighbour's name."""
+    limits = [(0, None) for _ in groups]
+    for i, cols in enumerate(group_cols):
+        left = [
+            j for j, other in enumerate(group_cols)
+            if max(other) < min(cols) and starts[j] < ends[i] and starts[i] < ends[j]
+        ]
+        if not left:
             continue
-        if _axis_replaces(current, group_cols[other]):
-            later.append(other_start)
-    end = min(later) if later else (max(row_ids) + 1 if row_ids else start + 1)
-    body = [row for row in row_ids if start <= row < end and title_owner.get(row, index) == index]
-    above = [row for row, owner in title_owner.items() if owner == index and row < start]
-    return sorted(set(body) | set(above))
+        floor = max(max(group_cols[j]) for j in left)
+        name = _side_label_col(by_row, row_ids, groups[i][0][0], ends[i], cols, floor, date1904)
+        if name is None:
+            continue
+        limits[i] = (floor, limits[i][1])
+        for j in left:
+            low, high = limits[j]
+            limits[j] = (low, name if high is None else min(high, name))
+    return limits
+
+
+def _table_cells(by_row, floor, ceiling):
+    if not floor and ceiling is None:
+        return by_row
+    return {
+        row: [
+            cell for cell in cells
+            if int(cell["col"]) > floor and (ceiling is None or int(cell["col"]) < ceiling)
+        ]
+        for row, cells in by_row.items()
+    }
+
+
+def _group_body(index, group_cols, row_ids, starts, ends, title_owners):
+    start, end = starts[index], ends[index]
+    body = [
+        row for row in row_ids[bisect_left(row_ids, start):bisect_left(row_ids, end)]
+        if not title_owners.get(row)
+        or index in title_owners[row]
+        or all(not group_cols[index] & group_cols[owner] for owner in title_owners[row])
+    ]
+    above = sorted(row for row, owners in title_owners.items() if index in owners and row < start)
+    return above + body
 
 
 def _axis_replaces(current: set[int], later: set[int]) -> bool:
@@ -328,26 +427,60 @@ def _assign_overlapping_rows(
     groups: list[list[tuple[list[int], TimeAxis]]],
     group_cols: list[set[int]],
     by_row: dict[int, list[dict]],
+    local_rows: list[dict[int, list[dict]]],
+    limits: list[tuple[int, int | None]],
+    captions: list[tuple[set[int], dict[int, str]]],
     date1904: bool,
 ) -> list[list[int]]:
-    """A row under two axes belongs to the one its values fit.
-
-    The wide table keeps rows that spill past a nested ruler. The nested ruler
-    keeps rows that sit inside its columns.
-    """
+    """Resolve competing rulers by coverage and allow independent named rows."""
     owners: dict[int, list[int]] = defaultdict(list)
     for index, rows in enumerate(bodies):
         for row_n in rows:
             owners[row_n].append(index)
-    chosen: dict[int, int] = {}
+    chosen: list[set[int]] = [set() for _ in groups]
     for row_n, indexes in owners.items():
         if len(indexes) == 1:
-            chosen[row_n] = indexes[0]
+            chosen[indexes[0]].add(row_n)
             continue
-        chosen[row_n] = _prefer_axis(row_n, indexes, groups, group_cols, by_row, date1904)
-    return [
-        [row_n for row_n in rows if chosen[row_n] == index] for index, rows in enumerate(bodies)
-    ]
+        last_label_edge = max(min(group_cols[i]) for i in indexes)
+        occupied = _occupied_cols(by_row[row_n], last_label_edge, date1904)
+        if not any(
+            limits[right][0] and max(group_cols[left]) <= limits[right][0]
+            for right in indexes for left in indexes
+        ):
+            chosen[_prefer_axis(row_n, indexes, groups, group_cols, occupied)].add(row_n)
+            continue
+        eligible = [i for i in indexes if row_n not in captions[i][0]]
+        if not eligible:
+            continue
+        names = {
+            i: _local_names(
+                local_rows[i][row_n], group_cols[i], limits[i][0], captions[i][1], date1904
+            )
+            for i in eligible
+        }
+        filled = [i for i in eligible if occupied & group_cols[i]]
+        named = [i for i in eligible if names[i]]
+        if filled and not any(names[i] for i in filled):
+            # A common name can still identify the only filled table on the row.
+            winner = _prefer_axis(row_n, filled, groups, group_cols, occupied)
+            if limits[winner][0] and named:
+                common = min(
+                    (cell for i in named for cell in names[i]), key=lambda cell: cell["col"]
+                )
+                local_rows[winner][row_n] = [common, *local_rows[winner][row_n]]
+            chosen[winner].add(row_n)
+            continue
+        while named:
+            winner = _prefer_axis(row_n, named, groups, group_cols, occupied)
+            chosen[winner].add(row_n)
+            named = [
+                i for i in named
+                if i != winner and not group_cols[i] & group_cols[winner]
+            ]
+        if not filled and not any(names.values()):
+            chosen[_prefer_axis(row_n, eligible, groups, group_cols, occupied)].add(row_n)
+    return [[row for row in rows if row in chosen[i]] for i, rows in enumerate(bodies)]
 
 
 def _prefer_axis(
@@ -355,10 +488,9 @@ def _prefer_axis(
     indexes: list[int],
     groups: list[list[tuple[list[int], TimeAxis]]],
     group_cols: list[set[int]],
-    by_row: dict[int, list[dict]],
-    date1904: bool,
+    occupied: set[int],
 ) -> int:
-    occupied = _occupied_cols(by_row.get(row_n, []), date1904)
+    """Prefer the nested ruler when the row fits entirely inside it."""
     best = indexes[0]
     best_key: tuple[int, int, int, int] | None = None
     for index in indexes:
@@ -380,17 +512,37 @@ def _prefer_axis(
     return best
 
 
-def _occupied_cols(cells: list[dict], date1904: bool) -> set[int]:
-    found: set[int] = set()
-    for cell in cells:
-        col = int(cell["col"])
-        if cell.get("formula_raw"):
-            found.add(col)
-            continue
-        text = _text(cell, date1904)
-        if text and _is_number(text):
-            found.add(col)
-    return found
+def _occupied_cols(cells: list[dict], label_edge: int, date1904: bool) -> set[int]:
+    return {
+        int(cell["col"]) for cell in cells
+        if _value_cell(cell, date1904)
+        and (int(cell["col"]) >= label_edge or not _name_cell(cell, date1904))
+    }
+
+
+def _value_cell(cell, date1904):
+    return bool(
+        cell.get("formula_raw") or cell.get("formula_template")
+        or _is_number(_text(cell, date1904) or "")
+    )
+
+
+def _name_cell(cell, date1904):
+    text = _label_piece(cell, date1904)
+    return bool(
+        text and not is_unit_text(text) and not is_entry_instruction(text)
+        and not _SERVICE_MARK.fullmatch(text.strip())
+    )
+
+
+def _local_names(cells, cols, floor, roles, date1904):
+    left = min(cols)
+    return [
+        cell for cell in cells
+        if floor < int(cell["col"]) < left
+        and roles.get(int(cell["col"])) not in _NAME_COLUMN_SKIP
+        and _name_cell(cell, date1904)
+    ]
 
 
 def _transposed_blocks(
@@ -503,20 +655,40 @@ def _section_seed(by_row, axis, span, period_cols, date1904):
     return _year_label_section(by_row, header, period_cols, date1904, years)
 
 
+def _side_title(by_row, start, period_cols, date1904):
+    """A short banner above a side ruler can start its section."""
+    for row in range(start - 1, max(0, start - 3), -1):
+        cells = by_row.get(row, [])
+        if _is_empty_row(cells, date1904):
+            continue
+        if _is_banner_gap(cells, period_cols, date1904):
+            named = [cell for cell in cells if _name_cell(cell, date1904)]
+            if len(named) == 1:
+                cell = named[0]
+                return LayoutRow(
+                    row=row, label=_text(cell, date1904).strip(), kind="abstract",
+                    label_col=int(cell["col"]),
+                )
+        break
+    return None
+
+
 def _section_title_owners(
     groups: list[list[tuple[list[int], TimeAxis]]],
-    by_row: dict[int, list[dict]],
+    group_cols: list[set[int]],
+    local_rows: list[dict[int, list[dict]]],
+    starts: list[int],
     date1904: bool,
-) -> dict[int, int]:
-    """Label-only rows above a header belong to that block, not the one they close."""
-    owners: dict[int, int] = {}
-    starts = [min(group[0][0]) for group in groups]
+) -> dict[int, set[int]]:
+    """A label above a ruler belongs to that table, including beside another table."""
+    owners: dict[int, set[int]] = defaultdict(set)
     for index, group in enumerate(groups):
+        by_row = local_rows[index]
         start = starts[index]
         earlier = [other for other in starts if other < start]
         floor = max(earlier) if earlier else 0
         axis = group[0][1]
-        period_cols = {period.col for _band, item in group for period in item.periods}
+        period_cols = group_cols[index]
         years = {
             period.period_key[:4]
             for period in axis.periods
@@ -531,7 +703,10 @@ def _section_title_owners(
             # A note between the named year and the quarters is not the section.
             if section is not None and section.row < row_n < start:
                 continue
-            owners[row_n] = index
+            owners[row_n] = {
+                owner for owner in owners[row_n] if not group_cols[owner] & period_cols
+            }
+            owners[row_n].add(index)
     return owners
 
 
