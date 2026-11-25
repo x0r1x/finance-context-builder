@@ -31,6 +31,8 @@ class CellSpec:
     shared_si: int | None = None
     shared_ref: str | None = None
     style: int | None = None
+    # Write ``<v></v>`` when ``value`` is omitted. Used for an empty formula cache.
+    empty_cache: bool = False
 
 
 @dataclass
@@ -49,6 +51,8 @@ class SheetSpec:
     summary_below: bool | None = None
     # ``sheetPr`` is the OOXML location. ``sheetFormatPr`` is accepted too.
     summary_below_parent: str = "sheetPr"
+    # Horizontal merges, ``B2:C2``. The anchor cell keeps the value.
+    merges: list[str] = field(default_factory=list)
 
 
 def write_zip(path: Path, members: dict[str, str | bytes]) -> Path:
@@ -322,10 +326,14 @@ def _sheet_xml(sheet: SheetSpec, shared_strings: list[str]) -> str:
         outline = f' outlineLevel="{level}"' if level else ""
         cells_xml = "".join(_cell_xml(c, shared_strings) for c in by_row[row])
         rows_xml.append(f'<row r="{row}"{hidden}{outline}>{cells_xml}</row>')
+    merges = ""
+    if sheet.merges:
+        body = "".join(f'<mergeCell ref="{escape(ref)}"/>' for ref in sheet.merges)
+        merges = f'<mergeCells count="{len(sheet.merges)}">{body}</mergeCells>'
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<worksheet xmlns="{NS_MAIN}">'
-        f"{sheet_pr}{col_xml}<sheetData>{''.join(rows_xml)}</sheetData>"
+        f"{sheet_pr}{col_xml}<sheetData>{''.join(rows_xml)}</sheetData>{merges}"
         "</worksheet>"
     )
 
@@ -345,7 +353,11 @@ def _cell_xml(cell: CellSpec, shared_strings: list[str]) -> str:
         attr = (" " + " ".join(f_attrs)) if f_attrs else ""
         body = escape(cell.formula) if cell.formula is not None else ""
         f_xml = f"<f{attr}>{body}</f>"
-    if cell.type == "inlineStr" and cell.value is not None:
+    if cell.empty_cache and cell.value is None and cell.type != "inlineStr":
+        if cell.type:
+            attrs.append(f't="{cell.type}"')
+        v_xml = "<v></v>"
+    elif cell.type == "inlineStr" and cell.value is not None:
         attrs.append('t="inlineStr"')
         v_xml = f"<is><t>{escape(cell.value)}</t></is>"
     elif cell.value is not None:

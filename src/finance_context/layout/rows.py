@@ -186,9 +186,14 @@ def _distinct_year_ruler(row_cells: list[dict], date1904: bool) -> bool:
     """``2020, 2021, 2022, 2023``: each column is the next year.
 
     A banner repeats one year across the quarters under it, so a zero step
-    stays out of this check.
+    stays out of this check. A merged year fills the columns it covers, so
+    ``2024`` across two quarters is not a two-step ruler.
     """
-    values = _bare_year_values(row_cells, date1904)
+    banner = _year_banner_by_column(row_cells, date1904)
+    if len(banner) >= 2:
+        values = [int(banner[col]) for col in sorted(banner)]
+    else:
+        values = _bare_year_values(row_cells, date1904)
     if not _year_run_is_header(values) or len(set(values)) < 2:
         return False
     steps = [right - left for left, right in zip(values, values[1:], strict=False)]
