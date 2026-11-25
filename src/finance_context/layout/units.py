@@ -11,6 +11,10 @@ _UNIT_TEXT = re.compile(
 )
 
 
+_RU_PER_UNIT = (
+    r"(?:ед(?:иниц[ауы]?)?\.?(?:\s+продукции)?|удел\.?\s+ед\.?|шт\.?"
+    r"|(?:кв|куб)\.?\s*м|м[²³23]|[кмг]?вт\s*[-*·]?\s*ч)"
+)
 _UNIT_TOKEN = re.compile(
     r"^(?:(?:k|m|mn|bn)\s*)?(?:eur|usd|gbp|rub|chf|[£$€₽])\s*"
     r"(?:'?000|k|m|mn|bn|thousands?|millions?)?"
@@ -19,7 +23,8 @@ _UNIT_TOKEN = re.compile(
     r"|^(?:mwh|mw|mwp|kwh|kw|gwh)(?:\s*/\s*(?:mw|mwp|kw|year|yr))?$"
     r"|^(?:(?:тыс|млн|млрд)\.?\s*|т(?:\.\s*|\s+)"
     r"|(?:тысяч[аи]?|миллион(?:а|ов)?|миллиард(?:а|ов)?)\s+)?"
-    r"(?:руб(?:\.|лей)?|р\.|₽)$",
+    rf"(?:руб(?:\.|лей)?|р\.|₽|долл(?:\.|ар(?:а|ов|ы)?)?)(?:\s*/\s*{_RU_PER_UNIT})?$"
+    r"|^(?:тыс|млн|млрд)\.?\s*(?:ед\.?|единиц[аы]?|шт\.?)$",
     re.IGNORECASE,
 )
 
@@ -64,6 +69,15 @@ def is_unit_text(text: str | None) -> bool:
     from finance_context.context.measure import is_iso_unit_caption
 
     return is_iso_unit_caption(caption)
+
+
+def annotated_unit_caption(text: str | None) -> str | None:
+    """Return the unit in a cell such as `тыс. руб. (указывается со знаком '+')`."""
+    prefix, marker, annotation = (text or "").strip().partition("(")
+    caption = prefix.strip()
+    if marker and annotation.endswith(")") and is_unit_text(caption):
+        return caption
+    return None
 
 
 def unit_kind_from_text(text: str | None) -> str | None:

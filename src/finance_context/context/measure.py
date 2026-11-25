@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from finance_context.layout.units import annotated_unit_caption
+
 _CURRENCY_SYM = {"GBP": "£", "EUR": "€", "USD": "$", "RUB": "₽"}
 _CURRENCY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -129,7 +131,7 @@ def _combine_measure(
     parse it once and pass ``label_measure``.
     """
     measure = Measure()
-    measure = _fill(measure, _parse_text(unit_text or ""))
+    measure = _fill(measure, _parse_text(annotated_unit_caption(unit_text) or unit_text or ""))
     measure = _fill(measure, label_measure)
     # Base units only when the unit cell or label names the currency with no multiplier.
     # A number format names the currency, not the scale of the stored amount.
