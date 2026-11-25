@@ -96,6 +96,7 @@ _SERVICE_MARK = re.compile(
 )
 _PER_BASIS_CAPTION = re.compile(r"\bв\s+пересч[её]те\s+на\s+\S.*:\s*$", re.IGNORECASE)
 _TOTAL_LABEL = {"total", "subtotal", "sub total", "sum", "итого", "всего"}
+_NAMED_TOTAL = re.compile(r"^(?:итого|всего|total|sub\s*total)\s+(.+)$", re.IGNORECASE)
 # Parents come from the parsed formula, not from the letters SUM in its text.
 _AGG_ENGINES = (FormulaEngine(locale_hint="en"), FormulaEngine(locale_hint="ru"))
 _SUM_FUNCS = {"sum", "сумм"}
@@ -1167,6 +1168,27 @@ def _unit_stub_cols(row: LayoutRow) -> set[int]:
     return {cell.col for cell in row.cells if cell.role == "unit"}
 
 
+def _fact_sections_with_named_totals(rows: list[LayoutRow], units: list[bool]) -> set[int]:
+    """A valued section can open a run that closes with ``Total <section>``."""
+    stack: list[int] = []
+    sections: set[int] = set()
+    for index in range(len(rows) - 1, -1, -1):
+        if units[index]:
+            continue
+        row = rows[index]
+        while stack and rows[stack[-1]].indent > row.indent:
+            stack.pop()
+        if stack and rows[stack[-1]].indent == row.indent:
+            end = rows[stack.pop()]
+            if row.kind == end.kind == "fact" and rows[index + 1].indent > row.indent:
+                match = _NAMED_TOTAL.fullmatch(end.label.strip())
+                title = row.label.strip().rstrip(":").casefold()
+                if match and match[1].rstrip(":").casefold() == title:
+                    sections.add(index)
+        stack.append(index)
+    return sections
+
+
 def _apply_indent_aggregate_parents(
     rows: list[LayoutRow], aggregated: list[_AggregateRows], units: list[bool]
 ) -> None:
@@ -1175,11 +1197,12 @@ def _apply_indent_aggregate_parents(
     The nearest shallower row has to name the child. A single indent step, or a
     sum of some other rows, leaves the section parent in place. The stack is
     popped and pushed once per row. A one-child subtotal needs a containing
-    multi-row aggregate and a single adjacent indented detail row. ``units``
-    is the caption check already made while the rows were built.
+    multi-row aggregate and a single adjacent indented detail row. An explicit
+    matching closing total also confirms a valued section's boundary.
     """
     stack: list[int] = []
     aggregate_children: set[int] = set()
+    sections = _fact_sections_with_named_totals(rows, units)
     for index, row in enumerate(rows):
         if units[index]:
             continue
@@ -1194,10 +1217,13 @@ def _apply_indent_aggregate_parents(
                     row.parent_row = earlier.row
                     aggregate_children.add(index)
                 elif (
-                    prev in aggregate_children
-                    and aggregate.single_child
-                    and row.row == earlier.row + 1
-                    and (index + 1 == len(rows) or rows[index + 1].indent <= earlier.indent)
+                    prev in sections
+                    or (
+                        prev in aggregate_children
+                        and aggregate.single_child
+                        and row.row == earlier.row + 1
+                        and (index + 1 == len(rows) or rows[index + 1].indent <= earlier.indent)
+                    )
                 ):
                     row.parent_row = earlier.row
         stack.append(index)

@@ -361,6 +361,34 @@ def test_single_detail_of_nested_balance_subtotal_keeps_its_section(
     assert rows[5].values == ["10", "10"]
 
 
+@pytest.mark.parametrize("closing_matches", [True, False])
+def test_named_closing_total_preserves_a_valued_section(closing_matches: bool) -> None:
+    sheet = "Balance"
+    section = "Долгосрочные обязательства"
+    closing = f"ИТОГО {section.upper()}" if closing_matches else "ИТОГО КАПИТАЛ"
+    cells = [_c(sheet, "C1", "2024"), _c(sheet, "D1", "2025")]
+    cells += [
+        _c(sheet, "A2", "Баланс"),
+        _c(sheet, "A3", section),
+        _c(sheet, "A4", "  Займы и кредиты"),
+        _c(sheet, "A5", "  Прочие обязательства"),
+        _c(sheet, "A6", closing),
+    ]
+    for col in "CD":
+        cells.extend([
+            _c(sheet, f"{col}3", "17", formula=f"=Inputs!{col}33"),
+            _c(sheet, f"{col}4", "10", formula=f"=Inputs!{col}34"),
+            _c(sheet, f"{col}5", "7", formula=f"=Inputs!{col}35"),
+            _c(sheet, f"{col}6", "17", formula=f"=Inputs!{col}36"),
+        ])
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[3].kind == rows[6].kind == "fact"
+    path = ["Баланс", section] if closing_matches else ["Баланс"]
+    assert rows[4].label_path == rows[5].label_path == path
+    assert rows[6].label_path == ["Баланс"]
+    assert rows[4].values == ["10", "10"]
+
+
 @pytest.mark.parametrize(
     ("unit", "scale", "normalized"),
     [
