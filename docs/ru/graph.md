@@ -21,7 +21,7 @@
 | `row_key`, `period_id`, `node_type` (включая `empty` для проверенных пустых ячеек) | `graph/index.parquet`; у формулы ещё `links[].row_key` и `links[].period_id` |
 | Counts (`nodes` / `edges` — размеры cell-level parquet), `iterate`, циклы, `circularity_hints`, `dangling_classes` и `links[]` с `formula_class` | `graph.json` и то же в `graph.md` (schema `1.7.0`, колонка Class) |
 | Каждый `<c>` листа: `populated` или `styled_blank` | `raw/cell_presence.parquet` |
-| Строка отчёта: лейбл, одна формула строки, серии кэша по осям, статус значения, scale factor, нормализованные значения | `context.json` / `context.md` (schema `1.14.0`, оси в `axes`) |
+| Строка отчёта: лейбл, одна формула строки, серии кэша по осям, статус значения, scale factor, нормализованные значения | `context.json` / `context.md` (schema `1.15.0`, оси в `axes`) |
 
 `links[]` — одна запись на ячейку с формулой: `cell`, A1-текст один раз, `formula_class` (`same_period`, `cross_period`, `aggregation`, `rollforward`, `conditional`, `hardcoded`), `refs`, `row_key` строки контекста и `period_id` колонки оси. Оба ключа `null`, если ячейка вне layout. Колонка `total` или `stub` периодом не является, поэтому у её link `period_id=null`, даже если строка лежит в timeline-блоке. `SUM(J9:J12)` остаётся одним диапазоном, не десятками `range_member`. Пустые члены диапазона в `links` не входят. `nodes` и `edges` — не `len(links)`. `context.md` печатает в значении периода `[Sheet!A1]` — это `links[].cell`, формула остаётся в link. Заголовок периода по-прежнему содержит букву колонки (`Y23 (AA)`).
 

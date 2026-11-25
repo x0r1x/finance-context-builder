@@ -81,13 +81,13 @@
     "error": null,
     "job_id": "job1",
     "questions": [],
-    "schema_version": "1.14.0",
+    "schema_version": "1.15.0",
     "source_filename": "simple.xlsx",
     "stage": "done",
     "status": "succeeded",
     "warnings": []
   },
-  "schema_version": "1.14.0",
+  "schema_version": "1.15.0",
   "warnings": [],
   "workbook": {
     "cell_count": 4,
