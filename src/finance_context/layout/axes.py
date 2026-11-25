@@ -7,7 +7,14 @@ from datetime import date
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
-from finance_context.layout.cells import _cell_at, _is_number, _text, parse_int, parse_number
+from finance_context.layout.cells import (
+    _cell_at,
+    _cell_covering,
+    _is_number,
+    _text,
+    parse_int,
+    parse_number,
+)
 from finance_context.layout.format_words import is_total_word
 from finance_context.layout.markers import DerivedScan, _fill_banner, apply_axis_markers
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
@@ -675,7 +682,10 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
             if (
                 covered
                 and not _starter_outside_columns(row_cells, covered, date1904)
-                and _labeled_numeric_under_axis(row_cells, covered, date1904)
+                and (
+                    _labeled_numeric_under_axis(row_cells, covered, date1904)
+                    or _blank_axis_formulas(row_cells, covered, date1904)
+                )
                 and not _distinct_year_ruler(row_cells, date1904)
             ):
                 i += 1
@@ -967,24 +977,36 @@ def _blank_axis_formulas(
 ) -> bool:
     """A line name and formulas in the axis whose cache does not display.
 
-    A formula that caches a quarter or a date is still a header cell. A formula
-    in the name, unit or note column does not, by itself, make the row a value.
+    A calendar layer may contain blank date-formatted formulas. Calendar
+    caches do not cancel other blank value formulas in the same axis.
     """
-    if not calendar_cols or _row_label(row_cells, date1904) is None:
+    if not calendar_cols:
         return False
-    saw = False
+    label = _row_label(row_cells, date1904)
+    if label is None:
+        return False
+    allow_q = is_quarter_label(label)
+    allow_m = is_month_label(label)
+    has_calendar = False
+    has_formula = False
+    has_blank_value_formula = False
     for cell in row_cells:
         if int(cell["col"]) not in calendar_cols:
             continue
         text = _text(cell, date1904)
-        atom = classify_atom(text)
-        if text and atom is not None and atom.kind not in {"marker", "noise"}:
-            return False
+        atom = classify_atom(text, allow_quarter_num=allow_q, allow_month_num=allow_m)
+        if atom is not None and atom.kind not in {"marker", "noise"}:
+            has_calendar = True
+            continue
         if text and _is_number(text):
             return False
         if cell.get("formula_raw") or cell.get("formula_template"):
-            saw = True
-    return saw
+            has_formula = True
+            if not text and not is_date_format(cell.get("number_format")):
+                has_blank_value_formula = True
+    if has_calendar:
+        return has_blank_value_formula and not (allow_q or allow_m)
+    return has_formula
 
 
 def _is_flag_bits_row(
@@ -1607,26 +1629,6 @@ def _band_prefers_end(
     return any(is_start_period_label(label) for label in labels) and any(
         is_end_period_label(label) for label in labels
     )
-
-
-def _cell_covering(row_cells: list[dict], col: int) -> dict | None:
-    """The cell at ``col``, or the merge anchor whose span covers it."""
-    found = _cell_at(row_cells, col)
-    if found is not None:
-        return found
-    cover: dict | None = None
-    for cell in row_cells:
-        end = cell.get("merge_end_col")
-        if end is None:
-            continue
-        try:
-            end_col = int(end)
-        except (TypeError, ValueError):
-            continue
-        origin = int(cell["col"])
-        if origin < col <= end_col and (cover is None or origin > int(cover["col"])):
-            cover = cell
-    return cover
 
 
 # Rows around a bare quarter that can still supply its year. CFS uses three.

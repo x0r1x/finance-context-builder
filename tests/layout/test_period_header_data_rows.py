@@ -18,6 +18,8 @@ from tests.helpers.xlsx import CellSpec, SheetSpec, build_xlsx
 from finance_context.excel import parse_workbook
 from finance_context.excel.a1 import format_addr, index_to_col, parse_addr
 from finance_context.formulas import compile_workbook
+from finance_context.layout import axes as axes_module
+from finance_context.layout.cells import bind_row_index, clear_row_index
 from finance_context.layout.detect import detect_layout
 from finance_context.layout.periods import LAYER_BOUNDS, classify_atom
 from finance_context.layout.rows import _is_data_row, _row_layers
@@ -465,6 +467,44 @@ def test_calendar_cells_among_sums_keep_the_year_axis(
     ]
 
 
+@pytest.mark.parametrize("tail", ["4 кв. 2026", "31.12.2026"])
+def test_blank_value_formulas_among_calendar_cells_keep_the_year_axis(
+    tmp_path: Path, tail: str
+) -> None:
+    cols = "BCDEFGHIJ"
+    cells = [CellSpec(addr="A1", value="Показатель")]
+    cells.extend(
+        CellSpec(addr=f"{col}1", value=str(year))
+        for col, year in zip(cols, range(2018, 2027), strict=True)
+    )
+    cells.append(CellSpec(addr="A2", value="Остаток на начало периода"))
+    cells.extend(CellSpec(addr=f"{col}2", formula=f"={col}10") for col in cols[:7])
+    cells.extend([CellSpec(addr="I2", value="31.03.2026"), CellSpec(addr="J2", value=tail)])
+    cells.append(CellSpec(addr="A3", value="Выручка"))
+    cells.extend(
+        CellSpec(addr=f"{col}3", value=str(110 + 10 * index)) for index, col in enumerate(cols)
+    )
+    source = build_xlsx(
+        tmp_path / "mixed-cache.xlsx",
+        sheets=[SheetSpec(name="Debt", cells=cells)],
+        shared_strings=["Показатель", "Остаток на начало периода", "31.03.2026", tail, "Выручка"],
+    )
+
+    doc, rows, raw = _published_xlsx(tmp_path, source, "Debt")
+    assert len(doc.axes) == 1
+    assert [period.period_key for period in doc.axes[0].periods] == [
+        str(year) for year in range(2018, 2027)
+    ]
+    assert rows[2].kind == "fact"
+    assert list(rows[2].value_statuses[:7]) == ["empty"] * 7
+    assert list(rows[2].values[-2:]) == ["31.03.2026", tail]
+    assert rows[2].formula
+    assert {cell["addr"] for cell in raw if cell["row"] == 2 and cell.get("formula_raw")} == {
+        f"{col}2" for col in cols[:7]
+    }
+    assert list(rows[3].values) == [str(value) for value in range(110, 200, 10)]
+
+
 def test_two_calendar_cells_keep_the_quarter_axis() -> None:
     sheet = "CF"
     labels = ["4 кв. 2015", "1 кв. 2016", "2 кв. 2016", "3 кв. 2016", "4 кв. 2016", "1 кв. 2017"]
@@ -823,7 +863,8 @@ def test_gapped_year_layer_keeps_every_amount() -> None:
     assert [header.col for header in block.axis.headers] == [2, 3, 4, 5]
 
 
-def test_incomplete_date_layer_keeps_the_open_year() -> None:
+@pytest.mark.parametrize("tail", ["text", "formula"])
+def test_incomplete_date_layer_keeps_the_open_year(tail: str) -> None:
     sheet = "CF"
     cells = [_c(sheet, "A1", "Показатель")]
     for col, year in zip("BCDE", ["2024", "2025", "2026", "2027"], strict=True):
@@ -831,7 +872,10 @@ def test_incomplete_date_layer_keeps_the_open_year() -> None:
     cells.append(_c(sheet, "A2", "Начало периода"))
     for col, text in zip("BCD", ["01.01.2024", "01.01.2025", "01.01.2026"], strict=True):
         cells.append(_c(sheet, f"{col}2", text))
-    cells.append(_c(sheet, "E2", "4_2025", number_format="DD.MM.YYYY"))
+    if tail == "text":
+        cells.append(_c(sheet, "E2", "4_2025", number_format="DD.MM.YYYY"))
+    else:
+        cells.append(_c(sheet, "E2", None, formula="=DATE(E1,1,1)", number_format="DD.MM.YYYY"))
     cells.append(_c(sheet, "A3", "Выручка"))
     for col, value in zip("BCDE", ["10", "20", "30", "40"], strict=True):
         cells.append(_c(sheet, f"{col}3", value))
@@ -1027,5 +1071,40 @@ def test_wide_quarter_header_classifies_about_linearly(monkeypatch: pytest.Monke
     small = measured(80)
     middle = measured(160)
     large = measured(320)
+    assert middle < small * 3, (small, middle, large)
+    assert large < middle * 3, (small, middle, large)
+
+
+def test_wide_merged_year_layer_checks_coverage_about_linearly() -> None:
+    visits = 0
+
+    class CountedRow(list):
+        def __iter__(self):
+            nonlocal visits
+            for cell in super().__iter__():
+                visits += 1
+                yield cell
+
+    def measured(width: int) -> int:
+        nonlocal visits
+        years = CountedRow()
+        quarters = CountedRow()
+        for index in range(width):
+            col = index_to_col(2 + index)
+            if index % 4 == 0:
+                year = _c("CF", f"{col}1", str(2000 + index // 4))
+                year["merge_end_col"] = 5 + index
+                years.append(year)
+            quarters.append(_c("CF", f"{col}2", f"{index % 4 + 1} кв."))
+        rows = {1: years, 2: quarters}
+        bind_row_index(rows)
+        try:
+            visits = 0
+            assert not axes_module._quarters_need_a_year([1, 2], rows, False)
+            return visits
+        finally:
+            clear_row_index()
+
+    small, middle, large = (measured(width) for width in (80, 160, 320))
     assert middle < small * 3, (small, middle, large)
     assert large < middle * 3, (small, middle, large)
