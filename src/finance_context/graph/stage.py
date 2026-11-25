@@ -35,6 +35,7 @@ from finance_context.graph.refs import parse_node_id
 from finance_context.layout.models import (
     Layout,
     is_series_column,
+    is_value_block,
     published_row_key,
     shared_horizontal_rows,
 )
@@ -194,7 +195,7 @@ def _at_cell(
     col: int,
     side: dict[tuple[str, int, int], str] | None = None,
 ) -> tuple[str | None, str | None]:
-    """Row key and period id of one cell. A vertical value wins over the column.
+    """Row key and period id of one cell. A cell-specific key wins over the column.
 
     A horizontal row shared by two blocks is resolved from ``side`` by column.
     The sheet-wide column map still supplies the period key.
@@ -505,7 +506,8 @@ def build_formula_graph(
     side = _side_cells(layout)
     row_meta = _row_meta(layout, side)
     period_by_cell, _period_index = _period_maps(layout)
-    transposed = _transposed_cells(layout)
+    transposed = _local_value_cells(layout)
+    transposed.update(_transposed_cells(layout))
     circular = _circular_rows(layout)
     if stream:
         # Row maps are copied. The caller's list slot is already empty.
@@ -787,6 +789,43 @@ def _transposed_cells(
     return out
 
 
+def _local_value_cells(layout: Layout) -> dict[tuple[str, int, int], tuple[str, str]]:
+    """Use the block's own key where local tables and other axes share a column."""
+    cells: dict[tuple[str, int, int], tuple[str, str]] = {}
+    for sheet in layout.sheets:
+        if len(sheet.blocks) < 2:
+            continue
+        first: dict[int, str] = {}
+        conflicts: set[int] = set()
+        for block in sheet.blocks:
+            for header in period_headers(sheet, block):
+                if not header.row and first.setdefault(header.col, header.period_key) != (
+                    header.period_key
+                ):
+                    conflicts.add(header.col)
+        if not conflicts:
+            continue
+        shared = shared_horizontal_rows(sheet.blocks)
+        for block in sheet.blocks:
+            if not is_value_block(block.kind):
+                continue
+            keys = {
+                header.col: header.period_key for header in period_headers(sheet, block)
+                if header.col in conflicts and header.role in {"value", "unknown"}
+            }
+            if not keys:
+                continue
+            for row in block.rows:
+                key = published_row_key(
+                    sheet.name, row.row, block.block_id,
+                    label_col=block.label_col if row.row in shared else None,
+                )
+                for cell in row.cells:
+                    if cell.col in keys:
+                        cells[sheet.name, row.row, cell.col] = (key, keys[cell.col])
+    return cells
+
+
 def calendar_key(period_id: str) -> str:
     """Lag slot for a period id. ``2024@факт`` and ``2024`` share ``2024``.
 
@@ -825,12 +864,16 @@ def _period_maps(layout: Layout) -> tuple[dict[tuple[str, int], str], dict[str, 
     period_by_cell: dict[tuple[str, int], str] = {}
     index: dict[str, int] = {}
     for sheet in layout.sheets:
+        calendar_cols: set[int] = set()
         for block in sheet.blocks:
             for header in period_headers(sheet, block):
                 # A vertical period lives on a row. The column map would keep
                 # only the last year of that ruler.
-                if not header.row:
+                local = is_value_block(block.kind)
+                if not header.row and (not local or header.col not in calendar_cols):
                     period_by_cell[(sheet.name, header.col)] = header.period_key
+                    if not local:
+                        calendar_cols.add(header.col)
                 position = period_position(calendar_key(header.period_key))
                 if position is not None:
                     index[header.period_key] = position[1]

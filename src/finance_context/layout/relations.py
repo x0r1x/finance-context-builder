@@ -110,7 +110,10 @@ def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation
                 # transposed line is a column, so that read would be the label.
                 if layout_row.value_col:
                     continue
-                periods.setdefault((sheet.name, layout_row.row), []).append(cols)
+                owned = cols
+                if layout_row.excluded_cols:
+                    owned = [col for col in cols if col not in layout_row.excluded_cols]
+                periods.setdefault((sheet.name, layout_row.row), []).append(owned)
     patterns: dict[tuple[str, int, tuple[int, ...]], RowPattern] = {}
     current: tuple[str, int] | None = None
     bucket: list[dict] = []
@@ -139,10 +142,11 @@ def formula_relations(layout: Layout, cells: Iterable[dict]) -> list[RowRelation
     relations: list[RowRelation] = []
     for sheet in layout.sheets:
         for block in sheet.blocks:
-            keyed = tuple(relation_period_cols(sheet, block))
+            cols = relation_period_cols(sheet, block)
             for layout_row in block.rows:
                 if layout_row.value_col:
                     continue
+                keyed = tuple(col for col in cols if col not in layout_row.excluded_cols)
                 pattern = patterns.get((sheet.name, layout_row.row, keyed))
                 if pattern is None:
                     continue

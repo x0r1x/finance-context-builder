@@ -81,6 +81,7 @@ def horizontal_columns(sheet: SheetLayout, block: Block, row_n: int) -> set[int]
             columns.add(int(row.label_col))
         for cell in row.cells:
             columns.add(int(cell.col))
+        columns.difference_update(row.excluded_cols)
     return columns
 
 

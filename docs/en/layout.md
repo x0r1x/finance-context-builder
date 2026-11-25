@@ -70,7 +70,7 @@ If the sheet has no axis, `detect_params_block` classifies the shape (not a whit
 | Shape | Result |
 | --- | --- |
 | A label in the left text column **and** a value column (numbers / dates / short scalars) on ≥3 rows | `block.kind=params` |
-| A 2-D grid whose row label is itself a number (`Sensitivity`) | Header row only, `kind=abstract` |
+| A sensitivity grid with ordered numeric row and column labels | `matrix` with one row per row label and local column keys `c<N>` |
 | Numbered rows under a header of ≥3 text captions (`№ п/п`, `Показатель`, a sentence that contains a date) | `params` table. The date stays inside the caption and is not a period key |
 | Long prose, Cover, Disclaimer, shortcuts, including a hidden option list with no textual value header | Region dropped, not in completeness |
 

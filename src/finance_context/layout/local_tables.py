@@ -1,0 +1,274 @@
+"""Identify independently headed regions before assigning rows to sheet-wide blocks."""
+
+from __future__ import annotations
+
+from bisect import bisect_right
+from itertools import pairwise
+
+from finance_context.excel.a1 import index_to_col
+from finance_context.layout.axes import _vertical_axes
+from finance_context.layout.cells import _is_number, _text
+from finance_context.layout.coverage import _without_taken, coverage_blocks
+from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell, TimeAxis
+from finance_context.layout.params import detect_params_block
+from finance_context.layout.periods import classify_header, is_calendar_hit
+
+
+def local_table_blocks(
+    sheet, by_row, date1904, horizontal_headers, hidden_cols, edges, defined_names
+):
+    blocks, taken, schedules = _panels(
+        sheet, by_row, date1904, horizontal_headers, edges, defined_names
+    )
+    if horizontal_headers:
+        return blocks, taken, schedules
+    remaining = _without_taken(by_row, taken)
+    stacked = _stacked_tables(sheet, remaining, date1904)
+    blocks.extend(stacked)
+    taken.update(_coordinates(stacked))
+    remaining = _without_taken(remaining, taken)
+    side = _side_lists(sheet, remaining, date1904, hidden_cols)
+    blocks.extend(side)
+    taken.update(_coordinates(side))
+    return blocks, taken, schedules
+
+
+def _panels(sheet, by_row, date1904, horizontal_headers, edges, defined_names):
+    blocks: list[Block] = []
+    taken: set[tuple[int, int]] = set()
+    schedules: list[tuple[dict[int, list[dict]], list[tuple[list[int], TimeAxis]]]] = []
+    if not by_row:
+        return blocks, taken, schedules
+    last = max(by_row)
+    for start in sorted(by_row):
+        populated = _populated(by_row[start], date1904)
+        titles = [
+            (col, text) for col, text in populated
+            if (start, col) not in taken and _caption(text)
+        ]
+        if not 2 <= len(titles) == len(populated):
+            continue
+        if any(right[0] - left[0] <= 1 for left, right in pairwise(titles)):
+            continue
+        next_header = bisect_right(horizontal_headers, start)
+        end = horizontal_headers[next_header] if next_header < len(horizontal_headers) else last + 1
+        if start in horizontal_headers or end - start < 3:
+            continue
+        right_edge = max(
+            (col for row in range(start + 1, min(end, start + 9))
+             for col, _ in _populated(by_row.get(row, []), date1904)),
+            default=titles[-1][0],
+        ) + 1
+        right_edges = [col for col, _ in titles[1:]] + [right_edge]
+        candidates = []
+        for (left, title), right in zip(titles, right_edges, strict=True):
+            region = _panel_rows(by_row, start, end, left, right, date1904)
+            if not region:
+                continue
+            block = detect_params_block(sheet, region, date1904, edges, defined_names)
+            local = [block] if block is not None else coverage_blocks(
+                sheet, region, date1904, [], set()
+            )[0]
+            local = [item for item in local if item.label_col == left and item.axis.headers]
+            if local:
+                if block is None:
+                    _keep_panel_scalars(sheet, region, local, left, date1904)
+                candidates.append((title, left, right, max(region), local))
+        if len(candidates) < 2:
+            continue
+        for title, left, right, last_row, local in candidates:
+            for block in local:
+                for row in block.rows:
+                    if row.kind == "fact" and not row.section_path:
+                        row.section_path = [title]
+            blocks.extend(local)
+            taken.update(_coordinates(local))
+            taken.add((start, left))
+            for region, axes in _panel_schedules(
+                sheet, by_row, last_row + 1, end, left, right, date1904
+            ):
+                schedules.append((region, axes))
+                taken.update((row, int(cell["col"])) for row, cells in region.items()
+                             for cell in cells)
+    return blocks, taken, schedules
+
+
+def _panel_rows(by_row, start, end, left, right, date1904):
+    region = {}
+    named = 0
+    numeric = 0
+    value_cols: set[int] = set()
+    blank = 0
+    for n in range(start, end):
+        cells = [cell for cell in by_row.get(n, []) if left <= int(cell["col"]) < right]
+        populated = _populated(cells, date1904)
+        if not populated:
+            blank += 1
+            if named and blank >= 2:
+                break
+            continue
+        blank = 0
+        label = next((text for col, text in populated if col == left), None)
+        values = [text for col, text in populated if col != left]
+        if n > start:
+            if label is not None and not _caption(label):
+                break
+            amounts = {col for col, text in populated if col != left and _is_number(text)}
+            if numeric >= 2 and label and amounts and not amounts & value_cols:
+                break
+            if numeric >= 2 and label and values and all(_caption(text) for text in values):
+                break
+            named += int(bool(label and values))
+            if label and amounts:
+                numeric += 1
+                value_cols.update(amounts)
+        region[n] = cells
+        if n - start >= 8 and numeric < 2:
+            return {}
+    return region if named >= 2 and numeric >= 2 else {}
+
+
+def _keep_panel_scalars(sheet, region, blocks, left, date1904):
+    """A confirmed panel can contain a date or a text selector in a value cell."""
+    scalar_blocks = {}
+    for block in blocks[:]:
+        if len(block.axis.headers) != 1:
+            continue
+        [header] = block.axis.headers
+        # A date mistaken for a header is a scalar within this panel.
+        if not _caption(header.text):
+            header.text = index_to_col(header.col)
+            block.axis.row = block.rows[0].row
+        existing = scalar_blocks.get(header.col)
+        if existing and existing.axis.headers[0].text == header.text:
+            existing.rows.extend(block.rows)
+            blocks.remove(block)
+        else:
+            scalar_blocks[header.col] = block
+    occupied_rows = {row.row for block in blocks for row in block.rows}
+    headings = {block.axis.row for block in blocks}
+    for n, cells in region.items():
+        if n in occupied_rows or n in headings:
+            continue
+        populated = _populated(cells, date1904)
+        if len(populated) != 2 or populated[0][0] != left:
+            continue
+        (_, label), (col, value) = populated
+        if not _caption(label) or len(value) > 24:
+            continue
+        row = LayoutRow(
+            row=n, label=label, label_col=left, cells=[RowCell(col=col, role="value")],
+            hidden=any(int(cell["col"]) == left and cell.get("hidden") for cell in cells),
+        )
+        if col in scalar_blocks:
+            scalar_blocks[col].rows.append(row)
+            continue
+        block_id = f"{sheet}!c{n}"
+        header = AxisHeader(col=col, text=index_to_col(col), period_key=f"c{col}", role="value")
+        block = Block(
+            block_id=block_id, label_col=left, kind="key_value",
+            axis=Axis(id=block_id, row=n, headers=[header]), rows=[row],
+        )
+        scalar_blocks[col] = block
+        blocks.append(block)
+    for block in scalar_blocks.values():
+        block.rows.sort(key=lambda row: row.row)
+
+
+def _panel_schedules(sheet, by_row, start, end, left, right, date1904):
+    """A Year / Amount heading below a panel starts its own vertical ruler."""
+    for n in range(start, min(start + 3, end)):
+        captions = [
+            (col, text) for col, text in _populated(by_row.get(n, []), date1904)
+            if left <= col < right
+        ]
+        for (year_col, year), (value_col, caption) in pairwise(captions):
+            if year.casefold() not in {"year", "год"} or value_col != year_col + 1:
+                continue
+            if not _caption(caption):
+                continue
+            region = {
+                row: [
+                    cell for cell in by_row.get(row, [])
+                    if int(cell["col"]) in {year_col, value_col}
+                ]
+                for row in range(n, end)
+            }
+            found, _notes = _vertical_axes(sheet, region, date1904, [])
+            for rows, axis in found:
+                if rows[0] == n + 1 and axis.periods[0].col == year_col:
+                    yield {row: region[row] for row in [n, *rows]}, [(rows, axis)]
+
+
+def _stacked_tables(sheet, by_row, date1904):
+    """Two explicit column headings on one label column start separate local tables."""
+    headed: list[Block] = []
+    for n in sorted(by_row):
+        captions = _populated(by_row[n], date1904)
+        if len(captions) < 3 or not all(_caption(text) for _, text in captions):
+            continue
+        left, title = captions[0]
+        right = captions[-1][0]
+        region = {n: by_row[n]}
+        row = n + 1
+        while cells := by_row.get(row):
+            scoped = [cell for cell in cells if left <= int(cell["col"]) <= right]
+            populated = _populated(scoped, date1904)
+            if not populated or populated[0][0] != left or not _caption(populated[0][1]):
+                break
+            if sum(_is_number(text) for _, text in populated[1:]) < 2:
+                break
+            region[row] = scoped
+            row += 1
+        if len(region) < 3:
+            continue
+        candidates = coverage_blocks(sheet, region, date1904, [], set())[0]
+        for block in candidates:
+            if block.label_col == left and len(block.rows) >= 2:
+                for data in block.rows:
+                    data.section_path = [title]
+                headed.append(block)
+    return [
+        block for block in headed
+        if any(
+            other.label_col == block.label_col and other.axis.row != block.axis.row
+            and [h.text for h in other.axis.headers] != [h.text for h in block.axis.headers]
+            for other in headed
+        )
+    ]
+
+
+def _side_lists(sheet, by_row, date1904, hidden_cols):
+    """Reserve right-hand lists so a left-hand params block cannot absorb them."""
+    candidates = coverage_blocks(sheet, by_row, date1904, [], set(), hidden_cols)[0]
+    return [
+        right for right in candidates
+        if any(
+            left.axis.headers[-1].col < right.label_col
+            and left.rows[0].row <= right.rows[-1].row
+            and right.rows[0].row <= left.rows[-1].row
+            for left in candidates
+        )
+    ]
+
+
+def _coordinates(blocks):
+    taken = set()
+    for block in blocks:
+        taken.add((block.axis.row, block.label_col))
+        taken.update((block.axis.row, header.col) for header in block.axis.headers)
+        for row in block.rows:
+            taken.add((row.row, row.label_col or block.label_col))
+            taken.update((row.row, cell.col) for cell in row.cells)
+    return taken
+
+
+def _caption(text):
+    return not _is_number(text) and not is_calendar_hit(classify_header(text))
+
+
+def _populated(cells, date1904):
+    return sorted(
+        (int(cell["col"]), text.strip()) for cell in cells
+        if (text := _text(cell, date1904))
+    )

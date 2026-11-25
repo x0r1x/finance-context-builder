@@ -689,7 +689,9 @@ def _series_numbers(
     values: list[str | None] = []
     statuses: list[ValueStatus] = []
     for header in headers:
-        if header.col not in keep_cols and not _transposed_value(layout_row, header):
+        if header.col in layout_row.excluded_cols or (
+            header.col not in keep_cols and not _transposed_value(layout_row, header)
+        ):
             values.append(None)
             statuses.append("not_applicable")
             continue
@@ -727,6 +729,8 @@ def _value_cell(
 ) -> dict | None:
     """The cached cell for one period of one line."""
     col, line = _value_coord(layout_row, header, row_num)
+    if col in layout_row.excluded_cols:
+        return None
     return by_addr.get((sheet_name, line, col))
 
 
