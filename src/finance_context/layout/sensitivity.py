@@ -9,9 +9,10 @@ from itertools import pairwise
 from finance_context.layout.cells import _text, parse_number
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell
 
-_AXIS_FORMAT = re.compile(r'(0(?:\.0+)?)\s*(%|"?[xX×]"?|\\[xX×])')
+_AXIS_FORMAT = re.compile(r'(?:#,##)?(0(?:\.0+)?)\s*(%|"?[xX×]"?|\\[xX×])')
+_FORMAT_PADDING = re.compile(r"[_*].")
 _MIN_COLUMNS = 3
-_MIN_ROWS = 2
+_MIN_ROWS = 3
 
 
 def sensitivity_blocks(
@@ -31,7 +32,8 @@ def sensitivity_blocks(
             corner = _cell(cells, label_col)
             if _axis_number(_text(corner, date1904)) is not None:
                 continue
-            rows = _grid_rows(by_row, header_row, label_col, cols, date1904)
+            start = _grid_start(by_row, header_row, label_col, cols[0], date1904)
+            rows = _grid_rows(by_row, start, label_col, cols, date1904)
             if len(rows) < _MIN_ROWS:
                 continue
             title = _grid_title(by_row, header_row, label_col, cols[-1], date1904)
@@ -48,7 +50,7 @@ def sensitivity_blocks(
             ))
             taken.update(
                 (row, col)
-                for row in [header_row, *(item.row for item in rows)]
+                for row in [*range(header_row, start), *(item.row for item in rows)]
                 for col in [label_col, *cols]
             )
     return found, taken
@@ -80,13 +82,32 @@ def _column_axis(run: list[tuple[int, float, str]]):
     ]
 
 
-def _grid_rows(by_row, header_row, label_col, cols, date1904):
+def _grid_start(by_row, header_row, label_col, first_value_col, date1904):
+    """A numeric corner and a second percentage caption precede some Excel grids."""
+    start = header_row + 1
+    first, second = by_row.get(start, []), by_row.get(start + 1, [])
+    base = _axis_text(_cell(first, label_col), date1904) or ""
+    label = _axis_text(_cell(second, label_col), date1904) or ""
+    caption = _axis_text(_cell(first, first_value_col), date1904) or ""
+    result = _axis_text(_cell(second, first_value_col), date1904) or ""
+    if _axis_number(base) is not None and not base.endswith("%") and (
+        label.endswith("%") and caption.endswith("%") and not result.endswith("%")
+    ):
+        return start + 1
+    return start
+
+
+def _grid_rows(by_row, start, label_col, cols, date1904):
     rows: list[LayoutRow] = []
     previous: float | None = None
     ascending: bool | None = None
-    n = header_row + 1
+    n = start
     while cells := by_row.get(n):
-        label_cell = _cell(cells, label_col)
+        indexed = {int(cell["col"]): cell for cell in cells}
+        left = _text(indexed.get(label_col - 1, {}), date1904)
+        if left and parse_number(left) is not None:
+            break
+        label_cell = indexed.get(label_col, {})
         label = _axis_text(label_cell, date1904)
         value = _axis_number(label)
         if value is None or value == previous:
@@ -98,7 +119,7 @@ def _grid_rows(by_row, header_row, label_col, cols, date1904):
             ascending = increases
         values = [
             RowCell(col=col, role="value") for col in cols
-            if _result_cell(_cell(cells, col), date1904)
+            if _result_cell(indexed.get(col, {}), date1904)
         ]
         if len(values) * 2 < len(cols):
             break
@@ -134,11 +155,11 @@ def _axis_text(cell: dict, date1904: bool) -> str | None:
     text = _text(cell, date1904)
     if text is None:
         return None
-    number = parse_number(text)
-    fmt = _AXIS_FORMAT.fullmatch((cell.get("number_format") or "").split(";")[0])
-    if number is None or fmt is None:
+    fmt = (cell.get("number_format") or "").split(";")[0]
+    parsed = _AXIS_FORMAT.fullmatch(_FORMAT_PADDING.sub("", fmt)) if fmt else None
+    if parsed is None or parse_number(text) is None:
         return text.strip()
-    pattern, token = fmt.groups()
+    pattern, token = parsed.groups()
     decimals = len(pattern.partition(".")[2])
     suffix = token.strip('"\\')
     try:
