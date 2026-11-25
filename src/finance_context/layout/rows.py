@@ -4,6 +4,7 @@ import re
 from bisect import bisect_left
 from collections import defaultdict
 from itertools import pairwise
+from typing import NamedTuple
 
 from finance_context.formulas.engine import FormulaEngine
 from finance_context.layout.cells import (
@@ -101,6 +102,11 @@ _SUM_FUNCS = {"sum", "сумм"}
 _IF_FUNCS = {"if", "если"}
 _AggregateSpans = tuple[tuple[int, int], ...]
 _FORMULA_STRING_LITERAL = re.compile(r'"(?:[^"]|"")*"')
+
+
+class _AggregateRows(NamedTuple):
+    spans: _AggregateSpans = ()
+    single_child: bool = False
 
 
 _RELATIVE_LABEL = re.compile(
@@ -691,7 +697,7 @@ def _data_rows(
     # the top of this stack, so a flat table does not rescan every earlier row.
     parent_stack: list[LayoutRow] = []
     outlines: list[int] = []
-    aggregated: list[_AggregateSpans] = []
+    aggregated: list[_AggregateRows] = []
     units: list[bool] = []
     section_stack: list[LayoutRow] = [seed] if seed is not None else []
     previous_name_template: str | None = None
@@ -869,7 +875,7 @@ def _rewire_parents(
     outlines: list[int],
     summary_below: bool,
     seed: LayoutRow | None = None,
-    aggregated: list[_AggregateSpans] | None = None,
+    aggregated: list[_AggregateRows] | None = None,
     units: list[bool] | None = None,
 ) -> None:
     """Section paths come from abstract headers. ``kind`` does not decide parentage.
@@ -931,7 +937,7 @@ def _rewire_parents(
         if structural[index]:
             section_stack.append(index)
     _apply_indent_aggregate_parents(
-        rows, aggregated or [() for _ in rows], units or [False for _ in rows]
+        rows, aggregated or [_AggregateRows()] * len(rows), units or [False for _ in rows]
     )
     if any(level > 0 for level in outlines):
         _apply_outline_parents(rows, outlines, summary_below)
@@ -1000,23 +1006,26 @@ def _nonneg_int(value: object) -> int:
 
 def _aggregated_child_rows(
     row_cells: list[dict], period_cols: set[int], row_n: int
-) -> _AggregateSpans:
+) -> _AggregateRows:
     """Spans named by a vertical sum in a period column. A same-row total is not one."""
     sheet = str(next((cell.get("sheet") for cell in row_cells if cell.get("sheet")), ""))
     spans: list[tuple[int, int]] = []
+    single_child = False
     for cell in row_cells:
         if int(cell["col"]) not in period_cols:
             continue
         formula = cell.get("formula_raw") or cell.get("formula_template")
         if not formula:
             continue
-        spans.extend(_vertical_aggregate_rows(str(formula), row_n, sheet, int(cell["col"])))
-    return tuple(spans)
+        aggregate = _vertical_aggregate_rows(str(formula), row_n, sheet, int(cell["col"]))
+        spans.extend(aggregate.spans)
+        single_child |= aggregate.single_child
+    return _AggregateRows(tuple(spans), single_child)
 
 
 def _vertical_aggregate_rows(
     formula: str, row_n: int, sheet: str, formula_col: int
-) -> _AggregateSpans:
+) -> _AggregateRows:
     """Local rows a total owns, from the parsed formula.
 
     ``SUM`` inside an ``IF`` test is not the value. Every ``SUM`` argument in
@@ -1026,10 +1035,23 @@ def _vertical_aggregate_rows(
     """
     ast = _aggregate_ast(formula, sheet)
     if ast is None:
-        return ()
+        return _AggregateRows()
     spans: list[tuple[int, int]] = []
     _collect_aggregate_spans(ast, sheet, row_n, formula_col, spans, plus=False)
-    return tuple(spans) if _combines_rows(spans) else ()
+    if _combines_rows(spans):
+        return _AggregateRows(tuple(spans))
+    # An explicit one-cell range can be a subtotal inside a larger roll-up.
+    # Keep it separate from multi-row evidence and from aliases such as =C4.
+    args = ast.get("args") or []
+    single_child = (
+        spans == [(row_n + 1, row_n + 1)]
+        and ast.get("op") == "func"
+        and str(ast.get("name") or "").casefold() in _SUM_FUNCS
+        and len(args) == 1
+        and isinstance(args[0], dict)
+        and args[0].get("op") == "range"
+    )
+    return _AggregateRows(single_child=single_child)
 
 
 def _combines_rows(spans: list[tuple[int, int]]) -> bool:
@@ -1146,16 +1168,18 @@ def _unit_stub_cols(row: LayoutRow) -> set[int]:
 
 
 def _apply_indent_aggregate_parents(
-    rows: list[LayoutRow], aggregated: list[_AggregateSpans], units: list[bool]
+    rows: list[LayoutRow], aggregated: list[_AggregateRows], units: list[bool]
 ) -> None:
     """A fact parents a deeper row only when its formula aggregates that row.
 
     The nearest shallower row has to name the child. A single indent step, or a
     sum of some other rows, leaves the section parent in place. The stack is
-    popped and pushed once per row. ``units`` is the caption check already made
-    while the rows were built.
+    popped and pushed once per row. A one-child subtotal needs a containing
+    multi-row aggregate and a single adjacent indented detail row. ``units``
+    is the caption check already made while the rows were built.
     """
     stack: list[int] = []
+    aggregate_children: set[int] = set()
     for index, row in enumerate(rows):
         if units[index]:
             continue
@@ -1164,10 +1188,18 @@ def _apply_indent_aggregate_parents(
         if stack:
             prev = stack[-1]
             earlier = rows[prev]
-            if _span_contains(aggregated[prev], row.row) and (
-                row.parent_row is None or earlier.row > row.parent_row
-            ):
-                row.parent_row = earlier.row
+            if row.parent_row is None or earlier.row > row.parent_row:
+                aggregate = aggregated[prev]
+                if _span_contains(aggregate.spans, row.row):
+                    row.parent_row = earlier.row
+                    aggregate_children.add(index)
+                elif (
+                    prev in aggregate_children
+                    and aggregate.single_child
+                    and row.row == earlier.row + 1
+                    and (index + 1 == len(rows) or rows[index + 1].indent <= earlier.indent)
+                ):
+                    row.parent_row = earlier.row
         stack.append(index)
 
 

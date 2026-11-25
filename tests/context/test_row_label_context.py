@@ -324,6 +324,44 @@ def test_only_a_formula_combining_distinct_rows_supplies_a_parent(
 
 
 @pytest.mark.parametrize(
+    ("rollup", "subtotal", "is_parent"),
+    [
+        ("=SUM({c}4,{c}6)", "=SUM({c}5:{c}5)", True),
+        ("=SUM({c}4,{c}6)", "=SUM({c}5)", False),
+        ("=SUM({c}4,{c}6)", "={c}5", False),
+        ("=SUM({c}4,{c}6)", "=SUM(H5:H5)", False),
+        (None, "=SUM({c}5:{c}5)", False),
+    ],
+)
+def test_single_detail_of_nested_balance_subtotal_keeps_its_section(
+    rollup: str | None, subtotal: str, is_parent: bool
+) -> None:
+    sheet = "BS"
+    section = "Бухгалтерский баланс"
+    long_term = "Обязательства долгосрочные"
+    cells = [_c(sheet, "C1", "2024"), _c(sheet, "D1", "2025")]
+    cells += [
+        _c(sheet, "A2", section),
+        _c(sheet, "A3", "Долгосрочные и краткосрочные обязательства"),
+        _c(sheet, "A4", f"  {long_term}"),
+        _c(sheet, "A5", "    Кредиты и займы"),
+        _c(sheet, "A6", "  Обязательства краткосрочные"),
+    ]
+    for col in "CD":
+        cells.extend([
+            _c(sheet, f"{col}3", "17", formula=rollup.format(c=col) if rollup else None),
+            _c(sheet, f"{col}4", "10", formula=subtotal.format(c=col)),
+            _c(sheet, f"{col}5", "10"),
+            _c(sheet, f"{col}6", "7"),
+        ])
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[4].kind == rows[5].kind == "fact"
+    assert rows[5].parent_label == (long_term if is_parent else section)
+    assert rows[5].label_path == ([section, long_term] if is_parent else [section])
+    assert rows[5].values == ["10", "10"]
+
+
+@pytest.mark.parametrize(
     ("unit", "scale", "normalized"),
     [
         ("млн единиц", 1_000_000, ["2000000000", "3000000000"]),

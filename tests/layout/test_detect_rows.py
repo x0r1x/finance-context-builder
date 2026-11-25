@@ -1161,16 +1161,18 @@ def test_a_local_sum_range_parents_only_its_rows() -> None:
 def test_a_full_column_sum_keeps_its_bounds() -> None:
     from finance_context.layout.rows import _vertical_aggregate_rows
 
-    spans = _vertical_aggregate_rows("=SUM(C1:C1048576)", 6, "ОПиУ", 3)
+    spans = _vertical_aggregate_rows("=SUM(C1:C1048576)", 6, "ОПиУ", 3).spans
     assert spans == ((1, 1048576),)
-    assert _vertical_aggregate_rows("=SUM(Inputs!C4:C5)", 3, "ОПиУ", 3) == ()
-    assert _vertical_aggregate_rows("=SUM('ОПиУ'!C4:C5)", 3, "ОПиУ", 3) == ((4, 5),)
-    assert _vertical_aggregate_rows('=COUNTIF(Inputs!C4:C5,"SUM(C4:C5)")', 3, "ОПиУ", 3) == ()
-    assert _vertical_aggregate_rows("=SUM(C4:C5)+Inputs!C8", 3, "ОПиУ", 3) == ((4, 5),)
-    assert _vertical_aggregate_rows("=IF(SUM(C4:C5)>0,C10,C11)", 3, "ОПиУ", 3) == ()
-    assert _vertical_aggregate_rows("=SUM(C4,C5)", 3, "ОПиУ", 3) == ((4, 4), (5, 5))
-    assert _vertical_aggregate_rows("=SUM(Inputs!C8,C4:C5)", 3, "ОПиУ", 3) == ((4, 5),)
-    assert _vertical_aggregate_rows("=SUM(H4:H5)", 3, "ОПиУ", 3) == ()
+    assert _vertical_aggregate_rows("=SUM(Inputs!C4:C5)", 3, "ОПиУ", 3).spans == ()
+    assert _vertical_aggregate_rows("=SUM('ОПиУ'!C4:C5)", 3, "ОПиУ", 3).spans == ((4, 5),)
+    assert (
+        _vertical_aggregate_rows('=COUNTIF(Inputs!C4:C5,"SUM(C4:C5)")', 3, "ОПиУ", 3).spans == ()
+    )
+    assert _vertical_aggregate_rows("=SUM(C4:C5)+Inputs!C8", 3, "ОПиУ", 3).spans == ((4, 5),)
+    assert _vertical_aggregate_rows("=IF(SUM(C4:C5)>0,C10,C11)", 3, "ОПиУ", 3).spans == ()
+    assert _vertical_aggregate_rows("=SUM(C4,C5)", 3, "ОПиУ", 3).spans == ((4, 4), (5, 5))
+    assert _vertical_aggregate_rows("=SUM(Inputs!C8,C4:C5)", 3, "ОПиУ", 3).spans == ((4, 5),)
+    assert _vertical_aggregate_rows("=SUM(H4:H5)", 3, "ОПиУ", 3).spans == ()
 
 
 def test_a_unit_formula_keeps_a_section_and_parents_the_next_line() -> None:
