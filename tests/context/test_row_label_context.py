@@ -234,6 +234,52 @@ def _capex_children(formula_c: str, formula_d: str):
     return {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
 
 
+def test_a_balance_subtotal_enters_the_child_label_path() -> None:
+    sheet = "BS_PL_DCF"
+    cells = [_c(sheet, "C1", "2018"), _c(sheet, "D1", "2019")]
+    cells += [
+        _c(sheet, "A2", "Бухгалтерский баланс"),
+        _c(sheet, "A3", "Необоротные активы"),
+        _c(sheet, "C3", "260000", formula="=SUM(C4:C5)"),
+        _c(sheet, "D3", "252866", formula="=SUM(D4:D5)"),
+        _c(sheet, "A4", "  Основные средства"),
+        _c(sheet, "C4", "250000"),
+        _c(sheet, "D4", "242866"),
+        _c(sheet, "A5", "  Прочее"),
+        _c(sheet, "C5", "10000"),
+        _c(sheet, "D5", "10000"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[3].kind == "fact"
+    assert rows[3].values == ["260000", "252866"]
+    assert rows[4].parent_label == "Необоротные активы"
+    assert rows[4].label_path == ["Бухгалтерский баланс", "Необоротные активы"]
+    assert rows[4].values == ["250000", "242866"]
+    assert rows[5].label_path == ["Бухгалтерский баланс", "Необоротные активы"]
+
+
+def test_a_parallel_column_sum_leaves_the_section_label_path() -> None:
+    sheet = "BS"
+    cells = [_c(sheet, "C1", "2018"), _c(sheet, "D1", "2019")]
+    cells += [
+        _c(sheet, "A2", "Бухгалтерский баланс"),
+        _c(sheet, "A3", "Необоротные активы"),
+        _c(sheet, "C3", "1", formula="=SUM(H4:H5)"),
+        _c(sheet, "D3", "2", formula="=SUM(I4:I5)"),
+        _c(sheet, "A4", "  Основные средства"),
+        _c(sheet, "C4", "10"),
+        _c(sheet, "D4", "11"),
+        _c(sheet, "A5", "  Прочее"),
+        _c(sheet, "C5", "3"),
+        _c(sheet, "D5", "4"),
+    ]
+    rows = {row.row: row for block in _publish(sheet, cells).blocks for row in block.rows}
+    assert rows[4].parent_label == "Бухгалтерский баланс"
+    assert rows[4].label_path == ["Бухгалтерский баланс"]
+    assert rows[5].label_path == ["Бухгалтерский баланс"]
+    assert rows[4].values == ["10", "11"]
+
+
 def test_a_sum_inside_an_if_test_does_not_enter_the_label_path() -> None:
     rows = _capex_children("=IF(SUM(C4:C5)>0,C10,C11)", "=IF(SUM(D4:D5)>0,D10,D11)")
     assert rows[3].kind == "fact"

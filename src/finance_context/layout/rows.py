@@ -1010,22 +1010,25 @@ def _aggregated_child_rows(
         formula = cell.get("formula_raw") or cell.get("formula_template")
         if not formula:
             continue
-        spans.extend(_vertical_aggregate_rows(str(formula), row_n, sheet))
+        spans.extend(_vertical_aggregate_rows(str(formula), row_n, sheet, int(cell["col"])))
     return tuple(spans)
 
 
-def _vertical_aggregate_rows(formula: str, row_n: int, sheet: str) -> _AggregateSpans:
+def _vertical_aggregate_rows(
+    formula: str, row_n: int, sheet: str, formula_col: int
+) -> _AggregateSpans:
     """Local rows a total owns, from the parsed formula.
 
-    ``SUM`` inside an ``IF`` test is not the value. Every ``SUM`` argument is,
-    including a list of refs and a range beside a cell on another sheet. A
-    range stays a pair of bounds.
+    ``SUM`` inside an ``IF`` test is not the value. Every ``SUM`` argument in
+    this period column counts, including a list of refs and a range beside a
+    cell on another sheet. A sum down another column is a different table.
+    A range stays a pair of bounds.
     """
     ast = _aggregate_ast(formula, sheet)
     if ast is None:
         return ()
     spans: list[tuple[int, int]] = []
-    _collect_aggregate_spans(ast, sheet, row_n, spans, plus=False)
+    _collect_aggregate_spans(ast, sheet, row_n, formula_col, spans, plus=False)
     return tuple(spans) if _combines_rows(spans) else ()
 
 
@@ -1043,7 +1046,13 @@ def _aggregate_ast(formula: str, sheet: str) -> dict | None:
 
 
 def _collect_aggregate_spans(
-    node: object, sheet: str, row_n: int, spans: list[tuple[int, int]], *, plus: bool
+    node: object,
+    sheet: str,
+    row_n: int,
+    formula_col: int,
+    spans: list[tuple[int, int]],
+    *,
+    plus: bool,
 ) -> None:
     """Value structure only. An ``IF`` condition is not part of the value."""
     if not isinstance(node, dict):
@@ -1055,39 +1064,47 @@ def _collect_aggregate_spans(
         if name in _IF_FUNCS:
             for arg in args[1:]:
                 branch: list[tuple[int, int]] = []
-                _collect_aggregate_spans(arg, sheet, row_n, branch, plus=False)
+                _collect_aggregate_spans(arg, sheet, row_n, formula_col, branch, plus=False)
                 if _combines_rows(branch):
                     spans.extend(branch)
             return
         if name in _SUM_FUNCS:
             for arg in args:
-                _collect_sum_argument(arg, sheet, row_n, spans)
+                _collect_sum_argument(arg, sheet, row_n, formula_col, spans)
             return
         return
     if op == "bin" and node.get("kind") == "+":
-        _collect_aggregate_spans(node.get("left"), sheet, row_n, spans, plus=True)
-        _collect_aggregate_spans(node.get("right"), sheet, row_n, spans, plus=True)
+        _collect_aggregate_spans(node.get("left"), sheet, row_n, formula_col, spans, plus=True)
+        _collect_aggregate_spans(node.get("right"), sheet, row_n, formula_col, spans, plus=True)
         return
     if op == "unary":
-        _collect_aggregate_spans(node.get("expr"), sheet, row_n, spans, plus=False)
+        _collect_aggregate_spans(node.get("expr"), sheet, row_n, formula_col, spans, plus=False)
         return
     if plus:
-        _append_local_span(node, sheet, row_n, spans)
+        _append_local_span(node, sheet, row_n, formula_col, spans)
 
 
 def _collect_sum_argument(
-    node: object, sheet: str, row_n: int, spans: list[tuple[int, int]]
+    node: object,
+    sheet: str,
+    row_n: int,
+    formula_col: int,
+    spans: list[tuple[int, int]],
 ) -> None:
     if not isinstance(node, dict):
         return
     if node.get("op") in {"ref", "range"}:
-        _append_local_span(node, sheet, row_n, spans)
+        _append_local_span(node, sheet, row_n, formula_col, spans)
         return
-    _collect_aggregate_spans(node, sheet, row_n, spans, plus=False)
+    _collect_aggregate_spans(node, sheet, row_n, formula_col, spans, plus=False)
 
 
 def _append_local_span(
-    node: dict, sheet: str, row_n: int, spans: list[tuple[int, int]]
+    node: dict,
+    sheet: str,
+    row_n: int,
+    formula_col: int,
+    spans: list[tuple[int, int]],
 ) -> None:
     if node.get("external"):
         return
@@ -1097,14 +1114,16 @@ def _append_local_span(
     op = node.get("op")
     if op == "ref":
         child = node.get("row")
-        if isinstance(child, int) and child != row_n:
+        if isinstance(child, int) and child != row_n and node.get("col") == formula_col:
             spans.append((child, child))
         return
-    if op != "range" or node.get("col_only"):
+    if op != "range" or node.get("col_only") or node.get("row_only"):
         return
     start = node.get("start") or {}
     end = node.get("end") or {}
     if not isinstance(start, dict) or not isinstance(end, dict):
+        return
+    if start.get("col") != formula_col or end.get("col") != formula_col:
         return
     if "row" not in start or "row" not in end:
         return

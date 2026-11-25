@@ -1045,6 +1045,75 @@ def test_an_aggregate_formula_parents_only_the_rows_it_sums() -> None:
     assert rows[6].section_path == ["Инвестиции"]
 
 
+def test_a_repayment_subtotal_without_an_outline_parents_its_lines() -> None:
+    """Auchan «Денежные потоки»!54 sums !55+!56 in the same period column, with no group."""
+    cells = [_c("Денежные потоки", "C1", "2024"), _c("Денежные потоки", "D1", "2025")]
+    cells += [
+        _c("Денежные потоки", "A2", "Финансовый денежный поток"),
+        _c("Денежные потоки", "A3", "Погашение обязательств, за кв."),
+        _c("Денежные потоки", "C3", "0", formula="=C4+C5"),
+        _c("Денежные потоки", "D3", "0", formula="=D4+D5"),
+        _c("Денежные потоки", "A4", "  Текущих обязательств в Сбербанке"),
+        _c("Денежные потоки", "C4", "1"),
+        _c("Денежные потоки", "D4", "2"),
+        _c("Денежные потоки", "A5", "  Текущих обязательств в других банках"),
+        _c("Денежные потоки", "C5", "3"),
+        _c("Денежные потоки", "D5", "4"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[3].kind == "fact"
+    assert rows[4].parent_row == 3
+    assert rows[5].parent_row == 3
+    assert rows[4].section_path == ["Финансовый денежный поток"]
+    assert rows[5].section_path == ["Финансовый денежный поток"]
+
+
+def test_a_balance_subtotal_without_an_outline_parents_its_lines() -> None:
+    """VEB BS_PL_DCF!4 is SUM of !5:!6. Outline level is 0; the subtotal still parents."""
+    cells = [_c("BS_PL_DCF", "C1", "2018"), _c("BS_PL_DCF", "D1", "2019")]
+    cells += [
+        _c("BS_PL_DCF", "A2", "Бухгалтерский баланс"),
+        _c("BS_PL_DCF", "A3", "Необоротные активы"),
+        _c("BS_PL_DCF", "C3", "260000", formula="=SUM(C4:C5)"),
+        _c("BS_PL_DCF", "D3", "252866", formula="=SUM(D4:D5)"),
+        _c("BS_PL_DCF", "A4", "  Основные средства"),
+        _c("BS_PL_DCF", "C4", "250000"),
+        _c("BS_PL_DCF", "D4", "242866"),
+        _c("BS_PL_DCF", "A5", "  Прочее"),
+        _c("BS_PL_DCF", "C5", "10000"),
+        _c("BS_PL_DCF", "D5", "10000"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[3].kind == "fact"
+    assert rows[4].parent_row == 3
+    assert rows[5].parent_row == 3
+    assert rows[4].section_path == ["Бухгалтерский баланс"]
+    assert rows[5].section_path == ["Бухгалтерский баланс"]
+
+
+def test_a_sum_down_a_parallel_column_does_not_parent_local_rows() -> None:
+    """Same physical rows, another column: the sum is not this table's parent."""
+    cells = [_c("BS", "C1", "2018"), _c("BS", "D1", "2019")]
+    cells += [
+        _c("BS", "A2", "Бухгалтерский баланс"),
+        _c("BS", "A3", "Необоротные активы"),
+        _c("BS", "C3", "1", formula="=SUM(H4:H5)"),
+        _c("BS", "D3", "2", formula="=SUM(I4:I5)"),
+        _c("BS", "A4", "  Основные средства"),
+        _c("BS", "C4", "10"),
+        _c("BS", "D4", "11"),
+        _c("BS", "A5", "  Прочее"),
+        _c("BS", "C5", "3"),
+        _c("BS", "D5", "4"),
+        _c("BS", "H4", "250000"),
+        _c("BS", "H5", "10000"),
+    ]
+    rows = {row.row: row for row in detect_layout(cells).sheets[0].blocks[0].rows}
+    assert rows[4].parent_row == 2
+    assert rows[5].parent_row == 2
+    assert rows[4].section_path == ["Бухгалтерский баланс"]
+
+
 def test_a_sum_on_another_sheet_does_not_parent_local_rows() -> None:
     cells = [_c("ОПиУ", "C1", "2024"), _c("ОПиУ", "D1", "2025")]
     cells += [
@@ -1092,15 +1161,16 @@ def test_a_local_sum_range_parents_only_its_rows() -> None:
 def test_a_full_column_sum_keeps_its_bounds() -> None:
     from finance_context.layout.rows import _vertical_aggregate_rows
 
-    spans = _vertical_aggregate_rows("=SUM(C1:C1048576)", 6, "ОПиУ")
+    spans = _vertical_aggregate_rows("=SUM(C1:C1048576)", 6, "ОПиУ", 3)
     assert spans == ((1, 1048576),)
-    assert _vertical_aggregate_rows("=SUM(Inputs!C4:C5)", 3, "ОПиУ") == ()
-    assert _vertical_aggregate_rows("=SUM('ОПиУ'!C4:C5)", 3, "ОПиУ") == ((4, 5),)
-    assert _vertical_aggregate_rows('=COUNTIF(Inputs!C4:C5,"SUM(C4:C5)")', 3, "ОПиУ") == ()
-    assert _vertical_aggregate_rows("=SUM(C4:C5)+Inputs!C8", 3, "ОПиУ") == ((4, 5),)
-    assert _vertical_aggregate_rows("=IF(SUM(C4:C5)>0,C10,C11)", 3, "ОПиУ") == ()
-    assert _vertical_aggregate_rows("=SUM(C4,C5)", 3, "ОПиУ") == ((4, 4), (5, 5))
-    assert _vertical_aggregate_rows("=SUM(Inputs!C8,C4:C5)", 3, "ОПиУ") == ((4, 5),)
+    assert _vertical_aggregate_rows("=SUM(Inputs!C4:C5)", 3, "ОПиУ", 3) == ()
+    assert _vertical_aggregate_rows("=SUM('ОПиУ'!C4:C5)", 3, "ОПиУ", 3) == ((4, 5),)
+    assert _vertical_aggregate_rows('=COUNTIF(Inputs!C4:C5,"SUM(C4:C5)")', 3, "ОПиУ", 3) == ()
+    assert _vertical_aggregate_rows("=SUM(C4:C5)+Inputs!C8", 3, "ОПиУ", 3) == ((4, 5),)
+    assert _vertical_aggregate_rows("=IF(SUM(C4:C5)>0,C10,C11)", 3, "ОПиУ", 3) == ()
+    assert _vertical_aggregate_rows("=SUM(C4,C5)", 3, "ОПиУ", 3) == ((4, 4), (5, 5))
+    assert _vertical_aggregate_rows("=SUM(Inputs!C8,C4:C5)", 3, "ОПиУ", 3) == ((4, 5),)
+    assert _vertical_aggregate_rows("=SUM(H4:H5)", 3, "ОПиУ", 3) == ()
 
 
 def test_a_unit_formula_keeps_a_section_and_parents_the_next_line() -> None:
