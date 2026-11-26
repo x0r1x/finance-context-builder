@@ -77,7 +77,7 @@ def test_published_artifacts_match_golden(
     run_book(xlsx, dest, filename=filename, job_id=f"synthetic-{name}")
     context = json.loads((dest / "context" / "context.json").read_text(encoding="utf-8"))
     graph = json.loads((dest / "graph" / "graph.json").read_text(encoding="utf-8"))
-    assert context["schema_version"] == "1.14.0"
+    assert context["schema_version"] == "1.15.0"
     assert graph["schema_version"] == "1.7.0"
     actual = artifact_hashes(dest)
     payload = _load()

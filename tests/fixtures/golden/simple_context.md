@@ -1,6 +1,6 @@
 # Financial context
 
-- Schema: `1.14.0`
+- Schema: `1.15.0`
 - Job: `job1`
 - Status: `succeeded`
 - Source: `simple.xlsx`

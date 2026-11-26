@@ -6,7 +6,13 @@ from pathlib import Path
 from finance_context.formulas.models import as_edge
 from finance_context.layout.axes import _axis_candidates, _series_row_above, _table_groups
 from finance_context.layout.cells import _is_number, _text, bind_row_index, clear_row_index
-from finance_context.layout.coverage import chart_note, coverage_blocks
+from finance_context.layout.coverage import (
+    _disambiguate_ids,
+    _without_taken,
+    chart_note,
+    coverage_blocks,
+)
+from finance_context.layout.local_tables import local_table_blocks
 from finance_context.layout.models import (
     Block,
     Layout,
@@ -30,6 +36,7 @@ from finance_context.layout.rows import (
     _label_span,
     _year_label_section,
 )
+from finance_context.layout.sensitivity import sensitivity_blocks
 from finance_context.layout.timelines import _share_repeated_axes, link_workbook_timelines
 from finance_context.layout.units import is_unit_text
 
@@ -157,9 +164,27 @@ def _blocks_indexed(
     defined_names: list | None,
     name_headers: tuple[str, ...] | None = None,
 ) -> tuple[list[Block], list[TimeAxis], list[str]]:
-    row_ids = sorted(by_row)
+    grids, grid_cells = sensitivity_blocks(sheet, by_row, date1904)
+    if grid_cells:
+        by_row = _without_taken(by_row, grid_cells)
+        bind_row_index(by_row)
     found, axis_notes = _axis_candidates(sheet, by_row, date1904, hidden_cols)
-    vertical = [item for item in found if item[1].transposed]
+    horizontal_headers = sorted({axis.header_row for _band, axis in found if not axis.transposed})
+    panels, panel_cells, schedules = local_table_blocks(
+        sheet, by_row, date1904, horizontal_headers, hidden_cols, edges, defined_names,
+        hidden_row_ids=hidden_row_ids,
+    )
+    if panel_cells:
+        by_row = _without_taken(by_row, panel_cells)
+        bind_row_index(by_row)
+    local_claims: dict[int, set[int]] = defaultdict(set)
+    for row, col in grid_cells | panel_cells:
+        local_claims[row].add(col)
+    row_ids = sorted(by_row)
+    vertical = [
+        item for item in found if item[1].transposed
+        and not any((period.row, period.col) in panel_cells for period in item[1].periods)
+    ]
     candidates = [item for item in found if not item[1].transposed]
     groups = _table_groups(candidates)
     blocks: list[Block] = []
@@ -224,6 +249,8 @@ def _blocks_indexed(
         data_rows, carved = carve_params_regions(
             sheet, data_rows, by_row, date1904, period_cols, label_col
         )
+        for row in data_rows:
+            row.excluded_cols = sorted(period_cols & local_claims.get(row.row, set()))
         params_blocks.extend(carved)
         if len(group_axes) == 1:
             block_id = group_axes[0].id
@@ -241,6 +268,12 @@ def _blocks_indexed(
         )
     blocks, axes = _share_repeated_axes(blocks, axes, by_row, date1904)
     turned_blocks, turned_axes = _transposed_blocks(sheet, by_row, date1904, vertical)
+    for region, scheduled_axes in schedules:
+        scheduled_blocks, local_axes = _transposed_blocks(
+            sheet, region, date1904, scheduled_axes
+        )
+        turned_blocks.extend(scheduled_blocks)
+        turned_axes.extend(local_axes)
     blocks = [*blocks, *turned_blocks]
     axes = [*axes, *turned_axes]
     if params_blocks:
@@ -267,9 +300,11 @@ def _blocks_indexed(
         taken=_vertical_period_cells(axes),
         axes=axes,
     )
-    if covered:
+    if covered or grids or panels:
+        local = [*covered, *grids, *panels]
+        _disambiguate_ids(local)
         blocks = sorted(
-            [*blocks, *covered],
+            [*blocks, *local],
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
     return blocks, axes, [*axis_notes, *notes]

@@ -53,6 +53,7 @@ class SheetSpec:
     summary_below_parent: str = "sheetPr"
     # Horizontal merges, ``B2:C2``. The anchor cell keeps the value.
     merges: list[str] = field(default_factory=list)
+    collapsed_rows: set[int] = field(default_factory=set)
 
 
 def write_zip(path: Path, members: dict[str, str | bytes]) -> Path:
@@ -320,12 +321,13 @@ def _sheet_xml(sheet: SheetSpec, shared_strings: list[str]) -> str:
     )
     col_xml = f"<cols>{''.join(bits)}</cols>" if bits else ""
     rows_xml = []
-    for row in sorted(by_row):
+    for row in sorted(by_row.keys() | sheet.collapsed_rows):
         hidden = ' hidden="1"' if row in sheet.hidden_rows else ""
         level = sheet.row_outline.get(row, 0)
         outline = f' outlineLevel="{level}"' if level else ""
-        cells_xml = "".join(_cell_xml(c, shared_strings) for c in by_row[row])
-        rows_xml.append(f'<row r="{row}"{hidden}{outline}>{cells_xml}</row>')
+        collapsed = ' collapsed="1"' if row in sheet.collapsed_rows else ""
+        cells_xml = "".join(_cell_xml(c, shared_strings) for c in by_row.get(row, ()))
+        rows_xml.append(f'<row r="{row}"{hidden}{outline}{collapsed}>{cells_xml}</row>')
     merges = ""
     if sheet.merges:
         body = "".join(f'<mergeCell ref="{escape(ref)}"/>' for ref in sheet.merges)
