@@ -178,9 +178,15 @@ def build_context(
     date_flag = bool(workbook_meta.get("date1904"))
     body = MarkdownBody(context_dir)
     built: list[ContextDocument] = []
+    outline_hidden_rows = {
+        sheet["name"]: set(sheet["outline_hidden_rows"])
+        for sheet in workbook_meta.get("sheets") or []
+        if sheet.get("outline_hidden_rows")
+    }
 
     def _stream_blocks():
         for sheet in layout.sheets:
+            hidden_by_outline = outline_hidden_rows.get(sheet.name, set())
             for block in sheet.blocks:
                 yield from _stream_one_block(
                     sheet,
@@ -193,6 +199,7 @@ def build_context(
                     dependents=dependents,
                     reads=reads,
                     relations=relations,
+                    hidden_by_outline=hidden_by_outline,
                     date1904=date_flag,
                     not_applicable=not_applicable,
                     published=published,
@@ -352,6 +359,7 @@ def _stream_one_block(
     dependents: dict,
     reads: RangeReads,
     relations: list[RowRelation],
+    hidden_by_outline: set[int],
     date1904: bool,
     not_applicable: set[str],
     published: list[FinancialBlock],
@@ -520,6 +528,9 @@ def _stream_one_block(
                     series=series,
                     share_label=layout_row.row in shared_rows,
                     label_col=block.label_col,
+                )
+                line.hidden_by_outline = (
+                    line.hidden and not layout_row.value_col and layout_row.row in hidden_by_outline
                 )
                 for (_axis_id, headers), item in zip(views, series, strict=False):
                     for header, item_state in zip(headers, item.value_statuses, strict=False):
