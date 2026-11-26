@@ -90,10 +90,19 @@ The `ETag` of catalog, summary, and observations is strong: schema, `content_sha
 | `formula.text` | the link with the same `row_key` and `period_id`, otherwise `row.formula` | The formula text of this period. No link means the row fingerprint or `null`. A stub formula is not substituted |
 | `formula.class` | `links[].formula_class` | The class of this cell in the response. It is not in `context.json`. AST is not copied |
 | `formula.precedents` | `trace_graph` when `precedent_depth` is 1–3 | `depth`, `label`, `row_key`, `period_id`, the cache in `value`, the address in `cell`. `depth` 1 is a direct input. `label` is the context row with the same `row_key`. The list is the whole walk at the requested depth, and `precedents_total` is its length. Depth 0 leaves the list empty and `precedents_total` at 0. A wider walk is a higher `precedent_depth` or `graph/trace` |
-| `source.sheet`, `source.cell` | the sheet, the row number, and `period.col` | The address is computed in the response. `context.json` has no per-cell `source` |
+| `source.sheet`, `source.cell` | the sheet and the source coordinates described below | The address is computed in the response. `context.json` has no per-cell `source` |
 | `timeline.group_key`, `flags` | `axes[].periods[]` with the same `period_key` on the series axis | Copied into the slice so the model does not join. `group_key` is set on a month under a repeated year |
 
 `flags` (case, covenant, repayment, and other 0/1 overlays) come from the axis whose rows contain the flags.
+
+## Cell addresses for horizontal and vertical axes
+
+Follow the row's `series[].axis_id` to its axis and select the period at the same position as the value in the series. Excel row and column numbers start at 1.
+
+- For a horizontal axis, the context row's `row` and the period's `col` give the value's address.
+- An axis with `transposed: true` lists periods down the sheet. The period's `row` is the Excel row of the value, and the context row's `value_col` is its Excel column. The period's `col` locates the period label, and the context row's `row` locates the series label.
+
+For example, on sheet `Model`, a vertical series with `value_col: 17` and a period with `row: 23` has its value at `Model!Q23`.
 
 ## What the slice does not contain
 

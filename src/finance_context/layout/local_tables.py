@@ -8,10 +8,11 @@ from itertools import pairwise
 from finance_context.excel.a1 import index_to_col
 from finance_context.layout.axes import _vertical_axes
 from finance_context.layout.cells import _is_number, _text
-from finance_context.layout.coverage import _without_taken, coverage_blocks
+from finance_context.layout.coverage import _value_role, _without_taken, coverage_blocks
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell, TimeAxis
 from finance_context.layout.params import detect_params_block
 from finance_context.layout.periods import classify_header, is_calendar_hit
+from finance_context.layout.rows import _vertical_aggregate_rows
 
 
 def local_table_blocks(
@@ -21,6 +22,7 @@ def local_table_blocks(
         sheet, by_row, date1904, horizontal_headers, edges, defined_names
     )
     if horizontal_headers:
+        blocks.extend(_headed_sections(sheet, by_row, date1904, horizontal_headers, taken))
         return blocks, taken, schedules
     remaining = _without_taken(by_row, taken)
     stacked = _stacked_tables(sheet, remaining, date1904)
@@ -31,6 +33,170 @@ def local_table_blocks(
     blocks.extend(side)
     taken.update(_coordinates(side))
     return blocks, taken, schedules
+
+
+def _headed_sections(sheet, by_row, date1904, horizontal_headers, taken):
+    """Reserve side-by-side local tables within a horizontal timeline's body."""
+    remaining = _without_taken(by_row, taken)
+    blocks = []
+    last = max(remaining, default=0) + 1
+    for n, cells in sorted(remaining.items()):
+        next_header = bisect_right(horizontal_headers, n)
+        if not next_header or n == horizontal_headers[next_header - 1]:
+            continue
+        captions = []
+        for col, text in _populated(cells, date1904):
+            if (n, col) in taken or not _caption(text):
+                break
+            if captions and col != captions[-1][0] + 1:
+                break
+            captions.append((col, text))
+        if len(captions) < 2:
+            continue
+        first, right = captions[0][0], captions[-1][0]
+        anchor = _section_anchor(remaining, n, first, right, date1904, taken)
+        if anchor is None:
+            continue
+        title_row, left, _ = anchor
+        end = horizontal_headers[next_header] if next_header < len(horizontal_headers) else last
+        block = _section_table(sheet, remaining, n, end, anchor, captions, date1904)
+        if block is None:
+            continue
+        neighbors = _section_neighbors(sheet, remaining, block, end, date1904)
+        if not neighbors:
+            continue
+        local = [block, *neighbors]
+        blocks.extend(local)
+        taken.update(_coordinates(local))
+        taken.add((title_row, left))
+    return blocks
+
+
+def _section_anchor(by_row, heading, first, right, date1904, taken):
+    for n in range(heading - 1, max(0, heading - 4), -1):
+        local = [
+            (col, text) for col, text in _populated(by_row.get(n, []), date1904)
+            if max(1, first - 4) <= col <= right and (n, col) not in taken
+        ]
+        if not local:
+            continue
+        if len(local) == 1 and local[0][0] < first and _caption(local[0][1]):
+            return n, *local[0]
+        break
+    return None
+
+
+def _section_table(sheet, by_row, heading, end, anchor, captions, date1904):
+    _, left, title = anchor
+    first, right = captions[0][0], captions[-1][0]
+    names = dict(captions)
+    caption_cols = set(names)
+    body = []
+    numeric_cols: dict[int, int] = {}
+    qualified = 0
+    blank = 0
+    for n in range(heading + 1, end):
+        cells = [cell for cell in by_row.get(n, []) if left <= int(cell["col"]) <= right]
+        populated = dict(_populated(cells, date1904))
+        label = populated.get(left)
+        values = {col for col, value in populated.items() if col > left and _is_number(value)}
+        if label and _caption(label):
+            if not values:
+                break
+            qualified += int(len(values & caption_cols) >= 2)
+            for col in values:
+                numeric_cols[col] = numeric_cols.get(col, 0) + 1
+            hidden = any(int(cell["col"]) == left and cell.get("hidden") for cell in cells)
+            body.append((n, label, hidden, None))
+        elif not label and body:
+            totals = _section_totals(sheet, cells, body[0][0], n, caption_cols)
+            if totals:
+                body.append((n, "Total", False, totals))
+                blank = 0
+                continue
+            blank += 1
+            if blank == 2:
+                break
+            continue
+        else:
+            break
+        blank = 0
+    if qualified < 2:
+        return None
+
+    # Some amount columns have no caption, immediately before the captioned fields.
+    while first - 1 > left and numeric_cols.get(first - 1, 0) >= 2:
+        first -= 1
+    headers = [
+        AxisHeader(col=col, text=names.get(col, index_to_col(col)), period_key=f"c{col}",
+                   role=_value_role(names.get(col)))
+        for col in range(first, right + 1)
+    ]
+    rows = [
+        LayoutRow(
+            row=n, label=label, label_col=left, hidden=hidden, section_path=[title],
+            cells=[RowCell(col=h.col, role=h.role, header=names.get(h.col))
+                   for h in headers if totals is None or h.col in totals],
+        )
+        for n, label, hidden, totals in body
+    ]
+    block_id = f"{sheet}!c{rows[0].row}"
+    return Block(block_id=block_id, label_col=left, axis=Axis(
+        id=block_id, row=heading, headers=headers
+    ), rows=rows, kind="matrix" if len(headers) > 2 else "key_value")
+
+
+def _section_totals(sheet, cells, first, current, headings):
+    if current - first < 2:
+        return set()
+    totals = set()
+    for cell in cells:
+        col = int(cell["col"])
+        formula = cell.get("formula_raw")
+        if col not in headings or not formula:
+            continue
+        spans = _vertical_aggregate_rows(formula, current, sheet, col).spans
+        if spans == ((first, current - 1),):
+            totals.add(col)
+    return totals
+
+
+def _section_neighbors(sheet, by_row, block, end, date1904):
+    heading = block.axis.row
+    right = block.axis.headers[-1].col
+    candidates = [
+        (col, text) for col, text in _populated(by_row[heading], date1904) if col > right
+    ]
+    if candidates:
+        left, title = candidates[0]
+        if left > right + 1 and _caption(title):
+            limit = min(candidates[1][0], left + 4) if len(candidates) > 1 else left + 4
+            region = _panel_rows(by_row, heading, end, left, limit, date1904)
+            neighbors = coverage_blocks(sheet, region, date1904, [], set())[0]
+            neighbors = [item for item in neighbors if item.label_col == left]
+            for item in neighbors:
+                for row in item.rows:
+                    row.section_path = [title]
+            if neighbors:
+                # The heading names the list even if coverage starts on its first value row.
+                neighbors[0].axis.row = heading
+                return neighbors
+        return []
+
+    first = block.rows[0].row
+    sibling = [
+        (col, text) for col, text in _populated(by_row[first], date1904) if col > right
+    ]
+    if len(sibling) != 2:
+        return []
+    (left, label), (col, value) = sibling
+    if left <= right + 1 or col - left > 3 or not _caption(label) or not _is_number(value):
+        return []
+    block_id = f"{sheet}!c{first}"
+    header = AxisHeader(col=col, text=index_to_col(col), period_key=f"c{col}", role="value")
+    row = LayoutRow(row=first, label=label, label_col=left, cells=[RowCell(col=col, role="value")])
+    return [Block(block_id=block_id, label_col=left, kind="key_value",
+                  axis=Axis(id=block_id, row=first, headers=[header]), rows=[row])]
 
 
 def _panels(sheet, by_row, date1904, horizontal_headers, edges, defined_names):
