@@ -75,7 +75,18 @@ _CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_HALF,
 _UNLABELED_RELATIVE_MIN = 8
 
 
+# Labeled ``Year | 1 | 2 | 3`` and ``Metric | Year 1 | Year 2 | Year 3``.
+_LABELED_RELATIVE_MIN = 3
+
+
 _FORMULA_RUN_MIN = 3
+
+
+# ``Year 1`` / ``Год 1`` / ``Yr 1``. A calendar period still wins in ``classify_header``.
+_MODEL_YEAR_HEADER = re.compile(
+    r"(?:год|year|yr)\s*№?\s*(\d{1,3})",
+    re.IGNORECASE,
+)
 
 
 _FP_ENGINE = FormulaEngine(locale_hint="en")
@@ -105,13 +116,29 @@ def _axis_candidates(
         if row_n in taken:
             continue
         labeled = _relative_run(
-            by_row[row_n], date1904, require_label=True, min_len=3, hidden_cols=known
+            by_row[row_n],
+            date1904,
+            require_label=True,
+            min_len=_LABELED_RELATIVE_MIN,
+            hidden_cols=known,
         )
         if labeled:
             axis = _axis_from_relative(
                 sheet, row_n, labeled, by_row[row_n], date1904, hidden_cols=known
             )
             candidates.append(([row_n], axis))
+            taken.add(row_n)
+            continue
+        # ``Metric | Year 1 | Year 2 | …`` reuses the relative axis. The copy
+        # that confirms it has to sit in the body under this header.
+        confirmed = _confirmed_model_year_runs(
+            by_row, row_n, date1904, hidden_cols=known
+        )
+        if confirmed:
+            for run in confirmed:
+                candidates.append(
+                    ([row_n], _axis_from_model_years(sheet, row_n, run, hidden_cols=known))
+                )
             taken.add(row_n)
             continue
         # Without a formula timeline the run is discarded. Scanning it still
@@ -614,6 +641,169 @@ def _relative_prefix(label: str | None) -> str:
     if re.search(r"year|год", raw, re.IGNORECASE):
         return "Y"
     return "P"
+
+
+def is_labeled_model_year(text: str | None) -> bool:
+    """True for ``Year 1`` / ``Год 1``. A parsed calendar period stays a period."""
+    return _model_year_number(text) is not None
+
+
+def _model_year_number(text: str | None) -> int | None:
+    raw = normalize_header(text)
+    if not raw:
+        return None
+    match = _MODEL_YEAR_HEADER.fullmatch(raw)
+    if match is None or classify_header(raw) is not None:
+        return None
+    return int(match.group(1))
+
+
+def _model_year_tokens(
+    row_cells: list[dict], date1904: bool
+) -> list[tuple[int, int, str, bool]]:
+    tokens: list[tuple[int, int, str, bool]] = []
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        text = _text(cell, date1904)
+        number = _model_year_number(text)
+        if text is None or number is None:
+            continue
+        tokens.append((int(cell["col"]), number, text.strip(), bool(cell.get("hidden"))))
+    return tokens
+
+
+def _model_year_runs(
+    tokens: list[tuple[int, int, str, bool]], hidden_cols: set[int]
+) -> list[list[tuple[int, int, str, bool]]]:
+    runs: list[list[tuple[int, int, str, bool]]] = []
+    run: list[tuple[int, int, str, bool]] = []
+    for token in tokens:
+        connected = bool(run) and _cols_connected(run[-1][0], token[0], hidden_cols)
+        if connected:
+            run.append(token)
+        else:
+            if run:
+                runs.append(run)
+            run = [token]
+    if run:
+        runs.append(run)
+    return runs
+
+
+def _consecutive_model_years(run: list[tuple[int, int, str, bool]]) -> bool:
+    """Same gate as a labeled relative run: length, start at 0 or 1, step 1."""
+    if len(run) < _LABELED_RELATIVE_MIN or run[0][1] not in {0, 1}:
+        return False
+    return all(right[1] == left[1] + 1 for left, right in zip(run, run[1:], strict=False))
+
+
+def _confirmed_model_year_runs(
+    by_row: dict[int, list[dict]],
+    row_n: int,
+    date1904: bool,
+    *,
+    hidden_cols: set[int],
+) -> list[list[tuple[int, int, str, bool]]]:
+    runs = _model_year_runs(_model_year_tokens(by_row[row_n], date1904), hidden_cols)
+    confirmed: list[list[tuple[int, int, str, bool]]] = []
+    for run in runs:
+        if not _consecutive_model_years(run):
+            continue
+        cols = {col for col, _number, _text, _hidden in run}
+        if _body_confirms_model_years(by_row, row_n, cols, date1904):
+            confirmed.append(run)
+    return confirmed
+
+
+def _body_confirms_model_years(
+    by_row: dict[int, list[dict]],
+    header_row: int,
+    cols: set[int],
+    date1904: bool,
+) -> bool:
+    """A copied formula in the columns under this header, and nowhere else.
+
+    The run is the same length the sheet-wide formula timeline already uses.
+    The first year may use a different formula. A gap or a later header ends
+    the body, so a copy further down the sheet does not confirm this header.
+    """
+    previous = header_row
+    for row_n in sorted(by_row):
+        if row_n <= header_row:
+            continue
+        if row_n > previous + 1:
+            break
+        previous = row_n
+        span = [cell for cell in by_row[row_n] if int(cell["col"]) in cols]
+        if not span or _span_is_year_header(span, date1904):
+            break
+        if len(_formula_run_columns(span, cols)) >= _FORMULA_RUN_MIN:
+            return True
+    return False
+
+
+def _span_is_year_header(span: list[dict], date1904: bool) -> bool:
+    captions = 0
+    values = 0
+    for cell in span:
+        if cell.get("formula_raw") or cell.get("formula_template"):
+            values += 1
+            continue
+        text = _text(cell, date1904)
+        if text and _is_number(text):
+            values += 1
+        elif _model_year_number(text) is not None:
+            captions += 1
+    return captions >= 2 and values == 0
+
+
+def _formula_run_columns(row_cells: list[dict], allowed: set[int]) -> list[int]:
+    """Longest adjacent copy whose columns all sit in ``allowed``."""
+    items: list[tuple[int, str]] = []
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        col = int(cell["col"])
+        if col not in allowed:
+            continue
+        fingerprint = _cell_fingerprint(cell)
+        if fingerprint:
+            items.append((col, fingerprint))
+    best: list[tuple[int, str]] = []
+    run: list[tuple[int, str]] = []
+    for col, fingerprint in items:
+        if run and col == run[-1][0] + 1 and fingerprint == run[-1][1]:
+            run.append((col, fingerprint))
+        else:
+            run = [(col, fingerprint)]
+        if len(run) > len(best):
+            best = list(run)
+    if len(best) < _FORMULA_RUN_MIN:
+        return []
+    return [col for col, _fingerprint in best]
+
+
+def _axis_from_model_years(
+    sheet: str,
+    row_n: int,
+    run: list[tuple[int, int, str, bool]],
+    hidden_cols: set[int] | None = None,
+) -> TimeAxis:
+    hidden = hidden_cols or set()
+    periods = [
+        AxisPeriod(
+            col=col,
+            text=text,
+            kind="relative",
+            period_key=f"Y{number}",
+            hidden=cell_hidden or col in hidden,
+        )
+        for col, number, text, cell_hidden in run
+    ]
+    keys = [period.period_key for period in periods]
+    return TimeAxis(
+        id=f"{sheet}!r{row_n}",
+        grain=infer_grain(keys),
+        header_row=row_n,
+        periods=periods,
+    )
 
 
 def _axis_from_relative(
