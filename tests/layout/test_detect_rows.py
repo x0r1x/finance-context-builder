@@ -438,7 +438,7 @@ def test_numbered_rows_under_a_text_header_stay_a_table() -> None:
     assert "scenario" not in by_text.values()
 
 
-def test_sensitivity_grid_keeps_title_only() -> None:
+def test_sensitivity_grid_keeps_title_and_numeric_rows() -> None:
     cells = [
         _c("Sensitivity", "A1", "GRID 1: MO-12 CLOSING CASH"),
         _c("Sensitivity", "B2", "0.75"),
@@ -459,9 +459,10 @@ def test_sensitivity_grid_keeps_title_only() -> None:
     ]
     layout = detect_layout(cells)
     block = layout.sheets[0].blocks[0]
-    assert len(block.rows) == 1
-    assert block.rows[0].kind == "abstract"
-    assert "GRID" in block.rows[0].label
+    assert block.kind == "matrix"
+    assert [row.label for row in block.rows] == ["-0.2", "0", "0.2"]
+    assert all(row.section_path == ["GRID 1: MO-12 CLOSING CASH"] for row in block.rows)
+    assert [header.text for header in block.axis.headers] == ["0.75", "1.00", "1.25"]
 
 
 def test_timeline_stub_cells_get_roles() -> None:

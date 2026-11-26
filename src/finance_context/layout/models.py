@@ -185,12 +185,15 @@ class LayoutRow:
     # Column of a transposed line item. Horizontal rows leave this empty.
     value_col: int | None = None
     cells: list[RowCell] = Field(default_factory=list)
+    excluded_cols: list[int] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
         data = handler(self)
         if data.get("value_col") is None:
             data.pop("value_col", None)
+        if not data.get("excluded_cols"):
+            data.pop("excluded_cols", None)
         return data
 
 
