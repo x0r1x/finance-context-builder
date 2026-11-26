@@ -134,11 +134,11 @@ def _axis_candidates(
         confirmed = _confirmed_model_year_runs(
             by_row, row_n, date1904, hidden_cols=known
         )
-        if confirmed:
-            for run in confirmed:
-                candidates.append(
-                    ([row_n], _axis_from_model_years(sheet, row_n, run, hidden_cols=known))
-                )
+        # Two scales on one row would share ``sheet!rN``. Leave both local.
+        if len(confirmed) == 1:
+            candidates.append(
+                ([row_n], _axis_from_model_years(sheet, row_n, confirmed[0], hidden_cols=known))
+            )
             taken.add(row_n)
             continue
         # Without a formula timeline the run is discarded. Scanning it still
@@ -723,8 +723,9 @@ def _body_confirms_model_years(
     """A copied formula in the columns under this header, and nowhere else.
 
     The run is the same length the sheet-wide formula timeline already uses.
-    The first year may use a different formula. A gap or a later header ends
-    the body, so a copy further down the sheet does not confirm this header.
+    The first year may use a different formula. A gap ends the body. So does
+    the next header, including a calendar header, so that table's formulas
+    do not confirm this one.
     """
     previous = header_row
     for row_n in sorted(by_row):
@@ -732,13 +733,25 @@ def _body_confirms_model_years(
             continue
         if row_n > previous + 1:
             break
-        previous = row_n
         span = [cell for cell in by_row[row_n] if int(cell["col"]) in cols]
-        if not span or _span_is_year_header(span, date1904):
+        if _model_year_body_ends(span, date1904):
             break
+        previous = row_n
         if len(_formula_run_columns(span, cols)) >= _FORMULA_RUN_MIN:
             return True
     return False
+
+
+def _model_year_body_ends(span: list[dict], date1904: bool) -> bool:
+    """True when ``span`` is outside the table under a ``Year N`` header."""
+    if not span or _span_is_year_header(span, date1904):
+        return True
+    calendar = 0
+    for cell in span:
+        text = _text(cell, date1904)
+        if text and is_calendar_hit(classify_header(text)):
+            calendar += 1
+    return calendar >= 2
 
 
 def _span_is_year_header(span: list[dict], date1904: bool) -> bool:
@@ -778,6 +791,86 @@ def _formula_run_columns(row_cells: list[dict], allowed: set[int]) -> list[int]:
     if len(best) < _FORMULA_RUN_MIN:
         return []
     return [col for col, _fingerprint in best]
+
+
+def local_model_year_regions(
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    hidden_cols: set[int],
+    timeline_rows: set[int],
+) -> list[tuple[int, int | None, list[tuple[int, str]], list[int]]]:
+    """Year-like headers that stayed off the timeline, with the rows under them.
+
+    Each region is ``(header_row, label_col, [(col, text), ...], body_rows)``.
+    A repeat, a skip, constants, or two scales on one row all qualify. The body
+    stops at the next header, including a calendar header.
+    """
+    regions: list[tuple[int, int | None, list[tuple[int, str]], list[int]]] = []
+    for row_n in sorted(by_row):
+        if row_n in timeline_rows:
+            continue
+        runs = [
+            run
+            for run in _model_year_runs(
+                _model_year_tokens(by_row[row_n], date1904), hidden_cols
+            )
+            if len(run) >= 2
+        ]
+        for run in runs:
+            columns = [(col, text) for col, _number, text, _hidden in run]
+            cols = {col for col, _text in columns}
+            label_col = _label_col_left(by_row[row_n], min(cols), date1904)
+            body = _rows_under_model_year_header(by_row, row_n, cols, date1904)
+            if body:
+                regions.append((row_n, label_col, columns, body))
+    return regions
+
+
+def _label_col_left(row_cells: list[dict], left: int, date1904: bool) -> int | None:
+    """Nearest text left of ``left`` that is not itself a ``Year N`` caption."""
+    found: int | None = None
+    for cell in row_cells:
+        col = int(cell["col"])
+        if col >= left or cell.get("hidden"):
+            continue
+        text = _text(cell, date1904)
+        if not text or _is_number(text) or _model_year_number(text) is not None:
+            continue
+        if found is None or col > found:
+            found = col
+    return found
+
+
+def _rows_under_model_year_header(
+    by_row: dict[int, list[dict]],
+    header_row: int,
+    cols: set[int],
+    date1904: bool,
+) -> list[int]:
+    previous = header_row
+    found: list[int] = []
+    for row_n in sorted(by_row):
+        if row_n <= header_row:
+            continue
+        if row_n > previous + 1:
+            break
+        span = [cell for cell in by_row[row_n] if int(cell["col"]) in cols]
+        if _model_year_body_ends(span, date1904):
+            break
+        previous = row_n
+        if _span_has_value(span, date1904):
+            found.append(row_n)
+    return found
+
+
+def _span_has_value(span: list[dict], date1904: bool) -> bool:
+    for cell in span:
+        text = _text(cell, date1904)
+        if cell.get("formula_raw") or cell.get("formula_template"):
+            return True
+        if text and _is_number(text):
+            return True
+    return False
 
 
 def _axis_from_model_years(

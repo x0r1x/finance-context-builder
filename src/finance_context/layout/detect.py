@@ -9,8 +9,15 @@ from finance_context.layout.axes import (
     _series_row_above,
     _table_groups,
     is_labeled_model_year,
+    local_model_year_regions,
 )
-from finance_context.layout.cells import _is_number, _text, bind_row_index, clear_row_index
+from finance_context.layout.cells import (
+    _cell_at,
+    _is_number,
+    _text,
+    bind_row_index,
+    clear_row_index,
+)
 from finance_context.layout.coverage import (
     _disambiguate_ids,
     _without_taken,
@@ -289,6 +296,17 @@ def _blocks_indexed(
             [*blocks, *params_blocks],
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
+    timeline_rows = {int(axis.header_row) for axis in axes}
+    year_blocks = _local_year_blocks(
+        sheet,
+        local_model_year_regions(
+            by_row, date1904, set(hidden_cols or ()), timeline_rows
+        ),
+        by_row,
+        date1904,
+    )
+    if year_blocks:
+        blocks = [*blocks, *year_blocks]
     if not blocks:
         extra = detect_params_block(sheet, by_row, date1904, edges, defined_names)
         if extra is not None:
@@ -322,6 +340,70 @@ def _blocks_indexed(
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
     return blocks, axes, [*axis_notes, *notes]
+
+
+def _local_year_blocks(
+    sheet: str,
+    regions: list[tuple[int, int | None, list[tuple[int, str]], list[int]]],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> list[Block]:
+    """Publish an unconfirmed ``Year N`` header with every column still in the series."""
+    blocks: list[Block] = []
+    for header_row, label_col, columns, body_rows in regions:
+        if label_col is None or not body_rows:
+            continue
+        headers = [
+            AxisHeader(col=col, text=text, role="unknown", period_key=f"c{col}")
+            for col, text in columns
+        ]
+        rows: list[LayoutRow] = []
+        for row_n in body_rows:
+            cells = by_row.get(row_n) or []
+            label_cell = _cell_at(cells, label_col)
+            label = _text(label_cell, date1904) if label_cell else None
+            if not label or _is_number(label):
+                continue
+            tagged = [
+                RowCell(col=col, role="unknown")
+                for col, _caption in columns
+                if _year_value_cell(_cell_at(cells, col), date1904)
+            ]
+            if not tagged:
+                continue
+            rows.append(
+                LayoutRow(
+                    row=row_n,
+                    label=label.strip(),
+                    kind="fact",
+                    label_col=label_col,
+                    cells=tagged,
+                )
+            )
+        if not rows:
+            continue
+        block_id = f"{sheet}!r{header_row}c{columns[0][0]}"
+        blocks.append(
+            Block(
+                block_id=block_id,
+                label_col=label_col,
+                axis=Axis(id=block_id, row=header_row, headers=headers),
+                rows=rows,
+                kind="params",
+            )
+        )
+    return blocks
+
+
+def _year_value_cell(cell: dict | None, date1904: bool) -> bool:
+    if cell is None:
+        return False
+    text = _text(cell, date1904)
+    return bool(
+        cell.get("formula_raw")
+        or cell.get("formula_template")
+        or (text and _is_number(text))
+    )
 
 
 def _parameters_above_model_years(
