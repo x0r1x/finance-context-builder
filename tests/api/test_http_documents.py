@@ -68,7 +68,11 @@ def test_upload_and_download(client: TestClient, tmp_path: Path) -> None:
         assert negative.status_code == 422
     assert md_doc.status_code == 200
     assert "Financial context" in md_doc.text
-    assert json_doc.json()["schema_version"] == "1.14.0"
+    context = json_doc.json()
+    assert context["schema_version"] == context["meta"]["schema_version"] == "1.15.0"
+    summary = client.get(f"/v1/context-jobs/{job_id}/summary")
+    assert summary.status_code == 200
+    assert summary.json()["context_schema_version"] == "1.15.0"
 
 
 def test_get_context_md_rewrites_a_finished_job(tmp_path: Path) -> None:

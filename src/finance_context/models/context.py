@@ -7,7 +7,7 @@ from pydantic.dataclasses import dataclass
 
 from finance_context.vocab import ValueStatus
 
-SCHEMA_VERSION = "1.14.0"
+SCHEMA_VERSION = "1.15.0"
 
 JobStatus = Literal["queued", "running", "succeeded", "degraded", "needs_input", "failed"]
 

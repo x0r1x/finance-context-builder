@@ -48,7 +48,7 @@ def test_list_finds_a_book_by_filename(tmp_path: Path) -> None:
     body = response.json()
     assert [item["job_id"] for item in body] == [_JOB]
     assert body[0]["source_filename"] == "rvi-project-finance.xlsx"
-    assert body[0]["schema_version"] == "1.14.0"
+    assert body[0]["schema_version"] == "1.15.0"
     assert "warnings" not in body[0]
 
 
