@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from finance_context.excel.dates import is_date_format, serial_to_date
+from finance_context.layout.periods import display_cell_text
 
 
 def test_builtin_date_formats_detected() -> None:
@@ -39,3 +40,20 @@ def test_non_finite_serial_is_not_a_date() -> None:
     assert serial_to_date("inf") is None
     assert serial_to_date("nan") is None
     assert serial_to_date("1e400") is None
+
+
+def test_underscore_text_is_not_a_serial() -> None:
+    assert serial_to_date("4_2025") is None
+    assert serial_to_date("45747") == date(2025, 3, 31)
+    assert serial_to_date("45747.5") == date(2025, 3, 31)
+    assert serial_to_date(45747) == date(2025, 3, 31)
+    assert serial_to_date(45747.5) == date(2025, 3, 31)
+    assert serial_to_date("45 747") == date(2025, 3, 31)
+    assert serial_to_date("45747,5") == date(2025, 3, 31)
+    assert serial_to_date(60) is None
+    assert serial_to_date(60, date1904=True) == date(1904, 3, 1)
+
+
+def test_date_format_keeps_underscore_text() -> None:
+    assert display_cell_text("4_2025", "DD.MM.YYYY") == "4_2025"
+    assert display_cell_text("45747", "DD.MM.YYYY") == "31.03.2025"

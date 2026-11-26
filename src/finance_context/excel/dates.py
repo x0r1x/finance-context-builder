@@ -39,8 +39,13 @@ def is_date_format(fmt: str | None) -> bool:
 
 
 def serial_to_date(serial: float | int | str, *, date1904: bool = False) -> date | None:
+    # Python's float accepts ``4_2025`` as 42025. Excel does not. Spaces and a
+    # decimal comma stay legal; an underscore is not part of a serial.
+    text = str(serial).replace(" ", "").replace(",", ".")
+    if "_" in text:
+        return None
     try:
-        value = float(str(serial).replace(" ", "").replace(",", "."))
+        value = float(text)
     except ValueError:
         return None
     if not math.isfinite(value):

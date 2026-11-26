@@ -513,9 +513,19 @@ def _transposed_items(
 
 
 def _quarter_year_row(by_row, axis, period_cols, date1904):
-    """The labelled year that was borrowed into this quarter ruler."""
+    """The labelled year that was borrowed into this quarter ruler.
+
+    Quarters that already name a year (``1 кв. 2024``) did not borrow the row
+    below. ``Год ввода`` there is a fact, not the section that filled the keys.
+    """
     if axis.grain != "quarter":
         return None
+    for cell in by_row.get(axis.header_row, []):
+        if int(cell["col"]) not in period_cols:
+            continue
+        hit = classify_header(_text(cell, date1904))
+        if hit is not None and hit.period_key[:4].isdigit():
+            return None
     years = {
         period.period_key[:4]
         for period in axis.periods
