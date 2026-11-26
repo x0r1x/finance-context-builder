@@ -172,6 +172,7 @@ def _blocks_indexed(
     horizontal_headers = sorted({axis.header_row for _band, axis in found if not axis.transposed})
     panels, panel_cells, schedules = local_table_blocks(
         sheet, by_row, date1904, horizontal_headers, hidden_cols, edges, defined_names,
+        hidden_row_ids=hidden_row_ids,
     )
     if panel_cells:
         by_row = _without_taken(by_row, panel_cells)

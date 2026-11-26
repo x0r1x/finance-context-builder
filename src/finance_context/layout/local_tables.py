@@ -12,17 +12,20 @@ from finance_context.layout.coverage import _value_role, _without_taken, coverag
 from finance_context.layout.models import Axis, AxisHeader, Block, LayoutRow, RowCell, TimeAxis
 from finance_context.layout.params import detect_params_block
 from finance_context.layout.periods import classify_header, is_calendar_hit
-from finance_context.layout.rows import _vertical_aggregate_rows
+from finance_context.layout.rows import _row_all_hidden, _vertical_aggregate_rows
 
 
 def local_table_blocks(
-    sheet, by_row, date1904, horizontal_headers, hidden_cols, edges, defined_names
+    sheet, by_row, date1904, horizontal_headers, hidden_cols, edges, defined_names,
+    *, hidden_row_ids=None,
 ):
     blocks, taken, schedules = _panels(
         sheet, by_row, date1904, horizontal_headers, edges, defined_names
     )
     if horizontal_headers:
-        blocks.extend(_headed_sections(sheet, by_row, date1904, horizontal_headers, taken))
+        blocks.extend(_headed_sections(
+            sheet, by_row, date1904, horizontal_headers, taken, hidden_row_ids,
+        ))
         return blocks, taken, schedules
     remaining = _without_taken(by_row, taken)
     stacked = _stacked_tables(sheet, remaining, date1904)
@@ -35,7 +38,7 @@ def local_table_blocks(
     return blocks, taken, schedules
 
 
-def _headed_sections(sheet, by_row, date1904, horizontal_headers, taken):
+def _headed_sections(sheet, by_row, date1904, horizontal_headers, taken, hidden_row_ids):
     """Reserve side-by-side local tables within a horizontal timeline's body."""
     remaining = _without_taken(by_row, taken)
     blocks = []
@@ -59,7 +62,7 @@ def _headed_sections(sheet, by_row, date1904, horizontal_headers, taken):
             continue
         title_row, left, _ = anchor
         end = horizontal_headers[next_header] if next_header < len(horizontal_headers) else last
-        block = _section_table(sheet, remaining, n, end, anchor, captions, date1904)
+        block = _section_table(sheet, remaining, n, end, anchor, captions, date1904, hidden_row_ids)
         if block is None:
             continue
         neighbors = _section_neighbors(sheet, remaining, block, end, date1904)
@@ -86,7 +89,7 @@ def _section_anchor(by_row, heading, first, right, date1904, taken):
     return None
 
 
-def _section_table(sheet, by_row, heading, end, anchor, captions, date1904):
+def _section_table(sheet, by_row, heading, end, anchor, captions, date1904, hidden_row_ids):
     _, left, title = anchor
     first, right = captions[0][0], captions[-1][0]
     names = dict(captions)
@@ -111,7 +114,9 @@ def _section_table(sheet, by_row, heading, end, anchor, captions, date1904):
         elif not label and body:
             totals = _section_totals(sheet, cells, body[0][0], n, caption_cols)
             if totals:
-                body.append((n, "Total", False, totals))
+                total_cells = [cell for cell in cells if int(cell["col"]) in totals]
+                hidden = _row_all_hidden(n, total_cells, hidden_row_ids)
+                body.append((n, "Total", hidden, totals))
                 blank = 0
                 continue
             blank += 1

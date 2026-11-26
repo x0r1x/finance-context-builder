@@ -1,3 +1,4 @@
+import pytest
 from tests.helpers.published import published_context
 from tests.layout.test_detect_rows import _c
 
@@ -5,16 +6,19 @@ from finance_context.graph.stage import _local_value_cells, _period_maps, _side_
 from finance_context.layout.detect import detect_layout
 
 
-def _layout_and_cells(entries):
+def _layout_and_cells(entries, *, hidden_cells=(), hidden_rows=None):
     cells = [
-        _c("Model", addr, value, formula=formula[0] if formula else None)
+        _c(
+            "Model", addr, value, formula=formula[0] if formula else None,
+            hidden=addr in hidden_cells,
+        )
         for addr, value, *formula in entries
     ]
-    return detect_layout(cells), cells
+    return detect_layout(cells, hidden_rows=hidden_rows), cells
 
 
-def _publish(entries):
-    layout, cells = _layout_and_cells(entries)
+def _publish(entries, **visibility):
+    layout, cells = _layout_and_cells(entries, **visibility)
     return published_context(
         job_id="local-tables", workbook_meta={"sheets": [{"name": "Model"}]},
         cells=cells, layout=layout,
@@ -118,7 +122,12 @@ def test_panel_cell_can_share_a_physical_row_with_a_calendar_observation():
     assert periods["Model", 11] == "2024"
 
 
-def test_headed_cost_tables_and_adjacent_inputs_under_a_calendar():
+@pytest.mark.parametrize(("hidden_rows", "expected_hidden"), [
+    ({"Model": {10}}, True),
+    ({"Model": set()}, False),
+    (None, True),
+])
+def test_headed_cost_tables_and_adjacent_inputs_under_a_calendar(hidden_rows, expected_hidden):
     entries = [
         ("B2", "Year"), ("G2", "2020"), ("H2", "2021"), ("I2", "2022"),
         ("J2", "2023"), ("K2", "2024"),
@@ -144,7 +153,7 @@ def test_headed_cost_tables_and_adjacent_inputs_under_a_calendar():
         ("J22", "2023"), ("K22", "2024"),
         ("B23", "Revenue"), ("G23", "50"), ("H23", "60"), ("I23", "70"),
     ]
-    doc = _publish(entries)
+    doc = _publish(entries, hidden_cells={"G10"}, hidden_rows=hidden_rows)
     [(costs, insurance)] = _rows(doc, "Insurance")
     [(costs_tail, replacement)] = _rows(doc, "Replacement")
     [(finance, amortization)] = _rows(doc, "Amortization")
@@ -164,6 +173,7 @@ def test_headed_cost_tables_and_adjacent_inputs_under_a_calendar():
     assert insurance.label_path == ["Operating costs"]
     assert totals == costs
     assert total.values == [None, None, None, "10"]
+    assert total.hidden is expected_hidden
     assert finance == finance_tail
     assert amortization.values == ["19"]
     assert reserve.values == ["6"]
