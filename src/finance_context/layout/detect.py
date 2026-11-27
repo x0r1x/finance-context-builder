@@ -413,14 +413,9 @@ def _parameters_above_model_years(
     by_row: dict[int, list[dict]],
     date1904: bool,
 ) -> list[Block]:
-    """Keep a label and its scalar that sit above a ``Year N`` header.
-
-    The year columns belong to the timeline. ``Case Selected`` in the first of
-    those columns is still its own parameter. A title with no scalar stays out.
-    """
+    """Keep the parameter rows and their heading above a ``Year N`` header."""
     owned = {row.row for block in blocks for row in block.rows}
     found: list[Block] = []
-    used: set[int] = set()
     for axis in axes:
         if axis.grain != "model_year" or not axis.periods:
             continue
@@ -430,7 +425,7 @@ def _parameters_above_model_years(
         left = min(cols)
         picked: list[tuple[int, dict, list[dict]]] = []
         for row_n in range(axis.header_row - 1, 0, -1):
-            if row_n in owned or row_n in used:
+            if row_n in owned:
                 break
             cells = by_row.get(row_n)
             if not cells or _is_empty_row(cells, date1904):
@@ -449,9 +444,44 @@ def _parameters_above_model_years(
         if not picked:
             continue
         picked.reverse()
-        used.update(row_n for row_n, _label, _scalars in picked)
-        found.append(_parameter_block(sheet, picked, date1904))
+        block = _parameter_block(sheet, picked, date1904)
+        title = _title_above_parameters(by_row, block.rows[0].row, block.label_col, owned, date1904)
+        if title is not None:
+            block.rows.insert(0, title)
+        owned.update(row.row for row in block.rows)
+        found.append(block)
     return found
+
+
+def _title_above_parameters(
+    by_row: dict[int, list[dict]],
+    first_row: int,
+    label_col: int,
+    owned: set[int],
+    date1904: bool,
+) -> LayoutRow | None:
+    """Look through blank rows for a standalone heading aligned with the parameters."""
+    for row_n in range(first_row - 1, 0, -1):
+        if row_n in owned:
+            break
+        cells = by_row.get(row_n, [])
+        if any(cell.get("formula_raw") or cell.get("formula_template") for cell in cells):
+            break
+        populated = [(cell, text) for cell in cells if (text := _text(cell, date1904))]
+        if not populated:
+            continue
+        if len(populated) != 1:
+            break
+        cell, text = populated[0]
+        if (
+            int(cell["col"]) != label_col
+            or cell.get("hidden")
+            or _is_number(text)
+            or is_unit_text(text)
+        ):
+            break
+        return LayoutRow(row=row_n, label=text.strip(), kind="abstract", label_col=label_col)
+    return None
 
 
 def _label_left_of(cells: list[dict], left: int, date1904: bool) -> dict | None:

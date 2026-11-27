@@ -145,8 +145,14 @@ def test_copied_year_headers_publish_model_year_keys(tmp_path: Path) -> None:
     assert rent.label == _RENT
     assert [float(value) for value in rent.values] == pytest.approx(list(_RENT_CACHE))
     case_block, case = _block(doc, "Case Selected:")
-    assert case_block.kind != "timeline"
+    title_block, title = _block(doc, "Five-year property cash flow")
+    assert title_block.block_id == case_block.block_id
+    assert case_block.kind == "params"
+    assert (title.row, title.kind) == (2, "abstract")
+    assert (case.row, case.kind) == (4, "fact")
     assert case.values == ["Base"]
+    assert case.label_path == []
+    assert all(row.label_path == [] for row in block.rows)
     assert "Case Selected:" not in {row.label for row in block.rows}
     other_block, other = _block(doc, "Other income ($/sf)")
     assert other_block.block_id == block.block_id
