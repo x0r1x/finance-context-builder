@@ -5,7 +5,7 @@ from tests.helpers.published import published_context
 from tests.layout.test_detect_rows import _c
 
 from finance_context.excel.a1 import index_to_col
-from finance_context.graph.stage import _side_cells
+from finance_context.graph.stage import _local_value_cells, _side_cells
 from finance_context.layout.detect import detect_layout
 
 
@@ -41,6 +41,7 @@ def test_side_tables_keep_their_labels_values_and_sections(right_header):
         _c("Model", "F5", "Right amount"),
         _c("Model", "A6", "Left only"),
         _c("Model", "F7", "Right only"),
+        _c("Model", "F11", "Later right amount"),
     ]
     for offset, col in enumerate("BCDE"):
         cells.append(_c("Model", f"{col}1", str(2020 + offset)))
@@ -57,6 +58,8 @@ def test_side_tables_keep_their_labels_values_and_sections(right_header):
             formula=f"={'BCD'[offset]}5*2", formula_template="=RC[-5]*2",
         ))
         cells.append(_c("Model", f"{col}7", str(50 + offset)))
+        cells.append(_c("Model", f"{col}10", f"{offset + 1} кв. 2027"))
+        cells.append(_c("Model", f"{col}11", str(60 + offset)))
 
     layout, context = _publish(cells)
     sheet = layout.sheets[0]
@@ -90,6 +93,9 @@ def test_side_tables_keep_their_labels_values_and_sections(right_header):
     owners = _side_cells(layout)
     assert owners["Model", 5, 2] == rows["Left amount"].row_key
     assert owners["Model", 5, 7] == rows["Right amount"].row_key
+    periods = _local_value_cells(layout)
+    assert periods["Model", 5, 7] == (rows["Right amount"].row_key, "2025Q1")
+    assert periods["Model", 7, 7] == (rows["Right only"].row_key, "2025Q1")
     if right_header == 3:
         row = rows["Left during right header"]
         assert _observations(context, row)[0] == ("B3", "2020", "10")
