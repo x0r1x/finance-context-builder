@@ -7,7 +7,7 @@ from pydantic.dataclasses import dataclass
 
 from finance_context.vocab import ValueStatus
 
-SCHEMA_VERSION = "1.14.0"
+SCHEMA_VERSION = "1.15.0"
 
 JobStatus = Literal["queued", "running", "succeeded", "degraded", "needs_input", "failed"]
 
@@ -106,6 +106,7 @@ class BlockRow:
     series: list[RowSeries] = Field(default_factory=list, kw_only=True)
     # Column of a transposed line item. Horizontal rows omit it.
     value_col: int | None = None
+    hidden_by_outline: bool = False
 
     @model_serializer(mode="wrap")
     def _slim(self, handler):
@@ -114,6 +115,8 @@ class BlockRow:
             data.pop("neighbor_ranges", None)
         if data.get("value_col") is None:
             data.pop("value_col", None)
+        if not data.get("hidden_by_outline"):
+            data.pop("hidden_by_outline", None)
         return data
 
 

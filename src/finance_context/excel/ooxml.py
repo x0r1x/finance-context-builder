@@ -456,6 +456,7 @@ def _parse_sheet(
     col_outline = _col_outline_spans(root)
     sheet.info.summary_below = _summary_below(root)
     hidden_rows: list[int] = []
+    outline_rows: dict[int, tuple[int, bool, bool]] = {}
     pending: list[_PendingCell] = []
     presence: list[CellPresence] = []
     runs = _BlankRuns()
@@ -474,12 +475,7 @@ def _parse_sheet(
     sheet_data = find_child(root, "sheetData")
     if sheet_data is not None:
         for row_el in children(sheet_data, "row"):
-            row_hidden = as_bool(row_el.get("hidden"))
-            row_outline = _int_attr(row_el.get("outlineLevel"))
-            if row_hidden:
-                row_n = int(row_el.get("r") or "0")
-                if row_n:
-                    hidden_rows.append(row_n)
+            row_hidden, row_outline = _read_row_visibility(row_el, hidden_rows, outline_rows)
             for cell_el in children(row_el, "c"):
                 built, cell_presence = _pending_from_cell(
                     cell_el,
@@ -532,6 +528,7 @@ def _parse_sheet(
             )
         )
     sheet.info.hidden_rows = hidden_rows
+    sheet.info.outline_hidden_rows = _outline_hidden_rows(outline_rows, sheet.info.summary_below)
     sheet.info.hidden_cols = sorted(hidden_cols)
     sheet.info.merges = _merge_refs(root)
     return cells, presence
@@ -565,6 +562,46 @@ def _summary_below(root: etree._Element) -> bool:
         if outline is not None and outline.get("summaryBelow") is not None:
             return as_bool(outline.get("summaryBelow"))
     return True
+
+
+def _read_row_visibility(
+    element: etree._Element,
+    hidden_rows: list[int],
+    outline_rows: dict[int, tuple[int, bool, bool]],
+) -> tuple[bool, int]:
+    hidden = as_bool(element.get("hidden"))
+    level = _int_attr(element.get("outlineLevel"))
+    collapsed = as_bool(element.get("collapsed"))
+    if hidden or level or collapsed:
+        row = _int_attr(element.get("r"))
+        if row:
+            if hidden:
+                hidden_rows.append(row)
+            if level or collapsed:
+                outline_rows[row] = (level, hidden, collapsed)
+    return hidden, level
+
+
+def _outline_hidden_rows(
+    rows: dict[int, tuple[int, bool, bool]], summary_below: bool
+) -> list[int]:
+    """From each collapsed summary, walk toward the deeper detail rows."""
+    if not any(collapsed for _, _, collapsed in rows.values()):
+        return []
+    hidden_rows: list[int] = []
+    group_level: int | None = None
+    previous = 0
+    step = -1 if summary_below else 1
+    for row in sorted(rows, reverse=summary_below):
+        level, hidden, collapsed = rows[row]
+        if row != previous + step or (group_level is not None and level <= group_level):
+            group_level = None
+        if group_level is not None and hidden:
+            hidden_rows.append(row)
+        if collapsed and group_level is None:
+            group_level = level
+        previous = row
+    return sorted(hidden_rows)
 
 
 def _col_outline_spans(root: etree._Element) -> list[tuple[int, int, int]]:
@@ -893,6 +930,7 @@ def _parse_sheet_stream(
     comments = _load_comments(zf, sheet.part)
     name = sheet.info.name
     hidden_rows: list[int] = []
+    outline_rows: dict[int, tuple[int, bool, bool]] = {}
     batch: list[tuple[Any, ...]] = []
     presence_batch: list[tuple[str, str, str, int]] = []
     runs = _BlankRuns()
@@ -943,12 +981,7 @@ def _parse_sheet_stream(
                 if hidden_cols is None:
                     hidden_cols = _hidden_cols(root)
                     col_outline = _col_outline_spans(root)
-                row_hidden = as_bool(el.get("hidden"))
-                row_outline = _int_attr(el.get("outlineLevel"))
-                if row_hidden:
-                    row_n = int(el.get("r") or "0")
-                    if row_n:
-                        hidden_rows.append(row_n)
+                row_hidden, row_outline = _read_row_visibility(el, hidden_rows, outline_rows)
                 for cell_el in children(el, "c"):
                     built, cell_presence = _pending_from_cell(
                         cell_el,
@@ -1044,5 +1077,6 @@ def _parse_sheet_stream(
     flush_presence()
     sheet.info.summary_below = _summary_below(root)
     sheet.info.hidden_rows = hidden_rows
+    sheet.info.outline_hidden_rows = _outline_hidden_rows(outline_rows, sheet.info.summary_below)
     sheet.info.hidden_cols = sorted(hidden_cols)
     sheet.info.merges = _merge_refs(root)

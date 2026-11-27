@@ -5,14 +5,35 @@ from collections import defaultdict
 from pathlib import Path
 
 from finance_context.formulas.models import as_edge
-from finance_context.layout.axes import _axis_candidates, _series_row_above, _table_groups
-from finance_context.layout.cells import _is_number, _text, bind_row_index, clear_row_index
-from finance_context.layout.coverage import chart_note, coverage_blocks
+from finance_context.layout.axes import (
+    _axis_candidates,
+    _series_row_above,
+    _table_groups,
+    is_labeled_model_year,
+    local_model_year_regions,
+)
+from finance_context.layout.cells import (
+    _cell_at,
+    _is_number,
+    _text,
+    bind_row_index,
+    clear_row_index,
+)
+from finance_context.layout.coverage import (
+    _disambiguate_ids,
+    _without_taken,
+    chart_note,
+    coverage_blocks,
+)
 from finance_context.layout.format_words import is_entry_instruction
+from finance_context.layout.local_tables import local_table_blocks
 from finance_context.layout.models import (
+    Axis,
+    AxisHeader,
     Block,
     Layout,
     LayoutRow,
+    RowCell,
     SheetLayout,
     TimeAxis,
 )
@@ -35,6 +56,7 @@ from finance_context.layout.rows import (
     _label_span,
     _year_label_section,
 )
+from finance_context.layout.sensitivity import sensitivity_blocks
 from finance_context.layout.timelines import _share_repeated_axes, link_workbook_timelines
 from finance_context.layout.units import is_unit_text
 
@@ -162,9 +184,27 @@ def _blocks_indexed(
     defined_names: list | None,
     name_headers: tuple[str, ...] | None = None,
 ) -> tuple[list[Block], list[TimeAxis], list[str]]:
-    row_ids = sorted(by_row)
+    grids, grid_cells = sensitivity_blocks(sheet, by_row, date1904)
+    if grid_cells:
+        by_row = _without_taken(by_row, grid_cells)
+        bind_row_index(by_row)
     found, axis_notes = _axis_candidates(sheet, by_row, date1904, hidden_cols)
-    vertical = [item for item in found if item[1].transposed]
+    horizontal_headers = sorted({axis.header_row for _band, axis in found if not axis.transposed})
+    panels, panel_cells, schedules = local_table_blocks(
+        sheet, by_row, date1904, horizontal_headers, hidden_cols, edges, defined_names,
+        hidden_row_ids=hidden_row_ids,
+    )
+    if panel_cells:
+        by_row = _without_taken(by_row, panel_cells)
+        bind_row_index(by_row)
+    local_claims: dict[int, set[int]] = defaultdict(set)
+    for row, col in grid_cells | panel_cells:
+        local_claims[row].add(col)
+    row_ids = sorted(by_row)
+    vertical = [
+        item for item in found if item[1].transposed
+        and not any((period.row, period.col) in panel_cells for period in item[1].periods)
+    ]
     candidates = [item for item in found if not item[1].transposed]
     groups = _split_side_tables(_table_groups(candidates), by_row, row_ids, date1904)
     blocks: list[Block] = []
@@ -244,6 +284,8 @@ def _blocks_indexed(
         data_rows, carved = carve_params_regions(
             sheet, data_rows, local, date1904, period_cols, label_col
         )
+        for row in data_rows:
+            row.excluded_cols = sorted(period_cols & local_claims.get(row.row, set()))
         params_blocks.extend(carved)
         if len(group_axes) == 1:
             block_id = group_axes[0].id
@@ -261,6 +303,12 @@ def _blocks_indexed(
         )
     blocks, axes = _share_repeated_axes(blocks, axes, by_row, date1904)
     turned_blocks, turned_axes = _transposed_blocks(sheet, by_row, date1904, vertical)
+    for region, scheduled_axes in schedules:
+        scheduled_blocks, local_axes = _transposed_blocks(
+            sheet, region, date1904, scheduled_axes
+        )
+        turned_blocks.extend(scheduled_blocks)
+        turned_axes.extend(local_axes)
     blocks = [*blocks, *turned_blocks]
     axes = [*axes, *turned_axes]
     if params_blocks:
@@ -268,10 +316,27 @@ def _blocks_indexed(
             [*blocks, *params_blocks],
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
+    timeline_rows = {int(axis.header_row) for axis in axes}
+    year_blocks = _local_year_blocks(
+        sheet,
+        local_model_year_regions(
+            by_row, date1904, set(hidden_cols or ()), timeline_rows
+        ),
+        by_row,
+        date1904,
+    )
+    if year_blocks:
+        blocks = [*blocks, *year_blocks]
     if not blocks:
         extra = detect_params_block(sheet, by_row, date1904, edges, defined_names)
         if extra is not None:
             blocks.append(extra)
+    parameters = _parameters_above_model_years(sheet, blocks, axes, by_row, date1904)
+    if parameters:
+        blocks = sorted(
+            [*blocks, *parameters],
+            key=lambda block: min((row.row for row in block.rows), default=0),
+        )
     attach_orphan_switches(sheet, blocks, by_row, date1904, defined_names)
     for block in blocks:
         axis = block.axis
@@ -287,12 +352,232 @@ def _blocks_indexed(
         taken=_vertical_period_cells(axes),
         axes=axes,
     )
-    if covered:
+    if covered or grids or panels:
+        local = [*covered, *grids, *panels]
+        _disambiguate_ids(local)
         blocks = sorted(
-            [*blocks, *covered],
+            [*blocks, *local],
             key=lambda block: min((row.row for row in block.rows), default=0),
         )
     return blocks, axes, [*axis_notes, *notes]
+
+
+def _local_year_blocks(
+    sheet: str,
+    regions: list[tuple[int, int | None, list[tuple[int, str]], list[int]]],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> list[Block]:
+    """Publish an unconfirmed ``Year N`` header with every column still in the series."""
+    blocks: list[Block] = []
+    for header_row, label_col, columns, body_rows in regions:
+        if label_col is None or not body_rows:
+            continue
+        headers = [
+            AxisHeader(col=col, text=text, role="unknown", period_key=f"c{col}")
+            for col, text in columns
+        ]
+        rows: list[LayoutRow] = []
+        for row_n in body_rows:
+            cells = by_row.get(row_n) or []
+            label_cell = _cell_at(cells, label_col)
+            label = _text(label_cell, date1904) if label_cell else None
+            if not label or _is_number(label):
+                continue
+            tagged = [
+                RowCell(col=col, role="unknown")
+                for col, _caption in columns
+                if _year_value_cell(_cell_at(cells, col), date1904)
+            ]
+            if not tagged:
+                continue
+            rows.append(
+                LayoutRow(
+                    row=row_n,
+                    label=label.strip(),
+                    kind="fact",
+                    label_col=label_col,
+                    cells=tagged,
+                )
+            )
+        if not rows:
+            continue
+        block_id = f"{sheet}!r{header_row}c{columns[0][0]}"
+        blocks.append(
+            Block(
+                block_id=block_id,
+                label_col=label_col,
+                axis=Axis(id=block_id, row=header_row, headers=headers),
+                rows=rows,
+                kind="params",
+            )
+        )
+    return blocks
+
+
+def _year_value_cell(cell: dict | None, date1904: bool) -> bool:
+    if cell is None:
+        return False
+    text = _text(cell, date1904)
+    return bool(
+        cell.get("formula_raw")
+        or cell.get("formula_template")
+        or (text and _is_number(text))
+    )
+
+
+def _parameters_above_model_years(
+    sheet: str,
+    blocks: list[Block],
+    axes: list[TimeAxis],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> list[Block]:
+    """Keep the parameter rows and their heading above a ``Year N`` header."""
+    owned = {row.row for block in blocks for row in block.rows}
+    found: list[Block] = []
+    for axis in axes:
+        if axis.grain != "model_year" or not axis.periods:
+            continue
+        if not all(is_labeled_model_year(period.text) for period in axis.periods):
+            continue
+        cols = {period.col for period in axis.periods}
+        left = min(cols)
+        picked: list[tuple[int, dict, list[dict]]] = []
+        for row_n in range(axis.header_row - 1, 0, -1):
+            if row_n in owned:
+                break
+            cells = by_row.get(row_n)
+            if not cells or _is_empty_row(cells, date1904):
+                if picked:
+                    break
+                continue
+            label = _label_left_of(cells, left, date1904)
+            scalars = _scalars_in_columns(cells, cols, date1904)
+            if label is not None and not scalars:
+                if picked:
+                    break
+                continue
+            if label is None or not scalars or _year_caption_row(scalars, date1904):
+                break
+            picked.append((row_n, label, scalars))
+        if not picked:
+            continue
+        picked.reverse()
+        block = _parameter_block(sheet, picked, date1904)
+        title = _title_above_parameters(by_row, block.rows[0].row, block.label_col, owned, date1904)
+        if title is not None:
+            block.rows.insert(0, title)
+        owned.update(row.row for row in block.rows)
+        found.append(block)
+    return found
+
+
+def _title_above_parameters(
+    by_row: dict[int, list[dict]],
+    first_row: int,
+    label_col: int,
+    owned: set[int],
+    date1904: bool,
+) -> LayoutRow | None:
+    """Look through blank rows for a standalone heading aligned with the parameters."""
+    for row_n in range(first_row - 1, 0, -1):
+        if row_n in owned:
+            break
+        cells = by_row.get(row_n, [])
+        if any(cell.get("formula_raw") or cell.get("formula_template") for cell in cells):
+            break
+        populated = [(cell, text) for cell in cells if (text := _text(cell, date1904))]
+        if not populated:
+            continue
+        if len(populated) != 1:
+            break
+        cell, text = populated[0]
+        if (
+            int(cell["col"]) != label_col
+            or cell.get("hidden")
+            or _is_number(text)
+            or is_unit_text(text)
+        ):
+            break
+        return LayoutRow(row=row_n, label=text.strip(), kind="abstract", label_col=label_col)
+    return None
+
+
+def _label_left_of(cells: list[dict], left: int, date1904: bool) -> dict | None:
+    found: dict | None = None
+    for cell in cells:
+        if cell.get("hidden"):
+            continue
+        col = int(cell["col"])
+        if col >= left:
+            continue
+        text = _text(cell, date1904)
+        if not text or _is_number(text):
+            continue
+        if found is None or col < int(found["col"]):
+            found = cell
+    return found
+
+
+def _scalars_in_columns(
+    cells: list[dict], cols: set[int], date1904: bool
+) -> list[dict]:
+    found: list[dict] = []
+    for cell in sorted(cells, key=lambda item: int(item["col"])):
+        if int(cell["col"]) not in cols or cell.get("hidden"):
+            continue
+        text = _text(cell, date1904)
+        if cell.get("formula_raw") or cell.get("formula_template") or text:
+            found.append(cell)
+    return found
+
+
+def _year_caption_row(cells: list[dict], date1904: bool) -> bool:
+    captions = [
+        cell
+        for cell in cells
+        if is_labeled_model_year(_text(cell, date1904)) and not cell.get("formula_raw")
+    ]
+    return len(captions) >= 2
+
+
+def _parameter_block(
+    sheet: str,
+    rows: list[tuple[int, dict, list[dict]]],
+    date1904: bool,
+) -> Block:
+    label_col = int(rows[0][1]["col"])
+    columns = sorted({int(cell["col"]) for _row, _label, scalars in rows for cell in scalars})
+    single = len(columns) == 1
+    headers = [
+        AxisHeader(
+            col=col,
+            text="",
+            role="value",
+            period_key="value" if single else f"c{col}",
+        )
+        for col in columns
+    ]
+    first = rows[0][0]
+    block_id = f"{sheet}!r{first}"
+    layout_rows = [
+        LayoutRow(
+            row=row_n,
+            label=str(_text(label, date1904) or "").strip(),
+            kind="fact",
+            label_col=int(label["col"]),
+            cells=[RowCell(col=int(cell["col"]), role="value") for cell in scalars],
+        )
+        for row_n, label, scalars in rows
+    ]
+    return Block(
+        block_id=block_id,
+        label_col=label_col,
+        axis=Axis(id=block_id, row=first, headers=headers),
+        rows=layout_rows,
+        kind="params",
+    )
 
 
 def _vertical_period_cells(axes: list[TimeAxis]) -> set[tuple[int, int]]:
@@ -630,9 +915,19 @@ def _transposed_items(
 
 
 def _quarter_year_row(by_row, axis, period_cols, date1904):
-    """The labelled year that was borrowed into this quarter ruler."""
+    """The labelled year that was borrowed into this quarter ruler.
+
+    Quarters that already name a year (``1 кв. 2024``) did not borrow the row
+    below. ``Год ввода`` there is a fact, not the section that filled the keys.
+    """
     if axis.grain != "quarter":
         return None
+    for cell in by_row.get(axis.header_row, []):
+        if int(cell["col"]) not in period_cols:
+            continue
+        hit = classify_header(_text(cell, date1904))
+        if hit is not None and hit.period_key[:4].isdigit():
+            return None
     years = {
         period.period_key[:4]
         for period in axis.periods

@@ -2,38 +2,38 @@
   "note": "Regenerate with UPDATE_SYNTHETIC_GOLDEN=1 uv run pytest tests/synthetic/test_golden.py and commit this file.",
   "books": {
     "rel5k": {
-      "context/context.json": "a65052ee02ced15362f6a8c9ed9e8f6ae4b4df9998a6b50acfcc4531d2f90b6c",
-      "context/context.md": "ba4dbd4ccc3675eefb55761b8bbae01691dcb43fba12ec21b23d514e0971df52",
+      "context/context.json": "79b8c12f36c0006aca9765aa6bd6b7f933cb0ddc744ac88d68c14352d2545f9d",
+      "context/context.md": "e126ac424d930c93aeb4ccf63f2182c420c1f35501c71910a7d415b9b3750e79",
       "graph/graph.json": "2a10b3f09659ea86386c30a2acc2d8bf5a2fe59fff7222b02242e36f1f4c3fa0",
       "layout/layout.json": "9327b44633ea8fc582b77550efb6633f0c2baa634bead95aa6cfc09d5eaf23c1"
     },
     "hops10k": {
-      "context/context.json": "d5ad37ab84ab118fb54bc87178bd21e8ab951ea28048f7a79de0624820d204ed",
-      "context/context.md": "9d928c5b208fe7465ac811defe68cc881d3aa23e44a427eead226088be03eafa",
+      "context/context.json": "9dbb7e433111eb540ae26942ba59ff3a0c92bd2cf9c7e28d8cbe9fb8ef41a9a4",
+      "context/context.md": "8f5d5a5b7c2e497c56d332e0293d70b3527d5a5bb14655674dd8a2dd2ec472fa",
       "graph/graph.json": "6c999a77a356347c0a8a49182453241c3157cd66a76a4d3a163000f14b886e2d",
       "layout/layout.json": "782c3bd1137967e1079821a76e8fb92ba77159f1d8f61a6ef78cc269ef4777d1"
     },
     "sumif10k": {
-      "context/context.json": "93414cb5ba680b8e72d91cb79dcc711df984276e95a4c271b2c566bdb6cb3dba",
-      "context/context.md": "857702b01a2fe348162f683e140d9f32207a7a2780ac4fe1b52f6779340ee931",
+      "context/context.json": "d503720708b55dd450698db1fd8d70e21c9b37d9446fb40851e448d0757f877d",
+      "context/context.md": "0fd4f7a8df6e57a58d3437676e7310aef75f00640870302ab5161cca853680d4",
       "graph/graph.json": "0ca2c1ee824e768190e9bb2bbcaa8de7452768afc7f34e0c0b74d4263f6dff70",
       "layout/layout.json": "8d2c4bb0863deb01cea2a33e19550c433774a0e2f319fe21d38b27e7ace639e7"
     },
     "outline": {
-      "context/context.json": "302f7c6f5ca05014e6f0a8dc98bb195d2908b9ccf7635a78a96f9cb9f2c7b289",
-      "context/context.md": "ea62eb50c78d693d39b9699e4328f7cb3f8d0309753baf1f4a2c7c72423391ee",
+      "context/context.json": "2bca53ef669a6714d725f19edb1c183acfeae0fd7e6f606346277eb864578b31",
+      "context/context.md": "9b8912de807d64d40a28df26880cf3462662b0d3b5306764585c455e6c8c9f47",
       "graph/graph.json": "4713f254148052e69e390bb5b1b8785f09a58c0c9d39168f1241fe5652a16324",
       "layout/layout.json": "5181a1d607e7b747e1f0e12e78b2e9ad3f1b2deca2a0f6d5f838cff5d07b24f2"
     },
     "text100": {
-      "context/context.json": "92a5bbffc71197ca38f0f8d943743fa626fa315aea5dd2c22f09cd5fde30062b",
-      "context/context.md": "926acaa3aa86d900a22e6b4c26ba19ecaba2ae376dcb52570986d3a61ab45303",
+      "context/context.json": "d0eefbf0e9dd1451ecb5606ac185b6aa5e0f13591e3222bfca8cc8b2714b8bd6",
+      "context/context.md": "0f2937763f71eeba33a263f05672584f32a0e187ef1c85bdf075d4698272988c",
       "graph/graph.json": "17f6cadad43835d4ea7aa595abb8fc204bbae16d1b3831594b0f8ea779661161",
       "layout/layout.json": "0c90c293e817db860942da299c0662937ff710e4dc939d0c2f9f0c1672aad590"
     },
     "block8": {
-      "context/context.json": "9d0fbaee508c2fd04a0a54d8d08bf7e4b295a24e4b259e9c9693bd0e61fac524",
-      "context/context.md": "25497ff84c7bff66aa3860fd7c93c35814f9c16c6ece16b02591d9687c0d6e0e",
+      "context/context.json": "8971e1d9f53a91055031d2dcf36ef46979c6277ccd11f6f8497bdf42be7b8008",
+      "context/context.md": "35ddf9d433f6a917e50fb4a79678f2ddf096d96186097d9801682516f8fd71b9",
       "graph/graph.json": "098c9af7fe840f7213816fa341877592526549cdc08ccab18cb3f5d99e60edfd",
       "layout/layout.json": "03801e7ac6ec742499cf34cbb7f690d5aa1aabcbca79048b41894edea211b49c"
     }

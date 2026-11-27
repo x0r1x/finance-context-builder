@@ -7,7 +7,14 @@ from datetime import date
 from finance_context.excel.a1 import format_addr, index_to_col
 from finance_context.excel.dates import is_date_format, serial_to_date
 from finance_context.formulas.engine import FormulaEngine
-from finance_context.layout.cells import _cell_at, _is_number, _text, parse_int, parse_number
+from finance_context.layout.cells import (
+    _cell_at,
+    _cell_covering,
+    _is_number,
+    _text,
+    parse_int,
+    parse_number,
+)
 from finance_context.layout.format_words import is_total_word
 from finance_context.layout.markers import DerivedScan, _fill_banner, apply_axis_markers
 from finance_context.layout.models import AxisHeader, AxisPeriod, TimeAxis, is_series_column
@@ -49,7 +56,9 @@ from finance_context.layout.rows import (
     _row_can_supply_year,
     _row_label,
     _row_layers,
+    _word_residual,
     _year_banner_by_column,
+    _year_run_is_header,
 )
 from finance_context.layout.totals import apply_total_columns
 from finance_context.layout.units import is_unit_text
@@ -66,7 +75,18 @@ _CALENDAR_LAYERS = frozenset({LAYER_DATE, LAYER_YEAR, LAYER_QUARTER, LAYER_HALF,
 _UNLABELED_RELATIVE_MIN = 8
 
 
+# Labeled ``Year | 1 | 2 | 3`` and ``Metric | Year 1 | Year 2 | Year 3``.
+_LABELED_RELATIVE_MIN = 3
+
+
 _FORMULA_RUN_MIN = 3
+
+
+# ``Year 1`` / ``Год 1`` / ``Yr 1``. A calendar period still wins in ``classify_header``.
+_MODEL_YEAR_HEADER = re.compile(
+    r"(?:год|year|yr)\s*№?\s*(\d{1,3})",
+    re.IGNORECASE,
+)
 
 
 _FP_ENGINE = FormulaEngine(locale_hint="en")
@@ -96,13 +116,29 @@ def _axis_candidates(
         if row_n in taken:
             continue
         labeled = _relative_run(
-            by_row[row_n], date1904, require_label=True, min_len=3, hidden_cols=known
+            by_row[row_n],
+            date1904,
+            require_label=True,
+            min_len=_LABELED_RELATIVE_MIN,
+            hidden_cols=known,
         )
         if labeled:
             axis = _axis_from_relative(
                 sheet, row_n, labeled, by_row[row_n], date1904, hidden_cols=known
             )
             candidates.append(([row_n], axis))
+            taken.add(row_n)
+            continue
+        # ``Metric | Year 1 | Year 2 | …`` reuses the relative axis. The copy
+        # that confirms it has to sit in the body under this header.
+        confirmed = _confirmed_model_year_runs(
+            by_row, row_n, date1904, hidden_cols=known
+        )
+        # Two scales on one row would share ``sheet!rN``. Leave both local.
+        if len(confirmed) == 1:
+            candidates.append(
+                ([row_n], _axis_from_model_years(sheet, row_n, confirmed[0], hidden_cols=known))
+            )
             taken.add(row_n)
             continue
         # Without a formula timeline the run is discarded. Scanning it still
@@ -607,6 +643,262 @@ def _relative_prefix(label: str | None) -> str:
     return "P"
 
 
+def is_labeled_model_year(text: str | None) -> bool:
+    """True for ``Year 1`` / ``Год 1``. A parsed calendar period stays a period."""
+    return _model_year_number(text) is not None
+
+
+def _model_year_number(text: str | None) -> int | None:
+    raw = normalize_header(text)
+    if not raw:
+        return None
+    match = _MODEL_YEAR_HEADER.fullmatch(raw)
+    if match is None or classify_header(raw) is not None:
+        return None
+    return int(match.group(1))
+
+
+def _model_year_tokens(
+    row_cells: list[dict], date1904: bool
+) -> list[tuple[int, int, str, bool]]:
+    tokens: list[tuple[int, int, str, bool]] = []
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        text = _text(cell, date1904)
+        number = _model_year_number(text)
+        if text is None or number is None:
+            continue
+        tokens.append((int(cell["col"]), number, text.strip(), bool(cell.get("hidden"))))
+    return tokens
+
+
+def _model_year_runs(
+    tokens: list[tuple[int, int, str, bool]], hidden_cols: set[int]
+) -> list[list[tuple[int, int, str, bool]]]:
+    runs: list[list[tuple[int, int, str, bool]]] = []
+    run: list[tuple[int, int, str, bool]] = []
+    for token in tokens:
+        connected = bool(run) and _cols_connected(run[-1][0], token[0], hidden_cols)
+        if connected:
+            run.append(token)
+        else:
+            if run:
+                runs.append(run)
+            run = [token]
+    if run:
+        runs.append(run)
+    return runs
+
+
+def _consecutive_model_years(run: list[tuple[int, int, str, bool]]) -> bool:
+    """Same gate as a labeled relative run: length, start at 0 or 1, step 1."""
+    if len(run) < _LABELED_RELATIVE_MIN or run[0][1] not in {0, 1}:
+        return False
+    return all(right[1] == left[1] + 1 for left, right in zip(run, run[1:], strict=False))
+
+
+def _confirmed_model_year_runs(
+    by_row: dict[int, list[dict]],
+    row_n: int,
+    date1904: bool,
+    *,
+    hidden_cols: set[int],
+) -> list[list[tuple[int, int, str, bool]]]:
+    runs = _model_year_runs(_model_year_tokens(by_row[row_n], date1904), hidden_cols)
+    confirmed: list[list[tuple[int, int, str, bool]]] = []
+    for run in runs:
+        if not _consecutive_model_years(run):
+            continue
+        cols = {col for col, _number, _text, _hidden in run}
+        if _body_confirms_model_years(by_row, row_n, cols, date1904):
+            confirmed.append(run)
+    return confirmed
+
+
+def _body_confirms_model_years(
+    by_row: dict[int, list[dict]],
+    header_row: int,
+    cols: set[int],
+    date1904: bool,
+) -> bool:
+    """A copied formula in the columns under this header, and nowhere else.
+
+    The run is the same length the sheet-wide formula timeline already uses.
+    The first year may use a different formula. A gap ends the body. So does
+    the next header, including a calendar header, so that table's formulas
+    do not confirm this one.
+    """
+    previous = header_row
+    for row_n in sorted(by_row):
+        if row_n <= header_row:
+            continue
+        if row_n > previous + 1:
+            break
+        span = [cell for cell in by_row[row_n] if int(cell["col"]) in cols]
+        if _model_year_body_ends(span, date1904):
+            break
+        previous = row_n
+        if len(_formula_run_columns(span, cols)) >= _FORMULA_RUN_MIN:
+            return True
+    return False
+
+
+def _model_year_body_ends(span: list[dict], date1904: bool) -> bool:
+    """True when ``span`` is outside the table under a ``Year N`` header."""
+    if not span or _span_is_year_header(span, date1904):
+        return True
+    calendar = 0
+    for cell in span:
+        text = _text(cell, date1904)
+        if text and is_calendar_hit(classify_header(text)):
+            calendar += 1
+    return calendar >= 2
+
+
+def _span_is_year_header(span: list[dict], date1904: bool) -> bool:
+    captions = 0
+    values = 0
+    for cell in span:
+        if cell.get("formula_raw") or cell.get("formula_template"):
+            values += 1
+            continue
+        text = _text(cell, date1904)
+        if text and _is_number(text):
+            values += 1
+        elif _model_year_number(text) is not None:
+            captions += 1
+    return captions >= 2 and values == 0
+
+
+def _formula_run_columns(row_cells: list[dict], allowed: set[int]) -> list[int]:
+    """Longest adjacent copy whose columns all sit in ``allowed``."""
+    items: list[tuple[int, str]] = []
+    for cell in sorted(row_cells, key=lambda item: int(item["col"])):
+        col = int(cell["col"])
+        if col not in allowed:
+            continue
+        fingerprint = _cell_fingerprint(cell)
+        if fingerprint:
+            items.append((col, fingerprint))
+    best: list[tuple[int, str]] = []
+    run: list[tuple[int, str]] = []
+    for col, fingerprint in items:
+        if run and col == run[-1][0] + 1 and fingerprint == run[-1][1]:
+            run.append((col, fingerprint))
+        else:
+            run = [(col, fingerprint)]
+        if len(run) > len(best):
+            best = list(run)
+    if len(best) < _FORMULA_RUN_MIN:
+        return []
+    return [col for col, _fingerprint in best]
+
+
+def local_model_year_regions(
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+    hidden_cols: set[int],
+    timeline_rows: set[int],
+) -> list[tuple[int, int | None, list[tuple[int, str]], list[int]]]:
+    """Year-like headers that stayed off the timeline, with the rows under them.
+
+    Each region is ``(header_row, label_col, [(col, text), ...], body_rows)``.
+    A repeat, a skip, constants, or two scales on one row all qualify. The body
+    stops at the next header, including a calendar header.
+    """
+    regions: list[tuple[int, int | None, list[tuple[int, str]], list[int]]] = []
+    for row_n in sorted(by_row):
+        if row_n in timeline_rows:
+            continue
+        runs = [
+            run
+            for run in _model_year_runs(
+                _model_year_tokens(by_row[row_n], date1904), hidden_cols
+            )
+            if len(run) >= 2
+        ]
+        for run in runs:
+            columns = [(col, text) for col, _number, text, _hidden in run]
+            cols = {col for col, _text in columns}
+            label_col = _label_col_left(by_row[row_n], min(cols), date1904)
+            body = _rows_under_model_year_header(by_row, row_n, cols, date1904)
+            if body:
+                regions.append((row_n, label_col, columns, body))
+    return regions
+
+
+def _label_col_left(row_cells: list[dict], left: int, date1904: bool) -> int | None:
+    """Nearest text left of ``left`` that is not itself a ``Year N`` caption."""
+    found: int | None = None
+    for cell in row_cells:
+        col = int(cell["col"])
+        if col >= left or cell.get("hidden"):
+            continue
+        text = _text(cell, date1904)
+        if not text or _is_number(text) or _model_year_number(text) is not None:
+            continue
+        if found is None or col > found:
+            found = col
+    return found
+
+
+def _rows_under_model_year_header(
+    by_row: dict[int, list[dict]],
+    header_row: int,
+    cols: set[int],
+    date1904: bool,
+) -> list[int]:
+    previous = header_row
+    found: list[int] = []
+    for row_n in sorted(by_row):
+        if row_n <= header_row:
+            continue
+        if row_n > previous + 1:
+            break
+        span = [cell for cell in by_row[row_n] if int(cell["col"]) in cols]
+        if _model_year_body_ends(span, date1904):
+            break
+        previous = row_n
+        if _span_has_value(span, date1904):
+            found.append(row_n)
+    return found
+
+
+def _span_has_value(span: list[dict], date1904: bool) -> bool:
+    for cell in span:
+        text = _text(cell, date1904)
+        if cell.get("formula_raw") or cell.get("formula_template"):
+            return True
+        if text and _is_number(text):
+            return True
+    return False
+
+
+def _axis_from_model_years(
+    sheet: str,
+    row_n: int,
+    run: list[tuple[int, int, str, bool]],
+    hidden_cols: set[int] | None = None,
+) -> TimeAxis:
+    hidden = hidden_cols or set()
+    periods = [
+        AxisPeriod(
+            col=col,
+            text=text,
+            kind="relative",
+            period_key=f"Y{number}",
+            hidden=cell_hidden or col in hidden,
+        )
+        for col, number, text, cell_hidden in run
+    ]
+    keys = [period.period_key for period in periods]
+    return TimeAxis(
+        id=f"{sheet}!r{row_n}",
+        grain=infer_grain(keys),
+        header_row=row_n,
+        periods=periods,
+    )
+
+
 def _axis_from_relative(
     sheet: str,
     row_n: int,
@@ -651,15 +943,36 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
         if not _is_starter_row(by_row[row_n], date1904):
             i += 1
             continue
-        # ``Год ввода | 2024…`` under a ruler is a value row. The same years
-        # with no line name are still a header.
-        if (
-            bands
-            and _repeated_year_line(by_row[row_n], date1904)
-            and _band_covers_years(bands[-1], by_row, row_n, date1904)
-        ):
-            i += 1
-            continue
+        # ``Год ввода | 2024…`` under a finished ruler is a value row. One
+        # repeated year is not the only such row: ``2024, 2024, 2025, 2025``
+        # is too. A distinct ``2018, 2019, 2020`` ruler can still open a table.
+        # The same years with no line name stay a header. Amounts with a few
+        # calendar cells are the first value row, not the next header.
+        if bands:
+            covered = _band_calendar_cols(bands[-1], by_row, date1904)
+            row_cells = by_row[row_n]
+            if _band_covers_years(bands[-1], by_row, row_n, date1904) and (
+                _repeated_year_line(row_cells, date1904)
+                or _labeled_year_value_row(row_cells, covered, date1904)
+            ):
+                i += 1
+                continue
+            if _partial_year_beside_quarters(bands[-1], row_cells, by_row, date1904):
+                i += 1
+                continue
+            # Amounts in the previous table do not cancel a header whose
+            # calendar cells sit in other columns of the same physical row.
+            if (
+                covered
+                and not _starter_outside_columns(row_cells, covered, date1904)
+                and (
+                    _labeled_numeric_under_axis(row_cells, covered, date1904)
+                    or _blank_axis_formulas(row_cells, covered, date1904)
+                )
+                and not _distinct_year_ruler(row_cells, date1904)
+            ):
+                i += 1
+                continue
         layers = _row_layers(by_row[row_n], date1904)
         band = [row_n]
         if i > 0 and _is_quarter_token_row(by_row[row_n], date1904):
@@ -670,6 +983,9 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
         j = i + 1
         band_quarters = _is_quarter_token_row(by_row[row_n], date1904)
         band_years = _distinct_year_ruler(by_row[row_n], date1904)
+        # Period columns of the rows already in the band. Later rows are not
+        # scanned again to rediscover them.
+        calendar_cols = _band_calendar_cols(band, by_row, date1904)
         while j < len(rows):
             nxt = rows[j]
             cells = by_row[nxt]
@@ -684,20 +1000,44 @@ def _header_bands(by_row: dict[int, list[dict]], date1904: bool) -> list[list[in
             year_ruler = _distinct_year_ruler(cells, date1904)
             if (band_quarters and year_ruler) or (band_years and quarter_tokens):
                 break
-            if _is_flag_bits_row(cells, _band_calendar_cols(band, by_row, date1904), date1904):
+            if _is_flag_bits_row(cells, calendar_cols, date1904):
+                break
+            # ``Остаток на начало периода`` is a bounds layer, so ``_is_data_row``
+            # is false, but numeric caches in the axis columns are values.
+            # A formula with an empty cache in those columns is a value too.
+            # A formula cache of quarter text has no number and can still join.
+            # ``Год | 2024 | 2024 | 2025 | 2025`` under bare quarters is the
+            # missing year layer, so it stays in the band. The same shape under
+            # quarters that already name a year is a value row. An unlabeled
+            # copy of that year row stays with the quarters.
+            quarter_cols = _quarter_columns(band, by_row, date1904)
+            if _blank_axis_formulas(cells, calendar_cols, date1904):
+                break
+            if _year_layer_supplements(cells, calendar_cols, band, by_row, date1904):
+                pass
+            elif _labeled_year_value_row(cells, quarter_cols or calendar_cols, date1904):
+                break
+            elif _labeled_numeric_under_axis(cells, calendar_cols, date1904):
                 break
             new_layers = _row_layers(cells, date1904)
             if not new_layers:
                 break
+            keep_year = (
+                _row_label(cells, date1904) is None
+                and bool(quarter_cols)
+                and _year_values_on_axis(cells, quarter_cols, date1904)
+            )
             overlap = layers & new_layers & {LAYER_YEAR, LAYER_DATE}
             if (
                 overlap
                 and _is_starter_row(cells, date1904)
                 and not (LAYER_BOUNDS in layers or LAYER_BOUNDS in new_layers)
+                and not keep_year
             ):
                 break
             layers |= new_layers
             band.append(nxt)
+            calendar_cols.update(_period_columns(cells, date1904))
             j += 1
         bands.append(band)
         i = j if j > i else i + 1
@@ -719,6 +1059,237 @@ def _band_covers_years(
         return False
     covered = {int(cell["col"]) for row in band for cell in by_row.get(row, [])}
     return bool(years & covered)
+
+
+def _quarter_columns(
+    band: list[int], by_row: dict[int, list[dict]], date1904: bool
+) -> set[int]:
+    """Columns whose header cell is a quarter, bare or already dated."""
+    cols: set[int] = set()
+    for row_n in band:
+        for cell in by_row[row_n]:
+            atom = classify_atom(_text(cell, date1904))
+            if atom is None or atom.kind in {"marker", "noise"}:
+                continue
+            if atom.quarter or atom.kind == "quarter_token":
+                cols.add(int(cell["col"]))
+    return cols
+
+
+def _column_has_year(
+    band: list[int], by_row: dict[int, list[dict]], col: int, date1904: bool
+) -> bool:
+    for row_n in band:
+        cell = _cell_covering(by_row[row_n], col)
+        atom = classify_atom(_text(cell, date1904) if cell is not None else None)
+        if atom is not None and atom.year:
+            return True
+    return False
+
+
+def _quarters_need_a_year(
+    band: list[int], by_row: dict[int, list[dict]], date1904: bool
+) -> bool:
+    """True when a quarter column in the band does not name its year yet.
+
+    A title such as ``Отчет 2024`` left of the quarters is not one of those
+    columns. One explicit ``1 кв. 2024`` does not finish the other quarters.
+    """
+    columns = _quarter_columns(band, by_row, date1904)
+    if not columns:
+        return False
+    return any(not _column_has_year(band, by_row, col, date1904) for col in columns)
+
+
+def _year_values_on_axis(
+    row_cells: list[dict], calendar_cols: set[int], date1904: bool
+) -> bool:
+    """Bare years on every requested column, including a merged year cell."""
+    if not calendar_cols:
+        return False
+    banner = _year_banner_by_column(row_cells, date1904)
+    values: list[int] = []
+    for col in sorted(calendar_cols):
+        year = banner.get(col)
+        if year is None:
+            return False
+        number = parse_int(year)
+        if number is None:
+            return False
+        values.append(number)
+    return _year_run_is_header(values)
+
+
+def _year_layer_supplements(
+    row_cells: list[dict],
+    _calendar_cols: set[int],
+    band: list[int],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> bool:
+    """A consistent year row can fill quarter columns that do not name a year."""
+    columns = _quarter_columns(band, by_row, date1904)
+    if not columns or not _quarters_need_a_year(band, by_row, date1904):
+        return False
+    return _year_values_on_axis(row_cells, columns, date1904)
+
+
+def _year_row_on_this_header(
+    band: list[int],
+    row_cells: list[dict],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> bool:
+    """True when the year row belongs to this header, not to a later table.
+
+    A year layer sits on the header or one blank row under it. A ruler further
+    down the sheet keeps its own axis even where the columns overlap.
+    """
+    if not row_cells:
+        return False
+    row_n = int(row_cells[0]["row"])
+    gap = row_n - max(band)
+    if gap <= 0 or gap > 2:
+        return False
+    for mid in range(max(band) + 1, row_n):
+        cells = by_row.get(mid, [])
+        if cells and not _is_empty_row(cells, date1904):
+            return False
+    return True
+
+
+def _partial_year_beside_quarters(
+    band: list[int],
+    row_cells: list[dict],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> bool:
+    """A partial year layer of this header is not its own axis.
+
+    The row counts only when these quarters still need a year and the years
+    sit on this header. A later ruler is a separate axis even if some columns
+    overlap. A real gap in the layer that does belong here must not become a
+    short ``2024@…`` ruler.
+    """
+    columns = _quarter_columns(band, by_row, date1904)
+    if len(columns) < 2 or not _quarters_need_a_year(band, by_row, date1904):
+        return False
+    if not _year_row_on_this_header(band, row_cells, by_row, date1904):
+        return False
+    banner = _year_banner_by_column(row_cells, date1904)
+    covered = [col for col in columns if col in banner]
+    if len(covered) < 2:
+        return False
+    return any(col not in banner for col in columns)
+
+
+def _starter_outside_columns(
+    row_cells: list[dict], columns: set[int], date1904: bool
+) -> bool:
+    """A period header outside one table's columns can open the next axis."""
+    outside = [cell for cell in row_cells if int(cell["col"]) not in columns]
+    return bool(outside) and _is_starter_row(outside, date1904)
+
+
+def _labeled_year_value_row(
+    row_cells: list[dict], calendar_cols: set[int], date1904: bool
+) -> bool:
+    """``Год ввода | 2024 | 2024 | 2025 | 2025`` after a finished axis.
+
+    ``_repeated_year_line`` only matches one year copied sideways. A stepped
+    ruler ``2018, 2019, 2020`` is still allowed to open the next table.
+    """
+    if _is_year_banner_row(row_cells, date1904) or _row_label(row_cells, date1904) is None:
+        return False
+    if _distinct_year_ruler(row_cells, date1904):
+        return False
+    return _year_values_on_axis(row_cells, calendar_cols, date1904)
+
+
+def _labeled_numeric_under_axis(
+    row_cells: list[dict], calendar_cols: set[int], date1904: bool
+) -> bool:
+    """A line name left of this axis and ordinary numbers in its columns.
+
+    The number may be a formula cache. A cache that reads as a period label
+    is a header cell, so a formula quarter row still extends the band. ``3``
+    under a ``Квартал`` label is that kind of header, as is ``1``–``12`` under
+    a month label. A bare year next to a line name is a value unless it fills
+    quarters that do not name a year yet. Calendar text among ordinary amounts
+    does not make another header layer, however many such cells there are. A
+    date-formatted serial displays as a date, not as one of these numbers.
+    """
+    if not calendar_cols:
+        return False
+    label = _row_label(row_cells, date1904)
+    allow_q = is_quarter_label(label)
+    allow_m = is_month_label(label)
+    left = min(calendar_cols)
+    has_label = False
+    ordinary = 0
+    for cell in row_cells:
+        text = _text(cell, date1904)
+        if not text:
+            continue
+        col = int(cell["col"])
+        if col < left:
+            if _is_number(text):
+                continue
+            atom = classify_atom(text)
+            if atom is None or atom.kind in {"marker", "noise"}:
+                has_label = True
+            continue
+        if col not in calendar_cols:
+            continue
+        atom = classify_atom(
+            text, allow_quarter_num=allow_q, allow_month_num=allow_m
+        )
+        # A date, quarter or month token is the header layer. An amount is not,
+        # even when other columns on the same row carry a calendar label.
+        if atom is not None and atom.kind not in {"marker", "noise"}:
+            continue
+        if _is_number(text):
+            ordinary += 1
+    # Amounts in the confirmed columns are the value row. A consistent date
+    # or quarter layer has no amount, so it can still extend the band.
+    return has_label and ordinary > 0
+
+
+def _blank_axis_formulas(
+    row_cells: list[dict], calendar_cols: set[int], date1904: bool
+) -> bool:
+    """A line name and formulas in the axis whose cache does not display.
+
+    A calendar layer may contain blank date-formatted formulas. Calendar
+    caches do not cancel other blank value formulas in the same axis.
+    """
+    if not calendar_cols:
+        return False
+    label = _row_label(row_cells, date1904)
+    if label is None:
+        return False
+    allow_q = is_quarter_label(label)
+    allow_m = is_month_label(label)
+    has_calendar = False
+    has_formula = False
+    has_blank_value_formula = False
+    for cell in row_cells:
+        if int(cell["col"]) not in calendar_cols:
+            continue
+        text = _text(cell, date1904)
+        atom = classify_atom(text, allow_quarter_num=allow_q, allow_month_num=allow_m)
+        if atom is not None and atom.kind not in {"marker", "noise"}:
+            has_calendar = True
+            continue
+        if text and _is_number(text):
+            return False
+        if cell.get("formula_raw") or cell.get("formula_template"):
+            has_formula = True
+            if not text and not is_date_format(cell.get("number_format")):
+                has_blank_value_formula = True
+    if has_calendar:
+        return has_blank_value_formula and not (allow_q or allow_m)
+    return has_formula
 
 
 def _is_flag_bits_row(
@@ -760,6 +1331,17 @@ def _cell_iso_date(cell: dict | None, date1904: bool) -> str | None:
     return "-".join(match.groups()) if match else None
 
 
+def _period_columns(row_cells: list[dict], date1904: bool) -> set[int]:
+    cols: set[int] = set()
+    for cell in row_cells:
+        atom = classify_atom(_text(cell, date1904))
+        if atom is None or atom.kind in {"marker", "noise"}:
+            continue
+        if atom.kind == "full" or atom.year or atom.quarter or atom.half or atom.month:
+            cols.add(int(cell["col"]))
+    return cols
+
+
 def _band_calendar_cols(
     band_rows: list[int],
     by_row: dict[int, list[dict]],
@@ -767,13 +1349,85 @@ def _band_calendar_cols(
 ) -> set[int]:
     cols: set[int] = set()
     for row_n in band_rows:
+        cols.update(_period_columns(by_row[row_n], date1904))
+    return cols
+
+
+def _partial_date_layer(
+    band_rows: list[int], by_row: dict[int, list[dict]], date1904: bool
+) -> bool:
+    """A year ruler is missing a date in at least one of its columns.
+
+    The dates that do exist must not replace that ruler or drop the open column.
+    """
+    ruler: set[int] = set()
+    for row_n in band_rows:
+        ruler.update(_year_banner_by_column(by_row[row_n], date1904))
+    if len(ruler) < 2:
+        return False
+    for col in ruler:
+        if any(
+            _cell_iso_date(_cell_covering(by_row[row_n], col), date1904)
+            for row_n in band_rows
+        ):
+            continue
+        return True
+    return False
+
+
+def _keep_explicit_quarter(atoms: list[HeaderAtom]) -> list[HeaderAtom]:
+    """An explicit ``1 кв. 2024`` wins over a different year in the same column."""
+    explicit = {atom.year for atom in atoms if atom.quarter and atom.year}
+    if len(explicit) != 1:
+        return atoms
+    year = next(iter(explicit))
+    return [
+        atom
+        for atom in atoms
+        if not (
+            atom.year
+            and atom.year != year
+            and not atom.quarter
+            and not atom.month
+            and not atom.day
+        )
+    ]
+
+
+def _side_year_caption(
+    band_rows: list[int],
+    by_row: dict[int, list[dict]],
+    date1904: bool,
+) -> set[int]:
+    """Columns of a title such as ``Отчет 2024`` left of the period run.
+
+    The period boundary and the title mark are read once per band. Calling
+    this from every column reclassified the whole band once per column.
+    """
+    anchors: list[int] = []
+    for row_n in band_rows:
         for cell in by_row[row_n]:
-            atom = classify_atom(_text(cell, date1904))
+            text = _text(cell, date1904)
+            atom = classify_atom(text)
             if atom is None or atom.kind in {"marker", "noise"}:
                 continue
-            if atom.kind == "full" or atom.year or atom.quarter or atom.half or atom.month:
-                cols.add(int(cell["col"]))
-    return cols
+            if atom.quarter or atom.kind == "quarter_token" or _is_bare_year_text(text):
+                anchors.append(int(cell["col"]))
+            elif atom.day and atom.month:
+                anchors.append(int(cell["col"]))
+    if not anchors:
+        return set()
+    left = min(anchors)
+    captions: set[int] = set()
+    for row_n in band_rows:
+        for cell in by_row[row_n]:
+            col = int(cell["col"])
+            if col >= left:
+                continue
+            text = _text(cell, date1904)
+            if text and _word_residual(text):
+                captions.add(col)
+    return captions
 
 
 def _axes_from_band(
@@ -810,7 +1464,11 @@ def _axes_from_band(
     bounds: dict[int, tuple[str | None, str | None]] = {}
     composed: list[AxisHeader] = []
     year_hint: str | None = None
+    drop_dates = _partial_date_layer(band_rows, by_row, date1904)
+    captions = _side_year_caption(band_rows, by_row, date1904)
     for col in cols:
+        if col in captions:
+            continue
         if prefer_end and start_rows:
             starts = [_cell_at(by_row[row_n], col) for row_n in start_rows]
             if not any(_text(cell, date1904) for cell in starts if cell is not None):
@@ -839,6 +1497,13 @@ def _axes_from_band(
             quarter_row=quarter_row,
             month_row=month_row,
         )
+        if drop_dates:
+            atoms = [
+                atom
+                for atom in atoms
+                if not (atom.day and atom.month and atom.year)
+            ]
+        atoms = _keep_explicit_quarter(atoms)
         # A bare quarter, half, or month borrows a year from the same column,
         # up to three rows up or down. A later column keeps that year until
         # its own column has one. The run is kept only when the step is steady.
@@ -1247,26 +1912,6 @@ def _band_prefers_end(
     return any(is_start_period_label(label) for label in labels) and any(
         is_end_period_label(label) for label in labels
     )
-
-
-def _cell_covering(row_cells: list[dict], col: int) -> dict | None:
-    """The cell at ``col``, or the merge anchor whose span covers it."""
-    found = _cell_at(row_cells, col)
-    if found is not None:
-        return found
-    cover: dict | None = None
-    for cell in row_cells:
-        end = cell.get("merge_end_col")
-        if end is None:
-            continue
-        try:
-            end_col = int(end)
-        except (TypeError, ValueError):
-            continue
-        origin = int(cell["col"])
-        if origin < col <= end_col and (cover is None or origin > int(cover["col"])):
-            cover = cell
-    return cover
 
 
 # Rows around a bare quarter that can still supply its year. CFS uses three.

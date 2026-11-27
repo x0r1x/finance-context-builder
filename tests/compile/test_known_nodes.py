@@ -24,7 +24,7 @@ _SCHEMA_ID = "936073df4b8bed1cb1e707daa4eb361d4aa21301dfb8d91fca1a0d0169335341"
 
 def test_compile_schema_id_is_unchanged() -> None:
     assert compile_schema_id() == _SCHEMA_ID
-    assert SCHEMA_VERSION == "1.14.0"
+    assert SCHEMA_VERSION == "1.15.0"
     assert GRAPH_SCHEMA_VERSION == "1.7.0"
 
 
@@ -232,7 +232,7 @@ def test_published_bytes_match_set_membership(
     plain = _run(tmp_path, "plain", source)
     ctx = json.loads((plain / "context" / "context.json").read_text(encoding="utf-8"))
     graph = json.loads((plain / "graph" / "graph.json").read_text(encoding="utf-8"))
-    assert ctx["schema_version"] == "1.14.0"
+    assert ctx["schema_version"] == "1.15.0"
     assert graph["schema_version"] == "1.7.0"
     stamp = json.loads((plain / "ir" / "compile.json").read_text(encoding="utf-8"))
     assert stamp["schema_id"] == _SCHEMA_ID

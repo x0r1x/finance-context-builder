@@ -10,6 +10,7 @@ class SheetInfo(BaseModel):
     sheet_id: int
     hidden: bool = False
     hidden_rows: list[int] = Field(default_factory=list)
+    outline_hidden_rows: list[int] = Field(default_factory=list)
     hidden_cols: list[int] = Field(default_factory=list)
     # Excel's default: the group summary sits below the detail rows.
     summary_below: bool = True
@@ -23,6 +24,8 @@ class SheetInfo(BaseModel):
             data.pop("summary_below", None)
         if not data.get("merges"):
             data.pop("merges", None)
+        if not data.get("outline_hidden_rows"):
+            data.pop("outline_hidden_rows", None)
         return data
 
 

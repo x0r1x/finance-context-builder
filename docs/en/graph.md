@@ -21,7 +21,7 @@ One fact, one place.
 | `row_key`, `period_id`, `node_type` (including `empty` for verified blank cells) | `graph/index.parquet`; a formula also has `links[].row_key` and `links[].period_id` |
 | Counts (`nodes` / `edges` are cell-level parquet sizes), `iterate`, cycles, `circularity_hints`, `dangling_classes`, and `links[]` with `formula_class` | `graph.json` and the same in `graph.md` (schema `1.7.0`, Class column) |
 | Every `<c>` on a sheet: `populated` or `styled_blank` | `raw/cell_presence.parquet` |
-| Report row: label, one row formula, cached series per axis, value status, scale factor, normalized values | `context.json` / `context.md` (schema `1.14.0`, axes in `axes`) |
+| Report row: label, one row formula, cached series per axis, value status, scale factor, normalized values | `context.json` / `context.md` (schema `1.15.0`, axes in `axes`) |
 
 `links[]` is one record per formula cell: `cell`, the A1 text once, `formula_class` (`same_period`, `cross_period`, `aggregation`, `rollforward`, `conditional`, `hardcoded`), `refs`, the context row's `row_key`, and the axis column's `period_id`. Both keys are `null` when the cell is outside layout. A `total` or `stub` column is not a period, so its link has `period_id=null` even when the row sits in a timeline block. `SUM(J9:J12)` stays one range, not dozens of `range_member`. Empty range members are not in `links`. `nodes` and `edges` are not `len(links)`. `context.md` prints `[Sheet!A1]` in the period value, the same key as `links[].cell`; the formula stays on the link. The period header still carries the column letter (`Y23 (AA)`).
 

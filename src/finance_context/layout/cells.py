@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import sys
 
-from finance_context.excel.a1 import format_addr, is_derived_addr
+from finance_context.excel.a1 import _MAX_COL, format_addr, is_derived_addr
 from finance_context.layout.periods import display_cell_text
 
 # Fields detection and the sheet overlays read. A dict of these is ~270 bytes;
@@ -134,6 +134,7 @@ _IGNORED_SPACE = str.maketrans("", "", " \xa0\u202f")
 
 # First cell in list order for each column. Valid only while those lists live.
 _ROW_INDEX: dict[int, dict[int, dict]] = {}
+_ROW_MERGES: dict[int, dict[int, dict]] = {}
 
 
 def bind_row_index(by_row: dict[int, list]) -> None:
@@ -142,7 +143,7 @@ def bind_row_index(by_row: dict[int, list]) -> None:
     ``_cell_at`` otherwise walks the row. On a wide header that walk ran once
     per column.
     """
-    _ROW_INDEX.clear()
+    clear_row_index()
     for cells in by_row.values():
         found: dict[int, dict] = {}
         for cell in cells:
@@ -153,6 +154,7 @@ def bind_row_index(by_row: dict[int, list]) -> None:
 def clear_row_index() -> None:
     """Drop the index before the row lists are freed, so a reused id cannot hit it."""
     _ROW_INDEX.clear()
+    _ROW_MERGES.clear()
 
 
 def _cell_at(row_cells: list[dict], col: int) -> dict | None:
@@ -163,6 +165,35 @@ def _cell_at(row_cells: list[dict], col: int) -> dict | None:
         if int(cell["col"]) == col:
             return cell
     return None
+
+
+def _cell_covering(row_cells: list[dict], col: int) -> dict | None:
+    """Lookup a direct cell first, then the nearest merge anchor to its left."""
+    cell = _cell_at(row_cells, col)
+    if cell is not None:
+        return cell
+    row_id = id(row_cells)
+    covered = _ROW_MERGES.get(row_id)
+    if covered is None:
+        spans: list[tuple[int, int, dict]] = []
+        for cell in row_cells:
+            end = cell.get("merge_end_col")
+            if end is None:
+                continue
+            try:
+                stop = min(int(end), _MAX_COL)
+            except (TypeError, ValueError):
+                continue
+            spans.append((int(cell["col"]), stop, cell))
+        covered = {}
+        # For overlapping ranges, prefer the rightmost anchor. Stable sorting
+        # keeps the first cell when two anchors start in the same column.
+        for start, stop, cell in sorted(spans, key=lambda span: -span[0]):
+            for column in range(start + 1, stop + 1):
+                covered.setdefault(column, cell)
+        if row_id in _ROW_INDEX:
+            _ROW_MERGES[row_id] = covered
+    return covered.get(col)
 
 
 def _text(cell: dict, date1904: bool = False) -> str | None:
