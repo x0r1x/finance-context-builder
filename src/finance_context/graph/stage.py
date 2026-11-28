@@ -506,7 +506,7 @@ def build_formula_graph(
     side = _side_cells(layout)
     row_meta = _row_meta(layout, side)
     period_by_cell, _period_index = _period_maps(layout)
-    transposed = _local_value_cells(layout)
+    transposed = _local_value_cells(layout, side)
     transposed.update(_transposed_cells(layout))
     circular = _circular_rows(layout)
     if stream:
@@ -789,16 +789,19 @@ def _transposed_cells(
     return out
 
 
-def _local_value_cells(layout: Layout) -> dict[tuple[str, int, int], tuple[str, str]]:
-    """Use the block's own key where local tables and other axes share a column."""
+def _local_value_cells(
+    layout: Layout, side: dict[tuple[str, int, int], str] | None = None,
+) -> dict[tuple[str, int, int], tuple[str, str]]:
+    """Use the owning block's period for cells under competing column rulers."""
     cells: dict[tuple[str, int, int], tuple[str, str]] = {}
     for sheet in layout.sheets:
         if len(sheet.blocks) < 2:
             continue
+        headers_by_block = [period_headers(sheet, block) for block in sheet.blocks]
         first: dict[int, str] = {}
         conflicts: set[int] = set()
-        for block in sheet.blocks:
-            for header in period_headers(sheet, block):
+        for headers in headers_by_block:
+            for header in headers:
                 if not header.row and first.setdefault(header.col, header.period_key) != (
                     header.period_key
                 ):
@@ -806,11 +809,18 @@ def _local_value_cells(layout: Layout) -> dict[tuple[str, int, int], tuple[str, 
         if not conflicts:
             continue
         shared = shared_horizontal_rows(sheet.blocks)
-        for block in sheet.blocks:
+        timeline_shared = shared_horizontal_rows([b for b in sheet.blocks if b.kind == "timeline"])
+        for block, headers in zip(sheet.blocks, headers_by_block, strict=True):
             if not is_value_block(block.kind):
+                if block.kind == "timeline" and any(
+                    row.row in timeline_shared for row in block.rows
+                ):
+                    if side is None:
+                        side = _side_cells(layout)
+                    _side_timeline_cells(cells, sheet.name, block, headers, conflicts, shared, side)
                 continue
             keys = {
-                header.col: header.period_key for header in period_headers(sheet, block)
+                header.col: header.period_key for header in headers
                 if header.col in conflicts and header.role in {"value", "unknown"}
             }
             if not keys:
@@ -824,6 +834,28 @@ def _local_value_cells(layout: Layout) -> dict[tuple[str, int, int], tuple[str, 
                     if cell.col in keys:
                         cells[sheet.name, row.row, cell.col] = (key, keys[cell.col])
     return cells
+
+
+def _side_timeline_cells(cells, sheet, block, headers, conflicts, shared, side):
+    keys: dict[int, set[str]] = {}
+    for header in headers:
+        if (not header.row and header.col in conflicts
+                and is_series_column(header.kind, header.period_key)):
+            keys.setdefault(header.col, set()).add(header.period_key)
+    periods = {col: next(iter(options)) for col, options in keys.items() if len(options) == 1}
+    if not periods:
+        return
+    for row in block.rows:
+        if row.value_col:
+            continue
+        shared_row = row.row in shared
+        key = published_row_key(
+            sheet, row.row, block.block_id, label_col=block.label_col if shared_row else None,
+        )
+        for col, period in periods.items():
+            slot = (sheet, row.row, col)
+            if col not in row.excluded_cols and (not shared_row or side.get(slot) == key):
+                cells[slot] = (key, period)
 
 
 def calendar_key(period_id: str) -> str:
