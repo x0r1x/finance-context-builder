@@ -101,6 +101,55 @@ def test_side_tables_keep_their_labels_values_and_sections(right_header):
         assert _observations(context, row)[0] == ("B3", "2020", "10")
 
 
+def test_a_side_check_with_one_number_is_not_a_fact():
+    cells = [
+        _c("Model", "A2", "Left section"),
+        _c("Model", "A5", "Left amount"),
+        _c("Model", "F1", "Name"),
+        _c("Model", "F4", "Right section"),
+        _c("Model", "F5", "Right amount"),
+        _c("Model", "F8", "Portfolio cost note"),
+        _c("Model", "F9", "G116"),
+        _c("Model", "H9", "Section total"),
+        _c("Model", "I9", "RUR"),
+        _c("Model", "J9", "20519302", formula="=P79"),
+        _c("Model", "F10", "Copy from line 1.6"),
+        _c("Model", "H10", "Balance total"),
+        _c("Model", "I10", "RUR"),
+        _c("Model", "J10", "20519302", formula="=P80"),
+    ]
+    for offset, col in enumerate("BCDE"):
+        cells.append(_c("Model", f"{col}1", str(2020 + offset)))
+        cells.append(_c("Model", f"{col}5", str(20 + offset)))
+    for offset, col in enumerate("GHIJ"):
+        cells.append(_c("Model", f"{col}1", f"{offset + 1} кв. 2025"))
+        cells.append(_c("Model", f"{col}5", str(40 + offset)))
+
+    layout, context = _publish(cells)
+    labels = [
+        row.label
+        for block in layout.sheets[0].blocks
+        if block.kind == "timeline"
+        for row in block.rows
+    ]
+    assert "Right amount" in labels
+    assert "Right section" in labels
+    for label in ("G116", "Copy from line 1.6", "Portfolio cost note"):
+        assert label not in labels
+    values = {
+        value
+        for block in context.blocks
+        for row in block.rows
+        for series in row.series
+        for value in series.values
+    }
+    assert "20519302" not in values
+    rows = {row.label: row for block in context.blocks for row in block.rows}
+    assert [item[2] for item in _observations(context, rows["Right amount"])] == [
+        "40", "41", "42", "43",
+    ]
+
+
 @pytest.mark.parametrize("value", [None, "29", "RUR"])
 def test_formula_name_does_not_extend_nested_axis_coverage(value):
     cells = [_c("Model", "A2", "Wide before"), _c("Model", "A6", "Wide after")]

@@ -234,6 +234,7 @@ def _blocks_indexed(
     bodies = _assign_overlapping_rows(
         raw_bodies, groups, group_cols, by_row, local_rows, limits, captions, date1904
     )
+    side_taken: set[tuple[int, int]] = set()
     for index, group in enumerate(groups):
         group_axes = [axis for _, axis in group]
         axes.extend(group_axes)
@@ -242,6 +243,12 @@ def _blocks_indexed(
         local = local_rows[index]
         table_headers, column_roles = captions[index]
         header_rows.update(table_headers)
+        if limits[index][0]:
+            body_rows, dropped = _keep_side_series(
+                body_rows, local, period_cols, table_headers, date1904
+            )
+            for row in dropped:
+                side_taken.update((row, int(cell["col"])) for cell in local.get(row, []))
         label_col, span = _label_span(
             local,
             body_rows,
@@ -349,7 +356,7 @@ def _blocks_indexed(
         blocks,
         header_rows,
         hidden_cols,
-        taken=_vertical_period_cells(axes),
+        taken=_vertical_period_cells(axes) | side_taken,
         axes=axes,
     )
     if covered or grids or panels:
@@ -818,6 +825,44 @@ def _name_cell(cell, date1904):
         text and not is_unit_text(text) and not is_entry_instruction(text)
         and not _SERVICE_MARK.fullmatch(text.strip())
     )
+
+
+def _keep_side_series(rows, by_row, period_cols, header_rows, date1904):
+    """One number beside prose is a check. A heading stays only with a series under it."""
+    shape = [
+        "skip"
+        if row in header_rows
+        else _side_row_shape(by_row.get(row, []), period_cols, date1904)
+        for row in rows
+    ]
+    keep = [kind in {"series", "skip"} for kind in shape]
+    for index, kind in enumerate(shape):
+        if kind != "header":
+            continue
+        nxt = next(
+            (item for item in range(index + 1, len(shape)) if shape[item] == "header"),
+            len(shape),
+        )
+        if any(shape[item] == "series" for item in range(index + 1, nxt)):
+            keep[index] = True
+    kept = [row for row, ok in zip(rows, keep, strict=True) if ok]
+    dropped = [row for row, ok in zip(rows, keep, strict=True) if not ok]
+    return kept, dropped
+
+
+def _side_row_shape(cells, period_cols, date1904):
+    numbers = 0
+    prose = False
+    for cell in cells:
+        if int(cell["col"]) not in period_cols:
+            continue
+        if _is_number(_text(cell, date1904) or ""):
+            numbers += 1
+        elif _name_cell(cell, date1904):
+            prose = True
+    if prose and numbers < 2:
+        return "drop"
+    return "series" if numbers else "header"
 
 
 def _local_names(cells, cols, floor, roles, date1904):
